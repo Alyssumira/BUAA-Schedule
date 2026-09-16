@@ -39,7 +39,8 @@
 
 ### 看课表
 
-- 周视图有两种模式：按节次排的行，以及 24 小时时间轴；左右横滑翻周，也可以直接跳周
+- 周视图有两种模式：按节次排的行（默认），以及 24 小时时间轴；顶栏写着「课次 / 时间」的按钮切换，
+  左右横滑翻周，也可以直接跳周
 - 今日视图列出当天全部课程与教室，时间轴模式带上下课时间
 - 按校区筛选；「课表管理」按课程归并，可以整门课改色或删除
 - 时间冲突有处理向导：按组给出同一天最近的空位建议，一键只改冲突的那几周
@@ -61,9 +62,10 @@
 
 ### 外观
 
-液态玻璃效果默认开启，深浅色跟随系统。课表背景默认取系统桌面壁纸（Android 14 起系统不再让
-普通应用读壁纸，这时会自动回退成渐变，或者你在设置里自选一张图）。排版有 10 级刻度可调，
-翻周、切视图、选校区都有触觉反馈。
+液态玻璃默认**关闭**（设置里只有「开启 / 关闭」两项）：整屏的大块玻璃面板开销最高、观感却不如小面积
+玻璃，所以默认只在小面积保留，想要全开在设置里勾上即可。深浅色跟随系统。课表背景默认取系统桌面壁纸
+（Android 14 起系统不再让普通应用读壁纸，这时会自动回退成渐变，或者你在设置里自选一张图）。
+排版有 10 级刻度可调，翻周、切视图、选校区都有触觉反馈。
 
 ### 把数据带走（或传给别人）
 
@@ -174,7 +176,45 @@ powershell -ExecutionPolicy Bypass -File release.ps1 0.2.0
 | [`docs/STATUS.md`](docs/STATUS.md) | 功能状态清单：已落地 / 不做 / 待实现 |
 | [`docs/BUAA_API.md`](docs/BUAA_API.md) | 北航教务接口参考（改导入链路时看） |
 
+## 第三方与参考项目
+
+本项目不是从零堆出来的：液态玻璃那一层渲染、以及几个交互控件的手感，直接用到了别人的成果。
+下面逐条写清**用了谁的什么、按什么许可证用**。
+
+### 随安装包分发的代码
+
+| 项目 | 许可证 | 用到哪里 |
+| --- | --- | --- |
+| [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)（tag 2.0.0） | Apache-2.0 | 液态玻璃渲染内核，以 `:kyant-backdrop` 目录 vendored。本地改动：把上游的 KMP 结构（commonMain / androidMain）拍平成纯 Android 库，并把 Compose 1.11 / Kotlin 2.3 的 API 适配到本项目的组合 |
+| [Kyant0/Shapes](https://github.com/Kyant0/Shapes) | Apache-2.0 | G2 连续曲率圆角形状，内嵌在 `kyant-backdrop/…/com/kyant/shapes/`。Maven 上各版本都以 Kotlin 2.3 编译、与本项目 Kotlin 2.0 不兼容，故只能内嵌源码 |
+| [SleepDown课程表](https://github.com/xiaomanjun233/SleepDown-Schedule) | 署名-非商业、源码可见 1.1（非 OSI 开源许可） | `:kyant-backdrop` 里 14 个带 `Modified for SleepDown` 头的文件（共享模糊 `SharedBlurBackdrop`、取景录制缓存等），以及 `core/designsystem/liquid/` 的 `DampedDragAnimation`、`DragGestureInspector`、`InteractiveHighlight`、`LiquidBottomTab` |
+| AndroidX / Jetpack：Compose BOM 2024.12.01（ui / foundation 1.11.3、material3 1.3.1）、Room 2.8.3、Navigation 2.8.5、WorkManager 2.9.1、Lifecycle 2.8.7、Core KTX 1.18.0 | Apache-2.0 | 常规运行库 |
+| Kotlin 运行时与 kotlinx-coroutines 1.9.0、kotlinx-serialization-json 1.8.1、OkHttp 4.12.0 | Apache-2.0 | 常规运行库 |
+| JUnit 4.13.2、androidx.test / Espresso / UiAutomator / benchmark | EPL-1.0 / Apache-2.0 | 只在测试里，不进 APK |
+
+### 只参考过、没有取代码的项目
+
+- [xingheyuzhuan/shiguang_warehouse](https://github.com/xingheyuzhuan/shiguang_warehouse)（拾光，MIT）：
+  24 小时连续时间轴与"多个组件共用水源"的目标形态。
+- [lingion/sleepy](https://github.com/lingion/sleepy)（GPL-3.0）：只借了「一键外观预设」的思路。
+  已按文件名 + 相似度逐一比对过，**没有任何重合代码**；特此写明以免误会。
+- [1812z/HyperIsland](https://github.com/1812z/HyperIsland)（MIT）：只读源码取证澎湃超级岛的
+  载荷键名与白名单（结论与证据记在 `docs/VENDOR_NOTES.md`），未取代码。
+- **WakeUp 课程表**：只提供「导出 WakeUp 兼容 JSON」这一条格式兼容，无代码依赖。
+
+### 对 SleepDown课程表 那份许可的遵守
+
+它不是 OSI 开源许可：允许个人非商业使用，但**对外提供修改版必须源码可见 + 显著署名**。
+本仓库满足前两条 —— 完整源码公开、免费且无广告无付费；署名按该许可第 2 条原文：
+
+> 本项目基于 SleepDown课程表 修改；原作者：xiaomanjun233；原项目：
+> <https://github.com/xiaomanjun233/SleepDown-Schedule>
+
+主要修改内容（相对 SleepDown 的那部分代码）：适配到本项目的 Compose / Kotlin 版本、给玻璃档位加
+「关闭 / 开启」两档收敛（默认关闭大面积面板），并在此之上重写成本应用自己的设计系统。
+**本应用与 SleepDown 无关，不由其作者维护，也不代表其官方版本。**
+
 ## 许可证
 
-MIT，见 [LICENSE](LICENSE)。第三方代码与资源遵循各自许可证（`kyant/backdrop` 以子模块形式
-vendored 在 `:kyant-backdrop`）。
+本项目源码以 MIT 许可发布，见 [LICENSE](LICENSE)。第三方代码与资源遵循各自许可证 ——
+具体谁贡献了什么、按哪份许可，见上一节「第三方与参考项目」。
