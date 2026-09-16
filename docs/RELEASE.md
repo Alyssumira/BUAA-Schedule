@@ -109,6 +109,14 @@ CI 用 `BUAA_KEYSTORE_BASE64` 等环境变量传同一组值（secrets 存不了
 
 - tag 写成 `v<VERSION_NAME>`（去掉 `v` 之后必须与包内版本号逐段相等，比较在
   `UpdateInfo.compareVersions` 里按数值分段做）。
+- **tag 要用轻量 tag**：`git tag v0.1.0 && git push origin v0.1.0`。加 `-a` 的附注 tag
+  会新建一个 tag 对象，服务端于是把这条历史整个翻一遍 —— 本仓库首个 commit（Gitee 网页
+  建的 `Initial commit`）committer 是 `noreply@gitee.com`，与 author 不等，钩子当场
+  `hook declined`（2026-09-16 实测）。轻量 tag 指着已经推上去的 commit，没有新对象，能过。
+- 没有浏览器会话时全套都能走接口：`POST https://gitee.com/api/v5/repos/alyssumira/buaa-schedule/releases`
+  创建发布（`tag_name` / `name` / `body`），再
+  `POST .../releases/{release_id}/attach_files`（multipart 字段名 `file`）上传附件。
+  两步都要 `access_token`，即 Gitee 私人令牌里勾了 `projects` 域的那种。
 - 标题写版本号，正文即更新说明（弹窗按 markdown 逐行渲染，`#`/`- ` 认）。
 - 附件名用 `buaa-schedule-<版本>.apk`（下载目录里按这个名字保留，"重试安装"不必重下）。
 - **可以再挂一个调试包**（真机自测要用），但文件名里必须含 `debug`，例如
