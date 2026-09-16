@@ -185,9 +185,9 @@ powershell -ExecutionPolicy Bypass -File release.ps1 0.2.0
 
 | 项目 | 许可证 | 用到哪里 |
 | --- | --- | --- |
-| [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)（tag 2.0.0） | Apache-2.0 | 液态玻璃渲染内核，以 `:kyant-backdrop` 目录 vendored。本地改动：把上游的 KMP 结构（commonMain / androidMain）拍平成纯 Android 库，并把 Compose 1.11 / Kotlin 2.3 的 API 适配到本项目的组合 |
+| [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)（tag 2.0.0） | Apache-2.0 | 液态玻璃的全部底子：`:kyant-backdrop` 子工程（背景采样与 AGSL 折射 / 高光 / 阴影），以及 `core/designsystem/liquid/` 的 `DampedDragAnimation`、`DragGestureInspector`、`InteractiveHighlight`、`LiquidBottomTab`（上游 catalog 里的同名组件）。本地改动：把上游的 KMP 结构（commonMain / androidMain）拍平成纯 Android 库，并把 Compose 1.11 / Kotlin 2.3 的 API 适配到本项目的组合 |
+| 同一份库的 SleepDown 补丁 | Apache-2.0（沿用各文件头的声明） | `:kyant-backdrop` 里 14 个文件带着 `Modified for SleepDown …; upstream 2.0.0, Apache-2.0` 的头（共享模糊 `SharedBlurBackdrop`、取景录制缓存等）—— 我们是经 [SleepDown课程表](https://github.com/xiaomanjun233/SleepDown-Schedule) 仓库里的 `third-party/kyant-backdrop` 取得这份副本的，取用位置与致谢见下一节 |
 | [Kyant0/Shapes](https://github.com/Kyant0/Shapes) | Apache-2.0 | G2 连续曲率圆角形状，内嵌在 `kyant-backdrop/…/com/kyant/shapes/`。Maven 上各版本都以 Kotlin 2.3 编译、与本项目 Kotlin 2.0 不兼容，故只能内嵌源码 |
-| [SleepDown课程表](https://github.com/xiaomanjun233/SleepDown-Schedule) | 署名-非商业、源码可见 1.1（非 OSI 开源许可） | `:kyant-backdrop` 里 14 个带 `Modified for SleepDown` 头的文件（共享模糊 `SharedBlurBackdrop`、取景录制缓存等），以及 `core/designsystem/liquid/` 的 `DampedDragAnimation`、`DragGestureInspector`、`InteractiveHighlight`、`LiquidBottomTab` |
 | AndroidX / Jetpack：Compose BOM 2024.12.01（ui / foundation 1.11.3、material3 1.3.1）、Room 2.8.3、Navigation 2.8.5、WorkManager 2.9.1、Lifecycle 2.8.7、Core KTX 1.18.0 | Apache-2.0 | 常规运行库 |
 | Kotlin 运行时与 kotlinx-coroutines 1.9.0、kotlinx-serialization-json 1.8.1、OkHttp 4.12.0 | Apache-2.0 | 常规运行库 |
 | JUnit 4.13.2、androidx.test / Espresso / UiAutomator / benchmark | EPL-1.0 / Apache-2.0 | 只在测试里，不进 APK |
@@ -202,17 +202,25 @@ powershell -ExecutionPolicy Bypass -File release.ps1 0.2.0
   载荷键名与白名单（结论与证据记在 `docs/VENDOR_NOTES.md`），未取代码。
 - **WakeUp 课程表**：只提供「导出 WakeUp 兼容 JSON」这一条格式兼容，无代码依赖。
 
-### 对 SleepDown课程表 那份许可的遵守
+### 致谢与取用位置
 
-它不是 OSI 开源许可：允许个人非商业使用，但**对外提供修改版必须源码可见 + 显著署名**。
-本仓库满足前两条 —— 完整源码公开、免费且无广告无付费；署名按该许可第 2 条原文：
+`:kyant-backdrop` 这批文件里，有 14 个带着 `Modified for SleepDown` 的头部注释，很容易读成
+"这些代码属于 SleepDown"。实际情况是：**Kyant0/AndroidLiquidGlass 是一个独立的开源库（Apache-2.0），
+SleepDown课程表 和我们一样是它的使用者**。它对该库的改动也写在这些保留 `com.kyant.*` 包名、
+保留上游 Apache-2.0 声明的文件里（SleepDown 自己的 `THIRD_PARTY_NOTICES.md` 同样这么标注），
+所以我们带出去的这一层始终在 Apache-2.0 之下，只需像现在这样保留来源注释。
 
-> 本项目基于 SleepDown课程表 修改；原作者：xiaomanjun233；原项目：
-> <https://github.com/xiaomanjun233/SleepDown-Schedule>
+SleepDown课程表 另有其自研的应用代码，那份许可（「署名-非商业、源码可见 1.1」）约束的是它。
+把 `:app` 与 `:kyant-backdrop` 的每个 Kotlin 文件与它的仓库逐一比对过：重合的只有上面那批
+`com.kyant.*` 文件，**没有一行来自它自研的业务代码**，因此本应用不是"基于 SleepDown 修改的版本"。
+按它许可的精神，这里仍然显著注明取用位置并致谢：
 
-主要修改内容（相对 SleepDown 的那部分代码）：适配到本项目的 Compose / Kotlin 版本、给玻璃档位加
-「关闭 / 开启」两档收敛（默认关闭大面积面板），并在此之上重写成本应用自己的设计系统。
-**本应用与 SleepDown 无关，不由其作者维护，也不代表其官方版本。**
+> 液态玻璃库取自 <https://github.com/xiaomanjun233/SleepDown-Schedule> 的
+> `third-party/kyant-backdrop`（其上游为 Kyant0/AndroidLiquidGlass，Apache-2.0）。
+
+另外，澎湃超级岛的实况通知形状（哪些 extras 必填、chip 要多短、为什么不能用系统 chronometer）
+是逐条对照 SleepDown 的真机做法定下来的，证据链记在 [`docs/VENDOR_NOTES.md`](docs/VENDOR_NOTES.md)。
+本应用与 SleepDown 无关，不由其作者维护，也不代表其官方版本。
 
 ## 许可证
 
