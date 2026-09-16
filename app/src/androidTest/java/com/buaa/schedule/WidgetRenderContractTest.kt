@@ -21,6 +21,9 @@ import com.buaa.schedule.widget.BackgroundSync
 import com.buaa.schedule.widget.CourseListFactory
 import com.buaa.schedule.widget.ListWidgetMode
 import com.buaa.schedule.widget.WidgetAppearance
+import com.buaa.schedule.widget.WidgetBinding
+import com.buaa.schedule.widget.WidgetBindingStore
+import com.buaa.schedule.widget.WidgetDataCache
 import java.time.LocalDate
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -52,35 +55,48 @@ class WidgetRenderContractTest {
     private val today: LocalDate = LocalDate.now()
 
     @Before
-    fun seedCourseToday() = runBlocking {
-        repository.saveSemester(
-            Semester(
-                termCode = TERM_CODE,
-                termName = TERM_CODE,
-                // 学期第 1 周周一 = 本周一：保证「今天」落在学期内且周次有效
-                startDate = mondayOfCurrentWeek().toString(),
-                totalWeeks = 20,
+    fun seedCourseToday() {
+        runBlocking {
+            repository.saveSemester(
+                Semester(
+                    termCode = TERM_CODE,
+                    termName = TERM_CODE,
+                    // 学期第 1 周周一 = 本周一：保证「今天」落在学期内且周次有效
+                    startDate = mondayOfCurrentWeek().toString(),
+                    totalWeeks = 20,
+                )
             )
-        )
-        repository.saveCourse(
-            Course(
-                name = COURSE_NAME,
-                teacher = "测试教师",
-                location = "主楼T-101",
-                dayOfWeek = today.dayOfWeek.value,
-                periods = listOf(1, 2),
-                weeks = listOf(1, 2, 3, 4, 5, 6, 7, 8),
-                semesterCode = TERM_CODE,
+            repository.saveCourse(
+                Course(
+                    name = COURSE_NAME,
+                    teacher = "测试教师",
+                    location = "主楼T-101",
+                    dayOfWeek = today.dayOfWeek.value,
+                    periods = listOf(1, 2),
+                    weeks = listOf(1, 2, 3, 4, 5, 6, 7, 8),
+                    semesterCode = TERM_CODE,
+                )
             )
-        )
-        // 走真实刷新路径，把快照备好（工厂只读快照，不查主库）
-        BackgroundSync.refreshWidgets(context)
+            // 实例级绑定指向测试学期：否则工厂按 "current" 取快照，读的是
+            // 真机上用户自己的课表，与这里 seed 的内容无关
+            WidgetBindingStore.save(context, TEST_WIDGET_ID, WidgetBinding(TERM_CODE))
+            // 走真实刷新路径，把快照备好（工厂只读快照，不查主库）
+            BackgroundSync.refreshWidgets(context)
+            // refreshWidgets 刚 invalidate 过内存缓存，而 sync 只写磁盘：
+            // peek() 必落空 → 工厂渲染空态再异步补数据（F-17 的设计如此）。
+            // 这里补上 provider 在 notifyListDataChanged 之前做的那步预热。
+            WidgetDataCache.get(context, TERM_CODE)
+        }
     }
 
     @After
-    fun cleanUp() = runBlocking {
-        db.courseDao().deleteBySemester(TERM_CODE)
-        db.semesterDao().deleteByTermCode(TERM_CODE)
+    fun cleanUp() {
+        runBlocking {
+            db.courseDao().deleteBySemester(TERM_CODE)
+            db.semesterDao().deleteByTermCode(TERM_CODE)
+            WidgetBindingStore.reset(context, TEST_WIDGET_ID)
+            WidgetDataCache.invalidate()
+        }
     }
 
     // —— 1. 预览布局：静态渲染也必须读得清 ——————————————————————
@@ -175,7 +191,7 @@ class WidgetRenderContractTest {
     }
 
     private fun intentForMode(mode: ListWidgetMode) = Intent().apply {
-        putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID)
+        putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, TEST_WIDGET_ID)
         putExtra(CourseListFactory.EXTRA_MODE, mode.ordinal)
     }
 
@@ -246,6 +262,9 @@ class WidgetRenderContractTest {
     private companion object {
         const val TERM_CODE = "TEST-WIDGET-RENDER"
         const val COURSE_NAME = "组件渲染测试课"
+
+        /** 自配的组件实例 id：绑到测试学期，不去读真机上用户自己的课表 */
+        const val TEST_WIDGET_ID = 90_001
 
         /** WCAG AA 对正文的最小对比度；白底白字算出来是 1.0，一定过不了 */
         const val MIN_CONTRAST = 3f

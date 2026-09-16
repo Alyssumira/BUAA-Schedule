@@ -132,6 +132,10 @@ CI 上等价的环境变量：`BUAA_KEYSTORE_PATH` / `BUAA_KEYSTORE_PASSWORD` / 
 | 单元测试 | 282 | 45 | 周次解析 / 教学周计算 / 冲突检测 / 导入规划 / 备份 schema / ICS 与文本解析与往返 / 节次分段与连堂判定 / 教务抓取脚本契约 / 日历投影选择 / 提醒排程与明日预告推送集合 / 分享编解码 / Widget 外观 |
 | 仪器测试 | 55 | 12 | Room 迁移（`MigrationTest`）/ Repository 提醒写入与事务 / Widget 刷新新鲜度与渲染契约（预览可读性、列表工厂）/ WebView 会话保留与隐藏宿主 / 课堂铃生命周期 / 日历同步部分失败 |
 
+最近一次真机实测（Redmi K60 Pro / Android 17）：**52 例通过、0 失败**；余下 3 例
+`BuaaSessionRetainKeepsJsAliveTest` 需要设备放行 instrumentation 拉起 Activity
+（小米/澎湃上是开发者选项「USB调试（安全设置）」），标准模拟器无此限制。
+
 单测不需要设备；仪器测试跑在 **API 29 + API 34 模拟器**上（CI 同配置），Room 迁移与
 WebView 相关用例必须有真实 Framework 环境，API 34 一档用于覆盖 Android 14 行为收紧
 （壁纸读取、精确闹钟等，见 `docs/KNOWN_ISSUES.md`）。

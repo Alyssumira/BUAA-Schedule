@@ -33,50 +33,56 @@ class WidgetRefreshFreshnessTest {
     private val db get() = AppDatabase.getInstance(context.applicationContext)
 
     @Before
-    fun seedCourse() = runBlocking {
-        repository.saveSemester(
-            Semester(
-                termCode = TERM_CODE,
-                termName = TERM_CODE,
-                startDate = "2026-09-07",
-                totalWeeks = 16,
+    fun seedCourse() {
+        runBlocking {
+            repository.saveSemester(
+                Semester(
+                    termCode = TERM_CODE,
+                    termName = TERM_CODE,
+                    startDate = "2026-09-07",
+                    totalWeeks = 16,
+                )
             )
-        )
-        repository.saveCourse(
-            Course(
-                name = FRESHNESS_COURSE_NAME,
-                dayOfWeek = 1,
-                periods = listOf(1, 2),
-                weeks = listOf(1, 2),
-                semesterCode = TERM_CODE,
+            repository.saveCourse(
+                Course(
+                    name = FRESHNESS_COURSE_NAME,
+                    dayOfWeek = 1,
+                    periods = listOf(1, 2),
+                    weeks = listOf(1, 2),
+                    semesterCode = TERM_CODE,
+                )
             )
-        )
+        }
     }
 
     @After
-    fun cleanUp() = runBlocking {
-        db.courseDao().deleteBySemester(TERM_CODE)
-        db.semesterDao().deleteByTermCode(TERM_CODE)
+    fun cleanUp() {
+        runBlocking {
+            db.courseDao().deleteBySemester(TERM_CODE)
+            db.semesterDao().deleteByTermCode(TERM_CODE)
+        }
     }
 
     @Test
-    fun refreshingWidgetsRewritesSnapshotFromDatabase() = runBlocking {
-        // 1) 伪造一份明显过期、与主库不一致的快照
-        WidgetDataSynchronizer.save(context, "current", WidgetData(null, emptyList(), emptyList()))
+    fun refreshingWidgetsRewritesSnapshotFromDatabase() {
+        runBlocking {
+            // 1) 伪造一份明显过期、与主库不一致的快照
+            WidgetDataSynchronizer.save(context, "current", WidgetData(null, emptyList(), emptyList()))
 
-        // 2) 走组件刷新路径（应用内改课表后 ScheduleViewModel 调的就是它）
-        BackgroundSync.refreshWidgets(context)
+            // 2) 走组件刷新路径（应用内改课表后 ScheduleViewModel 调的就是它）
+            BackgroundSync.refreshWidgets(context)
 
-        // 3) 快照必须已被重写成主库当前内容（含刚写入的那门课）
-        val expected = repository.getDisplayCourses(repository.getCurrentSemester())
-        val actual = WidgetDataSynchronizer.load(context, "current")?.data
+            // 3) 快照必须已被重写成主库当前内容（含刚写入的那门课）
+            val expected = repository.getDisplayCourses(repository.getCurrentSemester())
+            val actual = WidgetDataSynchronizer.load(context, "current")?.data
 
-        assertEquals(expected.size, actual?.courses?.size)
-        assertEquals(
-            expected.map { it.name }.sorted(),
-            actual?.courses?.map { it.name }?.sorted(),
-        )
-        assertEquals(true, actual?.courses?.any { it.name == FRESHNESS_COURSE_NAME })
+            assertEquals(expected.size, actual?.courses?.size)
+            assertEquals(
+                expected.map { it.name }.sorted(),
+                actual?.courses?.map { it.name }?.sorted(),
+            )
+            assertEquals(true, actual?.courses?.any { it.name == FRESHNESS_COURSE_NAME })
+        }
     }
 
     companion object {

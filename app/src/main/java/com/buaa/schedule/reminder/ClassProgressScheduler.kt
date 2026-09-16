@@ -293,8 +293,16 @@ object ClassProgressScheduler {
         val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
         // FLAG_NO_CREATE：只撤销“已存在”的 PendingIntent，
         // 避免每次重排提醒都新造两个永远不会使用的 PendingIntent。
-        existingPendingIntent(context, REQUEST_START, ACTION_START)?.let { alarmManager.cancel(it) }
-        existingPendingIntent(context, REQUEST_END, ACTION_END)?.let { alarmManager.cancel(it) }
+        // 只 alarmManager.cancel 不够：PI 记录仍被应用侧的引用钉住，FLAG_NO_CREATE
+        // 事后照样查得到（真机实测），于是"铃到底还挂不挂着"无法回答。
+        // PendingIntent.cancel() 把记录本身摘掉；重排时 getBroadcast 会再造新的。
+        existingPendingIntent(context, REQUEST_START, ACTION_START)?.cancelWith(alarmManager)
+        existingPendingIntent(context, REQUEST_END, ACTION_END)?.cancelWith(alarmManager)
+    }
+
+    private fun PendingIntent.cancelWith(alarmManager: AlarmManager) {
+        alarmManager.cancel(this)
+        cancel()
     }
 
     /**
