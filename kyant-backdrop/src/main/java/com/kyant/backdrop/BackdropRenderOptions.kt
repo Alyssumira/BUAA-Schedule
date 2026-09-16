@@ -1,0 +1,20 @@
+package com.kyant.backdrop
+
+import androidx.compose.ui.geometry.Rect
+
+/** SleepDown extension. Pausing retains node ownership without recording material layers. */
+class BackdropRenderOptions(
+    val enabled: () -> Boolean = { true },
+    val sampleBackdrop: Boolean = true,
+    val bounds: () -> Rect? = { null },
+    val allocationPadding: Float? = null,
+    /** Non-null only when the caller can describe ALL effect inputs with an immutable value. */
+    val effectKey: () -> Any? = { null },
+    val cacheDecorations: Boolean = false,
+    /** Sampling resolution only; layout, clipping and decorations remain at full resolution. */
+    val sampleScale: Float = 1f
+) {
+    companion object {
+        val Default = BackdropRenderOptions()
+    }
+}

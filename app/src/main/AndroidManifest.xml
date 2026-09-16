@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!--
+      不再声明 POST_PROMOTED_NOTIFICATIONS（R5 F-C10）：全仓没有申请路径，
+      ReminderGuidance 用的 canPostPromotedNotifications() 是只读查询、不需要权限。
+      商店审核会盯未使用的权限声明。
+    -->
+    <!-- 课程实况前台服务（澎湃实况窗 / 流体云）：specialUse FGS 需要这两项权限 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+    <!--
+      用于「设置 → 提醒可靠性」引导用户关闭电池优化（ReminderGuidance 发出的
+      Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 需要该权限）。
+      注意：应用商店对这条权限有额外审核要求，若将来改为商店分发，
+      需要改成纯说明页 + 手动跳转「电池优化」列表的引导方式，并移除本声明。
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!--
+      短时 PARTIAL_WAKE_LOCK（5 秒，带超时自动释放）：包住上课闹钟广播里的
+      DB 查询与全量重排。goAsync 只保证进程存活，Doze 下 CPU 可能中途入睡
+      导致重排被打断、提醒链条断掉（SleepDown 同款做法）。
+    -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+
+    <!--
+      allowBackup 保持开启（课表数据跨设备迁移是刚需），
+      但**必须**靠 backup_rules / backup_rules_legacy 把鉴权材料排除干净：
+      这里持有的是教务会话 Cookie（经 AndroidKeyStore 加密后的密文）。
+      密文即使离开设备也解不开，但把会话材料复制到另一台设备没有任何正当用途，
+      而 legacy 规则此前排除的是一个不存在的文件名（secure_session.xml），
+      实际等于什么都没排除。
+    -->
+    <application
+        android:name=".BUAAApplication"
+        android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules_legacy"
+        android:dataExtractionRules="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.BUAASchedule">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.BUAASchedule">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 列表型组件的数据源：必须由系统以 BIND_REMOTEVIEWS 权限绑定 -->
+        <service
+            android:name=".widget.CourseListWidgetService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
+
+        <!-- 4x2 周网格组件的数据源 -->
+        <service
+            android:name=".widget.WeekGridWidgetService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
+
+        <!--
+          桌面组件外观配置页：由 Launcher 在「拖放组件」或「长按组件 → 编辑」时拉起，
+          intent 携带 EXTRA_APPWIDGET_ID。必须 exported 才能被 Launcher 启动。
+        -->
+        <activity
+            android:name=".widget.WidgetConfigActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:label="@string/widget_config_title"
+            android:theme="@style/Theme.BUAASchedule">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
+        <receiver
+            android:name=".reminder.ReminderReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".reminder.BootReceiver"
+            android:exported="false">
+            <!-- 只负责开机/升级重建。DATE_CHANGED / TIME_SET / TIMEZONE_CHANGED
+                 由 WidgetRefreshReceiver 统一处理，避免同一事件被两个接收器各跑一遍 -->
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".reminder.TomorrowPreviewReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".reminder.ClassProgressReceiver"
+            android:exported="false" />
+
+        <!-- 课程实况前台服务：specialUse FGS，用于澎湃实况窗/流体云样式的常驻进度通知 -->
+        <service
+            android:name=".reminder.CourseFluidService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="course_progress_fluid_cloud" />
+        </service>
+
+        <receiver
+            android:name=".widget.WidgetRefreshReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.TIME_CHANGED" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.DATE_CHANGED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".widget.TodayWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_today_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/today_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.TomorrowWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_tomorrow_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/tomorrow_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.WeekWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_week_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/week_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.WeekGridWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_week_grid_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/week_grid_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.NextClassWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_next_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/next_widget_info" />
+        </receiver>
+    </application>
+
+</manifest>

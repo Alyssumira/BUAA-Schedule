@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  实况通知 ProgressStyle 的 tracker 图标（进度条上的「头」）。
+  对齐 SleepDown 的做法：单个白色小圆点，不叠加 Point，
+  避免 ROM 实况样式里出现两个重叠的进度图示。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,12m-6,0a6,6 0 1,1 12,0a6,6 0 1,1 -12,0" />
+</vector>

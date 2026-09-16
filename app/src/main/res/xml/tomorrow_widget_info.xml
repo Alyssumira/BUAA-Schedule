@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  明日组件此前复用今日组件的 initialLayout/previewLayout，选择器里标题写着「今日课程」；
+  现在指向自己的预览布局（R5 F-27）。targetCell* 等 API 31+ 属性见 next_widget_info 注释。
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:minWidth="180dp"
+    android:minHeight="40dp"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_preview_tomorrow"
+    android:resizeMode="horizontal|vertical"
+    android:configure="com.buaa.schedule.widget.WidgetConfigActivity"
+    android:description="@string/widget_tomorrow_desc"
+    android:widgetFeatures="reconfigurable|configuration_optional"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:previewLayout="@layout/widget_preview_tomorrow"
+    android:widgetCategory="home_screen"
+    tools:ignore="UnusedAttribute" />

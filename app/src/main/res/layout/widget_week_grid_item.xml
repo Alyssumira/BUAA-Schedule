@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 周网格组件的一天单元：星期 + 节次摘要 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="4dp">
+
+    <TextView
+        android:id="@+id/widget_grid_day"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#FFFFFF"
+        android:textSize="11sp"
+        android:textStyle="bold"
+        android:maxLines="1" />
+
+    <TextView
+        android:id="@+id/widget_grid_courses"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#D6E1F5"
+        android:textSize="11sp"
+        android:maxLines="3"
+        android:ellipsize="end" />
+
+</LinearLayout>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  仅 debug 变体存在的测试支撑声明。
+  仪器测试需要"一个真实窗口 + 空内容"的宿主来验证视图挂载行为
+  （如 BuaaWebSession.retain 之后 WebView 是否仍在窗口内）；
+  用 MainActivity 当宿主会因为 Compose 连续动画导致 ActivityScenario 等 idle 超时，
+  一个测试能跑十几分钟。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name="com.buaa.schedule.DebugHostActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BUAASchedule" />
+    </application>
+</manifest>

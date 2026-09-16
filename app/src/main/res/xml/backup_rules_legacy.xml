@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 11 及以下自动备份规则（android:fullBackupContent）。
+
+  排除的文件名必须与代码里实际的 SharedPreferences 名一致：
+  - buaa_cookie_store.xml ← BuaaCookieStore.PREFS
+  - buaa_session.xml      ← BuaaWebSession.PREFS_NAME
+
+  此前这里写的是 secure_session.xml —— 项目里根本不存在这个 prefs，
+  等于一条都没排除，登录会话材料一直在被自动备份上传。
+
+  app_webview 是 WebView 的数据目录（Cookies / Local Storage / IndexedDB），
+  里面才是跨设备真正可用的 SSO 凭证，必须一起排除（R5 F-C3）。
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="buaa_cookie_store.xml" />
+    <exclude domain="sharedpref" path="buaa_session.xml" />
+    <exclude domain="root" path="app_webview" />
+</full-backup-content>

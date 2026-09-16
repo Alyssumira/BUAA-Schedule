@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">北航课程表</string>
+    <string name="tab_home">课表</string>
+    <string name="tab_import">导入</string>
+    <string name="tab_settings">设置</string>
+    <string name="widget_today_desc">今日课程一览，可自定义背景色、透明度与圆角</string>
+    <string name="widget_tomorrow_desc">明日课程预览，可自定义背景色、透明度与圆角</string>
+    <string name="widget_next_desc">下一节课的极简提醒，可自定义背景色、透明度与圆角</string>
+    <string name="widget_week_desc">本周课表总览，可自定义背景色、透明度与圆角</string>
+    <!-- 4x2 周网格组件与"本周课表"列表组件是两个不同形态，选择器里必须有区分度 -->
+    <string name="widget_week_grid_label">本周网格</string>
+    <string name="widget_week_grid_desc">4×2 网格，一屏看全本周七天，可自定义背景色、透明度与圆角</string>
+    <string name="widget_today_label">今日课程</string>
+    <string name="widget_tomorrow_label">明日课程</string>
+    <string name="widget_week_label">本周课表</string>
+    <string name="widget_next_label">下一节课</string>
+    <string name="widget_config_title">桌面组件外观</string>
+
+    <!-- 线上布局里的占位文案：首次 onUpdate 前显示，随后被真实课表覆盖 -->
+    <string name="widget_next_placeholder">下一节</string>
+    <string name="widget_none_placeholder">暂无课程</string>
+    <string name="widget_empty_today">今天没有课</string>
+    <string name="widget_empty_week">本周没有课</string>
+
+    <!--
+      组件预览素材（R5 F-27）：initialLayout / previewLayout 是静态渲染的，
+      只能自带上课数据才看得出效果；这里的文案全是示例，不是真实课程。
+    -->
+    <string name="widget_preview_subtitle">第 8 周</string>
+    <string name="widget_preview_course_a">高等数学 A</string>
+    <string name="widget_preview_course_b">线性代数</string>
+    <string name="widget_preview_course_c">大学英语听说</string>
+    <string name="widget_preview_meta_a">08:00 · 主楼A-101</string>
+    <string name="widget_preview_room_a">主楼A-101</string>
+    <string name="widget_preview_room_b">主楼A-203</string>
+    <string name="widget_preview_room_c">新主楼B-301</string>
+    <string name="widget_preview_time_a">08:00</string>
+    <string name="widget_preview_time_b">10:00</string>
+    <string name="widget_preview_time_c">14:00</string>
+    <!-- 周网格预览：一列一个单元格，首行是星期 -->
+    <string name="widget_preview_cell_1">周一\n高数\n数构</string>
+    <string name="widget_preview_cell_2">周二\n线代\n英语</string>
+    <string name="widget_preview_cell_3">周三\n高数\n实验</string>
+    <string name="widget_preview_cell_4">周四\n线代\n体育</string>
+    <string name="widget_preview_cell_5">周五\n英语\n数构</string>
+    <string name="widget_preview_cell_rest">周六\n周日\n无课</string>
+</resources>

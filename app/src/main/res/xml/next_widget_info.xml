@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  initialLayout / previewLayout 指向 widget_preview_next：这两个位置是**静态渲染**的，
+  线上布局的纯白底 + 运行时着色在这里只会得到白底白字（R5 F-27）。
+  targetCell*/widgetFeatures/description 是 API 31+ 属性，低版本 launcher 会忽略它们，
+  这正是预期行为（高版本拿更精确的占位与说明），故整元素忽略 UnusedAttribute。
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:minWidth="110dp"
+    android:minHeight="40dp"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_preview_next"
+    android:resizeMode="horizontal|vertical"
+    android:configure="com.buaa.schedule.widget.WidgetConfigActivity"
+    android:description="@string/widget_next_desc"
+    android:widgetFeatures="reconfigurable|configuration_optional"
+    android:targetCellWidth="2"
+    android:targetCellHeight="1"
+    android:previewLayout="@layout/widget_preview_next"
+    android:widgetCategory="home_screen"
+    tools:ignore="UnusedAttribute" />

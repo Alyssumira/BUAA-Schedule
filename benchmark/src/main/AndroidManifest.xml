@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  这里曾经声明了 WRITE_EXTERNAL_STORAGE：本模块 minSdk 28，分区存储下该权限
+  什么都做不了，纯属遗留（R5 F-C10）。宏基准把产物写到
+  build/outputs/managed_device_android_test_additional_output/ 由 AGP 直接拉回，
+  不需要应用侧的写外部存储权限。未使用的权限声明会被商店审核盯上，故删除。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

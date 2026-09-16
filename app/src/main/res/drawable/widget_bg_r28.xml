@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 桌面组件背景：纯白圆角矩形，运行时用 ImageView.setColorFilter 重新着色。
+     必须是纯白/不透明，否则 SRC_ATOP 着色结果会偏色。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="28dp" />
+    <solid android:color="#FFFFFFFF" />
+</shape>

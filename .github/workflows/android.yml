@@ -1,0 +1,200 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+# 同一分支的新提交自动取消上一次仍在跑的任务，避免排队积压
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        # 与 app/build.gradle.kts 的 kotlin { jvmToolchain(21) } 保持一致：
+        # 工具链固定 21 后，runner 上必须有 JDK 21（settings.gradle.kts 未引入
+        # foojay resolver，Gradle 不会自动下载工具链）。
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build debug APK, run unit tests and lint
+        # 显式写成 :app: 前缀：裸任务名会被 Gradle 匹配到所有子工程，
+        # 从而把 :benchmark（宏基准/基线 profile 生成，需要真机）一起拉进 CI。
+        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug --stacktrace
+
+      - name: Build release APK (R8)
+        # 配了 BUAA_KEYSTORE_BASE64 等 secrets 时是签名包，否则 unsigned（R5 F-C8）。
+        # 没有签名包就没有"能装的 R8 产物"，下面的 release-artifact job 会因此跳过。
+        env:
+          BUAA_KEYSTORE_BASE64: ${{ secrets.BUAA_KEYSTORE_BASE64 }}
+          BUAA_KEYSTORE_PASSWORD: ${{ secrets.BUAA_KEYSTORE_PASSWORD }}
+          BUAA_KEYSTORE_ALIAS: ${{ secrets.BUAA_KEYSTORE_ALIAS }}
+          BUAA_KEYSTORE_KEY_PASSWORD: ${{ secrets.BUAA_KEYSTORE_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Upload release APK
+        # R5 F-C7：产物必须留档，且"没找到文件"要红 —— 否则 job 绿了却什么都没产出
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-debug.html
+
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest/**
+
+  # 仪器测试（Room 迁移 / 仓储边界 / WebView 契约 / 组件外观持久化）。
+  # 此前 CI 只 assembleDebugAndroidTest（编译但不执行），这些测试实际从未在 CI 上跑过。
+  # 评审 P0-4：矩阵跑 API 29 + 34 —— 29 是 WebView/Room 稳定可用的低版本下限，
+  # 34（Android 14）覆盖平台行为收紧（壁纸读取被禁、精确闹钟默认拒绝等），
+  # 正好是本 App 已知回退/降级路径所在区间。
+  instrumented:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      # 一个 API 档失败不要取消另一个：两份报告都留着，方便定位是平台差异还是回归
+      fail-fast: false
+      matrix:
+        api-level: [ 29, 34 ]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # 模拟器需要 KVM；GitHub 托管 runner 默认不放行
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run instrumented tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          # 29 = WebView 与 Room 都稳定可用的较低版本，冷启动比新版本快；
+          # 34 = Android 14，验证高版本系统行为收紧后的兼容路径
+          api-level: ${{ matrix.api-level }}
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          # 只跑 app 的仪器测试；:benchmark 的宏基准需要另行手动执行
+          script: ./gradlew :app:connectedDebugAndroidTest --stacktrace
+
+      - name: Upload instrumented test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # 报告按 API 档分开上传，避免矩阵两份产物互相覆盖
+          name: instrumented-test-report-api${{ matrix.api-level }}
+          path: |
+            app/build/reports/androidTests/connected/**
+            app/build/outputs/androidTest-results/connected/**
+
+  # R5 F-C7：release 包此前只 assembleRelease —— 编译通过不代表装得上、起得来。
+  # R8 独有的问题（keep 规则缺失导致反射/序列化初始化被剥掉、desugar 缺口）
+  # 只在真跑起来时才暴露，所以这里必须真正安装并启动一次。
+  # 不跑 connectedReleaseAndroidTest：DebugHostActivity 在 app/src/debug，
+  # release 构建里根本没有仪器测试宿主（要跑得先 testBuildType = "release"）。
+  release-artifact:
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 30
+    # job 级 if 里拿不到 secrets 上下文，只能把它转成 env 再在 step 级判断
+    env:
+      KEYSTORE_BASE64: ${{ secrets.BUAA_KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download release APK
+        uses: actions/download-artifact@v4
+        with:
+          name: release-apk
+          path: release-apk
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install and launch release APK
+        # 未配置签名 secrets 时产物是 unsigned APK，`adb install` 必然失败，
+        # 与其报一个假阳性不如显式跳过（build job 仍会绿，只是没有冒烟）。
+        if: env.KEYSTORE_BASE64 != ''
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -euo pipefail
+            # 产物目录里可能同时有签名与 unsigned 两份，取签名那份
+            apk="$(find release-apk -name '*.apk' ! -name '*-unsigned.apk' -print -quit)"
+            if [ -z "$apk" ]; then
+              echo "没找到签名 release APK"
+              exit 1
+            fi
+            echo "安装 $apk"
+            adb install -r -g "$apk"
+            adb logcat -c
+            adb shell am start -n com.buaa.schedule/.MainActivity
+            # 给首帧和启动期任务一点时间；崩了的话 pidof 会拿不到进程
+            sleep 15
+            # pidof 找不到进程时退出码非 0，不能让 set -e 抢先把有用的诊断吞掉
+            pid="$(adb shell pidof -s com.buaa.schedule | tr -d '\r' || true)"
+            if [ -z "$pid" ]; then
+              echo "release 包启动后进程不在，MainActivity 起不来"
+              adb logcat -d -b crash | tail -n 200
+              exit 1
+            fi
+            if adb logcat -d -b crash | grep -q "FATAL EXCEPTION"; then
+              echo "release 包启动期发生 FATAL EXCEPTION"
+              adb logcat -d -b crash | tail -n 200
+              exit 1
+            fi
+            echo "release 包存活，pid=$pid"
+
