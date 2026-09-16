@@ -510,9 +510,11 @@ fun printPublishSteps(artifact: File) {
         |     「author 必须等于 committer」的钩子当场拒推（2026-09-16 实测 hook declined）
         |  2. Gitee 新建仓库发布：tag 选 $tag，标题写 $releaseVersionName，正文即更新说明
         |     （不想点网页就走接口：POST $giteeApiReleasesUrl，参数 tag_name/name/body，
-        |     鉴权用带 projects 域的私人令牌）
+        |     鉴权用带 projects 域的私人令牌。**target_commitish 也必须传**，填 $tag 所指 commit 的 sha；
+        |     2026-09-16 实测：tag 已存在时少传它照样 400 "target_commitish is missing"）
         |  3. 上传附件：${artifact.name}
-        |     接口：POST $giteeApiReleasesUrl/{release_id}/attach_files（multipart 字段名 file）
+        |     接口：POST $giteeApiReleasesUrl/{release_id}/attach_files（multipart 字段名 file，
+        |     成功回 201，附件 id 在响应里）
         |     要额外挂调试包自测的话，名字里必须含 debug（客户端选附件的顺序见 UpdateInfo.pickApkAsset）
         |     附件必须「公开可下载」——私有仓库或需登录时，接口给的是 HTML 登录页，
         |     应用会把它挡在安装器之外（校验见 UpdateInfo.apkIntegrityProblem）

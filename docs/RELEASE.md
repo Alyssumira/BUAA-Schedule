@@ -113,10 +113,16 @@ CI 用 `BUAA_KEYSTORE_BASE64` 等环境变量传同一组值（secrets 存不了
   会新建一个 tag 对象，服务端于是把这条历史整个翻一遍 —— 本仓库首个 commit（Gitee 网页
   建的 `Initial commit`）committer 是 `noreply@gitee.com`，与 author 不等，钩子当场
   `hook declined`（2026-09-16 实测）。轻量 tag 指着已经推上去的 commit，没有新对象，能过。
-- 没有浏览器会话时全套都能走接口：`POST https://gitee.com/api/v5/repos/alyssumira/buaa-schedule/releases`
-  创建发布（`tag_name` / `name` / `body`），再
-  `POST .../releases/{release_id}/attach_files`（multipart 字段名 `file`）上传附件。
-  两步都要 `access_token`，即 Gitee 私人令牌里勾了 `projects` 域的那种。
+- 没有浏览器会话时全套都能走接口（2026-09-16 首发即这么发的）：
+  `POST https://gitee.com/api/v5/repos/alyssumira/buaa-schedule/releases` 创建发布，
+  参数 `tag_name` / `name` / `body` 之外**还必须传 `target_commitish`**（填 tag 所指 commit
+  的 sha；少传直接 400 `target_commitish is missing`，哪怕 tag 早就推上去了）。
+  再 `POST .../releases/{release_id}/attach_files`（multipart 字段名 `file`，成功回 201）上传附件。
+  两步都要 `access_token`，即 Gitee 私人令牌里勾了 `projects` 域的那种；
+  本项目的令牌放在 `local.properties` 的 `buaa.gitee.token`（同 keystore 口令，不入库）。
+- 上传响应里有 `id` / `size` / `label` 等字段，但 **releases 列表接口回给客户端的附件对象
+  只有 `name` 与 `browser_download_url`**（2026-09-16 首发后逐字段核对过），
+  所以弹窗里的体积只能来自下载响应的 `Content-Length`，这一点没变。
 - 标题写版本号，正文即更新说明（弹窗按 markdown 逐行渲染，`#`/`- ` 认）。
 - 附件名用 `buaa-schedule-<版本>.apk`（下载目录里按这个名字保留，"重试安装"不必重下）。
 - **可以再挂一个调试包**（真机自测要用），但文件名里必须含 `debug`，例如
