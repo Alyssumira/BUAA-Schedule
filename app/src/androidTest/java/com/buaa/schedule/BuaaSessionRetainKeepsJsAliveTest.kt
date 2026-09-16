@@ -14,7 +14,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.Timeout
 import org.junit.runner.RunWith
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -35,6 +37,18 @@ import java.util.concurrent.TimeUnit
  */
 @RunWith(AndroidJUnit4::class)
 class BuaaSessionRetainKeepsJsAliveTest {
+
+    /**
+     * 本类是仓库里唯一用 [ActivityScenario] 的仪器测试。`ActivityScenario.launch` 没有超时，
+     * 而在拒绝 instrumentation 拉起 Activity 的 ROM 上（真机实测：小米/澎湃 HyperOS，需
+     * 「后台弹出界面」授权）它会一直等 RESUMED，把整轮 connectedDebugAndroidTest 永久挂死。
+     * 这里给每条用例 30s 上限：超时报 TestTimedOutException 并打印卡住的线程，其余用例继续。
+     */
+    @get:Rule
+    val caseTimeout: Timeout = Timeout.builder()
+        .withTimeout(30, TimeUnit.SECONDS)
+        .withLookingForStuckThread(true)
+        .build()
 
     @Test
     fun retainedSessionWebViewStaysAttachedAndRunsAsyncJs() {

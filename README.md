@@ -1,6 +1,7 @@
 # BUAA Schedule（北航课程表）
 
-从零实现的北航专用课程表 Android App，功能对标 SleepDown，UI 风格参考但代码全新编写。
+声明：本项目全部代码均由AI生成
+从零实现的北航专用课程表 Android App
 
 ## 当前进度
 
@@ -65,9 +66,10 @@
 - [x] 文档体系（`docs/`：架构总览 / 备份与口令格式 / 设计系统约束 / 隐私与数据安全 / 已知问题 / 厂商 ROM 适配笔记）
 - [x] 宽屏（≥600dp）周视图 + 日视图双栏并排（用 `Row` 权重实现，未引入 material3-adaptive）
 
-## 不做 AI
+## 不做的内容
 
-本项目明确不包含 AI 助手 / AI 导入 / 智能推荐等 AI 功能。
+本项目明确不包含 AI 助手 / AI 导入 / 智能推荐等 AI 功能
+暂不考虑做国际化，目前文案均为中文硬编码
 
 ## 待实现
 
@@ -75,8 +77,6 @@
 - [ ] 桌面组件背景的真实高斯模糊（当前做法：采样壁纸 → 缩小再放大得到廉价模糊 + 叠加用户背景色，
       `WidgetBackgroundRenderer`；受同样的 Android 14 壁纸限制，该版本上回退纯色圆角底）
 - [ ] 图片 / PDF 导入
-- [ ] 国际化：目前只有中文，**没有任何 `values-*` 资源目录**，`strings.xml` 仅 15 条，
-      UI 中文文案大量硬编码在 Composable 里；要支持多语言得先把硬编码抽到 stringResource 再加翻译
 - [ ] 完整个性化外观（壁纸取景 / 横竖屏独立配置；模糊/亮度/缩放已完成）
 - [ ] Baseline Profile：**目前完全没接入，`:benchmark` 里的三个类都是跑不起来的死代码**。
       release 产物只含 **AGP 自动合并的依赖库 profile**（`app/build/outputs/apk/release/baselineProfiles/`），
@@ -132,9 +132,10 @@ CI 上等价的环境变量：`BUAA_KEYSTORE_PATH` / `BUAA_KEYSTORE_PASSWORD` / 
 | 单元测试 | 282 | 45 | 周次解析 / 教学周计算 / 冲突检测 / 导入规划 / 备份 schema / ICS 与文本解析与往返 / 节次分段与连堂判定 / 教务抓取脚本契约 / 日历投影选择 / 提醒排程与明日预告推送集合 / 分享编解码 / Widget 外观 |
 | 仪器测试 | 55 | 12 | Room 迁移（`MigrationTest`）/ Repository 提醒写入与事务 / Widget 刷新新鲜度与渲染契约（预览可读性、列表工厂）/ WebView 会话保留与隐藏宿主 / 课堂铃生命周期 / 日历同步部分失败 |
 
-最近一次真机实测（Redmi K60 Pro / Android 17）：**52 例通过、0 失败**；余下 3 例
-`BuaaSessionRetainKeepsJsAliveTest` 需要设备放行 instrumentation 拉起 Activity
-（小米/澎湃上是开发者选项「USB调试（安全设置）」），标准模拟器无此限制。
+最近一次真机实测（Redmi K60 Pro / Android 17）：**55 例全通过、0 失败**。其中
+`BuaaSessionRetainKeepsJsAliveTest` 3 例要求给本应用放行「后台弹出界面」——HyperOS 会拒绝
+instrumentation 拉起 Activity，而 `ActivityScenario.launch` 没有超时；该类已加 30 秒/例的
+JUnit `Timeout` 规则，在不放行的 ROM 上报超时而不是把整轮 `connectedDebugAndroidTest` 挂死。
 
 单测不需要设备；仪器测试跑在 **API 29 + API 34 模拟器**上（CI 同配置），Room 迁移与
 WebView 相关用例必须有真实 Framework 环境，API 34 一档用于覆盖 Android 14 行为收紧

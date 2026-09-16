@@ -57,15 +57,21 @@
 
 ## 真机观察记录（追加区，按日期倒序）
 
-- 2026-09-16（澎湃 OS 4 / Android 17，用户真机，首轮 `connectedDebugAndroidTest` 52 例通过）：
+- 2026-09-16（澎湃 OS 4 / Android 17，用户真机，`connectedDebugAndroidTest` 55/55 通过）：
   - **`alarmManager.cancel()` 不等于 PendingIntent 消失**（A）：随后用
     `PendingIntent.getBroadcast(FLAG_NO_CREATE)` 仍取得到非空，于是"上/下课铃到底还挂不挂着"
     在真机上查不出来（`ClassBellLifecycleTest` 三例全红暴露）。`ClassProgressScheduler.cancel`
     现在补 `PendingIntent.cancel()` 把记录本身摘掉，重排时再 `getBroadcast` 造新的。
   - **HyperOS 拦下 instrumentation 的 Activity 拉起**（A）：`ActivityScenario.launch` 没有超时，
     Activity 不被放行时它一直等 RESUMED，把整轮仪器测试挂死（实测 34 分钟 0 例完成，
-    且 `am instrument -w` 也不会自行退出）。放行开关 = 开发者选项「USB调试（安全设置）」。
-    本轮 `BuaaSessionRetainKeepsJsAliveTest` 三例因此未在真机执行（CI 模拟器无此限制）。
+    且 `am instrument -w` 也不会自行退出）。**放行开关 = 应用权限「后台弹出界面」**
+    （应用管理 → BUAA Schedule → 权限 → 其他权限）；开发者选项「USB调试（安全设置）」
+    单独开**不够**（实测仍拦）。授权后 `BuaaSessionRetainKeepsJsAliveTest` 3 例通过，
+    真机 55/55 全绿。
+  - **AGP 8.13 没有 connected 测试的超时 DSL**（A，扫过 `com.android.tools.build` 全部 jar，
+    `ExecutionConfig` 零命中）：防挂死只能落在测试类里 —— `BuaaSessionRetainKeepsJsAliveTest`
+    加 JUnit `Timeout` 规则（30s/例 + `withLookingForStuckThread`），在不放行拉起 Activity 的
+    ROM 上报超时并打印卡住的线程栈，而不是让整轮 `connectedDebugAndroidTest` 无限等待。
   - **真机与模拟器全新安装的差异：库里有用户真实数据**（A）：`CourseListFactory` 按
     `appWidgetId` 的绑定取快照 key，测试传 `INVALID_APPWIDGET_ID` 会落到 `"current"` 槽位，
     读到的是用户自己的课表而非 seed 内容。组件类仪器测试必须自配 widget id +
