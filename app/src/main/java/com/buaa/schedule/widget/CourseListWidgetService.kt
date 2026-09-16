@@ -5,6 +5,7 @@ import android.content.Intent
 import android.util.Log
 import android.widget.RemoteViews
 import android.widget.RemoteViewsService
+import com.buaa.schedule.MainActivity
 import com.buaa.schedule.R
 import com.buaa.schedule.core.designsystem.courseColor
 import com.buaa.schedule.domain.model.Course
@@ -183,11 +184,21 @@ class CourseListFactory(
 
     override fun getViewTypeCount(): Int = 1
 
-    override fun getItemId(position: Int): Long =
-        // 加上外观指纹：只改外观不改课程时，课程部分的 id 不变，
-        // 宿主会直接复用旧行视图，保存后颜色/文字还是老样子。
-        rows[position].let { it.courseId * 31L + it.periods.hashCode().toLong() } +
-            appearance.viewIdStamp()
+    override fun getItemId(position: Int): Long {
+        val row = rows[position]
+        // 宿主按这个 id 缓存行视图，id 不变就不看工厂新算的内容。
+        // 旧式只折了 courseId + 节次：改课名、换教室、换上课时间都不换 id，
+        // 于是"编辑后组件不动"、"手动刷新好了、一点击又变回原样"。
+        val content = listOf(
+            row.name,
+            row.location ?: "",
+            row.startTime ?: "",
+            row.dayTag ?: "",
+            row.periods.joinToString(","),
+            row.color,
+        ).hashCode()
+        return WidgetCommon.itemKey(position, content.toLong() + appearance.viewIdStamp())
+    }
 
     override fun hasStableIds(): Boolean = true
 
@@ -200,7 +211,7 @@ class CourseListFactory(
         private const val TAG = "CourseListFactory"
 
         const val EXTRA_MODE = "com.buaa.schedule.widget.EXTRA_MODE"
-        const val EXTRA_COURSE_ID = "com.buaa.schedule.widget.EXTRA_COURSE_ID"
+        const val EXTRA_COURSE_ID = MainActivity.EXTRA_COURSE_ID
 
         private val DAY_NAMES = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
     }

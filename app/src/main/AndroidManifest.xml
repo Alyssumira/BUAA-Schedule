@@ -5,10 +5,14 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!--
-      不再声明 POST_PROMOTED_NOTIFICATIONS（R5 F-C10）：全仓没有申请路径，
-      ReminderGuidance 用的 canPostPromotedNotifications() 是只读查询、不需要权限。
-      商店审核会盯未使用的权限声明。
+      实况通知（promoted ongoing / 澎湃超级岛 / ColorOS 流体云）在 Android 17 起要求本条权限：
+      官方《创建实时更新通知》写明需在清单中声明，且 `android.Manifest.permission` 里
+      这个常量**只存在于 android-37**（javap 对比 36/37 核实），所以 compileSdk 36 只能引字面量。
+      R5 F-C10 曾以"canPostPromotedNotifications() 是只读查询不需要权限"为由删掉它——
+      那句只对了一半：查询不需要，**发**需要。删掉后真机（澎湃 OS 4 / Android 17）的表现为
+      "通知正常显示、一个也不上岛"，且系统不给任何回调。别再以商店审核为由删除。
     -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <!-- 课程实况前台服务（澎湃实况窗 / 流体云）：specialUse FGS 需要这两项权限 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />

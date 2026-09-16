@@ -23,7 +23,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.EventNote
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Refresh
@@ -55,14 +54,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.buaa.schedule.BuildConfig
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.SettingsGroup
 import com.buaa.schedule.core.designsystem.SettingsRow
-import com.buaa.schedule.domain.model.Course
-import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.schedule.ImportPlanner
 import com.buaa.schedule.ui.ScheduleViewModel
 import com.buaa.schedule.ui.MAX_IMPORT_BYTES
@@ -75,7 +71,6 @@ private const val SOURCE_NONE = -1
 private const val SOURCE_ICS = 1
 private const val SOURCE_TEXT = 2
 private const val SOURCE_SHARE = 3
-private const val SOURCE_DEBUG = 4
 
 /**
  * 导入页。
@@ -103,10 +98,6 @@ fun ImportScreen(
     var termCode by remember { mutableStateOf("2026-2027-1") }
     // -1 = 未展开任何次要来源；北航不再占用该状态（它有自己的 Hero 区）
     var expandedSource by remember { mutableIntStateOf(SOURCE_NONE) }
-    // 调试用 Cookie 直连：只保留在本会话内存里，不落盘。
-    // 登录后的真实链路走保留的 WebView 页面上下文抓取，凭证由 CookieManager 自己持久化，
-    // 不需要（也不应该）再把一份 SSO 凭证额外写进磁盘。
-    var cookie by remember { mutableStateOf("") }
     var shareCode by remember { mutableStateOf("") }
     val importMessage by viewModel.importMessage.collectAsState()
     val buaaRefreshing by viewModel.buaaRefreshing.collectAsState()
@@ -166,14 +157,8 @@ fun ImportScreen(
         }
     }
 
-    // 调试来源只在 debug 构建存在
-    val effectiveSource = if (expandedSource == SOURCE_DEBUG && !BuildConfig.DEBUG) {
-        SOURCE_NONE
-    } else {
-        expandedSource
-    }
     fun toggleSource(source: Int) {
-        expandedSource = if (effectiveSource == source) SOURCE_NONE else source
+        expandedSource = if (expandedSource == source) SOURCE_NONE else source
     }
 
     Scaffold(
@@ -221,7 +206,6 @@ fun ImportScreen(
                 onCancelRefresh = { viewModel.cancelRefreshFromBuaa() },
                 onLogout = {
                     com.buaa.schedule.data.import.BuaaWebSession.clear()
-                    cookie = ""
                     viewModel.showMessage("已退出教务登录")
                 },
             )
@@ -262,7 +246,7 @@ fun ImportScreen(
                         onClick = { toggleSource(SOURCE_ICS) },
                     )
                 }
-                item(key = "icsInput", visible = effectiveSource == SOURCE_ICS) {
+                item(key = "icsInput", visible = expandedSource == SOURCE_ICS) {
                     Button(
                         onClick = { icsLauncher.launch(arrayOf("text/calendar", "text/plain")) },
                         modifier = Modifier.fillMaxWidth(),
@@ -278,7 +262,7 @@ fun ImportScreen(
                         onClick = { toggleSource(SOURCE_TEXT) },
                     )
                 }
-                item(key = "textInput", visible = effectiveSource == SOURCE_TEXT) {
+                item(key = "textInput", visible = expandedSource == SOURCE_TEXT) {
                     Button(
                         onClick = { textLauncher.launch(arrayOf("text/plain")) },
                         modifier = Modifier.fillMaxWidth(),
@@ -294,7 +278,7 @@ fun ImportScreen(
                         onClick = { toggleSource(SOURCE_SHARE) },
                     )
                 }
-                item(key = "shareInput", visible = effectiveSource == SOURCE_SHARE) {
+                item(key = "shareInput", visible = expandedSource == SOURCE_SHARE) {
                     Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
                         OutlinedTextField(
                             value = shareCode,
@@ -348,50 +332,6 @@ fun ImportScreen(
                         showChevron = true,
                         onClick = onOpenHistory,
                     )
-                }
-
-                item(key = "debug", visible = BuildConfig.DEBUG) {
-                    SettingsRow(
-                        icon = Icons.Filled.BugReport,
-                        title = "调试：Cookie 直连与示例数据",
-                        summary = "仅调试构建可见",
-                        showChevron = true,
-                        onClick = { toggleSource(SOURCE_DEBUG) },
-                    )
-                }
-                item(key = "debugInput", visible = BuildConfig.DEBUG && effectiveSource == SOURCE_DEBUG) {
-                    Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
-                        OutlinedTextField(
-                            value = cookie,
-                            onValueChange = { cookie = it },
-                            label = { Text("Cookie（从浏览器登录后复制）") },
-                            modifier = Modifier.fillMaxWidth(),
-                            minLines = 2,
-                            maxLines = 4,
-                        )
-                        Button(
-                            onClick = {
-                                viewModel.clearImportMessage()
-                                viewModel.importFromBuaa(termCode = termCode.trim(), cookie = cookie.trim())
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = cookie.isNotBlank(),
-                        ) { Text("北航教务导入（Cookie）") }
-                        OutlinedButton(
-                            onClick = {
-                                viewModel.importCourses(
-                                    semester = Semester(
-                                        termCode = "2025-2026-1",
-                                        termName = "2025-2026-1",
-                                        startDate = "2025-09-01",
-                                        totalWeeks = 20,
-                                    ),
-                                    courses = sampleCourses(),
-                                )
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("导入示例课表") }
-                    }
                 }
             }
 
@@ -682,42 +622,3 @@ private fun HeroBadge(text: String) {
             .padding(horizontal = DesignTokens.spaceS, vertical = 2.dp),
     )
 }
-
-private fun sampleCourses(): List<Course> = listOf(
-    Course(
-        name = "高等数学",
-        teacher = "张三",
-        location = "J3-101",
-        campus = "学院路",
-        dayOfWeek = 1,
-        periods = listOf(1, 2),
-        weeks = (1..16).toList(),
-        colorIndex = 0,
-        sourceGroupKey = "MATH101",
-        semesterCode = "2025-2026-1",
-    ),
-    Course(
-        name = "大学物理",
-        teacher = "李四",
-        location = "J3-205",
-        campus = "学院路",
-        dayOfWeek = 3,
-        periods = listOf(3, 4),
-        weeks = (1..16).toList(),
-        colorIndex = 1,
-        sourceGroupKey = "PHY101",
-        semesterCode = "2025-2026-1",
-    ),
-    Course(
-        name = "程序设计",
-        teacher = "王五",
-        location = "沙河校区 实验楼",
-        campus = "沙河",
-        dayOfWeek = 5,
-        periods = listOf(6, 7, 8),
-        weeks = (1..16).toList(),
-        colorIndex = 2,
-        sourceGroupKey = "CS101",
-        semesterCode = "2025-2026-1",
-    ),
-)

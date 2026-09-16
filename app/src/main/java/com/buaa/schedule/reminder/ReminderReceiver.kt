@@ -22,24 +22,29 @@ class ReminderReceiver : BroadcastReceiver() {
         val location = intent.getStringExtra(EXTRA_LOCATION) ?: ""
         val sectionText = intent.getStringExtra(EXTRA_SECTION) ?: ""
         val classStartAt = intent.getLongExtra(EXTRA_CLASS_START_AT, 0L)
-        notifyCourse(context, courseId, courseName, location, sectionText, classStartAt)
-
-        // 开启“课程进行中”时，课前提醒同时启动一个倒计时实况（流体云），
-        // 到上课时刻由 ClassProgressReceiver 继续接管为课程进行中进度。
-        val classProgressEnabled = context
-            .getSharedPreferences(ClassProgressReceiver.PREFS_NAME, Context.MODE_PRIVATE)
-            .getBoolean(ClassProgressReceiver.PREF_CLASS_PROGRESS, true)
         val now = System.currentTimeMillis()
-        if (classProgressEnabled && classStartAt > now) {
-            CourseFluidService.start(
+
+        // 开启“课程进行中”时，课前提醒同时起一段**倒计时实况**（流体云 / 超级岛载体），
+        // 到上课时刻由 ClassProgressReceiver 用同一个通知 id 接手为课程进度。
+        // 走 startLiveWindow 而不是直接起服务：服务可能被"后台启动前台服务受限"挡下，
+        // 那条路径必须先发同 id 的 promoted 兜底通知，否则课前什么实况都没有——
+        // 这正是"课中能上岛、课前倒计时上不了岛"的根因。
+        val livePhase = if (
+            classProgressEnabled(context) && classStartAt > now
+        ) LivePhase.BEFORE_CLASS else null
+        if (livePhase != null) {
+            ReminderNotifications.startLiveWindow(
                 context = context,
+                courseId = courseId,
                 courseName = courseName,
                 location = location.ifBlank { null },
                 sectionText = sectionText,
                 startMillis = now,
                 endMillis = classStartAt,
+                phase = livePhase,
             )
         }
+        notifyCourse(context, courseId, courseName, location, sectionText, classStartAt)
 
         // 闹钟触发后链式调度下一次提醒；goAsync 保证广播进程存活到调度完成，
         // 唤醒锁保证 Doze 下 CPU 不会在 DB 查询/重排中途再度入睡（进程活着 ≠ CPU 醒着）
@@ -62,6 +67,11 @@ class ReminderReceiver : BroadcastReceiver() {
         }
     }
 
+    /** 「课程进行中」开关：关掉它就不该有实况窗口，普通课前提醒照发 */
+    private fun classProgressEnabled(context: Context): Boolean = context
+        .getSharedPreferences(ClassProgressReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+        .getBoolean(ClassProgressReceiver.PREF_CLASS_PROGRESS, true)
+
     private fun notifyCourse(
         context: Context,
         courseId: Long,
@@ -79,24 +89,26 @@ class ReminderReceiver : BroadcastReceiver() {
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val now = System.currentTimeMillis()
 
         val builder = NotificationCompat.Builder(context, ReminderNotifications.CHANNEL_COURSE)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("课程提醒：$courseName")
             .setContentText(buildString {
                 if (location.isNotBlank()) append("$location ")
-                if (sectionText.isNotBlank()) append(sectionText)
-            })
+                if (sectionText.isNotBlank()) append("$sectionText ")
+                // 横幅自己带一句静态倒计时：用户不展开实况也能知道大概还剩多久
+                if (classStartAt > now) append(liveCountdownLine(LivePhase.BEFORE_CLASS, classStartAt, now))
+            }.trim())
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setShowWhen(false)
 
-        // 上课时间已知时用倒计时计时器展示“还有多久上课”
-        if (classStartAt > System.currentTimeMillis()) {
-            builder.setWhen(classStartAt)
-            builder.setUsesChronometer(true)
-            builder.setChronometerCountDown(true)
-        }
+        // 这里刻意**不用** `setUsesChronometer` / `setChronometerCountDown`：
+        // 会走的倒计时已经归实况载体（每分钟重发一次，岛与胶囊都靠它），
+        // 横幅再挂一个系统计时器只会在同屏出现两个各走各的倒计时，
+        // 而 chronometer 恰恰是 SleepDown 取证里"顶掉岛上那一格"的形状。
 
         try {
             // 用 tag 携带课程 id，而不是 courseId.toInt()：

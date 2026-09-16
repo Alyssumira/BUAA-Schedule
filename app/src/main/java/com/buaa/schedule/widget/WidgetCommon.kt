@@ -114,6 +114,19 @@ object WidgetCommon {
     }
 
     /**
+     * 列表/网格单元格的稳定 id：**位置在高位、内容指纹在低位**。
+     *
+     * 宿主（`RemoteViewsAdapter`）拿 `getItemId` 当行视图缓存的键 —— id 不变就直接把
+     * 上一次那份 RemoteViews 贴回去，工厂里刚算出来的新内容根本没机会上场。
+     * 此前两个工厂的 id 只含 `courseId + 节次`（网格更甚，只有 `position + 外观`），
+     * 于是"改课名/换教室后组件不刷新、点一下又变回原样"：改的这两项都不进 id。
+     * 位置放高位保证同一列内 id 互不相同（`hasStableIds` 下重复 id 会抛异常），
+     * 内容放低位保证任何一处文字变化都会换掉 id。
+     */
+    fun itemKey(position: Int, contentStamp: Long): Long =
+        ((position + 1L) shl 32) or (contentStamp and 0xFFFF_FFFFL)
+
+    /**
      * 只通知「列表数据变了」，不重画 RemoteViews 骨架。
      *
      * `RemoteViewsFactory.onDataSetChanged()` 跑在主线程、不能查库：未命中快照时它先渲染

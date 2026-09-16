@@ -1,27 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 周网格组件的一天单元：星期 + 节次摘要 -->
+<!--
+  周网格组件的一天单元：星期 + 节次摘要。
+  两处字号都低于 lint 建议的 11sp，是 4×2 组件在 7 列 × 约 30dp 列宽下的硬约束：
+  再大一档就折行，一格里只剩第一节课（真机反馈）。
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:padding="4dp">
+    android:padding="2dp">
 
     <TextView
         android:id="@+id/widget_grid_day"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:textColor="#FFFFFF"
-        android:textSize="11sp"
+        android:textSize="10sp"
         android:textStyle="bold"
-        android:maxLines="1" />
+        android:maxLines="1"
+        tools:ignore="SmallSp" />
 
+    <!--
+      maxLines 与 WeekGridWidgetService.WEEK_GRID_MAX_LINES 同值：数据侧每节课一行、
+      最多 5 行（第 5 行可能是「＋N」），布局侧再多一截都看不见。
+    -->
     <TextView
         android:id="@+id/widget_grid_courses"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:textColor="#D6E1F5"
-        android:textSize="11sp"
-        android:maxLines="3"
-        android:ellipsize="end" />
+        android:textSize="9sp"
+        android:maxLines="5"
+        android:ellipsize="end"
+        tools:ignore="SmallSp" />
 
 </LinearLayout>

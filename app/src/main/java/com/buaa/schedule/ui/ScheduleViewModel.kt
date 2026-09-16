@@ -16,8 +16,6 @@ import com.buaa.schedule.data.repository.PartialWeeksEdit
 import com.buaa.schedule.data.repository.RestoreResult
 import com.buaa.schedule.data.undo.UndoManager
 import android.webkit.CookieManager
-import com.buaa.schedule.data.import.BuaaApi
-import com.buaa.schedule.data.import.BuaaScheduleImporter
 import com.buaa.schedule.data.import.BuaaSessionExpiredException
 import com.buaa.schedule.data.import.IcsParser
 import com.buaa.schedule.data.import.TextScheduleParser
@@ -743,34 +741,9 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
-     * 从北航拉取整学期课表，解析后进入预览确认，不直接写入数据库。
-     */
-    fun importFromBuaa(termCode: String, cookie: String) {
-        viewModelScope.launch {
-            withImportLock {
-                _pendingImport.value = null
-                _importMessage.value = "正在从北航解析课表，可能需要几十秒..."
-                BuaaScheduleImporter(BuaaApi()).fetchSemesterWithCourses(
-                    termCode = termCode,
-                    cookie = cookie,
-                    onProgress = { week, total ->
-                        _importMessage.value = "正在获取课表：第 $week/$total 周..."
-                    },
-                ).onSuccess { result ->
-                    val pending = showPendingImport(result.semester, result.courses, result.warnings)
-                    _importMessage.value = "解析完成：新增 ${pending.addedCount}，更新 ${pending.changedCount}，" +
-                        "冲突 ${pending.conflicts.size} 组，请确认导入。"
-                }.onFailure { e ->
-                    _importMessage.value = importErrorMessage(e)
-                }
-            }
-        }
-    }
-
-    /**
      * 教务 WebView 登录链路拿到课表后进入**导入预览**，不直接落库。
      *
-     * 与 debug 的 Cookie 直连路径共用同一套"解析 → 预览 → 确认写入"管线：
+     * 所有导入共用这套"解析 → 预览 → 确认写入"管线：
      * 此前登录链路直接调 [importCourses] 立即覆盖写库，
      * 用户看不到新增/更新/冲突明细，也无法逐条勾选。
      *

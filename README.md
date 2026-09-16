@@ -64,7 +64,7 @@
 - [x] 发布签名配置（`local.properties` 或 `BUAA_KEYSTORE_*` 环境变量；缺省保持 unsigned）
 - [x] CI 跑模拟器仪器测试（`reactivecircus/android-emulator-runner` + `connectedDebugAndroidTest`，
       API 29 + API 34 矩阵，fail-fast 关闭、报告分档上传）
-- [x] 文档体系（`docs/`：架构总览 / 备份与口令格式 / 设计系统约束 / 隐私与数据安全 / 已知问题 / 厂商 ROM 适配笔记）
+- [x] 文档体系（`docs/`：架构总览 / 备份与口令格式 / 设计系统约束 / 隐私与数据安全 / 已知问题 / 厂商 ROM 适配笔记 / 发版与自更新）
 - [x] 宽屏（≥600dp）周视图 + 日视图双栏并排（用 `Row` 权重实现，未引入 material3-adaptive）
 
 ## 不做的内容
@@ -118,7 +118,11 @@ buaa.keystore.keyPassword=****
 ```
 
 CI 上等价的环境变量：`BUAA_KEYSTORE_PATH` / `BUAA_KEYSTORE_PASSWORD` / `BUAA_KEYSTORE_ALIAS` / `BUAA_KEYSTORE_KEY_PASSWORD`。
-版本号可覆盖：`-PversionCode=12 -PversionName=1.2.0`。
+
+版本号只有 `gradle.properties` 一个来源（`VERSION_NAME` / `VERSION_CODE`），缺它或格式不对会在
+配置期直接失败 —— 静默退回旧号会发出一个"装了也还是提示有更新"的包，把自更新通道变成噪音源。
+发版走一条命令：`powershell -ExecutionPolicy Bypass -File release.ps1 0.2.0`，细节见 `docs/RELEASE.md`。
+`-PVERSION_CODE=12` 只留给"CI 要一个能互相覆盖安装的快照包"这一种场景，发布不要用它。
 
 ## 测试
 
@@ -131,7 +135,7 @@ CI 上等价的环境变量：`BUAA_KEYSTORE_PATH` / `BUAA_KEYSTORE_PASSWORD` / 
 
 | 类型 | 用例数 | 文件数 | 覆盖范围 |
 | --- | --- | --- | --- |
-| 单元测试 | 282 | 45 | 周次解析 / 教学周计算 / 冲突检测 / 导入规划 / 备份 schema / ICS 与文本解析与往返 / 节次分段与连堂判定 / 教务抓取脚本契约 / 日历投影选择 / 提醒排程与明日预告推送集合 / 分享编解码 / Widget 外观 |
+| 单元测试 | 345 | 56 | 周次解析 / 教学周计算 / 冲突检测 / 导入规划 / 备份 schema / ICS 与文本解析与往返 / 节次分段与连堂判定 / 教务抓取脚本契约 / 日历投影选择 / 提醒排程与明日预告推送集合 / 分享编解码 / Widget 外观 / Gitee 发布解析与安装包完整性与附件选择 / 实况卡片文案与倒计时口径 |
 | 仪器测试 | 55 | 12 | Room 迁移（`MigrationTest`）/ Repository 提醒写入与事务 / Widget 刷新新鲜度与渲染契约（预览可读性、列表工厂）/ WebView 会话保留与隐藏宿主 / 课堂铃生命周期 / 日历同步部分失败 |
 
 最近一次真机实测（Redmi K60 Pro / Android 17）：**55 例全通过、0 失败**。其中
@@ -151,6 +155,7 @@ WebView 相关用例必须有真实 Framework 环境，API 34 一档用于覆盖
 - `docs/PRIVACY.md` — 隐私与数据安全说明（数据清单、备份规则、权限、日志脱敏）
 - `docs/KNOWN_ISSUES.md` — 已知问题与平台限制（先查这里再报 bug）
 - `docs/VENDOR_NOTES.md` — 厂商/ROM 适配笔记（证据分级 + 适配设施清单 + 真机观察记录）
+- `docs/RELEASE.md` — 发版与自更新（`release.ps1`、签名密钥不可更换的代价、Gitee 对端实测行为）
 
 ## 北航接口参考
 

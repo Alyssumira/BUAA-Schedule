@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -89,9 +90,11 @@ import com.buaa.schedule.domain.model.TimeSlotProfile
 import com.buaa.schedule.domain.schedule.CourseConstraints
 import com.buaa.schedule.domain.schedule.SmartPeriods
 import com.buaa.schedule.reminder.ReminderNotifications
+import com.buaa.schedule.reminder.IslandDiagnostics
 import com.buaa.schedule.reminder.TomorrowPreviewReceiver
 import com.buaa.schedule.ui.NO_WRITABLE_CALENDAR_MESSAGE
 import com.buaa.schedule.ui.ScheduleViewModel
+import com.buaa.schedule.ui.onboarding.PRIVACY_STATEMENT
 import com.buaa.schedule.widget.BackgroundSync
 import com.buaa.schedule.widget.NextClassWidgetProvider
 import com.buaa.schedule.widget.TodayWidgetProvider
@@ -100,6 +103,7 @@ import com.buaa.schedule.widget.WeekGridWidgetProvider
 import com.buaa.schedule.widget.WeekWidgetProvider
 import com.buaa.schedule.BuildConfig
 import com.buaa.schedule.R
+import com.buaa.schedule.core.FirstRun
 import com.buaa.schedule.core.openExternalUrl
 import com.buaa.schedule.update.AUTHOR_GITEE_URL
 import com.buaa.schedule.update.AUTHOR_GITHUB_URL
@@ -159,6 +163,10 @@ fun SettingsScreen(
     // 这里只负责触发和显示进度文案，弹窗由 MainActivity 统一渲染。
     val updateState by UpdateCheck.state.collectAsState()
     val settingsScope = rememberCoroutineScope()
+    // 隐私同意的状态要在设置页看得见、也能撤回。存成 state 而不是每次直接读盘：
+    // 撤回之后行内文案必须立刻变，否则用户只会觉得"点了没反应"。
+    var privacyConsentAt by remember { mutableStateOf(FirstRun.privacyConsentAt(context)) }
+    var showPrivacyDialog by remember { mutableStateOf(false) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json"),
@@ -1252,17 +1260,21 @@ fun SettingsScreen(
                 val promotedState = remember(permissionResumeTick) {
                     ReminderGuidance.promotedOngoingState(context)
                 }
+                val surface = IslandDiagnostics.liveIslandSurface()
                 if (promotedState != null) {
                     SettingsRow(
-                        title = "实况通知（超级岛/流体云）",
+                        title = IslandDiagnostics.promotedRowTitle(),
                         summary = if (promotedState) {
-                            "系统允许把课程进行中提升为实况样式"
+                            "系统允许把课程进行中提升为${surface.displayName}样式"
+                        } else if (!ReminderGuidance.hasPromotedPermission(context)) {
+                            "缺少 Android 17 的实况权限（POST_PROMOTED_NOTIFICATIONS），" +
+                                "属应用侧问题：装上声明了该权限的版本"
                         } else {
                             "系统已关闭提升式通知，课程进行中只会显示为普通常驻"
                         },
                         onClick = {
                             if (promotedState == false) {
-                                ReminderGuidance.openNotificationSettings(context)
+                                ReminderGuidance.openPromotedNotificationSettings(context)
                             }
                         },
                         trailing = {
@@ -1279,7 +1291,7 @@ fun SettingsScreen(
             item(key = "oem") {
                 SettingsRow(
                     title = "厂商自启动（保活）",
-                    summary = "MIUI/澎湃等系统会拦截后台闹钟，请允许自启动",
+                    summary = "MIUI/澎湃、ColorOS 等系统会拦截后台闹钟，请允许自启动",
                     onClick = { ReminderGuidance.openAutoStartSettings(context) },
                     trailing = {
                         Text(
@@ -1555,7 +1567,10 @@ fun SettingsScreen(
             }
             }
 
-            val updateSummary = remember(updateState) { describeUpdateState(context, updateState) }
+            val pendingUpdate = remember(updateState) { UpdateCheck.pendingUpdateVersion(context) }
+            val updateSummary = remember(updateState, pendingUpdate) {
+                describeUpdateState(context, updateState, pendingUpdate)
+            }
 
             SettingsGroup(title = "版本", visibleWhen = section == SettingsSection.ABOUT) {
             item(key = "aboutHeader") {
@@ -1567,6 +1582,7 @@ fun SettingsScreen(
                 title = "检查更新",
                 summary = updateSummary,
                 showChevron = true,
+                trailing = { if (pendingUpdate != null) PendingUpdateDot() },
                 onClick = { settingsScope.launch { UpdateCheck.check(context, force = true) } },
             )
             }
@@ -1618,6 +1634,8 @@ fun SettingsScreen(
                 title = "数据与隐私",
                 summary = "课表、提醒与节次时间只保存在本机，不上传任何个人数据；" +
                     "登录教务系统仅用于拉取你自己的课表。",
+                showChevron = true,
+                onClick = { showPrivacyDialog = true },
             )
             }
             item(key = "license") {
@@ -1631,12 +1649,56 @@ fun SettingsScreen(
             SettingsRow(
                 icon = Icons.Filled.Info,
                 title = "更新方式",
-                summary = "每天第一次打开时自动检查一次 Gitee Releases；" +
-                    "发现新版本可在应用内下载安装包，也可以跳浏览器去发布页。",
+                summary = "每天第一次打开时自动检查一次 Gitee Releases（本机唯一的后台联网项，" +
+                    "以「数据与隐私」里的同意为前提）；发现新版本可在应用内下载安装包，也可以跳浏览器去发布页。",
             )
             }
             }
         }
+    }
+
+    if (showPrivacyDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showPrivacyDialog = false },
+            title = { Text("数据与隐私") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
+                    Text(
+                        text = PRIVACY_STATEMENT,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState()),
+                    )
+                    Text(
+                        text = if (privacyConsentAt > 0L) {
+                            "当前：已同意（${formatLastCheck(privacyConsentAt)}）。" +
+                                "撤回后从下次启动起重新进入首启引导。"
+                        } else {
+                            "当前：未同意 · 检查更新不会发起任何网络请求"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (privacyConsentAt > 0L) {
+                        TextButton(
+                            onClick = {
+                                FirstRun.revokePrivacy(context)
+                                privacyConsentAt = 0L
+                                showPrivacyDialog = false
+                            },
+                        ) { Text("撤回同意") }
+                    }
+                    TextButton(onClick = { showPrivacyDialog = false }) { Text("知道了") }
+                }
+            },
+        )
     }
 
     if (calendarSync.showPicker) {
@@ -1882,17 +1944,41 @@ private fun AboutHeader() {
     }
 }
 
-/** 检查更新行的副标题：当前状态 + 上次检查时间 */
-private fun describeUpdateState(context: Context, state: UpdateUiState): String {
+/**
+ * 检查更新行的副标题：当前状态 + 上次检查时间。
+ *
+ * [pending] 是"发现了但还没装"——用户点「稍后」把弹窗关掉之后状态会回到 Idle，
+ * 但红点和这一行必须继续提醒，否则更新就永久丢了（当天不会再自动弹）。
+ */
+private fun describeUpdateState(context: Context, state: UpdateUiState, pending: String?): String {
     val last = formatLastCheck(UpdateCheck.lastCheckAt(context))
-    return when (state) {
-        is UpdateUiState.Available -> "发现新版本 v${state.info.version}（当前 v${BuildConfig.VERSION_NAME}）"
-        is UpdateUiState.Downloading -> if (state.percent >= 0) "下载中 ${state.percent}%" else "准备下载…"
-        is UpdateUiState.UpToDate -> "已是最新版本 · 上次检查 $last"
-        is UpdateUiState.Failed -> "上次检查失败：${state.message}"
-        UpdateUiState.Checking -> "正在检查…"
-        UpdateUiState.Idle -> "每天第一次打开自动检查 · 上次检查 $last"
+    return when {
+        state is UpdateUiState.Available -> "发现新版本 v${state.info.version}（当前 v${BuildConfig.VERSION_NAME}）"
+        state is UpdateUiState.NeedsInstallPermission -> "已下载 v${state.info.version}，等待授权安装"
+        state is UpdateUiState.InstallBlocked -> "已下载 v${state.info.version}，但签名与本机不兼容"
+        state is UpdateUiState.Downloading -> if (state.percent >= 0) "下载中 ${state.percent}%" else "准备下载…"
+        state is UpdateUiState.UpToDate -> "已是最新版本 · 上次检查 $last"
+        // 失败不占当天配额：半小时后就允许重试，所以这里说"可重试"而不是"今天查过了"
+        state is UpdateUiState.Failed -> "上次检查失败：${state.message}（稍后可重试）"
+        state is UpdateUiState.Checking -> "正在检查…"
+        pending != null -> "发现新版本 v$pending，待更新"
+        else -> "每天第一次打开自动检查 · 上次检查 $last"
     }
+}
+
+/**
+ * 待装更新的小红点。纯装饰——同行副标题已经写了版本号，读屏不依赖它。
+ * 作用是让用户下次进设置页时，不用读完副标题就知道"那条还在等我"。
+ */
+@Composable
+private fun PendingUpdateDot() {
+    Box(
+        modifier = Modifier
+            .padding(end = DesignTokens.spaceS)
+            .size(8.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.error),
+    )
 }
 
 private fun formatLastCheck(epochMillis: Long): String =

@@ -39,26 +39,19 @@ class ClassProgressReceiver : BroadcastReceiver() {
                     // "手机已被静音、却没有下课铃来解除" 的状态（R5 F-31）。
                     ClassProgressScheduler.scheduleEnd(context, end)
                     if (classProgress) {
-                        ReminderNotifications.ensureChannels(context)
-                        // 先发普通常驻通知作为保底（失败也能看到课程进行中），
-                        // 再启动前台服务接管为 ProgressStyle 实况；二者使用同一通知 id，
-                        // 服务启动成功后自然覆盖保底通知。
-                        ReminderNotifications.postClassOngoing(
+                        val courseId = intent.getLongExtra(EXTRA_COURSE_ID, 0L)
+                        val start = intent.getLongExtra(EXTRA_START, 0L)
+                        // 同一条实况窗口：先发 promoted 兜底通知，再交给前台服务接管。
+                        // 两者共用同一通知 id，服务启动成功后自然覆盖兜底那条。
+                        ReminderNotifications.startLiveWindow(
                             context = context,
-                            courseId = intent.getLongExtra(EXTRA_COURSE_ID, 0L),
+                            courseId = courseId,
                             courseName = courseName,
                             location = location,
                             sectionText = section,
-                            startMillis = intent.getLongExtra(EXTRA_START, 0L),
+                            startMillis = start,
                             endMillis = end,
-                        )
-                        CourseFluidService.start(
-                            context = context,
-                            courseName = courseName,
-                            location = location,
-                            sectionText = section,
-                            startMillis = intent.getLongExtra(EXTRA_START, 0L),
-                            endMillis = end,
+                            phase = LivePhase.IN_CLASS,
                         )
                     }
                     ClassProgressDnd.enter(context)

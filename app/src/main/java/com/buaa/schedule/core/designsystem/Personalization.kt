@@ -20,10 +20,11 @@ object Personalization {
      * 玻璃档位：0 关闭（大面积面板退化为普通卡片，仅留小面积玻璃）/ 1 标准 / 2 增强。
      * 设置页只暴露「关闭 / 开启」两项（旧数据里的增强档在读入时收敛到标准）。
      *
-     * 默认关闭：设置页与导入页整屏都是逐条 item 的 PANEL 玻璃，
-     * 几十个 AGSL 表面的开销全花在大块面板上，而观感上反而是小面积玻璃更好看。
+     * 默认标准档：玻璃是这套界面的主视觉，装完就该看到。开销与机型不适配由
+     * [GlassGovernance] 的运行期上限兜底（低内存/少核自行降到关闭，掉帧时再降），
+     * 用户仍可在设置页一键关闭。
      */
-    var glassTier by mutableIntStateOf(DesignTokens.GLASS_TIER_OFF)
+    var glassTier by mutableIntStateOf(DEFAULT_GLASS_TIER)
     var cardAlpha by mutableFloatStateOf(0.88f)
     var wallpaperUri: String? by mutableStateOf(null)
 
@@ -76,6 +77,7 @@ object Personalization {
     const val DEFAULT_ZOOM = 1f
     const val DEFAULT_USE_SYSTEM_WALLPAPER = true
     const val DEFAULT_USE_DYNAMIC_COLOR = false
+    const val DEFAULT_GLASS_TIER = DesignTokens.GLASS_TIER_STANDARD
     const val WEEK_GRID_PERIOD = 0
     const val WEEK_GRID_TIME_24H = 1
 
@@ -97,8 +99,8 @@ object Personalization {
         val tier = prefs.getInt("glass_tier", Int.MIN_VALUE)
         // 设置项只有「关闭 / 开启」两态，读档即收敛：
         // 老数据里的增强档（2）落到标准，非法值落到关闭。
-        // 全新安装（两个键都没有）必须是关闭——不能拿 legacyEnabled 的 true 当默认，
-        // 否则新用户一上手就是「开启」，与 DesignTokens.surfaceUsesGlass 的默认取向相反。
+        // 用户显式保存过的选择必须原样读回（包括「关闭」），只有两个键都不存在的
+        // 全新安装才落到 [DEFAULT_GLASS_TIER]。
         glassTier = when {
             hasTier -> tier.coerceIn(
                 DesignTokens.GLASS_TIER_OFF,
@@ -106,7 +108,7 @@ object Personalization {
             )
             hasLegacy && !legacyEnabled -> DesignTokens.GLASS_TIER_OFF
             hasLegacy -> DesignTokens.GLASS_TIER_STANDARD
-            else -> DesignTokens.GLASS_TIER_OFF
+            else -> DEFAULT_GLASS_TIER
         }
         cardAlpha = prefs.getFloat("glass_alpha", 0.88f)
         wallpaperUri = prefs.getString("wallpaper_uri", null)

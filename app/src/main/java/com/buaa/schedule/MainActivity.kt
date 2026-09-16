@@ -47,7 +47,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,7 +61,6 @@ import androidx.core.content.edit
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -86,7 +84,9 @@ import com.buaa.schedule.ui.ScheduleViewModel
 import com.buaa.schedule.core.designsystem.liquid.LiquidBottomTab
 import com.buaa.schedule.ui.editor.CourseEditorScreen
 import com.buaa.schedule.ui.course.CourseManagementScreen
+import com.buaa.schedule.core.FirstRun
 import com.buaa.schedule.ui.home.HomeScreen
+import com.buaa.schedule.ui.onboarding.OnboardingScreen
 import com.buaa.schedule.ui.importing.BuaaLoginScreen
 import com.buaa.schedule.ui.importing.ImportHistoryScreen
 import com.buaa.schedule.ui.importing.ImportScreen
@@ -110,6 +110,9 @@ class MainActivity : ComponentActivity() {
      */
     private val requestedCourseId = mutableStateOf<Long?>(null)
 
+    /** 引导最后一步选择的落点（"import" / "home" / null = 默认首页）；进程重建即失效 */
+    private val pendingStartRoute = mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -119,13 +122,36 @@ class MainActivity : ComponentActivity() {
                 android.util.Log.d("GlassDiag", "$name=$value")
             }
         }
-        maybeRequestNotificationPermission()
         requestedCourseId.value = courseIdFrom(intent)
+        // 老用户（引导已完成）没有自检步可走，通知权限仍在启动时补申请一次
+        if (FirstRun.onboardingCompleted(this)) maybeRequestNotificationPermission()
         setContent {
-            BUAAScheduleApp(
-                requestedCourseId = requestedCourseId.value,
-                onCourseRequestConsumed = { requestedCourseId.value = null },
-            )
+            // 必须是 state：引导完成回调把它翻成 true 之后，组合要切到主界面
+            var onboardingDone by remember {
+                mutableStateOf(FirstRun.onboardingCompleted(this))
+            }
+            if (onboardingDone) {
+                BUAAScheduleApp(
+                    requestedCourseId = requestedCourseId.value,
+                    onCourseRequestConsumed = { requestedCourseId.value = null },
+                    startRoute = pendingStartRoute.value,
+                )
+            } else {
+                BUAAScheduleTheme(
+                    darkTheme = androidx.compose.foundation.isSystemInDarkTheme(),
+                    dynamicColor = Personalization.useDynamicColor,
+                    seedColorArgb = Personalization.seedColorArgb,
+                ) {
+                    OnboardingScreen(
+                        onFinished = { startRoute ->
+                            onboardingDone = true
+                            pendingStartRoute.value = startRoute
+                            // 从欢迎页/隐私页就点跳过的人不会经过自检步，权限在这里补
+                            maybeRequestNotificationPermission()
+                        },
+                    )
+                }
+            }
         }
     }
 
@@ -185,8 +211,11 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        /** 与 `widget.CourseListFactory.EXTRA_COURSE_ID` 同值：组件行点击携带的课程 id */
-        private const val EXTRA_COURSE_ID = "com.buaa.schedule.widget.EXTRA_COURSE_ID"
+        /**
+         * 「打开这一节课」的 deeplink 键：MainActivity 只认这一个，
+         * 组件行点击、课堂实况通知与超级岛点按都复用它。
+         */
+        internal const val EXTRA_COURSE_ID = "com.buaa.schedule.widget.EXTRA_COURSE_ID"
     }
 }
 
@@ -228,6 +257,8 @@ enum class DarkModePreference(val label: String) {
 private fun BUAAScheduleApp(
     requestedCourseId: Long? = null,
     onCourseRequestConsumed: () -> Unit = {},
+    /** 引导结束时选择的落点；null = 首页 */
+    startRoute: String? = null,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val prefs = context.getSharedPreferences("schedule_settings", Context.MODE_PRIVATE)
@@ -275,8 +306,6 @@ private fun BUAAScheduleApp(
     // 更新检测：每天第一次打开自动查一次（节流在 UpdateCheck 内部），
     // 结果统一由下面的全局弹窗表达；设置页的"手动检查"复用同一个状态源。
     val updateState by UpdateCheck.state.collectAsState()
-    val updateScope = rememberCoroutineScope()
-    var downloadJob by remember { mutableStateOf<Job?>(null) }
     LaunchedEffect(Unit) { UpdateCheck.check(context, force = false) }
 
     // 深色主题用亮色状态栏图标，浅色主题用暗色图标，与 XML 主题的固定配置解耦
@@ -346,6 +375,7 @@ private fun BUAAScheduleApp(
                                 uiState = uiState,
                                 reminders = reminders,
                                 onDarkThemeChange = onDarkThemeChange,
+                                startRoute = startRoute,
                                 contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                             )
                         }
@@ -362,6 +392,7 @@ private fun BUAAScheduleApp(
                             uiState = uiState,
                             reminders = reminders,
                             onDarkThemeChange = onDarkThemeChange,
+                            startRoute = startRoute,
                             contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                             bottomBarVisible = showBottomBar,
                         )
@@ -373,7 +404,8 @@ private fun BUAAScheduleApp(
                                     .align(Alignment.BottomCenter)
                                     .fillMaxWidth()
                                     .navigationBarsPadding()
-                                    .padding(horizontal = DesignTokens.spaceL, vertical = DesignTokens.spaceS),
+                                    // 左右比页面常规边距再宽一档：贴边的玻璃长条在小屏上很压迫
+                                    .padding(horizontal = DesignTokens.spaceXL, vertical = DesignTokens.spaceS),
                             )
                         }
                     }
@@ -384,26 +416,25 @@ private fun BUAAScheduleApp(
         // 更新弹窗挂在主题层而不是某个页面：自动检测可能在任意页面弹出，
         // 下载进度也要在用户离开设置页后继续可见。
         if (updateState.visible) {
-            val available = (updateState as? UpdateUiState.Available)?.info
+            val info = when (val s = updateState) {
+                is UpdateUiState.Available -> s.info
+                is UpdateUiState.NeedsInstallPermission -> s.info
+                is UpdateUiState.InstallBlocked -> s.info
+                else -> null
+            }
             UpdateDialog(
                 state = updateState,
                 currentVersion = BuildConfig.VERSION_NAME,
                 onDismiss = { UpdateCheck.dismiss() },
-                onDownload = {
-                    if (available != null) {
-                        downloadJob = updateScope.launch { UpdateCheck.download(context, available) }
-                    }
-                },
-                onCancelDownload = {
-                    downloadJob?.cancel()
-                    downloadJob = null
-                    UpdateCheck.dismiss()
-                },
-                onIgnore = { if (available != null) UpdateCheck.ignore(context, available) },
+                onDownload = { (updateState as? UpdateUiState.Available)?.info?.let { UpdateCheck.startDownload(context, it) } },
+                onCancelDownload = { UpdateCheck.cancelDownload() },
+                onIgnore = { info?.let { UpdateCheck.ignore(context, it) } },
                 onOpenReleasePage = {
-                    openExternalUrl(context, available?.pageUrl ?: RELEASES_PAGE_URL)
+                    openExternalUrl(context, info?.pageUrl ?: RELEASES_PAGE_URL)
                     UpdateCheck.dismiss()
                 },
+                onOpenInstallPermissionSettings = { UpdateCheck.openInstallPermissionSettings(context) },
+                onRetryInstall = { UpdateCheck.retryInstall(context) },
             )
         }
     }
@@ -416,6 +447,8 @@ private fun AppNavHost(
     uiState: com.buaa.schedule.ui.ScheduleUiState,
     reminders: List<com.buaa.schedule.domain.model.ReminderSetting>,
     onDarkThemeChange: (DarkModePreference) -> Unit,
+    /** 引导结束时选定的落点页；null = home */
+    startRoute: String? = null,
     contentPadding: androidx.compose.foundation.layout.PaddingValues,
     /** 手机端当前路由是否显示悬浮底栏（宽屏导航栏分支恒为 false） */
     bottomBarVisible: Boolean = false,
@@ -431,7 +464,7 @@ private fun AppNavHost(
         ) {
         NavHost(
         navController = navController,
-        startDestination = "home",
+        startDestination = startRoute ?: "home",
         // 一级页面没有 TopAppBar，状态栏内边距要自己补（Scaffold 的 padding 不含它）
         modifier = Modifier
             .padding(contentPadding)
