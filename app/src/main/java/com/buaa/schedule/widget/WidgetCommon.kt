@@ -88,8 +88,14 @@ object WidgetCommon {
         val now = SystemClock.elapsedRealtime()
         if (now - lastBootstrapAt < BOOTSTRAP_INTERVAL_MS) return
         lastBootstrapAt = now
-        BackgroundSync.scheduleWidgetMidnight(context)
-        WidgetFallbackWorker.ensure(context)
+        // 每一步都得自己吞异常：Android 14+/HyperOS 默认拒绝「精确闹钟」，
+        // scheduleWidgetMidnight 会抛 SecurityException。它一旦顺着协程抛出去，
+        // 调用方后面的 updateAppWidget 就整轮不执行 —— 用户看到的正是
+        // 「组件编辑保存后不刷新」（组件其实什么都没画错，只是没被重绘）。
+        runCatching { BackgroundSync.scheduleWidgetMidnight(context) }
+            .onFailure { Log.w(TAG, "零点闹钟注册失败，跨天刷新交给兜底任务", it) }
+        runCatching { WidgetFallbackWorker.ensure(context) }
+            .onFailure { Log.w(TAG, "组件兜底任务注册失败", it) }
     }
 
     fun goAsyncUpdate(
@@ -101,9 +107,9 @@ object WidgetCommon {
         // 一个协程串行更新全部 widget，全部完成后再 finish，
         // 避免第一个更新完成就把广播标记结束导致其余更新被系统回收
         launchRefresh(pendingResult) {
-            bootstrapBackgroundSync(context)
             val manager = AppWidgetManager.getInstance(context)
             appWidgetIds.forEach { updateListWidget(context, manager, it, mode) }
+            bootstrapBackgroundSync(context)
         }
     }
 
@@ -457,9 +463,10 @@ object WidgetCommon {
     }
 
     /**
-     * 配置页「保存」的完整收尾：落盘外观与课表绑定 → 补注册后台刷新 → 重绘该实例。
+     * 配置页「保存」的完整收尾：落盘外观与课表绑定（同步，见下方注释）→
+     * 补注册后台刷新 → 重绘该实例。
      *
-     * 整体放进 [launchRefresh] 的后台协程，调用方可以立刻 `setResult` + `finish`：
+     * 后两步放进 [launchRefresh] 的后台协程，调用方可以立刻 `setResult` + `finish`：
      * 协程持有 applicationContext，不随配置页销毁。
      */
     fun saveConfigAndRefresh(
@@ -471,10 +478,14 @@ object WidgetCommon {
         mode: ListWidgetMode,
     ) {
         val appContext = context.applicationContext
+        // 配置必须**同步**落盘，且早于调用方的 setResult(RESULT_OK)：桌面一收到
+        // RESULT_OK 就广播一次 onUpdate，那次回调读的就是这两份配置。协程慢一步，
+        // 组件就用旧外观重绘了——正是"编辑后不立刻刷新"。
+        // 这里只是 SharedPreferences 的内存态写入（apply 语义，不等磁盘），
+        // 真正的耗时在下面重绘与后台补注册里，那部分才需要挪出主线程（R5 F-25）。
+        WidgetAppearanceStore.save(appContext, appWidgetId, appearance)
+        WidgetBindingStore.save(appContext, appWidgetId, binding)
         launchRefresh(null) {
-            WidgetAppearanceStore.save(appContext, appWidgetId, appearance)
-            WidgetBindingStore.save(appContext, appWidgetId, binding)
-            bootstrapBackgroundSync(appContext)
             val manager = AppWidgetManager.getInstance(appContext)
             when (providerClassName) {
                 NextClassWidgetProvider::class.java.name ->
@@ -483,6 +494,8 @@ object WidgetCommon {
                     updateWeekGridWidget(appContext, manager, appWidgetId)
                 else -> updateListWidget(appContext, manager, appWidgetId, mode)
             }
+            // 重绘在前：补注册与这次保存无关，不该挡在它前面。
+            bootstrapBackgroundSync(appContext)
         }
     }
 

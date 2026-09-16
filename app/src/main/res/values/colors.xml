@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#1A73E8</color>
+    <!-- 取图标插画四边像素均色：背景层只在启动器做视差/内缩时露出，对不上会露边 -->
+    <color name="ic_launcher_background">#939DC2</color>
 </resources>

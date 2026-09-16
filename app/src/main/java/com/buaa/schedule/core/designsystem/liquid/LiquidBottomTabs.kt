@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -30,7 +31,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.Personalization
+import com.buaa.schedule.core.designsystem.legibilityAlphaFloor
 import androidx.compose.ui.util.fastCoerceIn
 import androidx.compose.ui.util.fastRoundToInt
 import androidx.compose.ui.util.lerp
@@ -61,8 +62,6 @@ import com.kyant.backdrop.highlight.Highlight
 import com.kyant.backdrop.shadow.InnerShadow
 import com.kyant.backdrop.shadow.Shadow
 import com.kyant.shapes.Capsule
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.sign
@@ -111,9 +110,18 @@ fun LiquidBottomTabs(
     )
     // 与 GlassSurface / FAB 口径一致：底栏表面 alpha 也跟随用户「卡片透明度」。
     // containerAlpha 只作为基准值，用户可以在设置里继续往更透/更实的方向调。
-    val effectiveContainerAlpha = (
-        containerAlpha * (Personalization.cardAlpha / 0.88f).coerceIn(0.5f, 1.25f)
-        ).coerceIn(0.06f, 0.60f)
+    // 下限 0.18f 与 GlassSurface 同步：滑条最低 0.3f，以 0.88 归一后倍率只有 0.34，
+    // 此前钳到 0.5f 会让滑条下半段完全失效。
+    val userAlphaScale = (Personalization.cardAlpha / 0.88f).coerceIn(0.18f, 1.25f)
+    // tab 的图标/文字用的是 onSurfaceVariant，玻璃底下是**未压暗的原始壁纸**，
+    // 所以这条栏要多实只能看壁纸有多亮/多暗——原来按主题写死 0.06 / 0.34，
+    // 浅色主题配一张暗壁纸时 6% 的底板等于没有，近黑的 tab 文字直接糊在壁纸上。
+    val scheme = MaterialTheme.colorScheme
+    // 实际画出来的那层颜色：深色主题下栏体走 0xFF121212，不看调用方的 containerColor
+    val surfaceColor = if (isLightTheme) containerColor else Color(0xFF121212)
+    val effectiveContainerAlpha = (containerAlpha * userAlphaScale)
+        .coerceAtMost(0.60f)
+        .coerceAtLeast(legibilityAlphaFloor(surfaceColor, scheme.onSurfaceVariant, !isLightTheme))
     val lightContainerSurface = containerColor.copy(alpha = effectiveContainerAlpha)
     val darkContainerSurface = Color(0xFF121212).copy(alpha = effectiveContainerAlpha)
 
@@ -151,6 +159,10 @@ fun LiquidBottomTabs(
                 onDragStarted = {},
                 onDragStopped = {
                     val targetIndex = targetValue.fastRoundToInt().coerceIn(0, tabsCount - 1)
+                    // 只在真的落在别的 tab 上时才切换。inspectDragGestures 对一次普通
+                    // 点击也会回调（零位移拖拽），无条件回调就会和 tab 的 onClick 各发一次
+                    // navigateTopLevel —— 用户点一下，底栏替他跳两次。
+                    val changed = targetIndex != currentIndex
                     currentIndex = targetIndex
                     animateToValue(targetIndex.toFloat())
                     animationScope.launch {
@@ -159,6 +171,7 @@ fun LiquidBottomTabs(
                             spring(1f, 300f, 0.5f)
                         )
                     }
+                    if (changed) onTabSelected(targetIndex)
                 },
                 onDrag = { _, dragAmount ->
                     updateValue(
@@ -177,14 +190,6 @@ fun LiquidBottomTabs(
                 currentIndex = index
                 dampedDragAnimation.animateToValue(index.toFloat())
             }
-        }
-        LaunchedEffect(dampedDragAnimation) {
-            snapshotFlow { currentIndex }
-                .drop(1)
-                .collectLatest { index ->
-                    dampedDragAnimation.animateToValue(index.toFloat())
-                    onTabSelected(index)
-                }
         }
 
         val interactiveHighlight = remember(animationScope) {

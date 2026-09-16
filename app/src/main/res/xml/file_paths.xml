@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 路径白名单（应用内更新）。
+
+  只开放 cacheDir/update/ 这一个子目录：UpdateCheck 把下载中的 APK 写在这里，
+  安装完成后系统/下次下载会清掉。不声明 files/ 或 root-path —— 那样等于
+  把整个私有目录（课表数据库、教务会话材料）暴露成可分享 URI。
+-->
+<paths>
+    <cache-path name="update" path="update/" />
+</paths>

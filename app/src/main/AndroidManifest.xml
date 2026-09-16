@@ -29,6 +29,18 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+    <!--
+      应用内更新：下载 APK 后要调起系统安装器。这条权限**不会**自动获得，
+      只能由 UpdateCheck 把用户引导到「安装未知应用」开关手动放行；
+      未放行时不拦路 —— 直接退回浏览器打开发布页下载。
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!--
+      桌面快捷方式 / 小组件固定权限：由 Launcher 声明并在本应用安装时授予。
+      不声明时部分 Launcher（国产 ROM 为主）会让 requestPinAppWidget 静默返回 false，
+      用户点「一键添加」毫无反应；声明后应用内还能查到授权状态并引导放行。
+    -->
+    <uses-permission android:name="com.android.launcher.permission.INSTALL_SHORTCUT" />
 
     <!--
       allowBackup 保持开启（课表数据跨设备迁移是刚需），
@@ -85,6 +97,21 @@
                 <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
             </intent-filter>
         </activity>
+
+        <!--
+          下载好的 APK 存在 cacheDir/update/，安装器是另一个进程，
+          file:// URI 在 Android 7+ 会直接抛 FileUriExposedException，
+          必须走 FileProvider 换 content:// 并临时授予读权限。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <receiver
             android:name=".reminder.ReminderReceiver"

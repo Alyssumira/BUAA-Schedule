@@ -37,9 +37,12 @@ import com.buaa.schedule.domain.schedule.CourseFilter
 import com.buaa.schedule.domain.schedule.ImportPlanner
 import com.buaa.schedule.domain.schedule.WeekCalculator
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -492,12 +495,18 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     private val _pendingImport = MutableStateFlow<PendingImport?>(null)
     val pendingImport: StateFlow<PendingImport?> = _pendingImport.asStateFlow()
 
-    private val _loginRequired = MutableStateFlow(false)
-    val loginRequired: StateFlow<Boolean> = _loginRequired.asStateFlow()
-
-    fun clearLoginRequired() {
-        _loginRequired.value = false
-    }
+    /**
+     * 「教务会话失效，需要重新登录」——**一次性事件**，不是状态。
+     *
+     * 此前它是一个 `StateFlow<Boolean>`：抓取要跑几十秒，用户在途中切去别的页面时
+     * 没有订阅者，标志会一直留在 true；等他下次进导入页，导入页一组合就看到
+     * `loginRequired == true`，于是自动跳去登录页、并连带开始整学期抓取
+     * （表现即"点了一下别的键，怎么又自己开始导入了"）。
+     * `replay = 0` 的 SharedFlow 在没有订阅者时直接丢弃事件——没人听见的重登录
+     * 请求早就过期了，让用户下一次自己点。
+     */
+    private val _buaaReloginRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val buaaReloginRequests: SharedFlow<Unit> = _buaaReloginRequests.asSharedFlow()
 
     fun clearImportMessage() {
         _importMessage.value = null
@@ -764,19 +773,21 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
      * 与 debug 的 Cookie 直连路径共用同一套"解析 → 预览 → 确认写入"管线：
      * 此前登录链路直接调 [importCourses] 立即覆盖写库，
      * 用户看不到新增/更新/冲突明细，也无法逐条勾选。
+     *
+     * 用 suspend 而不是 `viewModelScope.launch`：调用方（登录页）算完就要立刻导航到
+     * 导入页，异步返回会让页面在预览还没就绪时先渲染一次——用户看到的正是"跳过去
+     * 却是空的"。这里只读库不改数据，调用方被取消可以安全中止。
      */
-    fun previewBuaaCourses(semester: Semester, courses: List<Course>) {
-        viewModelScope.launch {
-            withImportLock {
-                _pendingImport.value = null
-                if (courses.isEmpty()) {
-                    _importMessage.value = "教务系统未返回该学期课程（可能未选课）"
-                    return@withImportLock
-                }
-                val pending = showPendingImport(semester, courses)
-                _importMessage.value = "解析完成：新增 ${pending.addedCount}，更新 ${pending.changedCount}，" +
-                    "冲突 ${pending.conflicts.size} 组，请确认导入。"
+    suspend fun previewBuaaCourses(semester: Semester, courses: List<Course>) {
+        withImportLock {
+            _pendingImport.value = null
+            if (courses.isEmpty()) {
+                _importMessage.value = "教务系统未返回该学期课程（可能未选课）"
+                return@withImportLock
             }
+            val pending = showPendingImport(semester, courses)
+            _importMessage.value = "解析完成：新增 ${pending.addedCount}，更新 ${pending.changedCount}，" +
+                "冲突 ${pending.conflicts.size} 组，请确认导入。"
         }
     }
 
@@ -808,7 +819,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
 
     private fun importErrorMessage(e: Throwable): String =
         if (e is BuaaSessionExpiredException) {
-            _loginRequired.value = true
+            _buaaReloginRequests.tryEmit(Unit)
             "登录已失效，请重新通过 WebView 登录后导入。"
         } else {
             "导入失败：${e.message}"

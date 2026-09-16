@@ -50,6 +50,16 @@ data class WidgetAppearance(
         get() = alphaPercent.coerceIn(0, 100) / 100f
 
     /**
+     * 外观指纹，喂给 `RemoteViewsFactory.getItemId`。
+     *
+     * `hasStableIds() = true` 时宿主按 id 复用已经绑定好的行视图：只改外观
+     * （文字颜色 / 背景 / 圆角）而不改课程时，每行的 id 完全不变，于是配置页
+     * 保存后组件仍然是旧配色。把指纹加进 id（同一批行共用同一个偏移量，
+     * 行间唯一性不受影响），换外观即换 id，宿主只能重新向工厂取行。
+     */
+    fun viewIdStamp(): Long = hashCode().toLong()
+
+    /**
      * 实际用于着色的背景色。
      * 跟随系统取色时解析 Material You 动态色；API < 31 或解析失败回退自定义色。
      */

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,7 +25,6 @@ import androidx.compose.material.icons.filled.EditCalendar
 import androidx.compose.material.icons.filled.EventAvailable
 import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -49,6 +49,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -236,20 +238,33 @@ fun HomeScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = weekHeadline,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = todayLabel,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                    )
+                    // 今日页签：日期/周次由 DayView 页头负责（那里带 ‹ › 日期导航），
+                    // 这里再写一遍就会出现三个「第 N 周」+ 两个日期。
+                    if (selectedTab == 0) {
+                        Text(
+                            text = weekHeadline,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = todayLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    } else {
+                        Text(
+                            text = "今日课表",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 GlassSegmentedControl(
                     options = listOf("周课表", "今日"),
@@ -259,7 +274,10 @@ fun HomeScreen(
             }
 
             // 第二行：学期切换 | 时间模式 | ‹ 周次 › | 校区切换
+            // 切到「今日」时只保留学期与校区：周次步进翻的是周课表，日视图按日期翻页，
+            // 时间模式开关也只改周课表网格——留在这一行里点了没反应，反而显得顶栏杂乱。
             ScheduleToolbarRow(
+                showWeekNav = selectedTab == 0,
                 weekHeadline = weekHeadline,
                 displayWeek = browseWeek ?: state.currentWeek,
                 currentWeek = state.currentWeek,
@@ -510,9 +528,14 @@ private fun FirstRunEmptyState(
  * 从 WeekView 搬到页面级：这些入口切到「今日」页签时也必须可用
  * （校区筛选同时作用于周课表与今日列表），放在周视图里就会跟着消失。
  * 点中间的周次文字打开「跳转到周次」对话框。
+ *
+ * [showWeekNav] 为 false（今日页签）时只保留学期与校区两端：周次步进翻的是周课表，
+ * 日视图按**日期**翻页（DayView 自带 ‹ 日期 › 与横滑手势），时间模式也只改周课表网格，
+ * 留在这一行里既点了没反应，又和页头/日视图的周次文字凑成三份「第 N 周」。
  */
 @Composable
 private fun ScheduleToolbarRow(
+    showWeekNav: Boolean,
     weekHeadline: String,
     displayWeek: Int?,
     currentWeek: Int?,
@@ -532,53 +555,69 @@ private fun ScheduleToolbarRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         termSlot?.invoke()
-        IconButton(
-            onClick = {
-                Personalization.weekGridMode = if (timeMode) {
-                    Personalization.WEEK_GRID_PERIOD
+        if (showWeekNav) {
+            // 原来是一颗没有字面的时钟图标：点一下就把整张周课表换成 24 小时
+            // 时间轴，用户看不出自己改了什么，只会觉得"默认就是时间轴"。
+            // 现在把当前模式写在按钮上（课次 = 按节次分行，默认；时间 = 连续时间轴）。
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                        if (timeMode) MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.colorScheme.surfaceVariant,
+                    )
+                    .clickable {
+                        Personalization.weekGridMode = if (timeMode) {
+                            Personalization.WEEK_GRID_PERIOD
+                        } else {
+                            Personalization.WEEK_GRID_TIME_24H
+                        }
+                        Personalization.save(context)
+                    }
+                    .semantics { contentDescription = if (timeMode) "切换到课次行视图" else "切换到 24 小时时间轴" }
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+            ) {
+                Text(
+                    text = if (timeMode) "时间" else "课次",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (timeMode) MaterialTheme.colorScheme.onPrimaryContainer
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(
+                onClick = { onBrowseWeekChange(((displayWeek ?: 1) - 1).coerceAtLeast(1)) },
+                enabled = (displayWeek ?: 1) > 1,
+            ) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "上一周")
+            }
+            Text(
+                text = weekHeadline,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = if (displayWeek == currentWeek) {
+                    MaterialTheme.colorScheme.onSurface
                 } else {
-                    Personalization.WEEK_GRID_TIME_24H
-                }
-                Personalization.save(context)
-            },
-        ) {
-            Icon(
-                imageVector = Icons.Default.Schedule,
-                contentDescription = if (timeMode) "切换到节次行视图" else "切换到 24 小时时间轴",
-                tint = if (timeMode) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
+                    MaterialTheme.colorScheme.primary
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(DesignTokens.cornerPanel))
+                    .clickable { showJumpDialog = true }
+                    .padding(vertical = 6.dp),
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-        }
-        IconButton(
-            onClick = { onBrowseWeekChange(((displayWeek ?: 1) - 1).coerceAtLeast(1)) },
-            enabled = (displayWeek ?: 1) > 1,
-        ) {
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "上一周")
-        }
-        Text(
-            text = weekHeadline,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-            color = if (displayWeek == currentWeek) {
-                MaterialTheme.colorScheme.onSurface
-            } else {
-                MaterialTheme.colorScheme.primary
-            },
-            modifier = Modifier
-                .weight(1f)
-                .clip(RoundedCornerShape(DesignTokens.cornerPanel))
-                .clickable { showJumpDialog = true }
-                .padding(vertical = 6.dp),
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        IconButton(
-            onClick = { onBrowseWeekChange(((displayWeek ?: totalWeeks) + 1).coerceAtMost(totalWeeks)) },
-            enabled = (displayWeek ?: totalWeeks) < totalWeeks,
-        ) {
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "下一周")
+            IconButton(
+                onClick = { onBrowseWeekChange(((displayWeek ?: totalWeeks) + 1).coerceAtMost(totalWeeks)) },
+                enabled = (displayWeek ?: totalWeeks) < totalWeeks,
+            ) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "下一周")
+            }
+        } else {
+            // 顶上原周次文字的权重，保持「学期靠左、校区靠右」
+            Spacer(modifier = Modifier.weight(1f))
         }
         campusSlot?.invoke()
     }

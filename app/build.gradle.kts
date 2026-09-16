@@ -63,11 +63,14 @@ android {
         applicationId = "com.buaa.schedule"
         minSdk = 26
         targetSdk = 36
-        // 版本号优先级：-PversionCode=12（手动覆盖）> GITHUB_RUN_NUMBER（CI 自增）> 1。
+        // 版本号优先级：-PversionCode=12（手动覆盖）> GITHUB_RUN_NUMBER（CI 自增）> 2。
         // 此前默认恒为 1，CI 每次产出的 APK 版本号都一样，无法覆盖安装（R5 F-C8）。
+        // 兜底值必须随图标资源一起递增：启动器（HyperOS 的 com.miui.home）按
+        // package+versionCode 缓存应用图标，同 versionCode 的 `install -r` 不算升级，
+        // 换了 ic_launcher 也仍然显示旧图标。
         versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull()
             ?: System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
-            ?: 1
+            ?: 2
         versionName = (project.findProperty("versionName") as String?) ?: "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

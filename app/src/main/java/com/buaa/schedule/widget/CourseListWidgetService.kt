@@ -184,7 +184,10 @@ class CourseListFactory(
     override fun getViewTypeCount(): Int = 1
 
     override fun getItemId(position: Int): Long =
-        rows[position].let { it.courseId * 31L + it.periods.hashCode().toLong() }
+        // 加上外观指纹：只改外观不改课程时，课程部分的 id 不变，
+        // 宿主会直接复用旧行视图，保存后颜色/文字还是老样子。
+        rows[position].let { it.courseId * 31L + it.periods.hashCode().toLong() } +
+            appearance.viewIdStamp()
 
     override fun hasStableIds(): Boolean = true
 

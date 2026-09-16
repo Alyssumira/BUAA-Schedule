@@ -113,7 +113,10 @@ class WeekGridFactory(
 
     override fun getViewTypeCount(): Int = 1
 
-    override fun getItemId(position: Int): Long = position.toLong()
+    // 位置之外再叠加外观指纹：只改外观时位置不变，宿主会复用旧单元格视图，
+    // 保存后看到的还是改之前的配色（同 CourseListFactory.getItemId）。
+    override fun getItemId(position: Int): Long =
+        position.toLong() + appearance.viewIdStamp()
 
     override fun hasStableIds(): Boolean = true
 

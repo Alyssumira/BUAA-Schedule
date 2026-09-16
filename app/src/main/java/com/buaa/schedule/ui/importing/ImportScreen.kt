@@ -111,17 +111,16 @@ fun ImportScreen(
     val importMessage by viewModel.importMessage.collectAsState()
     val buaaRefreshing by viewModel.buaaRefreshing.collectAsState()
     val pendingImport by viewModel.pendingImport.collectAsState()
-    val loginRequired by viewModel.loginRequired.collectAsState()
     val importHistory by viewModel.importHistory.collectAsState()
     // 会话状态只用于展示（Hero 上的"已连接/未登录"），不是可观察数据源，
     // 每次重组读一次即可（操作后必然伴随重组）
     val hasBuaaSession = com.buaa.schedule.data.import.BuaaWebSession.hasSession()
 
-    LaunchedEffect(loginRequired) {
-        if (loginRequired) {
-            viewModel.clearLoginRequired()
-            onStartBuaaLogin()
-        }
+    // 「会话失效 → 去登录页」是一次性事件：只有此刻用户正看着导入页，跳过去才是
+    // 对他刚才那次操作的回应。以前用的是 StateFlow 标志位，失败的瞬间若人已经在
+    // 别的页面，标志会一直留到下次进导入页再触发——那就是"没点导入却自己开始导入"。
+    LaunchedEffect(Unit) {
+        viewModel.buaaReloginRequests.collect { onStartBuaaLogin() }
     }
     val scope = rememberCoroutineScope()
     val icsLauncher = rememberLauncherForActivityResult(

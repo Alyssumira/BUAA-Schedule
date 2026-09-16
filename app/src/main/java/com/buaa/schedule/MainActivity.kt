@@ -47,6 +47,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,6 +62,7 @@ import androidx.core.content.edit
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -89,6 +91,11 @@ import com.buaa.schedule.ui.importing.BuaaLoginScreen
 import com.buaa.schedule.ui.importing.ImportHistoryScreen
 import com.buaa.schedule.ui.importing.ImportScreen
 import com.buaa.schedule.ui.settings.SettingsScreen
+import com.buaa.schedule.core.openExternalUrl
+import com.buaa.schedule.update.RELEASES_PAGE_URL
+import com.buaa.schedule.update.UpdateCheck
+import com.buaa.schedule.update.UpdateDialog
+import com.buaa.schedule.update.UpdateUiState
 
 class MainActivity : ComponentActivity() {
 
@@ -235,12 +242,14 @@ private fun BUAAScheduleApp(
     }
     // Material You 动态取色（Android 12+），设置里可开关
     val dynamicColor = Personalization.useDynamicColor
-    val onDarkThemeChange: (Boolean) -> Unit = { dark ->
-        val pref = if (dark) DarkModePreference.DARK else DarkModePreference.LIGHT
+    // 深色偏好要按**枚举**回传：以前这里收的是 Boolean，设置页选「跟随系统」
+    // 会被折算成 LIGHT 写回 prefs —— 之后系统切换深浅色自然毫无反应，
+    // 而且这个错误选择还落了盘，重启也不会自愈。
+    val onDarkThemeChange: (DarkModePreference) -> Unit = { pref ->
         darkModePref = pref
         prefs.edit {
             putString(DarkModePreference.PREF_KEY, pref.name)
-            putBoolean("dark_theme", dark)
+            putBoolean("dark_theme", pref == DarkModePreference.DARK)
         }
     }
     val navController = rememberNavController()
@@ -262,6 +271,13 @@ private fun BUAAScheduleApp(
     val currentDestination = backStackEntry?.destination
     val topLevelRoutes = remember { navItems.map { it.route }.toSet() }
     val showBottomBar = currentDestination?.hierarchy?.any { it.route in topLevelRoutes } == true
+
+    // 更新检测：每天第一次打开自动查一次（节流在 UpdateCheck 内部），
+    // 结果统一由下面的全局弹窗表达；设置页的"手动检查"复用同一个状态源。
+    val updateState by UpdateCheck.state.collectAsState()
+    val updateScope = rememberCoroutineScope()
+    var downloadJob by remember { mutableStateOf<Job?>(null) }
+    LaunchedEffect(Unit) { UpdateCheck.check(context, force = false) }
 
     // 深色主题用亮色状态栏图标，浅色主题用暗色图标，与 XML 主题的固定配置解耦
     val view = LocalView.current
@@ -365,6 +381,31 @@ private fun BUAAScheduleApp(
                 }
             }
         }
+        // 更新弹窗挂在主题层而不是某个页面：自动检测可能在任意页面弹出，
+        // 下载进度也要在用户离开设置页后继续可见。
+        if (updateState.visible) {
+            val available = (updateState as? UpdateUiState.Available)?.info
+            UpdateDialog(
+                state = updateState,
+                currentVersion = BuildConfig.VERSION_NAME,
+                onDismiss = { UpdateCheck.dismiss() },
+                onDownload = {
+                    if (available != null) {
+                        downloadJob = updateScope.launch { UpdateCheck.download(context, available) }
+                    }
+                },
+                onCancelDownload = {
+                    downloadJob?.cancel()
+                    downloadJob = null
+                    UpdateCheck.dismiss()
+                },
+                onIgnore = { if (available != null) UpdateCheck.ignore(context, available) },
+                onOpenReleasePage = {
+                    openExternalUrl(context, available?.pageUrl ?: RELEASES_PAGE_URL)
+                    UpdateCheck.dismiss()
+                },
+            )
+        }
     }
 }
 
@@ -374,7 +415,7 @@ private fun AppNavHost(
     viewModel: ScheduleViewModel,
     uiState: com.buaa.schedule.ui.ScheduleUiState,
     reminders: List<com.buaa.schedule.domain.model.ReminderSetting>,
-    onDarkThemeChange: (Boolean) -> Unit,
+    onDarkThemeChange: (DarkModePreference) -> Unit,
     contentPadding: androidx.compose.foundation.layout.PaddingValues,
     /** 手机端当前路由是否显示悬浮底栏（宽屏导航栏分支恒为 false） */
     bottomBarVisible: Boolean = false,
@@ -590,7 +631,11 @@ private fun FloatingGlassBottomBar(
                         isLightTheme = !darkTheme,
                         // 底栏表面色：过高会像不透明色条，0.20 让背景能透出来
                         containerAlpha = 0.20f,
-                        containerColor = com.buaa.schedule.core.designsystem.LightGlassTint,
+                        containerColor = if (darkTheme) {
+                            com.buaa.schedule.core.designsystem.DarkGlassTint
+                        } else {
+                            com.buaa.schedule.core.designsystem.LightGlassTint
+                        },
         tabContent = { index ->
             val item = navItems[index]
             // 主行 tab 一律中性色；选中态内容由指示器以主题色承载（玻璃上叠内容）

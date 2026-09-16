@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -39,6 +40,7 @@ import com.kyant.backdrop.backdrops.layerBackdropCoordinates
 import androidx.compose.ui.unit.IntSize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /**
@@ -51,6 +53,115 @@ val LocalSceneBackdrop = staticCompositionLocalOf<LayerBackdrop?> { null }
 fun rememberSceneBackdrop(): LayerBackdrop {
     val graphicsLayer = androidx.compose.ui.graphics.rememberGraphicsLayer()
     return com.kyant.backdrop.backdrops.rememberManualLayerBackdrop(graphicsLayer)
+}
+
+/**
+ * 场景背景的实测亮度（相对亮度 0..1）。
+ *
+ * 存在的理由：玻璃表面要保住的对比度取决于**它底下到底是什么**，而主题只知道
+ * `colorScheme.background` 是亮是暗，看不到用户选的壁纸。浅色主题的 onSurface
+ * 是近黑（#1A1B20），往一张暗壁纸的半透明玻璃上一放就直接糊掉——这就是
+ * 「深色模式下很多黑色字符看不清」的其中一条成因。
+ *
+ * 解码壁纸时顺手量一次（16×16 缩放，成本可忽略），不做持久化：它是派生值，
+ * 换壁纸 / 换设备都会变。NaN = 当前没有真实壁纸（走内置渐变）。
+ */
+object SceneLuma {
+    /**
+     * @param mean 全图平均相对亮度
+     * @param darkest 最暗分块亮度——浅色主题（深色文字）的最坏情况落在这里
+     * @param brightest 最亮分块亮度——深色主题（浅色文字）的最坏情况落在这里
+     *
+     * 一块玻璃底下往往同时压着亮斑和暗斑，只看平均值会严重低估风险，
+     * 所以按 4×4 分块取极值。三个值全为 NaN 表示场景不是真实壁纸（内置渐变）。
+     */
+    @Immutable
+    data class Stats(
+        val mean: Float,
+        val darkest: Float,
+        val brightest: Float,
+    ) {
+        companion object {
+            val Unknown = Stats(Float.NaN, Float.NaN, Float.NaN)
+        }
+    }
+
+    var wallpaper: Stats by mutableStateOf(Stats.Unknown)
+}
+
+/**
+ * 内置渐变的分块亮度极值（手算自 [drawSceneGradient] 的取色与光斑 alpha）。
+ * 无壁纸时场景就是这层渐变，范围确定，不必等实测。
+ */
+private const val DARK_GRADIENT_BRIGHTEST = 0.08f
+private const val DARK_GRADIENT_DARKEST = 0.01f
+private const val LIGHT_GRADIENT_BRIGHTEST = 0.85f
+private const val LIGHT_GRADIENT_DARKEST = 0.50f
+
+/**
+ * 玻璃底板该担心哪一档背景亮度。
+ *
+ * 怕亮还是怕暗由**底板和文字的明暗关系**决定，而不是主题：
+ * 暗底板配浅色文字，怕的是亮斑（把复合亮度抬上去，浅字先糊）；
+ * 亮底板配深色文字（含语义色 tint），反过来怕暗斑。
+ *
+ * [darkTheme] 只在没有真实壁纸时用来挑内置渐变的常数——
+ * 直接返回 NaN 会让玻璃退回保守下限，等于把默认场景的通透感白白丢掉。
+ */
+fun worstGlassSceneLuma(darkTheme: Boolean, plateIsDark: Boolean): Float {
+    val stats = SceneLuma.wallpaper
+    val measured = if (plateIsDark) stats.brightest else stats.darkest
+    if (!measured.isNaN()) return measured
+    return when {
+        darkTheme && plateIsDark -> DARK_GRADIENT_BRIGHTEST
+        darkTheme -> DARK_GRADIENT_DARKEST
+        plateIsDark -> LIGHT_GRADIENT_BRIGHTEST
+        else -> LIGHT_GRADIENT_DARKEST
+    }
+}
+
+private const val WALLPAPER_SAMPLE_SIDE = 16
+private const val WALLPAPER_BLOCK_SIDE = 4
+
+/** 取壁纸亮度统计：缩到 16×16 后逐像素 sRGB→线性，再按 4×4 分块取极值。 */
+private fun measureWallpaper(bitmap: Bitmap): SceneLuma.Stats {
+    val scaled = Bitmap.createScaledBitmap(bitmap, WALLPAPER_SAMPLE_SIDE, WALLPAPER_SAMPLE_SIDE, true)
+    val pixels = IntArray(WALLPAPER_SAMPLE_SIDE * WALLPAPER_SAMPLE_SIDE)
+    scaled.getPixels(pixels, 0, WALLPAPER_SAMPLE_SIDE, 0, 0, WALLPAPER_SAMPLE_SIDE, WALLPAPER_SAMPLE_SIDE)
+    if (scaled !== bitmap) scaled.recycle()
+
+    val perPixel = FloatArray(pixels.size) { index ->
+        val pixel = pixels[index]
+        srgbLuminance(
+            r = (pixel shr 16 and 0xFF) / 255f,
+            g = (pixel shr 8 and 0xFF) / 255f,
+            b = (pixel and 0xFF) / 255f,
+        )
+    }
+    val cells = WALLPAPER_SAMPLE_SIDE / WALLPAPER_BLOCK_SIDE
+    val blocks = FloatArray(cells * cells)
+    for (by in 0 until cells) {
+        for (bx in 0 until cells) {
+            var sum = 0f
+            for (dy in 0 until WALLPAPER_BLOCK_SIDE) {
+                val row = (by * WALLPAPER_BLOCK_SIDE + dy) * WALLPAPER_SAMPLE_SIDE
+                val start = row + bx * WALLPAPER_BLOCK_SIDE
+                for (dx in 0 until WALLPAPER_BLOCK_SIDE) sum += perPixel[start + dx]
+            }
+            blocks[by * cells + bx] = sum / (WALLPAPER_BLOCK_SIDE * WALLPAPER_BLOCK_SIDE)
+        }
+    }
+    return SceneLuma.Stats(
+        mean = perPixel.average().toFloat(),
+        darkest = blocks.min(),
+        brightest = blocks.max(),
+    )
+}
+
+private fun srgbLuminance(r: Float, g: Float, b: Float): Float {
+    fun channel(v: Float): Float =
+        if (v <= 0.03928f) v / 12.92f else ((v + 0.055f) / 1.055f).pow(2.4f)
+    return 0.2126f * channel(r) + 0.7152f * channel(g) + 0.0722f * channel(b)
 }
 
 /**
@@ -90,7 +201,7 @@ fun SceneBackground(
         onDispose { lifecycle.removeObserver(observer) }
     }
     LaunchedEffect(wallpaperUri, useSystemWallpaper, retryToken) {
-        wallpaper = when {
+        val bitmap = when {
             // 用户拾取的壁纸优先
             wallpaperUri != null ->
                 withContext(Dispatchers.IO) { decodeSampledWallpaper(context, wallpaperUri) }
@@ -99,6 +210,15 @@ fun SceneBackground(
                 withContext(Dispatchers.IO) { decodeSystemWallpaper(context) }
             else -> null
         }
+        // 玻璃底板的不透明度下限取决于它底下到底有多亮/多暗，而主题只知道
+        // colorScheme.background，看不到用户壁纸——这里顺手量一次。
+        // 必须在赋值**之前**量：DisposableEffect(wallpaper) 会回收换掉的那张图。
+        SceneLuma.wallpaper = if (bitmap == null || bitmap.isRecycled) {
+            SceneLuma.Stats.Unknown
+        } else {
+            withContext(Dispatchers.IO) { measureWallpaper(bitmap) }
+        }
+        wallpaper = bitmap
     }
 
     // 旧壁纸位图必须显式回收：换壁纸 / 改 useSystemWallpaper / 重试都会重新解码一张
@@ -245,13 +365,25 @@ private const val WALLPAPER_TARGET_HEIGHT = 1920
  */
 private const val MAX_WALLPAPER_RETRY = 3
 
-private fun decodeSampledWallpaper(context: android.content.Context, uriString: String): Bitmap? {
+internal fun decodeSampledWallpaper(context: android.content.Context, uriString: String): Bitmap? {
     return runCatching {
         val uri = uriString.toUri()
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        context.contentResolver.openInputStream(uri)?.use {
-            BitmapFactory.decodeStream(it, null, bounds)
-        } ?: return null
+        // ⚠️ 判空必须落在**流本身**，不能被这次解码的返回值牵连：
+        // inJustDecodeBounds=true 时 decodeStream 按设计只填 bounds、恒返回 null，
+        // 于是 `openInputStream(uri)?.use { decodeStream(...) } ?: return null`
+        // 里的 `?: return null` 每次都会命中，自定义壁纸恒定失效（只显示渐变背景）。
+        // 拆成两步之后，这次探边界的解码结果直接丢弃。
+        val boundsStream = context.contentResolver.openInputStream(uri)
+        if (boundsStream == null) {
+            android.util.Log.w("SceneBackground", "壁纸无法打开（SAF 授权已失效？）: $uriString")
+            return null
+        }
+        boundsStream.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            android.util.Log.w("SceneBackground", "壁纸尺寸未知，放弃解码: $uriString")
+            return null
+        }
         var sampleSize = 1
         while (bounds.outWidth / (sampleSize * 2) >= WALLPAPER_TARGET_WIDTH &&
             bounds.outHeight / (sampleSize * 2) >= WALLPAPER_TARGET_HEIGHT

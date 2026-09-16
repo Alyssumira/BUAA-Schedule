@@ -50,6 +50,56 @@ object DesignTokens {
     fun glassIntensity(tier: Int): Float = if (tier >= GLASS_TIER_ENHANCED) 1.3f else 1f
 
     /**
+     * 某一玻璃档位下，该变体是否仍渲染真液态玻璃（AGSL 折射 + 模糊）。
+     *
+     * 关闭档保留小面积玻璃：顶栏 / 底栏 / 分段控件 / Chip / 提示条。
+     * [GlassVariant.PANEL] 退化为普通卡片表面——设置页与导入页整屏都是
+     * 逐条 item 的 PANEL（几十个 AGSL 表面），既是性能开销的主要来源，
+     * 观感上也不如小面积玻璃通透，因此默认档（关闭）只留小玻璃。
+     */
+    fun surfaceUsesGlass(tier: Int, variant: GlassVariant): Boolean =
+        tier >= GLASS_TIER_STANDARD || variant != GlassVariant.PANEL
+
+    /** WCAG AA 正文对比度阈值 */
+    const val WCAG_AA_RATIO = 4.5f
+
+    /** 玻璃底板 alpha 的绝对下限：再低就只剩高光/阴影在空气里，看不见"有一块板" */
+    const val GLASS_HARD_MIN_ALPHA = 0.08f
+
+    /**
+     * 玻璃底板 tint 的 alpha **下限**：让"文字—玻璃—壁纸"三层仍满足 [WCAG_AA_RATIO]。
+     *
+     * 复合亮度按线性近似 `luma = surface * a + scene * (1 - a)`，解出满足对比度的最小 a：
+     * 深色底板配浅色文字时复合必须**不亮于** `(text + .05)/R - .05`，
+     * 浅色底板配深色文字时复合必须**不暗于** `(text + .05) * R - .05`。
+     *
+     * [sceneLuma] 传的是**最不利**的区域亮度（见 [SceneLuma] 的 darkest / brightest），
+     * 不是平均值——一块玻璃底下同时压着亮斑和暗斑时平均值会严重低估风险。
+     * 结果只被 [GLASS_HARD_MIN_ALPHA] 托底：场景本身够安全时玻璃就该真的透
+     * （内置深色渐变下约 0.34，比原来写死的 0.55 通透一档），
+     * 场景很亮时才被迫压实。此前那个按主题写死的下限两头都错。
+     */
+    fun glassAlphaFloor(
+        surfaceLuma: Float,
+        sceneLuma: Float,
+        textLuma: Float,
+        hardMin: Float = GLASS_HARD_MIN_ALPHA,
+    ): Float {
+        if (sceneLuma.isNaN() || surfaceLuma.isNaN() || textLuma.isNaN()) return hardMin
+        val darkPlate = surfaceLuma < textLuma
+        val limit = if (darkPlate) {
+            (textLuma + 0.05f) / WCAG_AA_RATIO - 0.05f
+        } else {
+            (textLuma + 0.05f) * WCAG_AA_RATIO - 0.05f
+        }
+        val span = if (darkPlate) sceneLuma - surfaceLuma else surfaceLuma - sceneLuma
+        // 底板与场景亮度几乎相同：alpha 怎么调都不影响结果，直接给绝对下限
+        if (span <= 0.001f) return hardMin
+        val gap = if (darkPlate) sceneLuma - limit else limit - sceneLuma
+        return (gap / span).coerceIn(hardMin, 1f)
+    }
+
+    /**
      * 变体 + 档位 → 液态玻璃材质。**这是档位映射的唯一真源**。
      *
      * 此前存在两套并行映射（`glassSpec()` 与 `LiquidGlassMaterial`），

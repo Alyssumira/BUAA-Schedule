@@ -95,6 +95,37 @@ object ReminderGuidance {
         openAppDetails(context)
     }
 
+    /**
+     * 跳转「创建桌面快捷方式」授权页（MIUI / 澎湃：安全中心 → 应用管理 → 权限 → 其他权限）。
+     *
+     * 为什么不是 `requestPermissions`： Launcher 的 `INSTALL_SHORTCUT` 是 **normal 级**
+     * 权限，安装期就授予了，运行时申请只会立刻回调同一个答案，永远不弹窗。
+     * 真正拦住小组件钉选的是 ROM 自己的私有开关，被它拦住时
+     * `requestPinAppWidget` 仍然返回 true，但桌面一个确认框都不弹
+     * ——用户看到的就是"点了没反应"。这里能做的不是"申请"，
+     * 而是把用户直接送到那个开关面前。
+     */
+    fun openShortcutPermissionSettings(context: Context) {
+        val candidates = listOf(
+            Intent("miui.intent.action.APP_PERM_EDITOR")
+                .setClassName(
+                    "com.miui.securitycenter",
+                    "com.miui.permcenter.permissions.PermissionsEditorActivity",
+                )
+                .putExtra("extra_pkgname", context.packageName),
+            // 部分 MIUI 版本只认 action，不认组件名
+            Intent("miui.intent.action.APP_PERM_EDITOR")
+                .putExtra("extra_pkgname", context.packageName),
+        )
+        candidates.forEach { intent ->
+            runCatching {
+                context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                return
+            }
+        }
+        openAppDetails(context)
+    }
+
     /** 引导用户把应用加入电池优化白名单（系统会弹确认框） */
     fun requestIgnoreBatteryOptimizations(context: Context) {
         runCatching {

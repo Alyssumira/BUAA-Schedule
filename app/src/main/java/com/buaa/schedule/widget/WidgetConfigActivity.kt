@@ -37,8 +37,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -56,8 +54,10 @@ import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.core.designsystem.BUAAScheduleTheme
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
+import com.buaa.schedule.core.designsystem.GlassTopBar
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalSceneBackdrop
+import com.buaa.schedule.core.designsystem.Personalization
 import com.buaa.schedule.core.designsystem.SceneBackground
 import com.buaa.schedule.core.designsystem.contentOn
 import com.buaa.schedule.core.designsystem.rememberSceneBackdrop
@@ -102,7 +102,13 @@ class WidgetConfigActivity : ComponentActivity() {
             ?: ScheduleRepository(com.buaa.schedule.data.local.AppDatabase.getInstance(application))
 
         setContent {
-            BUAAScheduleTheme(darkTheme = darkTheme) {
+            // 与主界面同一套配色：动态取色和种子色都得带上，
+            // 否则这里解析出的 colorScheme 和用户刚从的主屏不一致（1-参重载会静默丢掉）
+            BUAAScheduleTheme(
+                darkTheme = darkTheme,
+                dynamicColor = Personalization.useDynamicColor,
+                seedColorArgb = Personalization.seedColorArgb,
+            ) {
                 // 与主界面一致的场景背景 + 玻璃材质（无 backdrop 时 GlassSurface 自动降级）
                 val backdrop = rememberSceneBackdrop()
                 Box(modifier = Modifier.fillMaxSize()) {
@@ -121,9 +127,11 @@ class WidgetConfigActivity : ComponentActivity() {
                                 finish()
                             },
                             onSave = { appearance, binding ->
-                                // 落盘 + 补注册 + 重绘整体挪到后台协程：这些原先都压在
-                                // 点击后的主线程上（含 hasAnyWidget 的多次 binder 往返），
-                                // 而此刻正要跑窗口退出动画。协程持有 applicationContext，
+                                // 配置落盘是同步的（必须赶在下面 setResult 之前，
+                                // 桌面收到 RESULT_OK 立刻就会广播 onUpdate 重绘一次）；
+                                // 补注册 + 重绘才挪到后台：这些原先都压在主线程上
+                                // （含 hasAnyWidget 的多次 binder 往返），而此刻正要跑
+                                // 窗口退出动画。协程持有 applicationContext，
                                 // 配置页 finish 之后照样会跑完（R5 F-25）。
                                 WidgetCommon.saveConfigAndRefresh(
                                     this@WidgetConfigActivity,
@@ -199,11 +207,11 @@ private fun WidgetConfigScreen(
     Scaffold(
         containerColor = Color.Transparent,
         topBar = {
-            TopAppBar(
-                title = { Text("桌面组件外观") },
-                navigationIcon = {
-                    TextButton(onClick = onCancel) { Text("返回") }
-                },
+            // 与站内其它二级页统一走玻璃顶栏：M3 TopAppBar 是不透明方角色条，
+            // 浮在这页整片圆角玻璃之上会割裂成一条色带（用户反馈「顶栏风格不同」）
+            GlassTopBar(
+                title = "桌面组件外观",
+                onBack = onCancel,
             )
         },
         bottomBar = {

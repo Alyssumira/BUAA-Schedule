@@ -96,10 +96,14 @@ fun BuaaLoginScreen(
     var fetchState by remember { mutableStateOf<String?>(null) }
     var fetchStarted by remember { mutableStateOf(false) }
     var fetchCancelled by remember { mutableStateOf(false) }
+    // 抓取结果已交给导入预览、正等页面跳转：保留底部状态卡，
+    // 别让「WebView 已被收走 + fetchState 已清空」把这一页留成一块空白。
+    var importPrepared by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(webViewRef, fetchStarted) {
         val web = webViewRef ?: return@LaunchedEffect
         if (!fetchStarted) return@LaunchedEffect
+        importPrepared = false
         // 登录成功 → byxt 页面已就绪，页面上下文 fetch 拉课表（原生栈复刻不出凭证 → 401，
         // 唯一可靠路径是 WebView 页面内 fetch，见 BuaaInPageFetcher）
         val fetcher = com.buaa.schedule.data.import.BuaaInPageFetcher
@@ -166,6 +170,7 @@ fun BuaaLoginScreen(
                             outcome.courses, selectedTerm, totalWeeks,
                         ),
                     )
+                    importPrepared = true
                     onImportPrepared()
                 }
             }
@@ -189,6 +194,7 @@ fun BuaaLoginScreen(
     val fetchStateText = fetchState
     val loadErrorText = loadError
     val statusText = when {
+        importPrepared -> "课程已获取完成，正在打开导入预览…"
         loadErrorText != null -> "登录页加载失败：$loadErrorText\n请检查网络（校园网/VPN）后重试。"
         timedOut -> "登录页加载超时（15 秒无响应）。\n请检查是否连接校园网或 VPN。"
         fetchStateText != null -> fetchStateText
@@ -345,7 +351,7 @@ fun BuaaLoginScreen(
                     Text(
                         text = statusText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (loadError != null || timedOut) Color(0xFFB3261E)
+                        color = if (loadError != null || timedOut) MaterialTheme.colorScheme.error
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
@@ -376,6 +382,12 @@ fun BuaaLoginScreen(
                                 },
                                 modifier = Modifier.weight(1f),
                             ) { Text("取消导入") }
+                        }
+                        if (importPrepared) {
+                            Button(
+                                onClick = onImportPrepared,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("查看导入预览") }
                         }
                         if (fetchCancelled) {
                             Button(

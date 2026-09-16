@@ -3,6 +3,7 @@ package com.buaa.schedule.ui.home
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,23 +32,31 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.contentOn
+import com.buaa.schedule.core.designsystem.contentOnLuma
 import com.buaa.schedule.core.designsystem.courseColor
+import com.buaa.schedule.core.designsystem.performTick
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
@@ -113,6 +122,16 @@ fun DayView(
     // 一天十几门课没问题，但翻周/每分钟 tick 都会整列重算，白烧 CPU。
     val slotByCourseId = remember(plan) { plan?.slots?.associateBy { it.course.id } }
 
+    // 节次 → 墙钟时间。今日计划（plan）只有**今天**才有，而日视图可以翻到任何一天，
+    // 所以列表卡上的上课时间必须直接从节次表算：此前只有时间轴内部解析了节次时间，
+    // 列表卡干脆没有时间可显示（用户反馈「今日界面课程不显示对应时间」）。
+    val periodTimes = remember(timeSlots) { parsePeriodTimes(timeSlots) }
+    fun clockOf(course: Course): Pair<String, String>? {
+        val start = periodTimes[course.startPeriod]?.first ?: return null
+        val end = periodTimes[course.endPeriod]?.second ?: return null
+        return hhmm(start) to hhmm(end)
+    }
+
     val weekText = when {
         semester == null -> "未设置学期"
         semesterStart == null -> "学期开学日期无效，请在设置中修正"
@@ -121,7 +140,37 @@ fun DayView(
     }
     var timelineMode by rememberSaveable { mutableStateOf(false) }
 
-    Column(modifier = modifier.fillMaxSize().padding(horizontal = DesignTokens.spaceL)) {
+    // 左右滑动翻日期：此前只有 ‹ › 两个箭头可点，
+    // 而周视图早已支持横滑翻周——日视图没有对应手势会被当成 bug。
+    val haptics = LocalHapticFeedback.current
+    var swipeDrag by remember { mutableFloatStateOf(0f) }
+    val swipeThreshold = with(LocalDensity.current) { 72.dp.toPx() }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = DesignTokens.spaceL)
+            .pointerInput(date) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        when {
+                            swipeDrag <= -swipeThreshold -> {
+                                haptics.performTick()
+                                onDateChange(date.plusDays(1))
+                            }
+                            swipeDrag >= swipeThreshold -> {
+                                haptics.performTick()
+                                onDateChange(date.minusDays(1))
+                            }
+                        }
+                        swipeDrag = 0f
+                    },
+                    onDragCancel = { swipeDrag = 0f },
+                ) { _, dragAmount ->
+                    swipeDrag += dragAmount
+                }
+            },
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -134,32 +183,46 @@ fun DayView(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    text = if (isToday) "今日 · ${weekdayName(date.dayOfWeek.value)}"
-                    else "${date.monthValue}月${date.dayOfMonth}日 · ${weekdayName(date.dayOfWeek.value)}",
+                    text = "${date.monthValue}月${date.dayOfMonth}日 · " +
+                        weekdayName(date.dayOfWeek.value),
                     style = MaterialTheme.typography.titleLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = weekText,
+                    text = if (isToday) "今天 · $weekText" else weekText,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
                 )
-            }
-            TextButton(onClick = { timelineMode = !timelineMode }) {
-                Text(if (timelineMode) "列表" else "时间轴")
             }
             IconButton(onClick = { onDateChange(date.plusDays(1)) }) {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "后一天")
             }
         }
+        // 视图切换与「回到今天」收进同一行：此前它们各占一行，
+        // 加上页头已有的周次/日期，今日页顶部一共吃掉四行（用户反馈"顶栏太乱"）。
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(
+                onClick = { timelineMode = !timelineMode },
+                modifier = Modifier.weight(1f, fill = false),
+            ) {
+                Text(if (timelineMode) "列表" else "时间轴")
+            }
+            if (!isToday) {
+                Spacer(modifier = Modifier.width(DesignTokens.spaceS))
+                TextButton(
+                    onClick = { onDateChange(today) },
+                    modifier = Modifier.weight(1f, fill = false),
+                ) { Text("回到今天") }
+            }
+        }
 
         if (isToday && plan != null) {
             TodayHero(plan)
-        }
-        if (!isToday) {
-            TextButton(
-                onClick = { onDateChange(today) },
-                modifier = Modifier.padding(top = 2.dp).align(Alignment.CenterHorizontally),
-            ) { Text("回到今天") }
         }
 
         if (dayCourses.isEmpty()) {
@@ -188,7 +251,7 @@ fun DayView(
                 if (timeline) {
                     DayTimelineCourseList(
                         courses = dayCourses,
-                        timeSlots = timeSlots,
+                        periodTimes = periodTimes,
                         onClick = onCourseClick,
                     )
                 } else {
@@ -197,9 +260,12 @@ fun DayView(
                     ) {
                         items(dayCourses, key = { it.id }) { course ->
                             val slot = slotByCourseId?.get(course.id)
+                            val clock = clockOf(course)
                             CourseTimelineCard(
                                 course = course,
                                 status = slot?.status,
+                                startTime = clock?.first,
+                                endTime = clock?.second,
                                 onClick = { onCourseClick(course) },
                             )
                         }
@@ -214,30 +280,21 @@ fun DayView(
 @Composable
 private fun DayTimelineCourseList(
     courses: List<Course>,
-    timeSlots: List<TimeSlot>,
+    periodTimes: Map<Int, Pair<LocalTime, LocalTime>>,
     onClick: (Course) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val slots = timeSlots.ifEmpty { com.buaa.schedule.domain.model.TimeSlotProfile.DEFAULT }
-    // 节次时间解析（含 LocalTime.parse）只在 timeSlots 变化时做一次；
-    // 此前每次重组都对整表重跑，且下面每门课还要线性扫两遍查起止时间。
-    val parsed = remember(slots) {
-        slots.mapNotNull { slot ->
-            runCatching {
-                Triple(slot.number, LocalTime.parse(slot.startTime), LocalTime.parse(slot.endTime))
-            }.getOrNull()
-        }
-    }
-    if (parsed.isEmpty()) {
+    if (periodTimes.isEmpty()) {
         Text("节次时间未配置", modifier = modifier, color = MaterialTheme.colorScheme.onSurfaceVariant)
         return
     }
-    val startByPeriod = remember(parsed) { parsed.associate { it.first to it.second } }
-    val endByPeriod = remember(parsed) { parsed.associate { it.first to it.third } }
-    val minStart = parsed.minOf { it.second }
-    val maxEnd = parsed.maxOf { it.third }
+    val minStart = periodTimes.values.minOf { it.first }
+    val maxEnd = periodTimes.values.maxOf { it.second }
     val totalMinutes = java.time.Duration.between(minStart, maxEnd).toMinutes().toInt().coerceAtLeast(1)
-    val heightPerMinute = 0.6.dp
+    // 0.6dp/分钟时一节 45 分钟的课只有 27dp，第二行文字根本放不下，
+    // 时间轴于是退化成"一排只有课程名的色块"（用户反馈信息太少）。
+    // 抬到 0.9dp/分钟：45 分钟 40dp 能带时间，90 分钟 81dp 还能带教室。
+    val heightPerMinute = 0.9.dp
     val totalHeight = heightPerMinute * totalMinutes.toFloat()
 
     Column(
@@ -251,29 +308,61 @@ private fun DayTimelineCourseList(
                 .height(totalHeight),
         ) {
             courses.forEach { course ->
-                val start = startByPeriod[course.startPeriod]
-                val end = endByPeriod[course.endPeriod]
+                val start = periodTimes[course.startPeriod]?.first
+                val end = periodTimes[course.endPeriod]?.second
                 if (start != null && end != null) {
-                    val y = heightPerMinute * java.time.Duration.between(minStart, start).toMinutes().toFloat()
-                    val h = heightPerMinute * java.time.Duration.between(start, end).toMinutes().toFloat().coerceAtLeast(0.5f)
+                    val y = heightPerMinute *
+                        java.time.Duration.between(minStart, start).toMinutes().toFloat()
+                    val blockHeight = heightPerMinute *
+                        java.time.Duration.between(start, end).toMinutes().toFloat().coerceAtLeast(0.5f)
+                    val blockColor = courseColor(course)
+                    // 文字要看**合成后**的亮度：0.72 的课程色叠在卡片底色上。
+                    // 用主题的 onSurface 时，深色主题下那是近白色，
+                    // 压在亮黄/亮绿的时间块上几乎看不见。
+                    val blockLuma = blockColor.luminance() * 0.72f +
+                        MaterialTheme.colorScheme.surface.luminance() * 0.28f
+                    val onBlock = contentOnLuma(blockLuma)
                     Box(
                         modifier = Modifier
                             .offset(y = y)
-                            .height(h)
+                            .height(blockHeight)
                             .fillMaxWidth()
                             .padding(horizontal = 2.dp)
-                            .background(courseColor(course).copy(alpha = 0.72f), RoundedCornerShape(8.dp))
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(blockColor.copy(alpha = 0.72f), RoundedCornerShape(8.dp))
                             .clickable { onClick(course) }
-                            .padding(4.dp),
-                        contentAlignment = Alignment.CenterStart,
+                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                        contentAlignment = Alignment.TopStart,
                     ) {
-                        Text(
-                            text = course.displayName,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        // 色块按真实时长定位，装不下就不画那一行：
+                        // 挤出去的第三行会把课程名顶没，反而更看不清。
+                        Column {
+                            Text(
+                                text = course.displayName,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = onBlock,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (blockHeight >= 38.dp) {
+                                Text(
+                                    text = "${hhmm(start)}–${hhmm(end)} · ${periodLabel(course.periods)}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = onBlock,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            if (blockHeight >= 58.dp) {
+                                Text(
+                                    text = course.location ?: "教室未定",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = onBlock.copy(alpha = 0.85f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -374,6 +463,8 @@ private fun TodayHero(plan: com.buaa.schedule.domain.schedule.TodayPlan) {
 private fun CourseTimelineCard(
     course: Course,
     status: SlotStatus?,
+    startTime: String?,
+    endTime: String?,
     onClick: () -> Unit,
 ) {
     val accent = courseColor(course)
@@ -391,6 +482,33 @@ private fun CourseTimelineCard(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            // 上课时间：这一列以前根本没有，卡片只写"第 1-2 节"，
+            // 用户看不出到底是几点上课（用户反馈「今日界面课程不显示对应时间」）。
+            // 节次表缺失时整列不画，不留一条空槽。
+            if (startTime != null && endTime != null) {
+                Column(
+                    modifier = Modifier.width(48.dp),
+                    horizontalAlignment = Alignment.End,
+                ) {
+                    Text(
+                        text = startTime,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = if (status == SlotStatus.PAST) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        maxLines = 1,
+                    )
+                    Text(
+                        text = endTime,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+                Spacer(modifier = Modifier.width(DesignTokens.spaceS))
+            }
             // 课程色带（进行中的课程加粗提示）
             Box(
                 modifier = Modifier
@@ -458,6 +576,23 @@ private fun CourseTimelineCard(
         }
     }
 }
+
+/**
+ * 节次表 → 每节的起止墙钟时间。空表回退到默认节次；
+ * 单条时间解析失败只丢这一节，不牵连整张日视图。
+ */
+private fun parsePeriodTimes(timeSlots: List<TimeSlot>): Map<Int, Pair<LocalTime, LocalTime>> {
+    val slots = timeSlots.ifEmpty { com.buaa.schedule.domain.model.TimeSlotProfile.DEFAULT }
+    return slots.mapNotNull { slot ->
+        runCatching {
+            slot.number to (LocalTime.parse(slot.startTime) to LocalTime.parse(slot.endTime))
+        }.getOrNull()
+    }.toMap()
+}
+
+/** LocalTime → "08:00"：节次表只到分钟，秒位显示出来只会让时间轴更挤 */
+private fun hhmm(time: LocalTime): String =
+    time.truncatedTo(java.time.temporal.ChronoUnit.MINUTES).toString()
 
 private fun weekdayName(day: Int): String = when (day) {
     1 -> "周一"

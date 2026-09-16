@@ -638,7 +638,7 @@ private fun ColorDot(
                 Text(
                     text = label,
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color.White,
+                    color = contentOn(color),
                 )
             }
         }

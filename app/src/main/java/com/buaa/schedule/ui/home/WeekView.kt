@@ -100,7 +100,9 @@ import com.buaa.schedule.core.designsystem.LocalSharedCourseBackdrop
 import com.buaa.schedule.core.designsystem.LocalSharedTransitionScope
 import com.buaa.schedule.core.designsystem.Personalization
 import com.buaa.schedule.core.designsystem.performTick
+import com.buaa.schedule.core.designsystem.SceneLuma
 import com.buaa.schedule.core.designsystem.contentOn
+import com.buaa.schedule.core.designsystem.contentOnLuma
 import com.buaa.schedule.core.designsystem.courseColor
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
@@ -1439,22 +1441,27 @@ private fun CourseCell(
     // 同一门课换一周显示效果就不一致。
     val glassEnabled = wantsGlass
     val tintAlpha = if (glassEnabled) {
-        // 对齐 SleepDown courseCard 0.52 基准，随用户透明度偏好缩放
-        (Personalization.cardAlpha * 0.62f).coerceIn(0.42f, 0.72f)
+        // 按滑条**实际定义域**线性映射：cardAlpha 可取 0.3f..1f，
+        // 此前写成 (cardAlpha * 0.62f).coerceIn(0.42f, 0.72f)，
+        // 于是 0.3~0.68 一整段都算出同一个 0.42，往左拖到底卡片毫无变化。
+        val fraction = ((Personalization.cardAlpha - 0.3f) / 0.7f).coerceIn(0f, 1f)
+        0.26f + (0.68f - 0.26f) * fraction
     } else {
         0.92f
     }
 
-    // 玻璃卡前景按“合成后亮度”决定黑/白：浅色主题下半透明课程色叠浅背景会明显偏亮，
-    // 固定白字对比度不足（实测 1.3-1.9:1），改用深色文字可达 9:1+
+    // 玻璃卡前景按"合成后亮度"决定黑/白：浅色主题下半透明课程色叠浅背景会明显偏亮，
+    // 固定白字对比度不足（实测 1.3-1.9:1），改用深色文字可达 9:1+。
+    // ⚠️ 候选必须是**固定的黑/白**，不能是 `onSurface`：深色主题下 onSurface 本身
+    // 就是近白，于是"亮底用 onSurface、暗底用 White"两支都是浅色，
+    // 一张亮黄色的课在深色模式下变成白字压白底（用户反馈的"黑字看不清"即此）。
     val darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val bgLum = if (darkTheme) 0.12f else 0.86f
+    // 卡底下是**未压暗的原始壁纸**（scrim 不进录制层），亮度以实测均值为准；
+    // 没有壁纸时才是内置渐变，取其大致平均亮度。
+    val bgLum = SceneLuma.wallpaper.mean.takeUnless { it.isNaN() }
+        ?: if (darkTheme) 0.03f else 0.83f
     val effectiveLum = background.luminance() * tintAlpha + bgLum * (1f - tintAlpha)
-    val foreground = if (effectiveLum > 0.52f) {
-        MaterialTheme.colorScheme.onSurface
-    } else {
-        Color.White
-    }
+    val foreground = contentOnLuma(effectiveLum)
     val foregroundSubtle = foreground.copy(alpha = 0.78f)
     val cornerRadius = if (Personalization.weekCornerRadiusDp > 0f) {
         Personalization.weekCornerRadiusDp.dp

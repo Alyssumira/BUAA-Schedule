@@ -16,8 +16,14 @@ import androidx.core.content.edit
  * 不参与玻璃层的反射采样（玻璃始终采样原始壁纸，见 SceneBackground 的注释）。
  */
 object Personalization {
-    /** 玻璃档位：0 关闭 / 1 标准 / 2 增强（旧布尔 glass_enabled 自动迁移） */
-    var glassTier by mutableIntStateOf(DesignTokens.GLASS_TIER_STANDARD)
+    /**
+     * 玻璃档位：0 关闭（大面积面板退化为普通卡片，仅留小面积玻璃）/ 1 标准 / 2 增强。
+     * 设置页只暴露「关闭 / 开启」两项（旧数据里的增强档在读入时收敛到标准）。
+     *
+     * 默认关闭：设置页与导入页整屏都是逐条 item 的 PANEL 玻璃，
+     * 几十个 AGSL 表面的开销全花在大块面板上，而观感上反而是小面积玻璃更好看。
+     */
+    var glassTier by mutableIntStateOf(DesignTokens.GLASS_TIER_OFF)
     var cardAlpha by mutableFloatStateOf(0.88f)
     var wallpaperUri: String? by mutableStateOf(null)
 
@@ -85,12 +91,22 @@ object Personalization {
 
     fun load(context: Context) {
         val prefs = context.getSharedPreferences("schedule_settings", Context.MODE_PRIVATE)
-        val legacyEnabled = prefs.getBoolean("glass_enabled", true)
+        val hasTier = prefs.contains("glass_tier")
+        val hasLegacy = prefs.contains("glass_enabled")
+        val legacyEnabled = prefs.getBoolean("glass_enabled", false)
         val tier = prefs.getInt("glass_tier", Int.MIN_VALUE)
+        // 设置项只有「关闭 / 开启」两态，读档即收敛：
+        // 老数据里的增强档（2）落到标准，非法值落到关闭。
+        // 全新安装（两个键都没有）必须是关闭——不能拿 legacyEnabled 的 true 当默认，
+        // 否则新用户一上手就是「开启」，与 DesignTokens.surfaceUsesGlass 的默认取向相反。
         glassTier = when {
-            tier != Int.MIN_VALUE -> tier
-            !legacyEnabled -> DesignTokens.GLASS_TIER_OFF
-            else -> DesignTokens.GLASS_TIER_STANDARD
+            hasTier -> tier.coerceIn(
+                DesignTokens.GLASS_TIER_OFF,
+                DesignTokens.GLASS_TIER_STANDARD,
+            )
+            hasLegacy && !legacyEnabled -> DesignTokens.GLASS_TIER_OFF
+            hasLegacy -> DesignTokens.GLASS_TIER_STANDARD
+            else -> DesignTokens.GLASS_TIER_OFF
         }
         cardAlpha = prefs.getFloat("glass_alpha", 0.88f)
         wallpaperUri = prefs.getString("wallpaper_uri", null)
@@ -99,7 +115,17 @@ object Personalization {
         useDynamicColor = prefs.getBoolean("use_dynamic_color", DEFAULT_USE_DYNAMIC_COLOR)
         seedColorArgb = prefs.getInt("theme_seed_color", Int.MIN_VALUE)
             .takeIf { it != Int.MIN_VALUE }
-        weekGridMode = prefs.getInt("week_grid_mode", WEEK_GRID_PERIOD)
+        // 切换时间轴的唯一入口曾是一颗无字面图标，落盘的 1 多半是误触，
+        // 不代表偏好：新版首次读盘时统一收敛回节次行视图，此后正常读盘。
+        weekGridMode = if (prefs.getBoolean("week_grid_mode_declared", false)) {
+            prefs.getInt("week_grid_mode", WEEK_GRID_PERIOD)
+        } else {
+            prefs.edit {
+                putBoolean("week_grid_mode_declared", true)
+                putInt("week_grid_mode", WEEK_GRID_PERIOD)
+            }
+            WEEK_GRID_PERIOD
+        }
         weekRowScale = prefs.getFloat("week_row_scale", 1f)
             .coerceIn(MIN_WEEK_ROW_SCALE, MAX_WEEK_ROW_SCALE)
         weekCornerRadiusDp = prefs.getFloat("week_corner_radius_dp", 0f)

@@ -112,6 +112,33 @@ class WidgetAppearanceTest {
         assertEquals(WidgetAppearance.TEXT_LIGHT, 1)
         assertEquals(WidgetAppearance.TEXT_DARK, 2)
     }
+
+    @Test
+    fun viewIdStampTracksAppearance() {
+        // getItemId 的偏移量：改外观必须换指纹，否则宿主按 hasStableIds 复用旧行视图，
+        // 配置页保存后组件仍是改之前的配色。
+        val base = WidgetAppearance()
+        assertNotEquals(
+            "只改文字颜色也要能反映在指纹上",
+            base.viewIdStamp(),
+            base.copy(textMode = WidgetAppearance.TEXT_DARK).viewIdStamp(),
+        )
+        assertNotEquals(
+            "圆角同样参与指纹",
+            base.viewIdStamp(),
+            base.copy(cornerBucket = base.cornerBucket + 1).viewIdStamp(),
+        )
+        // 反过来：外观没变时指纹必须逐次一致，不然每次 onDataSetChanged 都会全量重绑
+        assertEquals(
+            "同一份外观的指纹要稳定",
+            base.viewIdStamp(),
+            WidgetAppearance().viewIdStamp(),
+        )
+        // 整批行共用一个偏移：行间唯一性不受影响（base 不同 → id 不同）
+        val stamp = base.copy(textMode = WidgetAppearance.TEXT_DARK).viewIdStamp()
+        val ids = listOf(0L, 31L, 62L, 4_711L).map { it + stamp }
+        assertEquals("加偏移后行 id 仍要互不相同", ids.size, ids.toSet().size)
+    }
 }
 
 /** 测试辅助：自定义配色模式下，"实际背景色"就是 backgroundColor 本身 */

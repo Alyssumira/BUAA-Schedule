@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -41,19 +42,30 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.EventNote
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Gavel
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.EditCalendar
 import androidx.compose.material.icons.filled.EventNote
 import androidx.compose.material.icons.filled.Info
@@ -86,6 +98,15 @@ import com.buaa.schedule.widget.TodayWidgetProvider
 import com.buaa.schedule.widget.TomorrowWidgetProvider
 import com.buaa.schedule.widget.WeekGridWidgetProvider
 import com.buaa.schedule.widget.WeekWidgetProvider
+import com.buaa.schedule.BuildConfig
+import com.buaa.schedule.R
+import com.buaa.schedule.core.openExternalUrl
+import com.buaa.schedule.update.AUTHOR_GITEE_URL
+import com.buaa.schedule.update.AUTHOR_GITHUB_URL
+import com.buaa.schedule.update.PROJECT_GITEE_URL
+import com.buaa.schedule.update.PROJECT_GITHUB_URL
+import com.buaa.schedule.update.UpdateCheck
+import com.buaa.schedule.update.UpdateUiState
 import java.time.LocalDate
 import kotlin.math.roundToInt
 
@@ -116,7 +137,7 @@ enum class SettingsSection(
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
-    onDarkThemeChange: (Boolean) -> Unit = {},
+    onDarkThemeChange: (com.buaa.schedule.DarkModePreference) -> Unit = {},
     /** null = 分类列表（根界面）；非 null = 只显示该分类的设置项 */
     section: SettingsSection? = null,
     onOpenSection: (SettingsSection) -> Unit = {},
@@ -134,6 +155,10 @@ fun SettingsScreen(
     var totalWeeks by remember(semester) { mutableStateOf(semester?.totalWeeks?.toString() ?: "20") }
     val context = LocalContext.current
     val importMessage by viewModel.importMessage.collectAsState()
+    // 关于页的"检查更新"与全局更新弹窗共用同一个状态源：
+    // 这里只负责触发和显示进度文案，弹窗由 MainActivity 统一渲染。
+    val updateState by UpdateCheck.state.collectAsState()
+    val settingsScope = rememberCoroutineScope()
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json"),
@@ -639,19 +664,49 @@ fun SettingsScreen(
             }
             if (widgetManager.isRequestPinAppWidgetSupported) {
                 item(key = "pinToday") {
-                    PinWidgetButton("今日课程（4×2 列表）", TodayWidgetProvider::class.java, Modifier.fillMaxWidth())
+                    PinWidgetRow(
+                        label = "今日课程（4×2 列表）",
+                        provider = TodayWidgetProvider::class.java,
+                        previewLayout = R.layout.widget_preview_today,
+                        previewHeight = 150.dp,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
                 item(key = "pinTomorrow") {
-                    PinWidgetButton("明日课程（4×2 列表）", TomorrowWidgetProvider::class.java, Modifier.fillMaxWidth())
+                    PinWidgetRow(
+                        label = "明日课程（4×2 列表）",
+                        provider = TomorrowWidgetProvider::class.java,
+                        previewLayout = R.layout.widget_preview_tomorrow,
+                        previewHeight = 116.dp,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
                 item(key = "pinWeek") {
-                    PinWidgetButton("本周课表（4×4 列表）", WeekWidgetProvider::class.java, Modifier.fillMaxWidth())
+                    PinWidgetRow(
+                        label = "本周课表（4×4 列表）",
+                        provider = WeekWidgetProvider::class.java,
+                        previewLayout = R.layout.widget_preview_week,
+                        previewHeight = 150.dp,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
                 item(key = "pinWeekGrid") {
-                    PinWidgetButton("本周课表（4×2 紧凑网格）", WeekGridWidgetProvider::class.java, Modifier.fillMaxWidth())
+                    PinWidgetRow(
+                        label = "本周课表（4×2 紧凑网格）",
+                        provider = WeekGridWidgetProvider::class.java,
+                        previewLayout = R.layout.widget_preview_week_grid,
+                        previewHeight = 104.dp,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
                 item(key = "pinNext") {
-                    PinWidgetButton("下一节课（2×1 极简）", NextClassWidgetProvider::class.java, Modifier.fillMaxWidth())
+                    PinWidgetRow(
+                        label = "下一节课（2×1 极简）",
+                        provider = NextClassWidgetProvider::class.java,
+                        previewLayout = R.layout.widget_preview_next,
+                        previewHeight = 78.dp,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
             } else {
                 item(key = "pinUnsupported") {
@@ -704,7 +759,7 @@ fun SettingsScreen(
                                 prefs.edit {
                                     putString(com.buaa.schedule.DarkModePreference.PREF_KEY, pref.name)
                                 }
-                                onDarkThemeChange(pref == com.buaa.schedule.DarkModePreference.DARK)
+                                onDarkThemeChange(pref)
                             },
                             modifier = Modifier.weight(1f),
                             enabled = !selected,
@@ -874,24 +929,27 @@ fun SettingsScreen(
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                Switch(
+                    checked = glassTier >= com.buaa.schedule.core.designsystem.DesignTokens.GLASS_TIER_STANDARD,
+                    onCheckedChange = { on ->
+                        val tier = if (on) {
+                            com.buaa.schedule.core.designsystem.DesignTokens.GLASS_TIER_STANDARD
+                        } else {
+                            com.buaa.schedule.core.designsystem.DesignTokens.GLASS_TIER_OFF
+                        }
+                        glassTier = tier
+                        Personalization.glassTier = tier
+                        Personalization.save(context)
+                    },
+                )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
-                listOf(
-                    com.buaa.schedule.core.designsystem.DesignTokens.GLASS_TIER_OFF to "关闭",
-                    com.buaa.schedule.core.designsystem.DesignTokens.GLASS_TIER_STANDARD to "标准",
-                    com.buaa.schedule.core.designsystem.DesignTokens.GLASS_TIER_ENHANCED to "增强",
-                ).forEach { (tier, label) ->
-                    OutlinedButton(
-                        onClick = {
-                            glassTier = tier
-                            Personalization.glassTier = tier
-                            Personalization.save(context)
-                        },
-                        modifier = Modifier.weight(1f),
-                        enabled = glassTier != tier,
-                    ) { Text(label) }
-                }
-            }
+            Text(
+                // 关闭≠完全没有玻璃：小面积那几处（顶栏 / 底栏 / 页签切换）留着最好看，
+                // 大面板退化成实心卡片——整屏几十个 AGSL 表面既费电又不如小玻璃通透
+                text = "关闭时保留小面积玻璃（顶栏、底栏、页签切换），设置与导入页的大块面板改为实心卡片，更省电也更清晰",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             }
             }
             item(key = "glassPreview") {
@@ -917,62 +975,66 @@ fun SettingsScreen(
                     )
                 }
             }
-            if (glassTier > com.buaa.schedule.core.designsystem.DesignTokens.GLASS_TIER_OFF) {
-                Text(
-                    text = "卡片透明度：${(cardAlpha * 100).toInt()}%",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Slider(
-                    value = cardAlpha,
-                    onValueChange = { cardAlpha = it },
-                    // 拖动期间只动本地草稿：全局 cardAlpha 被 6 处玻璃组件在组合中读取，
-                    // 每帧写它等于每秒 60 次整树重组（R5 F-22）。松手后一次落全局并持久化。
-                    onValueChangeFinished = {
-                        Personalization.cardAlpha = cardAlpha
-                        Personalization.save(context)
-                    },
-                    valueRange = 0.3f..1f,
-                )
-            }
+            // 关闭档仍保留小面积玻璃，cardAlpha 就是那些玻璃的透明度，不该被藏起来
+            Text(
+                text = "卡片透明度：${(cardAlpha * 100).toInt()}%",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Slider(
+                value = cardAlpha,
+                onValueChange = { cardAlpha = it },
+                // 拖动期间只动本地草稿：全局 cardAlpha 被 6 处玻璃组件在组合中读取，
+                // 每帧写它等于每秒 60 次整树重组（R5 F-22）。松手后一次落全局并持久化。
+                onValueChangeFinished = {
+                    Personalization.cardAlpha = cardAlpha
+                    Personalization.save(context)
+                },
+                valueRange = 0.3f..1f,
+            )
             }
             }
             item(key = "systemWallpaper") {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "使用桌面壁纸",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Text(
-                        text = "未选自定义壁纸时，直接提取系统桌面壁纸做课表背景",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // ⚠️ 必须是单个 Column：SettingsGroup 把每条 item 包进 GlassSurface，
+            // 而它的内容容器是 Box —— 这里的开关行和下方提示若互为兄弟节点，
+            // 就会全部叠在左上角（表现为"提示文字和设置文字重叠"）。
+            Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "使用桌面壁纸",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            text = "未选自定义壁纸时，直接提取系统桌面壁纸做课表背景",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = Personalization.useSystemWallpaper,
+                        onCheckedChange = {
+                            Personalization.useSystemWallpaper = it
+                            Personalization.save(context)
+                        },
                     )
                 }
-                Switch(
-                    checked = Personalization.useSystemWallpaper,
-                    onCheckedChange = {
-                        Personalization.useSystemWallpaper = it
-                        Personalization.save(context)
-                    },
-                )
-            }
-            // 评审 P0-1：Android 14（API 34）起平台禁止第三方应用读取桌面壁纸，
-            // decodeSystemWallpaper 恒返回 null（见 SceneBackground），背景会静默回退
-            // 渐变色。不能让用户以为开关坏了 —— 在设置页显式说明并给出可操作出路。
-            if (Build.VERSION.SDK_INT >= 34 && Personalization.useSystemWallpaper &&
-                Personalization.wallpaperUri == null
-            ) {
-                Text(
-                    text = "提示：Android 14 起系统限制第三方应用读取桌面壁纸，" +
-                        "此开关不会生效，背景将回退为渐变色。" +
-                        "建议改用下方「选择壁纸图片」手动指定一张图。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
+                // 评审 P0-1：Android 14（API 34）起平台禁止第三方应用读取桌面壁纸，
+                // decodeSystemWallpaper 恒返回 null（见 SceneBackground），背景会静默回退
+                // 渐变色。不能让用户以为开关坏了 —— 在设置页显式说明并给出可操作出路。
+                if (Build.VERSION.SDK_INT >= 34 && Personalization.useSystemWallpaper &&
+                    Personalization.wallpaperUri == null
+                ) {
+                    Text(
+                        text = "提示：Android 14 起系统限制第三方应用读取桌面壁纸，" +
+                            "此开关不会生效，背景将回退为渐变色。" +
+                            "建议改用下方「选择壁纸图片」手动指定一张图。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
             }
             item(key = "wallpaperPick") {
@@ -1493,12 +1555,84 @@ fun SettingsScreen(
             }
             }
 
-            SettingsGroup(title = "关于", visibleWhen = section == SettingsSection.ABOUT) {
-            item(key = "about") {
+            val updateSummary = remember(updateState) { describeUpdateState(context, updateState) }
+
+            SettingsGroup(title = "版本", visibleWhen = section == SettingsSection.ABOUT) {
+            item(key = "aboutHeader") {
+                AboutHeader()
+            }
+            item(key = "checkUpdate") {
+            SettingsRow(
+                icon = Icons.Filled.CloudDownload,
+                title = "检查更新",
+                summary = updateSummary,
+                showChevron = true,
+                onClick = { settingsScope.launch { UpdateCheck.check(context, force = true) } },
+            )
+            }
+            }
+
+            SettingsGroup(title = "项目与作者", visibleWhen = section == SettingsSection.ABOUT) {
+            item(key = "authorGitee") {
+            SettingsRow(
+                icon = Icons.Filled.Person,
+                title = "作者 · Gitee",
+                summary = AUTHOR_GITEE_URL.substringAfter("https://"),
+                showChevron = true,
+                onClick = { openExternalUrl(context, AUTHOR_GITEE_URL) },
+            )
+            }
+            item(key = "authorGithub") {
+            SettingsRow(
+                icon = Icons.Filled.Face,
+                title = "作者 · GitHub",
+                summary = AUTHOR_GITHUB_URL.substringAfter("https://"),
+                showChevron = true,
+                onClick = { openExternalUrl(context, AUTHOR_GITHUB_URL) },
+            )
+            }
+            item(key = "repoGitee") {
+            SettingsRow(
+                icon = Icons.Filled.Link,
+                title = "项目仓库 · Gitee",
+                summary = "更新版本在此发布，Issues 也提在这里",
+                showChevron = true,
+                onClick = { openExternalUrl(context, PROJECT_GITEE_URL) },
+            )
+            }
+            item(key = "repoGithub") {
+            SettingsRow(
+                icon = Icons.Filled.Code,
+                title = "项目仓库 · GitHub",
+                summary = "与 Gitee 同步的镜像仓库",
+                showChevron = true,
+                onClick = { openExternalUrl(context, PROJECT_GITHUB_URL) },
+            )
+            }
+            }
+
+            SettingsGroup(title = "说明", visibleWhen = section == SettingsSection.ABOUT) {
+            item(key = "privacy") {
+            SettingsRow(
+                icon = Icons.Filled.Lock,
+                title = "数据与隐私",
+                summary = "课表、提醒与节次时间只保存在本机，不上传任何个人数据；" +
+                    "登录教务系统仅用于拉取你自己的课表。",
+            )
+            }
+            item(key = "license") {
+            SettingsRow(
+                icon = Icons.Filled.Gavel,
+                title = "开源许可",
+                summary = "MIT License · Copyright © 2026 Alyssumira",
+            )
+            }
+            item(key = "updateChannel") {
             SettingsRow(
                 icon = Icons.Filled.Info,
-                title = "北航课程表 v0.1.0",
-                summary = "本地优先，数据默认存储在设备。",
+                title = "更新方式",
+                summary = "每天第一次打开时自动检查一次 Gitee Releases；" +
+                    "发现新版本可在应用内下载安装包，也可以跳浏览器去发布页。",
             )
             }
             }
@@ -1682,39 +1816,6 @@ internal fun isValidTimeSlot(slot: com.buaa.schedule.domain.model.TimeSlot): Boo
         TIME_OF_DAY_PATTERN.matches(slot.endTime) &&
         slot.startTime < slot.endTime
 
-/** 「一键添加到桌面」：Launcher 支持 requestPinAppWidget 时可用 */
-@Composable
-private fun PinWidgetButton(
-    label: String,
-    provider: Class<out android.appwidget.AppWidgetProvider>,
-    modifier: Modifier = Modifier,
-) {
-    val context = LocalContext.current
-    OutlinedButton(
-        onClick = {
-            // requestPinAppWidget 返回 false 表示 Launcher 不支持固定组件（部分国内 ROM 直接静默失败），
-            // 这里用 Toast 兜底，避免用户点了没反应也不知道原因。
-            val accepted: Boolean? = runCatching {
-                android.appwidget.AppWidgetManager.getInstance(context).requestPinAppWidget(
-                    android.content.ComponentName(context, provider),
-                    null,
-                    null,
-                )
-            }.getOrNull()
-            if (accepted != true) {
-                android.widget.Toast.makeText(
-                    context,
-                    "当前桌面不支持一键添加，请长按桌面空白处手动添加组件",
-                    android.widget.Toast.LENGTH_LONG,
-                ).show()
-            }
-        },
-        modifier = modifier,
-    ) {
-        Text(label, style = MaterialTheme.typography.labelMedium)
-    }
-}
-
 /**
  * 壁纸调参滑块：拖动即时生效，拖完一次性落盘（避免每次 move 都写 prefs）。
  */
@@ -1739,3 +1840,71 @@ private fun WallpaperSlider(
         )
     }
 }
+
+/**
+ * 关于页头部：作者头像 + 应用名 + 版本号。
+ *
+ * 版本号必须取自 BuildConfig —— 之前这里是写死的 "v0.1.0" 字面量，
+ * 改 versionName 不会跟着变，等于每次发版都要手改一处文案。
+ */
+@Composable
+private fun AboutHeader() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = DesignTokens.spaceS),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Image(
+            painter = painterResource(R.drawable.author_avatar),
+            contentDescription = "作者头像",
+            modifier = Modifier
+                .size(56.dp)
+                .clip(CircleShape),
+        )
+        Column(modifier = Modifier.padding(start = DesignTokens.spaceL)) {
+            Text(
+                text = "北航课程表",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = "v${BuildConfig.VERSION_NAME} · Alyssumira",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            Text(
+                text = "开源、本地优先的北航课表",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** 检查更新行的副标题：当前状态 + 上次检查时间 */
+private fun describeUpdateState(context: Context, state: UpdateUiState): String {
+    val last = formatLastCheck(UpdateCheck.lastCheckAt(context))
+    return when (state) {
+        is UpdateUiState.Available -> "发现新版本 v${state.info.version}（当前 v${BuildConfig.VERSION_NAME}）"
+        is UpdateUiState.Downloading -> if (state.percent >= 0) "下载中 ${state.percent}%" else "准备下载…"
+        is UpdateUiState.UpToDate -> "已是最新版本 · 上次检查 $last"
+        is UpdateUiState.Failed -> "上次检查失败：${state.message}"
+        UpdateUiState.Checking -> "正在检查…"
+        UpdateUiState.Idle -> "每天第一次打开自动检查 · 上次检查 $last"
+    }
+}
+
+private fun formatLastCheck(epochMillis: Long): String =
+    if (epochMillis <= 0L) {
+        "从未进行"
+    } else {
+        java.time.Instant.ofEpochMilli(epochMillis)
+            .atZone(java.time.ZoneId.systemDefault())
+            .format(
+                java.time.format.DateTimeFormatter.ofPattern(
+                    "M月d日 HH:mm",
+                    java.util.Locale.CHINA,
+                ),
+            )
+    }

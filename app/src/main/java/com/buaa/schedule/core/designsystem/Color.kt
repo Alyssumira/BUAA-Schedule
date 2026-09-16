@@ -64,5 +64,12 @@ fun Color.readableLuminance(): Float {
  * 根据背景亮度自动选择可读前景色（黑或白），
  * 保证课程色块（如浅黄）上的文字始终满足对比度。
  */
-fun contentOn(background: Color): Color =
-    if (background.readableLuminance() > 0.45f) Color(0xFF1A1B20) else Color.White
+fun contentOn(background: Color): Color = contentOnLuma(background.readableLuminance())
+
+/**
+ * [contentOn] 的亮度版本：手头的底色是"半透明色叠在别的东西上"合成出来的，
+ * 只有亮度没有 Color（周视图课程卡：课程色 tint 叠在壁纸上），
+ * 阈值判断仍然一样——所以拆出来复用，不要各写一套 0.45。
+ */
+fun contentOnLuma(luma: Float): Color =
+    if (luma > 0.45f) Color(0xFF1A1B20) else Color.White

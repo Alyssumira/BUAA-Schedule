@@ -21,6 +21,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,6 +40,7 @@ import androidx.compose.ui.window.PopupProperties
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
+import com.buaa.schedule.core.designsystem.LocalSceneBackdrop
 import com.buaa.schedule.core.designsystem.performTick
 import com.buaa.schedule.data.import.BuaaInPageFetcher
 
@@ -238,19 +240,26 @@ private fun GlassDropdownPopup(
         onDismissRequest = onDismiss,
         properties = PopupProperties(focusable = true),
     ) {
-        GlassSurface(
-            variant = GlassVariant.PANEL,
-            shape = RoundedCornerShape(DesignTokens.cornerPanel),
-            contentPadding = DesignTokens.spaceS,
-            modifier = Modifier.widthIn(min = 180.dp, max = 300.dp),
-        ) {
-            Column(
-                modifier = Modifier
-                    .heightIn(max = 340.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+        // Popup 是**独立窗口**，采样不到主窗口的场景层：
+        // 沿用 LocalSceneBackdrop 的话，玻璃会按浮层自己的坐标去裁主窗口那张图，
+        // 于是折射内容整体错位（用户反馈的"取景位置好像不对"）。
+        // 浮层本来也不该去折射另一个窗口的内容——这里显式给 null，
+        // GlassSurface 就走不透明平板 + 描边，边界干净、列表文字也不再糊。
+        CompositionLocalProvider(LocalSceneBackdrop provides null) {
+            GlassSurface(
+                variant = GlassVariant.PANEL,
+                shape = RoundedCornerShape(DesignTokens.cornerPanel),
+                contentPadding = DesignTokens.spaceS,
+                modifier = Modifier.widthIn(min = 180.dp, max = 300.dp),
             ) {
-                content()
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 340.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    content()
+                }
             }
         }
     }
