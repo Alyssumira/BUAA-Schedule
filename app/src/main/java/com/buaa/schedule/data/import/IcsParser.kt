@@ -88,45 +88,80 @@ object IcsParser {
             val startSection = sectionOf(startTime, slots)
             val endSection = sectionOf(endTime, slots)
 
-            var date = startDate
-            val weeks = mutableListOf<Int>()
-            var occurrences = 0
-            // 硬性迭代上限：即使 RRULE 参数畸形也不能无限跑。
-            // 一个学期最多 MAX_WEEK(30) 周，留两倍余量足以覆盖任何合法输入
-            // （此前 INTERVAL=0 会让 date.plusWeeks(0) 原地踏步 → 死循环 + weeks 无限增长）。
-            val maxIterations = weekUpperBound * 2 + 8
-            while (true) {
-                val week = dateToWeek(date, semesterStart)
-                if (week in 1..weekUpperBound && date !in exDates) {
-                    weeks.add(week)
-                }
-                if (rruleLine == null || !isWeekly) break
-                occurrences++
-                if (occurrences >= maxIterations) break
-                if (count != null && occurrences >= count) break
-                date = date.plusWeeks(interval.toLong())
-                if (until != null && date.isAfter(until)) break
-                // 无 UNTIL/COUNT 的无限重复，超出学期周数即可停止
-                if (week > weekUpperBound && until == null && count == null) break
-            }
+            // RRULE 的 BYDAY=MO,WE：一周在多个星期几重复。此前一律按 DTSTART 的
+            // 星期几 plusWeeks，另一半星期的课整门静默丢失（Google Calendar 导出常见写法）。
+            // 现在每个目标星期各展开一条周次序列。
+            val byDays = extractByDays(rruleLine)
+            val weekdays: List<java.time.DayOfWeek> =
+                if (isWeekly && byDays.isNotEmpty()) byDays else listOf(startDate.dayOfWeek)
+            // COUNT 限的是总次数；拆成多条星期序列后按均摊近似（UNTIL 语义不受影响）
+            val perSeriesCount = count?.let { (it + weekdays.size - 1) / weekdays.size }
+            val mondayOfStart = startDate.minusDays((startDate.dayOfWeek.value - 1).toLong())
 
-            if (weeks.isNotEmpty()) {
-                courses.add(
-                    Course(
-                        name = summary,
-                        teacher = teacher,
-                        location = location,
-                        dayOfWeek = startDate.dayOfWeek.value,
-                        periods = (startSection..endSection).toList(),
-                        weeks = weeks.distinct().sorted(),
-                        colorIndex = (startSection + startDate.dayOfWeek.value) % 8,
-                        sourceGroupKey = null,
-                        semesterCode = termCode,
+            weekdays.forEach { dow ->
+                // 锚定 DTSTART 所在周（周一起算）里该星期几的日子；早于 DTSTART 的首周
+                // 出现由 isBefore 过滤，之后每周步进 interval 周
+                var date = mondayOfStart.plusDays((dow.value - 1).toLong())
+                val weeks = mutableListOf<Int>()
+                var occurrences = 0
+                // 硬性迭代上限：即使 RRULE 参数畸形也不能无限跑。
+                // 一个学期最多 MAX_WEEK(30) 周，留两倍余量足以覆盖任何合法输入
+                // （此前 INTERVAL=0 会让 date.plusWeeks(0) 原地踏步 → 死循环 + weeks 无限增长）。
+                val maxIterations = weekUpperBound * 2 + 8
+                while (true) {
+                    val week = dateToWeek(date, semesterStart)
+                    if (week in 1..weekUpperBound && !date.isBefore(startDate) && date !in exDates) {
+                        weeks.add(week)
+                    }
+                    if (rruleLine == null || !isWeekly) break
+                    occurrences++
+                    if (occurrences >= maxIterations) break
+                    if (perSeriesCount != null && occurrences >= perSeriesCount) break
+                    date = date.plusWeeks(interval.toLong())
+                    if (until != null && date.isAfter(until)) break
+                    // 无 UNTIL/COUNT 的无限重复，超出学期周数即可停止
+                    if (week > weekUpperBound && until == null && count == null) break
+                }
+
+                if (weeks.isNotEmpty()) {
+                    courses.add(
+                        Course(
+                            name = summary,
+                            teacher = teacher,
+                            location = location,
+                            dayOfWeek = dow.value,
+                            periods = (startSection..endSection).toList(),
+                            weeks = weeks.distinct().sorted(),
+                            colorIndex = (startSection + dow.value) % 8,
+                            sourceGroupKey = null,
+                            semesterCode = termCode,
+                        )
                     )
-                )
+                }
             }
         }
         return courses
+    }
+
+    /**
+     * RRULE 的 BYDAY=MO,WE,FR。带序数前缀（`+1MO`）的按周频语义无意义，剥掉字母部分即可；
+     * 一个都认不出来时返回空，由调用方退回「按 DTSTART 星期几」的老语义。
+     */
+    private fun extractByDays(rruleLine: String?): List<java.time.DayOfWeek> {
+        val line = rruleLine ?: return emptyList()
+        val value = RE_BYDAY.find(line)?.groupValues?.get(1) ?: return emptyList()
+        return value.split(',').mapNotNull { raw ->
+            when (raw.trim().filter { it.isLetter() }.uppercase()) {
+                "MO" -> java.time.DayOfWeek.MONDAY
+                "TU" -> java.time.DayOfWeek.TUESDAY
+                "WE" -> java.time.DayOfWeek.WEDNESDAY
+                "TH" -> java.time.DayOfWeek.THURSDAY
+                "FR" -> java.time.DayOfWeek.FRIDAY
+                "SA" -> java.time.DayOfWeek.SATURDAY
+                "SU" -> java.time.DayOfWeek.SUNDAY
+                else -> null
+            }
+        }
     }
 
     private fun sectionOf(time: LocalTime, slots: List<DefaultSlot>): Int {
@@ -325,6 +360,8 @@ object IcsParser {
 
     private val RE_INTERVAL = Regex("INTERVAL=(\\d+)")
     private val RE_COUNT = Regex("COUNT=(\\d+)")
+    /** RRULE 的 BYDAY=MO,WE,FR（值段到分号或行尾为止） */
+    private val RE_BYDAY = Regex("BYDAY=([^;\\s]+)")
     private val RE_EXDATE = Regex("(?m)^EXDATE(?:;[^:]*)?:(.*)$")
     /**
      * 教师名截断到 ` · ` 分隔符或行尾。

@@ -1,5 +1,6 @@
 package com.buaa.schedule.ui.editor
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
@@ -69,6 +70,7 @@ import com.buaa.schedule.core.designsystem.motionSpec
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.CourseSaveOptions
 import com.buaa.schedule.domain.model.ReminderSetting
+import com.buaa.schedule.domain.model.toPeriodSegments
 import com.buaa.schedule.domain.schedule.CourseConstraints
 import com.buaa.schedule.domain.schedule.WeekParser
 import kotlinx.coroutines.launch
@@ -93,9 +95,22 @@ fun CourseEditorScreen(
     var location by rememberSaveable { mutableStateOf(initialCourse?.location ?: "") }
     var campus by rememberSaveable { mutableStateOf(initialCourse?.campus ?: "") }
     var day by rememberSaveable { mutableIntStateOf(initialCourse?.dayOfWeek ?: 1) }
-    var startSection by rememberSaveable { mutableStateOf(initialCourse?.startPeriod?.toString() ?: "1") }
-    var endSection by rememberSaveable { mutableStateOf(initialCourse?.endPeriod?.toString() ?: "2") }
-    var extraPeriods by rememberSaveable { mutableStateOf("") }
+    // 节次按**连续段**回填：此前用 startPeriod(min)/endPeriod(max) 初始化，于是
+    // 一门 1-2 + 9-10 的课只改一下老师的名字，保存时 parsePeriods 就会把 1..10
+    // 展开成连续块——非连续节次被静默拉直（P0）。
+    // 首段进「开始/结束节次」，其余段拼成 parsePeriods 认得的 "9-10" 文本进「额外节次」。
+    val periodSegments = remember(initialCourse) {
+        initialCourse?.periods.orEmpty().toPeriodSegments()
+    }
+    val initialStartSection = (periodSegments.firstOrNull()?.first ?: 1).toString()
+    val initialEndSection = (periodSegments.firstOrNull()?.last ?: 2).toString()
+    val initialExtraPeriods = periodSegments.drop(1).joinToString(",") { segment ->
+        if (segment.first == segment.last) "${segment.first}"
+        else "${segment.first}-${segment.last}"
+    }
+    var startSection by rememberSaveable { mutableStateOf(initialStartSection) }
+    var endSection by rememberSaveable { mutableStateOf(initialEndSection) }
+    var extraPeriods by rememberSaveable { mutableStateOf(initialExtraPeriods) }
     var weeksText by rememberSaveable {
         mutableStateOf(
             initialCourse?.weeks?.let { WeekParser.toDisplayString(it).removeSuffix("周") }
@@ -113,6 +128,39 @@ fun CourseEditorScreen(
     val scope = rememberCoroutineScope()
     var saving by remember { mutableStateOf(false) }
     var saveError by remember { mutableStateOf<String?>(null) }
+
+    // 脏判定基线：打开那一刻的逐项初值。提醒那两个字段**故意**不在名单里——
+    // reminders 是独立的一条流，可能在编辑器首帧之后才到位，纳进来会让"什么都没改"
+    // 也被判成有改动、平白多弹一次确认框。
+    val baselineDraft = remember(
+        initialCourse,
+        initialStartSection,
+        initialEndSection,
+        initialExtraPeriods,
+    ) {
+        listOf(
+            initialCourse?.name ?: "",
+            initialCourse?.alias ?: "",
+            initialCourse?.teacher ?: "",
+            initialCourse?.location ?: "",
+            initialCourse?.campus ?: "",
+            initialCourse?.dayOfWeek ?: 1,
+            initialStartSection,
+            initialEndSection,
+            initialExtraPeriods,
+            initialCourse?.weeks?.let { WeekParser.toDisplayString(it).removeSuffix("周") } ?: "1-16",
+            initialCourse?.colorIndex ?: 0,
+            initialCourse?.customColorArgb,
+            false,
+            false,
+        )
+    }
+    val isDraftDirty = listOf(
+        name, alias, teacher, location, campus, day,
+        startSection, endSection, extraPeriods, weeksText,
+        colorIndex, customColor, partialWeeks, applyToGroup,
+    ) != baselineDraft
+    var showDiscardDialog by remember { mutableStateOf(false) }
 
     val periods = remember(startSection, endSection, extraPeriods) {
         parsePeriods(startSection, endSection, extraPeriods)
@@ -189,6 +237,13 @@ fun CourseEditorScreen(
         }
     }
 
+    // 中途返回不再静默丢草稿（P2）：顶部箭头与系统返回键都过这道闸。
+    // 保存成功/删除成功走的是 onBack() 本身，不经过这里。
+    fun requestBack() {
+        if (isDraftDirty) showDiscardDialog = true else onBack()
+    }
+    BackHandler(enabled = isDraftDirty && !saving) { showDiscardDialog = true }
+
     val sharedScope = LocalSharedTransitionScope.current
     val animScope = LocalAnimatedVisibilityScope.current
     val editorSharedModifier = if (initialCourse != null && sharedScope != null && animScope != null) {
@@ -209,7 +264,7 @@ fun CourseEditorScreen(
         topBar = {
             com.buaa.schedule.core.designsystem.GlassTopBar(
                 title = if (initialCourse == null) "添加课程" else "编辑课程",
-                onBack = onBack,
+                onBack = { requestBack() },
             )
         },
         bottomBar = {
@@ -466,6 +521,20 @@ fun CourseEditorScreen(
                 Spacer(modifier = Modifier.size(DesignTokens.spaceXL))
             }
         }
+    }
+
+    if (showDiscardDialog) {
+        AlertDialog(
+            onDismissRequest = { showDiscardDialog = false },
+            title = { Text("放弃修改？") },
+            text = { Text("这门课的改动还没有保存，返回后这些输入就没了。") },
+            confirmButton = {
+                TextButton(onClick = { showDiscardDialog = false; onBack() }) { Text("放弃修改") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDiscardDialog = false }) { Text("继续编辑") }
+            },
+        )
     }
 
     if (showColorPicker) {

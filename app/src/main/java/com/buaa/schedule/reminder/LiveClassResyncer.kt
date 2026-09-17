@@ -75,12 +75,7 @@ object LiveClassResyncer {
         // 与上课铃、课前提醒同一条入口：兜底通知 + 前台服务，课前课中课后共用一套形状
         ReminderNotifications.startLiveWindow(
             context = context,
-            courseId = window.courseId,
-            courseName = window.courseName,
-            location = window.location,
-            sectionText = window.sectionText,
-            startMillis = window.startMillis,
-            endMillis = window.endMillis,
+            window = window,
             phase = LivePhase.IN_CLASS,
         )
         // 上课铃被吞时下课铃多半也丢了：补一个，否则通知与勿扰只能等服务自杀收场

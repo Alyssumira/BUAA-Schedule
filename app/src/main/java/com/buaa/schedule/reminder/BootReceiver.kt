@@ -30,14 +30,27 @@ class BootReceiver : BroadcastReceiver() {
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // 重启把闹钟全清了，遗留的勿扰记录再没有下课铃来恢复 —— 开机即无条件清一次
-                // （没进过勿扰时 restore 本身就是 no-op，不会动用户自己的勿扰设置）
-                ClassProgressDnd.restore(context)
-                BackgroundSync.rescheduleReminders(context)
-                BackgroundSync.refreshWidgets(context)
-                BackgroundSync.scheduleWidgetMidnight(context)
-                BackgroundSync.scheduleTomorrowPreview(context)
-                ReminderNotifications.ensureChannels(context)
+                // 开机这批重建全是查库 + binder 调用；goAsync 只保证进程存活，
+                // 不保证 CPU 一直醒着（同 ReminderReceiver 的口径），带超时的部分唤醒锁
+                // 把整段圈进 CPU 醒着的时间，跑不完也不要留半套闹钟
+                WakeLocks.withPartialWakeLock(
+                    context,
+                    "boot_rebuild",
+                    // 开机这串重建（重排提醒 + 全量刷组件 + 排两个闹钟 + 建渠道）
+                    // 远超一次单条提醒重排的开销，默认 5 秒会被提前收回
+                    timeoutMs = 10_000L,
+                ) {
+                    // 重启把闹钟全清了，遗留的勿扰记录再没有下课铃来恢复 —— 开机即无条件清一次
+                    // （没进过勿扰时 restore 本身就是 no-op，不会动用户自己的勿扰设置）
+                    ClassProgressDnd.restore(context)
+                    // rescheduleReminders 的 Boolean 返回值代表「提醒链是否已接手课堂铃」，
+                    // 开机时闹钟全清、返回值此前被直接丢弃 —— 用打包版补齐课堂铃重排
+                    BackgroundSync.rescheduleRemindersAndBells(context)
+                    BackgroundSync.refreshWidgets(context)
+                    BackgroundSync.scheduleWidgetMidnight(context)
+                    BackgroundSync.scheduleTomorrowPreview(context)
+                    ReminderNotifications.ensureChannels(context)
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // 协程取消是控制流信号，必须继续向上传播，不能吞掉
                 throw e

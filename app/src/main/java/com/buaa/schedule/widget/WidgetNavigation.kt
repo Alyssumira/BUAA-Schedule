@@ -80,4 +80,4 @@ internal fun stepWeekOffset(baseWeek: Int, totalWeeks: Int, offset: Int, delta: 
     clampWeekOffset(baseWeek, totalWeeks, offset + delta)
 
 /** totalWeeks 为 0 的脏数据会让 coerceIn(min > max) 抛异常，先兜成 1 周 */
-private fun totalWeeksOf(semester: Semester?): Int = (semester?.totalWeeks ?: 1).coerceAtLeast(1)
+internal fun totalWeeksOf(semester: Semester?): Int = (semester?.totalWeeks ?: 1).coerceAtLeast(1)

@@ -79,8 +79,16 @@ object TodayPlanner {
             slots = todaySlots,
             ongoing = ongoing,
             next = next,
-            minutesToNext = next?.let { ChronoUnit.MINUTES.between(now, it.start) },
-            minutesRemaining = ongoing?.let { ChronoUnit.MINUTES.between(now, it.end) },
+            // 向上取整，与实况通知的 minutesLeft 同一口径：
+            // 向下截断会在下课（上课）前最后一分钟显示"还有 0 分钟"，两处数字还恒定差一分钟
+            minutesToNext = next?.let { minutesUntil(now, it.start) },
+            minutesRemaining = ongoing?.let { minutesUntil(now, it.end) },
         )
+    }
+
+    /** [from] 到 [to] 之间还剩多少分钟：不足一分钟按一分钟算，永不为负 */
+    private fun minutesUntil(from: LocalTime, to: LocalTime): Long {
+        val seconds = ChronoUnit.SECONDS.between(from, to)
+        return ((seconds + 59) / 60).coerceAtLeast(0L)
     }
 }

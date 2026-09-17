@@ -11,6 +11,7 @@ import android.widget.RemoteViewsService
 import com.buaa.schedule.R
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
+import com.buaa.schedule.domain.model.WEEKDAY_LABELS
 import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.schedule.WeekCalculator
 import kotlinx.coroutines.CoroutineScope
@@ -43,6 +44,12 @@ class WeekGridFactory(
         val summary: String,
         /** 这一列是不是「今天」（审查 3.4）。只在正在看本周时为 true */
         val isToday: Boolean,
+        /**
+         * 课表有数据、而这一格恰好没课：标一句淡化的「无课」。
+         * 没有学期 / 假期时不能这么标——那会在七列上各写一遍"无课"，
+         * 把"我还没导入课表"说成"我这周什么都没有"。
+         */
+        val isBlankDay: Boolean = false,
     )
 
     private var cells: List<DayCell> = emptyList()
@@ -85,7 +92,7 @@ class WeekGridFactory(
             WeekCalculator.currentWeekOrNull(it, semester.totalWeeks, today)
         }
         todayColumn = if (week != null && week == realWeek) today.dayOfWeek.value else 0
-        val names = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+        val names = WEEKDAY_LABELS
         cells = if (semester == null || week == null || courses.isEmpty()) {
             names.map { DayCell(it, "", false) }
         } else {
@@ -97,6 +104,7 @@ class WeekGridFactory(
                     dayName = dayName,
                     summary = weekGridDaySummary(dayCourses, maxLines = appearance.gridMaxLines),
                     isToday = day == todayColumn,
+                    isBlankDay = dayCourses.isEmpty(),
                 )
             }
         }
@@ -121,7 +129,18 @@ class WeekGridFactory(
         val cell = cells[position]
         val views = RemoteViews(context.packageName, R.layout.widget_week_grid_item)
         views.setTextViewText(R.id.widget_grid_day, cell.dayName)
-        views.setTextViewText(R.id.widget_grid_courses, cell.summary)
+        views.setTextViewText(
+            R.id.widget_grid_courses,
+            // 空着的工作日标一句淡色的「无课」：这一族组件回答的第二问就是"哪天是空的"，
+            // 完全留白和"数据还没到"看不出区别。周末不标——多数人周末本来就没课，
+            // 周六周日各一个「无课」只是噪音。
+            if (cell.isBlankDay && position < WEEKDAY_COLUMNS) NO_CLASS_LABEL else cell.summary,
+        )
+        views.setFloat(
+            R.id.widget_grid_courses,
+            "setAlpha",
+            if (cell.isBlankDay) BLANK_DAY_ALPHA else 1f,
+        )
         // U-09：宽松档（每格 3 节）把课程行从 9sp 提到 10sp——密集档是列宽所限，
         // 但既然只列三节，就没有理由继续用接近不可读的字号。
         // RemoteViews 改字号只有 setTextViewTextSize，而它要 API 33：26~32 上这一档仍然
@@ -166,10 +185,12 @@ class WeekGridFactory(
      *
      * 「今天」与浏览周也必须折进来：两者都不在 [appearance] 里，跨零点后 isToday 翻面、
      * 翻周后 weekOfGrid 变化，若某天两格的文字恰好一样，id 不变 → 高亮停在昨天。
+     * [DayCell.isBlankDay] 同理：没课表时的空格子与"有课表但今天没课"的空格子文字一样
+     * （都是空串），不折进来就永远刷不出那句「无课」。
      */
     override fun getItemId(position: Int): Long {
         val cell = cells.getOrNull(position) ?: return WidgetCommon.itemKey(position, position.toLong())
-        val content = (cell.dayName + cell.summary + cell.isToday + weekOfGrid).hashCode()
+        val content = (cell.dayName + cell.summary + cell.isToday + cell.isBlankDay + weekOfGrid).hashCode()
         return WidgetCommon.itemKey(position, content.toLong() + appearance.viewIdStamp())
     }
 
@@ -177,6 +198,13 @@ class WeekGridFactory(
 
     private companion object {
         private const val TAG = "WeekGridFactory"
+
+        /** 周一..周五的列数：只有工作日才标「无课」 */
+        private const val WEEKDAY_COLUMNS = 5
+        private const val NO_CLASS_LABEL = "无课"
+
+        /** 空格子的淡度：要到"看得见但不参与扫读"的程度 */
+        private const val BLANK_DAY_ALPHA = 0.35f
     }
 }
 
@@ -207,12 +235,21 @@ internal fun weekGridShortName(name: String, maxChars: Int = WEEK_GRID_NAME_CHAR
     val cleaned = name.replace(" ", "").trim()
     val trunkChars = (maxChars - 1).coerceAtLeast(1)
     parenInner(cleaned)?.let { inner ->
-        return cleaned.take(trunkChars) + inner
+        // 主干要**截到左括号之前**再取字：直接从原名取，maxChars=4 时
+        // 「体育(篮球)」会取到「体育(」，把一个标点当字留在短名里
+        val trunk = cleaned.beforeFirstParen().take(trunkChars)
+        return trunk + inner
     }
     asciiSuffix(cleaned)?.let { suffix ->
         return cleaned.dropLast(suffix.length).take(trunkChars) + suffix
     }
     return cleaned.take(maxChars)
+}
+
+/** 截到第一个中/英文左括号之前；没有括号时原样返回 */
+private fun String.beforeFirstParen(): String {
+    val open = indexOfFirst { it == '(' || it == '（' }
+    return if (open < 0) this else take(open)
 }
 
 /** 首个中英文括号里的第一个字；括号在最前、括号为空时返回 null */
@@ -253,10 +290,20 @@ private fun Char.isClassSuffixChar(): Boolean =
 internal fun weekGridDaySummary(
     courses: List<Course>,
     maxLines: Int = WEEK_GRID_MAX_LINES,
-): String {
-    if (courses.isEmpty()) return ""
-    val shown = courses.take(maxLines).map { "${it.startPeriod}${weekGridShortName(it.displayName)}" }
-    val hidden = courses.size - shown.size
-    val lines = if (hidden > 0) shown.dropLast(1) + "＋$hidden" else shown
-    return lines.joinToString("\n")
+): String = foldDayLines(
+    courses.map { "${it.startPeriod}${weekGridShortName(it.displayName)}" },
+    maxLines,
+)
+
+/**
+ * 把"每节课一行"的整段结果折进 [maxLines] 行以内，多出来的收成末行「＋N」。
+ *
+ * N 是**没有点名显示的节数**：末行整个被计数器占掉，所以它等于 `总行数 - 还留着几行名字`，
+ * 不是 `总行数 - 容量`。7 节课 / 5 行档要写「＋3」而不是「＋2」——
+ * 少算的那一节正是被计数器顶掉的那一行，用户按数字加一遍会对不上总数。
+ */
+internal fun foldDayLines(allLines: List<String>, maxLines: Int): String {
+    if (allLines.size <= maxLines) return allLines.joinToString("\n")
+    val shown = allLines.take(maxLines - 1)
+    return (shown + "＋${allLines.size - shown.size}").joinToString("\n")
 }

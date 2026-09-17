@@ -101,6 +101,8 @@ class WidgetConfigActivity : ComponentActivity() {
         val rowFieldChoices = when (providerClassName) {
             NextClassWidgetProvider::class.java.name -> WidgetAppearance.NEXT_ROW_FIELD_CHOICES
             WeekGridWidgetProvider::class.java.name -> emptyList()
+            // 两栏每行只有"时刻 + 短名"这一种排法，宽度也是硬约束：给它一排勾不生效的选项更糟
+            TwoDayWidgetProvider::class.java.name -> emptyList()
             else -> WidgetAppearance.LIST_ROW_FIELD_CHOICES
         }
         val rowFieldsDefault = when (providerClassName) {

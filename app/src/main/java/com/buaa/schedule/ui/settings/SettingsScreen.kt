@@ -110,6 +110,7 @@ import com.buaa.schedule.widget.BackgroundSync
 import com.buaa.schedule.widget.NextClassWidgetProvider
 import com.buaa.schedule.widget.TodayWidgetProvider
 import com.buaa.schedule.widget.TomorrowWidgetProvider
+import com.buaa.schedule.widget.TwoDayWidgetProvider
 import com.buaa.schedule.widget.WeekGridWidgetProvider
 import com.buaa.schedule.widget.WeekWidgetProvider
 import com.buaa.schedule.BuildConfig
@@ -701,6 +702,7 @@ fun SettingsScreen(
                         WeekWidgetProvider::class.java,
                         WeekGridWidgetProvider::class.java,
                         NextClassWidgetProvider::class.java,
+                        TwoDayWidgetProvider::class.java,
                     ).sumOf { clazz ->
                         widgetManager.getAppWidgetIds(
                             android.content.ComponentName(context, clazz)
@@ -736,6 +738,15 @@ fun SettingsScreen(
                         provider = TomorrowWidgetProvider::class.java,
                         previewLayout = R.layout.widget_preview_tomorrow,
                         previewHeight = 116.dp,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                item(key = "pinTwoDay") {
+                    PinWidgetRow(
+                        label = "今明课表（4×2 两栏对照）",
+                        provider = TwoDayWidgetProvider::class.java,
+                        previewLayout = R.layout.widget_preview_two_day,
+                        previewHeight = 104.dp,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -1433,10 +1444,18 @@ fun SettingsScreen(
                         )
                     )
                 }
+                // 日历模式下课堂铃整条链被撤掉（见 BackgroundSync.rescheduleReminders），
+                // 开关留着显示 ON 等于骗人：置灰并说明原因
+                val calendarMode = reminderMode == com.buaa.schedule.domain.model.ReminderMode.CALENDAR
                 SettingsSwitchRow(
                     title = "课程进行中常驻提醒",
-                    summary = "上课期间显示一条带倒计时的常驻通知",
+                    summary = if (calendarMode) {
+                        "「系统日历提醒」模式下不生效"
+                    } else {
+                        "上课期间显示一条带倒计时的常驻通知"
+                    },
                     checked = classProgress,
+                    enabled = !calendarMode,
                     onCheckedChange = {
                         classProgress = it
                         prefs.edit {
@@ -1486,8 +1505,13 @@ fun SettingsScreen(
                 } else {
                     SettingsSwitchRow(
                         title = "上课自动勿扰",
-                        summary = "上课期间开启勿扰，下课后自动恢复",
+                        summary = if (reminderMode == com.buaa.schedule.domain.model.ReminderMode.CALENDAR) {
+                            "「系统日历提醒」模式下不生效"
+                        } else {
+                            "上课期间开启勿扰，下课后自动恢复"
+                        },
                         checked = dndEnabled,
+                        enabled = reminderMode != com.buaa.schedule.domain.model.ReminderMode.CALENDAR,
                         onCheckedChange = {
                             dndEnabled = it
                             prefs.edit {

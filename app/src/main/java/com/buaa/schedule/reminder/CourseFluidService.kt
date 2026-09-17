@@ -13,9 +13,9 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.buaa.schedule.BUAAApplication
-import com.buaa.schedule.MainActivity
 import com.buaa.schedule.R
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -45,19 +45,13 @@ class CourseFluidService : Service() {
      */
     private val ioScope: CoroutineScope
         get() = (application as BUAAApplication).applicationScope
-    private var courseId = 0L
-    private var courseName = ""
-    private var location: String? = null
-    private var sectionText = ""
-    private var startMillis = 0L
-    private var endMillis = 0L
-
+    private var liveWindow: ClassProgressScheduler.ClassWindow = EMPTY_WINDOW
     /** 现在数到哪：只影响卡片第二行的措辞，不影响重发节拍与进度算法 */
     private var phase = LivePhase.IN_CLASS
     private val updater = object : Runnable {
         override fun run() {
             val now = System.currentTimeMillis()
-            if (now < endMillis) {
+            if (now < liveWindow.endMillis) {
                 postProgressNotification()
                 handler.postDelayed(this, nextTickMs(now))
             } else {
@@ -70,7 +64,8 @@ class CourseFluidService : Service() {
     }
 
     /** 见 [nextCourseFluidTickMs]：进度格与岛上小字哪个先到就按它醒 */
-    private fun nextTickMs(now: Long): Long = nextCourseFluidTickMs(startMillis, endMillis, now)
+    private fun nextTickMs(now: Long): Long =
+        nextCourseFluidTickMs(liveWindow.startMillis, liveWindow.endMillis, now)
 
     /**
      * 实况自己收尾时恢复勿扰、并续排下一节课的窗口。
@@ -78,36 +73,61 @@ class CourseFluidService : Service() {
      * 下课铃广播通常也会做同一件事（两步都是幂等的），但 ROM 把下课铃吞掉时，
      * 这条路径是唯一的机会：否则勿扰一直挂着，实况也不再排下一节。
      *
-     * **课前那一段不做这两步**：它倒计到上课铃为止，收尾时刻正是 [ClassProgressReceiver]
-     * 的 ACTION_START 在处理的时刻。这里再走一遍 `rescheduleNextWindow`，会先
-     * `cancel()` 掉刚排好的下课铃、再把"开始时间已在过去"的上课铃重新点一次，
-     * 用户看到的是课刚上岛就掉一下又重弹；勿扰恢复同理会把 ACTION_START 随后的
-     * `enter()` 抵消掉（顺序一旦反过来就是"上课了却没静音"）。
+     * **课前那一段走 [recoverMissedClassStart]**：它倒计到上课铃为止，收尾时刻正是
+     * [ClassProgressReceiver] 的 ACTION_START 在处理的时刻。这里若无条件再走一遍
+     * `rescheduleNextWindow`，会先 `cancel()` 掉刚排好的下课铃、再把"开始时间已在过去"
+     * 的上课铃重新点一次，用户看到的是课刚上岛就掉一下又重弹；勿扰恢复同理会把
+     * ACTION_START 随后的 `enter()` 抵消掉（顺序一旦反过来就是"上课了却没静音"）。
+     * 但**直接 return 也是错的**：ACTION_START 被省电策略吞掉时，课前岛在上课瞬间消失、
+     * 整节课再也不出现，勿扰也不会静音 —— 那条广播恰恰是这条链上最不可靠的一环。
      */
     private fun finishLiveAndReschedule() {
-        if (phase == LivePhase.BEFORE_CLASS) return
+        if (phase == LivePhase.BEFORE_CLASS) {
+            recoverMissedClassStart()
+            return
+        }
         runCatching { ClassProgressDnd.restore(applicationContext) }
         ioScope.launch { ClassProgressScheduler.rescheduleNextWindow(applicationContext) }
+    }
+
+    /**
+     * 上课铃疑似被吞时的补救：把这一节课的窗口重新排一遍。
+     *
+     * 判据沿用课前倒计时的归属状态（[ReminderNotifications.ownsCountdownTo]）：
+     * ACTION_START 一旦落地就会以 IN_CLASS 重新下发实况、顺带把归属清零，
+     * 所以"归属还在"就是"上课铃没跑过"的证据；重排后到期的上课铃会立刻触发，
+     * 把课中实况、勿扰进入与下课铃整套补上，本服务不需要自己做任何展示。
+     *
+     * 为什么要先等 [START_BELL_GRACE_MS]：本帧与 ACTION_START 都在主线程消息队列里排队，
+     * 谁先跑只看这一次调度 —— 正常送达时也可能差几十毫秒，抢在广播之前判就变成"证据还在、
+     * 于是把刚排好的下课铃撤了重排"，正是要避免的那种抖。
+     */
+    private fun recoverMissedClassStart() {
+        val window = liveWindow
+        ioScope.launch {
+            delay(START_BELL_GRACE_MS)
+            if (!ReminderNotifications.ownsCountdownTo(window.courseId, window.endMillis)) return@launch
+            android.util.Log.d(TAG, "上课铃未在窗口内落地，补排课堂窗口：${window.courseName}")
+            ClassProgressScheduler.rescheduleNextWindow(applicationContext)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // 进程内标志：供 LiveClassResyncer 判断实况是否已在跑（进程被杀则标志归 false，正确）
         isRunning = true
-        courseId = intent?.getLongExtra(EXTRA_COURSE_ID, 0L) ?: 0L
-        courseName = intent?.getStringExtra(EXTRA_COURSE_NAME) ?: "课程"
-        location = intent?.getStringExtra(EXTRA_LOCATION)
-        sectionText = intent?.getStringExtra(EXTRA_SECTION) ?: ""
-        startMillis = intent?.getLongExtra(EXTRA_START, 0L) ?: 0L
-        endMillis = intent?.getLongExtra(EXTRA_END, 0L) ?: 0L
+        liveWindow = ClassProgressScheduler.ClassWindow.from(intent?.extras)
         // 认不出的阶段值退回课中：课前/课中只差一句文案，为这个把实况停掉不值得
         phase = intent?.getStringExtra(EXTRA_PHASE)?.let { name ->
             runCatching { LivePhase.valueOf(name) }.getOrNull()
         } ?: LivePhase.IN_CLASS
 
-        if (startMillis <= 0L || endMillis <= startMillis || endMillis <= System.currentTimeMillis()) {
+        val window = liveWindow
+        if (window.startMillis <= 0L || window.endMillis <= window.startMillis ||
+            window.endMillis <= System.currentTimeMillis()
+        ) {
             // 契约要求：即使马上结束也必须先 startForeground()，否则 Android 12+ 抛异常
             runCatching {
-                startForeground(NOTIFY_ID, buildProgressNotification(if (endMillis > startMillis) 100 else 0))
+                startForeground(NOTIFY_ID, buildProgressNotification(if (window.endMillis > window.startMillis) 100 else 0))
             }
             stopForeground(STOP_FOREGROUND_REMOVE)
             finishLiveAndReschedule()
@@ -123,8 +143,9 @@ class CourseFluidService : Service() {
 
     private fun postProgressNotification() {
         val now = System.currentTimeMillis()
-        val total = (endMillis - startMillis).coerceAtLeast(1L)
-        val elapsed = (now - startMillis).coerceIn(0L, total)
+        val window = liveWindow
+        val total = (window.endMillis - window.startMillis).coerceAtLeast(1L)
+        val elapsed = (now - window.startMillis).coerceIn(0L, total)
         val progress = ((elapsed * 100L) / total).toInt().coerceIn(0, 100)
         // startForeground 可能抛 ForegroundServiceStartNotAllowedException（后台启动前台服务受限）
         // 或 SecurityException（FGS 类型/通知权限异常）。失败就记录并退出服务：
@@ -139,24 +160,36 @@ class CourseFluidService : Service() {
     }
 
     private fun buildProgressNotification(progress: Int): Notification {
-        val body = liveBody(sectionText, startMillis, endMillis, location, phase, System.currentTimeMillis())
-        val contentIntent = ReminderNotifications.courseLaunchPendingIntent(this, courseId)
+        val window = liveWindow
+        val now = System.currentTimeMillis()
+        val body = liveBody(
+            window.sectionText, window.startMillis, window.endMillis, window.location, phase, now,
+        )
+        val contentIntent = ReminderNotifications.courseLaunchPendingIntent(this, window.courseId)
         // 小字只算一次：setter 与 extras 兜底必须给同一句，否则读到哪一份说不清
-        val chipText = ReminderNotifications.chipCountdownLabel(endMillis)
+        val chipText = ReminderNotifications.chipCountdownLabel(window.endMillis)
+        val subText = liveSubText(window.week, window.dayOfWeek, window.teacher)
+        // 课程色与课表卡片一致。没取到色时必须交回 COLOR_DEFAULT 而不是 0：
+        // `Notification.COLOR_DEFAULT` 恰好就是 0，但把它写进 Segment 会被当成一格
+        // 全透明的进度，整条进度条直接消失，而不是"这条通知没着色"。
+        val accent = window.colorArgb
 
         // Android 16+：直接走框架 ProgressStyle，接 tracker 图标 + Segment(100)，
         // 对齐 SleepDown 实测能上澎湃超级岛的写法（R4 P1-2）。
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+            val segment = Notification.ProgressStyle.Segment(100)
+            accent?.let { segment.setColor(it) }
             val builder = Notification.Builder(this, ReminderNotifications.CHANNEL_CLASS_PROGRESS)
                 .setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(courseName)
+                .setContentTitle(window.courseName)
                 .setContentText(body)
+                .setSubText(subText)
                 .setStyle(
                     Notification.ProgressStyle()
                         .setProgressTrackerIcon(
                             Icon.createWithResource(this, R.drawable.ic_progress_dot)
                         )
-                        .setProgressSegments(listOf(Notification.ProgressStyle.Segment(100)))
+                        .setProgressSegments(listOf(segment))
                         .setProgress(progress)
                 )
                 .setCategory(NotificationCompat.CATEGORY_PROGRESS)
@@ -166,7 +199,7 @@ class CourseFluidService : Service() {
                 // （岛上那一格），所以它用 setShowWhen(false) + 应用侧每分钟重发。
                 // 倒计时文案由下面 nextTickMs 的重发节拍驱动，精度到分钟即可。
                 .setShowWhen(false)
-                .setColor(Notification.COLOR_DEFAULT)
+                .setColor(accent ?: Notification.COLOR_DEFAULT)
                 .setContentIntent(contentIntent)
             // 小字必须走真正的 setter（对齐 SleepDown）：框架的读回口是 getShortCriticalText()，
             // 我们此前只往 extras 里塞同一个键，岛上一格显示的是 ROM 通用文案「进行中」。
@@ -176,26 +209,22 @@ class CourseFluidService : Service() {
                 // 没有对应 setter（只有 androidx 兼容层有，已核实），extras 是那条的唯一手段。
                 ReminderNotifications.applyPromotedOngoingExtras(notification, chipText)
                 ReminderNotifications.logPromotionShape("fluidService", notification)
-                IslandFocusTemplate.attach(
-                    this,
-                    notification,
-                    NOTIFY_ID,
-                    courseId,
-                    courseName,
-                    sectionText,
-                    startMillis,
-                )
+                IslandFocusTemplate.attach(this, notification, NOTIFY_ID, window)
             }
         }
 
         // 低版本：没有 tracker/segments 语义，继续用兼容 ProgressStyle。
         // 注意不 setSilent：静默通知会被 ROM 的实况/焦点提升逻辑忽略。
+        val compatSegment = NotificationCompat.ProgressStyle.Segment(100)
+        accent?.let { compatSegment.setColor(it) }
         val builder = NotificationCompat.Builder(this, ReminderNotifications.CHANNEL_CLASS_PROGRESS)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(courseName)
+            .setContentTitle(window.courseName)
             .setContentText(body)
+            .setSubText(subText)
             .setStyle(
                 NotificationCompat.ProgressStyle()
+                    .setProgressSegments(listOf(compatSegment))
                     .setStyledByProgress(true)
                     .setProgress(progress)
             )
@@ -206,22 +235,14 @@ class CourseFluidService : Service() {
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
-            .setColor(Notification.COLOR_DEFAULT)
+            .setColor(accent ?: Notification.COLOR_DEFAULT)
             .setContentIntent(contentIntent)
         ReminderNotifications.applyShortCriticalText(builder, chipText)
         return builder.build().also { notification ->
             ReminderNotifications.applyPromotedOngoingExtras(notification, chipText)
             ReminderNotifications.logPromotionShape("fluidServiceCompat", notification)
             // 澎湃焦点通知早于 Android 16 就存在，这条分支同样值得挂模板
-            IslandFocusTemplate.attach(
-                this,
-                notification,
-                NOTIFY_ID,
-                courseId,
-                courseName,
-                sectionText,
-                startMillis,
-            )
+            IslandFocusTemplate.attach(this, notification, NOTIFY_ID, window)
         }
     }
 
@@ -243,22 +264,24 @@ class CourseFluidService : Service() {
 
         /**
          * 进程内「实况是否在跑」标志：onStartCommand 置 true、onDestroy 置 false。
-         * 只用于同进程判断（LiveClassResyncer 的状态驱动兜底），跨进程无意义——
-         * 进程被杀时标志随之归零，语义仍然正确。
+         * 只用于同进程判断（LiveClassResyncer 的状态驱动兜底），进程被杀则标志归零，正确。
          */
         @Volatile
         var isRunning: Boolean = false
             private set
 
-        const val EXTRA_COURSE_ID = "extra_course_id"
-        const val EXTRA_COURSE_NAME = "extra_course_name"
-        const val EXTRA_LOCATION = "extra_location"
-        const val EXTRA_SECTION = "extra_section"
-        const val EXTRA_START = "extra_start"
-        const val EXTRA_END = "extra_end"
-
         /** [LivePhase] 的名字；缺省按课中处理 */
         const val EXTRA_PHASE = "extra_phase"
+
+        /** 收不到 extras 时的空窗口：只用于 stopSelf 前那一帧，不会显示成有课 */
+        private val EMPTY_WINDOW = ClassProgressScheduler.ClassWindow(0L, "", null, "", 0L, 0L)
+
+        /**
+         * 课前倒计时收尾后，给上课铃广播留的投递宽限（见 [recoverMissedClassStart]）。
+         * 同一进程的主线程消息排队最多晚几十毫秒，5 秒足够把"在路上"和"被吞了"分开，
+         * 又远小于一节课的长度 —— 补排晚这几秒，用户不会察觉。
+         */
+        private const val START_BELL_GRACE_MS = 5_000L
 
         /**
          * 启动一段课程实况。
@@ -266,24 +289,17 @@ class CourseFluidService : Service() {
          * 课中传 `startMillis = 上课铃, endMillis = 下课铃`；课前倒计时传
          * `startMillis = 此刻, endMillis = 上课铃`——同一条服务、同一个通知 id，
          * 只是进度条量的是"这段等待过去了多少"、第二行数到上课而不是下课。
+         *
+         * extras 的读写只在 [ClassProgressScheduler.ClassWindow] 一处：这条链上四个进程边界
+         * 各写一套键名时，加字段就会只有加的那一处看得到（周次/教师/课程色此前这样丢过）。
          */
         fun start(
             context: Context,
-            courseId: Long,
-            courseName: String,
-            location: String?,
-            sectionText: String,
-            startMillis: Long,
-            endMillis: Long,
+            window: ClassProgressScheduler.ClassWindow,
             phase: LivePhase,
         ) {
             val intent = Intent(context, CourseFluidService::class.java).apply {
-                putExtra(EXTRA_COURSE_ID, courseId)
-                putExtra(EXTRA_COURSE_NAME, courseName)
-                putExtra(EXTRA_LOCATION, location)
-                putExtra(EXTRA_SECTION, sectionText)
-                putExtra(EXTRA_START, startMillis)
-                putExtra(EXTRA_END, endMillis)
+                putExtras(window.toExtras())
                 putExtra(EXTRA_PHASE, phase.name)
             }
             runCatching {

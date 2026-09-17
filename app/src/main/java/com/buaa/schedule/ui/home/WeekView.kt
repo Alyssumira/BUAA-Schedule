@@ -65,8 +65,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -366,13 +368,32 @@ fun WeekView(
                     val target = ((displayWeek ?: currentWeek ?: 1) - 1).coerceIn(0, totalWeeks - 1)
                     if (pagerState.currentPage != target) pagerState.animateScrollToPage(target)
                 }
-                // 只在滑动落定后回写，避免拖拽过程中每帧回调触发整表过滤
+                // 只在滑动**落定**后回写：一次长距离惯性滑动会连着跨过好几页，
+                // 按 currentPage 逐页回写等于每跨一页就把整张课表重新过滤一遍、
+                // 还跟着震一次（P2）。isScrollInProgress 变 false 才是"这一滑完了"。
+                // displayWeek / onBrowseWeekChange 走 rememberUpdatedState：这个 effect
+                // 不再随 displayWeek 重启，直接捕获到的是首帧的旧值，会把顶部翻周按钮
+                // 那次改动也读成"用户滑到了别的周"，白震一下还多回写一次。
                 val haptics = LocalHapticFeedback.current
-                LaunchedEffect(pagerState.currentPage) {
-                    val week = pagerState.currentPage + 1
-                    if (week != displayWeek) {
-                        onBrowseWeekChange(week)
-                        haptics.performTick()
+                val latestDisplayWeek by rememberUpdatedState(displayWeek)
+                val latestOnBrowseWeekChange by rememberUpdatedState(onBrowseWeekChange)
+                LaunchedEffect(pagerState) {
+                    // snapshotFlow 一订阅就先发当前值（false），首帧那次"落定"不是用户滑的；
+                    // displayWeek 为 null 时它会把浏览周次凭空钉死在今天这一周、还震一下。
+                    // 只认真正的 滚动中 → 已落定 这条边。
+                    var wasScrolling = false
+                    snapshotFlow { pagerState.isScrollInProgress }.collect { scrolling ->
+                        if (scrolling) {
+                            wasScrolling = true
+                            return@collect
+                        }
+                        if (!wasScrolling) return@collect
+                        wasScrolling = false
+                        val week = pagerState.currentPage + 1
+                        if (week != latestDisplayWeek) {
+                            latestOnBrowseWeekChange(week)
+                            haptics.performTick()
+                        }
                     }
                 }
                 HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
@@ -401,6 +422,10 @@ fun WeekView(
                     courses = courses,
                     slots = slots,
                     weekForContent = null,
+                    // 「没有浏览周次」有两种含义：学期真的没设（只能整学期一起看），
+                    // 与学期在、只是今天不落在任何教学周（放假 / 超周 / 还没开学）。
+                    // 后者不能照旧画全部课程，详见 [WeekGrid.coursesForContent]（P1）。
+                    showAllCoursesWithoutWeek = semester == null,
                     currentWeek = currentWeek,
                     totalWeeks = totalWeeks,
                     today = today,
@@ -423,9 +448,12 @@ fun WeekView(
 /**
  * 单周课表网格。被 [WeekView] 的翻周 Pager 与“无周次信息”分支复用。
  *
- * @param weekForContent 本页对应的教学周；null 表示不过滤周次（学期未设置时展示全部课程）
- * @param onCourseMove 课程拖拽落点的回调（dayIndex 0..6，newStartPeriod 为新的起始节）；
- *   传 null 时禁用拖拽
+ * @param weekForContent 本页对应的教学周；null 表示这一页没有对应的周次
+ * @param showAllCoursesWithoutWeek [weekForContent] 为 null 时是否照旧画出全部课程：
+ *   只有**真没有学期**（不存在周次概念）时才该这样；学期在、只是当前浏览周次取不到
+ *   （放假 / 已超周 / 还没开学）时必须给空网格，否则第 1-8 周与 9-16 周的卡叠在同一格
+ * @param onCourseMove 课程拖拽落点的回调（dayIndex 0..6，newStartPeriod 是**整门课**的
+ *   新起始节，拖非首段时由网格侧换算好）；传 null 时禁用拖拽
  */
 @Composable
 private fun WeekGrid(
@@ -449,12 +477,16 @@ private fun WeekGrid(
     onCourseDelete: ((course: Course) -> Unit)? = null,
     /** 空态里的「回到本周」：翻到别的周看到空白时，光靠一句提示找不到回家的路 */
     onReturnToThisWeek: () -> Unit = {},
+    showAllCoursesWithoutWeek: Boolean = true,
 ) {
-    val coursesForContent = remember(courses, weekForContent) {
-        if (weekForContent == null) {
-            courses
-        } else {
-            courses.filter { it.weeks.contains(weekForContent) }
+    val coursesForContent = remember(courses, weekForContent, showAllCoursesWithoutWeek) {
+        when {
+            weekForContent != null -> courses.filter { it.weeks.contains(weekForContent) }
+            showAllCoursesWithoutWeek -> courses
+            // 学期存在却取不到浏览周次 = 今天不在教学周里（放假 / 已超周 / 还没开学）。
+            // 以前这里退回"画全部课程"，于是 1-8 周与 9-16 周的卡叠在同一格里，
+            // 还和同屏顶栏那句「假期中」自相矛盾（P1）—— 宁可给一张空网格。
+            else -> emptyList()
         }
     }
     // 每列取数预聚合一次：此前是在 7 列的循环里各 filter 一遍，
@@ -467,7 +499,15 @@ private fun WeekGrid(
     // 拖动期间约 40 个 list+IntRange/帧（R5 F-23）
     // 切段按墙钟间隔而不是节次号相邻，否则第 5、6 节会画成一张横跨午休的卡（R5 F-30）
     val segmentsByCourse = remember(coursesForContent, slotIndex) {
-        coursesForContent.associate { it.id to it.periods.toPeriodSegments(slotIndex::gapMinutes) }
+        // 课表里不存在的节次（缩了作息后的旧课程、外部导入的超表节次）没有对应的行：
+        // 以前会退到按比例兜底，末端被拉到网格底部，一张卡纵向盖住整张课表（D4）。
+        // 与编辑器「缺节次时间即不可排课」同一口径 —— 这些节次直接不画，
+        // 课程本身仍从日视图 / 课表管理进编辑器修正。
+        coursesForContent.associate { course ->
+            course.id to course.periods
+                .filter { it in slotIndex.numbered }
+                .toPeriodSegments(slotIndex::gapMinutes)
+        }
     }
     // 玻璃档位与渲染能力探测在网格层算一次：effectiveTier 内部读 Runtime，
     // isRenderEffectSupported 走系统能力查询，逐卡各算一次 = 拖动时每帧几十次（R5 F-22）
@@ -860,6 +900,7 @@ private fun WeekGrid(
                                                                 course = d.course,
                                                                 newDayIndex = d.targetDayIndex,
                                                                 newStartPeriod = d.targetStartPeriod,
+                                                                draggedSegmentStart = d.originStartPeriod,
                                                                 week = weekForContent,
                                                             )
                                                         }
@@ -988,6 +1029,7 @@ private fun WeekGrid(
                                                             course = d.course,
                                                             newDayIndex = d.targetDayIndex,
                                                             newStartPeriod = d.targetStartPeriod,
+                                                            draggedSegmentStart = d.originStartPeriod,
                                                             week = weekForContent,
                                                         )
                                                     }
@@ -1113,6 +1155,23 @@ private fun WeekGrid(
                             }
                         }
                     }
+                    // 学期在、但今天不落在任何教学周（放假 / 已超周 / 还没开学）：上面那处
+                    // 刚把这一屏渲染成空网格，这里得说清"为什么是空的"，否则只剩一片空白，
+                    // 与顶栏那句「假期中」一起读起来像渲染坏了。不给「回到本周」——
+                    // 本周本来就取不到，按钮点了也没有可回的地方。
+                    if (weekForContent == null && !showAllCoursesWithoutWeek) {
+                        Box(
+                            modifier = Modifier.matchParentSize(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            EmptyState(
+                                icon = Icons.Filled.EventBusy,
+                                title = "假期中",
+                                description = "今天不在本学期的教学周里，所以这一屏没有课；开学后会自动回到课表。",
+                                modifier = Modifier.padding(horizontal = DesignTokens.spaceL),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1187,7 +1246,15 @@ private fun WeekGrid(
                 onDismiss = { movePickerFor = null },
                 onConfirm = { dayIndex, startPeriod ->
                     movePickerFor = null
-                    pendingMove = CourseMoveRequest(request.course, dayIndex, startPeriod, weekForContent)
+                    // 选择框收的也是"那一段"的目标起始节，与拖拽同一口径，
+                    // 段基准交给请求，落库前换算成整课起点
+                    pendingMove = CourseMoveRequest(
+                        course = request.course,
+                        newDayIndex = dayIndex,
+                        newStartPeriod = startPeriod,
+                        draggedSegmentStart = request.segment.first,
+                        week = weekForContent,
+                    )
                 },
             )
         }
@@ -1207,7 +1274,13 @@ private fun WeekGrid(
                         onClick = {
                             val target = request
                             pendingMove = null
-                            onCourseMove?.invoke(target.course, target.newDayIndex, target.newStartPeriod, false)
+                            // 回调的是**整课**新起始节：非首段被拖过时段差已经在这里换算掉
+                            onCourseMove?.invoke(
+                                target.course,
+                                target.newDayIndex,
+                                target.courseStartPeriod,
+                                false,
+                            )
                         },
                     ) { Text("所有周") }
                 },
@@ -1218,7 +1291,12 @@ private fun WeekGrid(
                             onClick = {
                                 val target = request
                                 pendingMove = null
-                                onCourseMove?.invoke(target.course, target.newDayIndex, target.newStartPeriod, true)
+                                onCourseMove?.invoke(
+                                    target.course,
+                                    target.newDayIndex,
+                                    target.courseStartPeriod,
+                                    true,
+                                )
                             },
                         ) { Text("仅本周") }
                     }
@@ -1374,6 +1452,9 @@ private class TimeSlotIndex(slots: List<TimeSlot>) {
     fun range(segment: IntRange): Pair<LocalTime, LocalTime> =
         (starts[segment.first] ?: LocalTime.of(8, 0)) to (ends[segment.last] ?: LocalTime.of(22, 15))
 
+    /** 课表里有合法起止时间的节次号；网格只为这些节次画行 */
+    val numbered: Set<Int> get() = starts.keys
+
     /** 前一节下课 → 后一节上课的间隔分钟数；任一节缺时间时返回 null */
     fun gapMinutes(from: Int, to: Int): Long? {
         val end = ends[from] ?: return null
@@ -1488,13 +1569,27 @@ private fun edgeDragScrollStep(overPx: Float, edgePx: Float, maxStepPx: Float): 
     return if (overPx > 0f) step.coerceAtLeast(1f) else step.coerceAtMost(-1f)
 }
 
-/** 拖拽松手后的待确认移动请求 */
+/**
+ * 拖拽松手后的待确认移动请求。
+ *
+ * [newStartPeriod] 记的是**被拖那一段**的目标起始节 —— 确认框里念给用户听的、
+ * 以及屏幕上那张卡实际落到的格子，都是这一段。而 [Course] 的 `periods` 可能有好几段
+ * （1-2 + 9-10 连排），`onCourseMove` 约定的又是**整门课**的新起始节次，所以落库前
+ * 必须按 [draggedSegmentStart] 换算成 [courseStartPeriod]：拿段目标直接当整课起点，
+ * 拖 9-10 那一段会把 1-2 那一段也推到 8-9 去（P0 位移错位）。
+ */
 private data class CourseMoveRequest(
     val course: Course,
     val newDayIndex: Int,
     val newStartPeriod: Int,
+    /** 被拖那一段原来的起始节（段内拖拽的基准，非整课起始节） */
+    val draggedSegmentStart: Int,
     val week: Int?,
-)
+) {
+    /** 交给 [onCourseMove] 的整课新起始节 */
+    val courseStartPeriod: Int
+        get() = course.startPeriod + (newStartPeriod - draggedSegmentStart)
+}
 
 /**
  * 「移动到其他时间」的待选请求（审查 U-08）。

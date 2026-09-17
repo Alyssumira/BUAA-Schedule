@@ -35,6 +35,7 @@ import com.buaa.schedule.domain.schedule.CourseFilter
 import com.buaa.schedule.domain.schedule.ImportPlanner
 import com.buaa.schedule.domain.schedule.WeekCalculator
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -44,6 +45,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -108,6 +110,8 @@ data class PendingImport(
     val excludedKeys: Set<String> = emptySet(),
     /** 取消勾选且本地已存在、将被"原样保留"的课程数 */
     val keptCount: Int = 0,
+    /** 导入来源（buaa/ics/text），随确认落库写进导入历史；此前历史页所有条目都硬编码成 buaa */
+    val source: String = "buaa",
 )
 
 /**
@@ -161,7 +165,14 @@ internal fun buildFallbackSemester(
     currentSemester: Semester?,
     today: LocalDate = LocalDate.now(),
 ): Semester {
-    val startDate = currentSemester?.startLocalDate ?: mostRecentMonday(today)
+    // 新学期代码不能沿用旧学期的开学日：ICS 的 dateToWeek 会整表错位，
+    // 课次落到 1..maxWeeks 之外，用户只看到误导性的「解析结果为空」。
+    // 导入动作发生在当下，今天的周一是更可信的兜底原点。
+    val startDate = if (currentSemester?.termCode == termCode) {
+        currentSemester.startLocalDate ?: mostRecentMonday(today)
+    } else {
+        mostRecentMonday(today)
+    }
     return currentSemester?.takeIf { it.termCode == termCode } ?: Semester(
         termCode = termCode,
         termName = termCode,
@@ -255,11 +266,27 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    /**
+     * 系统日期滴答：只在跨午夜后发射一次。周次只随日期变化，
+     * 此前 uiState 的三个源全是数据流——课表挂着不动、跨过午夜，
+     * 顶栏「第 N 周」会停在上一周，与今日页现算的周次自相矛盾。
+     */
+    private val dayTicker: kotlinx.coroutines.flow.Flow<java.time.LocalDate> = flow {
+        while (true) {
+            emit(java.time.LocalDate.now())
+            val secondsTodayLeft = java.time.Duration.ofDays(1).seconds -
+                java.time.LocalDateTime.now().toLocalTime().toSecondOfDay()
+            // 越过零点 5 秒再醒，避开时钟回调边界的抖动
+            delay((secondsTodayLeft + 5).coerceAtLeast(60) * 1_000L)
+        }
+    }
+
     val uiState = combine(
         repository.courses,
         repository.currentSemester,
         repository.timeSlots,
-    ) { courses, semester, timeSlots ->
+        dayTicker,
+    ) { courses, semester, timeSlots, _ ->
         // 只展示手动课程 + 当前学期课程，避免多学期叠加；
         // 开学日期非法时按“无学期周次”降级，而不是崩溃
         val visibleCourses = CourseFilter.visibleIn(courses, semester)
@@ -337,8 +364,10 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         }
 
     suspend fun deleteCourse(course: Course): Boolean = runCatching {
-        UndoManager.pushDelete(course)
-        repository.deleteCourse(course)
+        // 先删库、成功才压栈：反过来会让"删除失败"留下一条悬空撤销记录，
+        // 之后任意一次撤销都会按新 id 重插这门根本没删掉的课
+        val removedReminders = repository.deleteCourse(course)
+        UndoManager.pushDelete(course, removedReminders)
         afterDataChangedInternal()
     }.fold({ true }, { e ->
         _importMessage.value = "删除课程失败：${e.message}"
@@ -393,6 +422,15 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
 
     fun saveSemester(semester: Semester) {
         viewModelScope.launch {
+            val old = repository.getCurrentSemester()
+            if (old != null && old.termCode != semester.termCode) {
+                // 改代码 = 给当前课表重命名：课程必须跟着改挂，否则 CourseFilter
+                // 按新学期代码一过滤，用户看到的是一保存课表就"空了"
+                if (!repository.renameSemesterCourses(old.termCode, semester.termCode)) {
+                    _importMessage.value = "学期代码 ${semester.termCode} 下已有另一份课表，请先切换学期再改代码"
+                    return@launch
+                }
+            }
             repository.saveSemester(semester)
             afterDataChangedInternal()
         }
@@ -534,7 +572,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     semester = pending.semester,
                     importedCourses = selection.toWrite,
                     history = ImportHistory(
-                        source = "buaa",
+                        source = pending.source,
                         importedAt = System.currentTimeMillis(),
                         termCode = pending.semester.termCode,
                         courseCount = selection.toWrite.size,
@@ -638,9 +676,15 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             ReminderScheduler.cancelAll(app)
             com.buaa.schedule.reminder.ClassProgressScheduler.cancelAll(app)
         } else {
-            com.buaa.schedule.widget.BackgroundSync.rescheduleReminders(app)
+            // 必须兑现 rescheduleReminders 的 Boolean 契约（false=课堂铃没人排、当场补排），
+            // 此前这里丢弃返回值：改一节课后上/下课铃被 cancelAll 清掉且不再续排，
+            // 实况岛最长 12 小时不出现（只有兜底 Worker 兑现了契约）
+            com.buaa.schedule.widget.BackgroundSync.rescheduleRemindersAndBells(app)
         }
         com.buaa.schedule.widget.BackgroundSync.refreshWidgets(app)
+        // 明日预告的续排此前只挂在开机广播与设置开关上：假期结束回到有课周，
+        // 预告链条不会自己回来。数据每次变化都重新判定一次（内部按开关决定排/撤）
+        com.buaa.schedule.widget.BackgroundSync.scheduleTomorrowPreview(app)
     }
 
     /** 用户切换提醒模式后调用：立即按新模式重排/取消应用内闹钟 */
@@ -751,14 +795,18 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
      * 导入页，异步返回会让页面在预览还没就绪时先渲染一次——用户看到的正是"跳过去
      * 却是空的"。这里只读库不改数据，调用方被取消可以安全中止。
      */
-    suspend fun previewBuaaCourses(semester: Semester, courses: List<Course>) {
+    suspend fun previewBuaaCourses(
+        semester: Semester,
+        courses: List<Course>,
+        warnings: List<String> = emptyList(),
+    ) {
         withImportLock {
             _pendingImport.value = null
             if (courses.isEmpty()) {
                 _importMessage.value = "教务系统未返回该学期课程（可能未选课）"
                 return@withImportLock
             }
-            val pending = showPendingImport(semester, courses)
+            val pending = showPendingImport(semester, courses, warnings)
             _importMessage.value = "解析完成：新增 ${pending.addedCount}，更新 ${pending.changedCount}，" +
                 "冲突 ${pending.conflicts.size} 组，请确认导入。"
         }
@@ -768,6 +816,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         semester: Semester,
         courses: List<Course>,
         warnings: List<String> = emptyList(),
+        source: String = "buaa",
     ): PendingImport {
         val existing = repository.getCoursesBySemester(semester.termCode)
         val existingMap = existing.associateBy { ImportPlanner.courseKey(it) }
@@ -785,6 +834,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             changedCount = changedCount,
             conflicts = conflicts,
             warnings = warnings,
+            source = source,
         )
         _pendingImport.value = pending
         return pending
@@ -820,7 +870,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     _importMessage.value = "ICS 解析结果为空，请检查文件格式"
                     return@withImportLock
                 }
-                val pending = showPendingImport(semester, courses)
+                val pending = showPendingImport(semester, courses, source = "ics")
                 _importMessage.value = "ICS 解析完成：新增 ${pending.addedCount}，更新 ${pending.changedCount}，" +
                     "冲突 ${pending.conflicts.size} 组，请确认导入。"
             }
@@ -842,7 +892,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     _importMessage.value = "文本解析结果为空，请检查格式：课程名,教师,地点,星期,开始节-结束节,周次"
                     return@withImportLock
                 }
-                val pending = showPendingImport(semester, courses)
+                val pending = showPendingImport(semester, courses, source = "text")
                 _importMessage.value = "文本解析完成：新增 ${pending.addedCount}，更新 ${pending.changedCount}，" +
                     "冲突 ${pending.conflicts.size} 组，请确认导入。"
             }
@@ -1035,6 +1085,19 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 return
             }
             is RestoreResult.Applied -> {
+                // 恢复也是会改课表来源的操作：不记历史，用户翻「导入记录」时
+                // 完全无法解释"课表怎么变了"
+                runCatching {
+                    repository.addImportHistory(
+                        ImportHistory(
+                            source = "backup",
+                            importedAt = System.currentTimeMillis(),
+                            termCode = data.semester?.termCode,
+                            courseCount = result.restoredCourses,
+                            message = sourceLabel,
+                        ),
+                    )
+                }
                 afterDataChangedInternal()
                 _importMessage.value = buildString {
                     append("${sourceLabel}成功：${result.restoredCourses} 条课程")

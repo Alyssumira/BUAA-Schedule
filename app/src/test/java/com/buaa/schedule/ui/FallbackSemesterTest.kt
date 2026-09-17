@@ -41,7 +41,7 @@ class FallbackSemesterTest {
     }
 
     @Test
-    fun carriesStartDateAndWeeksIntoNewTerm() {
+    fun anchorsNewTermToTodaysMondayNotTheOldStartDate() {
         val previous = semester("2025-2026-3", "2026-02-23", totalWeeks = 16)
 
         val result = buildFallbackSemester("2026-2027-1", previous, thursday)
@@ -49,7 +49,9 @@ class FallbackSemesterTest {
         assertNotSame(previous, result)
         assertEquals("2026-2027-1", result.termCode)
         assertEquals("termName 用 termCode 占位，等教务数据回来再改", "2026-2027-1", result.termName)
-        assertEquals("开学日沿用上一学期，第 1 周才有原点", "2026-02-23", result.startDate)
+        // 旧学期开学日（2 月）当新学期原点是错的：ICS 的 dateToWeek 整表错位、
+        // 课次全落到 1..maxWeeks 之外，用户只看到误导性的「解析结果为空」
+        assertEquals("新学期兜底原点应是今天的周一", "2026-09-07", result.startDate)
         assertEquals(16, result.totalWeeks)
     }
 

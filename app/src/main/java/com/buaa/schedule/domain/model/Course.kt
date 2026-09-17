@@ -107,3 +107,15 @@ fun periodLabel(periods: List<Int>): String =
     periods.toPeriodSegments().joinToString(",") { range ->
         if (range.first == range.last) "${range.first}" else "${range.first}-${range.last}"
     }.let { "第${it}节" }
+
+/** 星期简写表，下标 0 = 周一。桌面组件与课程实况共用一份措辞 */
+val WEEKDAY_LABELS = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+/**
+ * 按 ISO 星期序号（1=周一…7=周日）取简写。
+ *
+ * 越界返回 null 而不是抛：教务导入的脏数据里确实出现过 `dayOfWeek = 0/8`，
+ * 而从组件的 `RemoteViewsFactory` 里抛出异常会让整个宿主停在灰色崩溃块上，
+ * 不会重试 —— 少一个日标签远比整块组件消失划算。
+ */
+fun weekdayLabel(dayOfWeek: Int): String? = WEEKDAY_LABELS.getOrNull(dayOfWeek - 1)

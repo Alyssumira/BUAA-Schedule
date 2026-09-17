@@ -52,6 +52,9 @@ object BuaaWebSession {
 
     @Volatile private var appContext: Context? = null
 
+    /** setAcceptCookie 只需配一次；由 [cookieManager] 维护 */
+    @Volatile private var cookiesConfigured = false
+
     /**
      * 会话 WebView / 隐藏宿主的实际存储。
      *
@@ -176,14 +179,27 @@ object BuaaWebSession {
             .onFailure { Log.w(TAG, "对齐 WebView 定时器失败", it) }
     }
 
-    /** 应用启动时调用一次（任意线程） */
+    /** 应用启动时调用一次（任意线程）；只做 Context 寄存，不碰 WebView provider */
     fun init(context: Context) {
         if (appContext != null) return
         appContext = context.applicationContext
-        runCatching {
-            val cm = CookieManager.getInstance()
+    }
+
+    /**
+     * CookieManager 的统一入口：第一次真正要用时才去拉 WebView provider。
+     *
+     * `CookieManager.getInstance()` 并不只是拿个对象——它要求系统装载并绑定
+     * `android.webkit` provider，是冷启动主线程上排得上号的开销，而绝大多数启动
+     * 从头到尾不会碰教务导入。所以 [init] 只寄存 Context，这条链留到
+     * 登录页建 WebView / 落盘注回 Cookie 时才发动。
+     */
+    private fun cookieManager(): CookieManager {
+        val cm = CookieManager.getInstance()
+        if (!cookiesConfigured) {
+            cookiesConfigured = true
             cm.setAcceptCookie(true)
         }
+        return cm
     }
 
     /**
@@ -226,7 +242,7 @@ object BuaaWebSession {
     private fun persistCookies() {
         val context = appContext ?: return
         runCatching {
-            val cm = CookieManager.getInstance()
+            val cm = cookieManager()
             val payload = COOKIE_HOSTS.mapNotNull { host ->
                 cm.getCookie("https://$host/")?.takeIf { it.isNotBlank() }?.let { "$host\t$it" }
             }.joinToString("\n")
@@ -242,7 +258,7 @@ object BuaaWebSession {
     private fun injectPersistedCookies(context: Context) {
         val payload = BuaaCookieStore.load(context) ?: return
         runCatching {
-            val cm = CookieManager.getInstance()
+            val cm = cookieManager()
             payload.lineSequence().forEach { line ->
                 val host = line.substringBefore('\t').trim()
                 val header = line.substringAfter('\t', "").trim()
@@ -401,8 +417,9 @@ object BuaaWebSession {
             if (host != null) (host.parent as? ViewGroup)?.removeView(host)
         }
         runCatching {
-            CookieManager.getInstance().removeAllCookies(null)
-            CookieManager.getInstance().flush()
+            val cm = cookieManager()
+            cm.removeAllCookies(null)
+            cm.flush()
         }
         appContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             ?.edit { putBoolean(PREF_RETAINED, false) }
@@ -429,7 +446,7 @@ object BuaaWebSession {
         // 第三方 Cookie 一律不放行：SSO 跳转靠的是顶层导航 + 第一方 Cookie，
         // 放开只会让页面里任意第三方 iframe 带上会话 Cookie（行为是对的，
         // 之前的注释写反了 —— R5 F-48）
-        CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
+        cookieManager().setAcceptThirdPartyCookies(this, false)
         // 新建的 WebView 会继承进程遗留的定时器挂起态（上次后台 pause 之后没有
         // 实例能 resume）—— 不清掉的话这个页面一出生 JS 就是冻结的。
         alignTimersWithForeground(this)

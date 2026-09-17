@@ -6,13 +6,18 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import androidx.compose.ui.graphics.toArgb
+import com.buaa.schedule.core.designsystem.courseColor
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.ReminderSetting
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.TimeSlotProfile
+import com.buaa.schedule.domain.model.periodGapMinutesOf
 import com.buaa.schedule.domain.model.periodLabel
 import com.buaa.schedule.domain.model.startLocalDate
+import com.buaa.schedule.domain.model.toPeriodSegments
+import com.buaa.schedule.domain.model.toStartEndTimes
 import com.buaa.schedule.domain.schedule.CourseConstraints
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -32,9 +37,13 @@ object ReminderScheduler {
 
     data class ReminderPlan(
         val course: Course,
+        /** 本次提醒对应的那个**连续节次段**（跨午休的课一段一次），不是整门课的节次 */
+        val segment: IntRange,
         val classStart: LocalDateTime,
         val advanceMinutes: Int,
         val triggerAtMillis: Long,
+        /** 这一次上课落在第几周：课前实况的「第 N 周」取它，与 [segment] 同为"这一次"的属性 */
+        val week: Int,
     )
 
     fun rescheduleAll(
@@ -73,23 +82,28 @@ object ReminderScheduler {
         // 并在没有课在进行时把遗留的常驻通知与勿扰收干净。
 
         // getSystemService(Class) 在极端情况下返回 null（系统服务未就绪/定制 ROM），
-        // 不判空会直接 NPE，而这条路径是从广播里调的，崩了就是"设置里点保存闪退"
-        val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
-        val classStartMillis = plan.classStart
-            .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        val pendingIntent = createPendingIntent(context, plan.course, classStartMillis)
-        // Android 12+ 精确闹钟是特殊权限（默认拒绝），未授予时降级为不精确闹钟，避免崩溃。
-        // canScheduleExactAlarms() 本身也可能抛 SecurityException（权限被运行期撤销），
-        // 因此整段调度都套上 runCatching 兜底，失败只是这一次不精确，不影响其余链路。
-        val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-            runCatching { alarmManager.canScheduleExactAlarms() }.getOrDefault(false)
-        runCatching {
-            if (canExact) {
-                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, plan.triggerAtMillis, pendingIntent)
-            } else {
-                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, plan.triggerAtMillis, pendingIntent)
-            }
-        }.onFailure { Log.w(TAG, "调度课程提醒失败", it) }
+        // 不判空会直接 NPE，而这条路径是从广播里调的，崩了就是"设置里点保存闪退"。
+        // ⚠️ 但**不能早退**：拿不到 AlarmManager 只意味着"这一次课前闹钟排不上"，
+        // 下面那段课堂铃的撤销/重排跟 AlarmManager 无关（它自己会判 null），
+        // 早退会把清理块一起跳过，留下永不消失的常驻通知 + 永不恢复的勿扰。
+        val alarmManager = context.getSystemService(AlarmManager::class.java)
+        if (alarmManager == null) {
+            Log.w(TAG, "AlarmManager 不可用，跳过课前提醒排程（课堂铃清理照常执行）")
+        } else {
+            val pendingIntent = createPendingIntent(context, plan)
+            // Android 12+ 精确闹钟是特殊权限（默认拒绝），未授予时降级为不精确闹钟，避免崩溃。
+            // canScheduleExactAlarms() 本身也可能抛 SecurityException（权限被运行期撤销），
+            // 因此整段调度都套上 runCatching 兜底，失败只是这一次不精确，不影响其余链路。
+            val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+                runCatching { alarmManager.canScheduleExactAlarms() }.getOrDefault(false)
+            runCatching {
+                if (canExact) {
+                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, plan.triggerAtMillis, pendingIntent)
+                } else {
+                    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, plan.triggerAtMillis, pendingIntent)
+                }
+            }.onFailure { Log.w(TAG, "调度课程提醒失败", it) }
+        }
 
         // 上/下课铃与常驻通知（"课程进行中"）和「上课自动勿扰」是两个独立开关，
         // 但共用同一对上课/下课闹钟：任一开启都必须排铃，接收器里再按开关决定做什么。
@@ -125,23 +139,27 @@ object ReminderScheduler {
         nowMillis: Long,
         zone: ZoneId = ZoneId.systemDefault(),
     ): ReminderPlan? {
-        val slots = if (timeSlots.isNotEmpty()) timeSlots else TimeSlotProfile.DEFAULT
+        val slots = (if (timeSlots.isNotEmpty()) timeSlots else TimeSlotProfile.DEFAULT)
+            .toStartEndTimes()
+        val gapMinutes = periodGapMinutesOf(slots)
         return courses.asSequence()
             .mapNotNull { course ->
                 val setting = reminders[course.id]
                 if (setting != null && !setting.enabled) return@mapNotNull null
-                val occurrence = nextOccurrence(course, semesterStart, slots, now)
+                val occurrence = nextOccurrence(course, semesterStart, slots, gapMinutes, now)
                     ?: return@mapNotNull null
                 val advanceMinutes =
                     CourseConstraints.normalizeAdvanceMinutes(setting?.advanceMinutes ?: DEFAULT_ADVANCE_MINUTES)
-                val triggerAt = occurrence.atZone(zone).toInstant().toEpochMilli() -
+                val triggerAt = occurrence.classStart.atZone(zone).toInstant().toEpochMilli() -
                     advanceMinutes * 60_000L
                 if (triggerAt <= nowMillis) return@mapNotNull null
                 ReminderPlan(
                     course = course,
-                    classStart = occurrence,
+                    segment = occurrence.segment,
+                    classStart = occurrence.classStart,
                     advanceMinutes = advanceMinutes,
                     triggerAtMillis = triggerAt,
+                    week = occurrence.week,
                 )
             }
             .minByOrNull { it.triggerAtMillis }
@@ -163,14 +181,26 @@ object ReminderScheduler {
 
     private fun baseIntent(context: Context): Intent = Intent(context, ReminderReceiver::class.java)
 
-    private fun createPendingIntent(context: Context, course: Course, classStartMillis: Long): PendingIntent {
-        val intent = baseIntent(context).apply {
-            putExtra(ReminderReceiver.EXTRA_COURSE_ID, course.id)
-            putExtra(ReminderReceiver.EXTRA_COURSE_NAME, course.displayName)
-            putExtra(ReminderReceiver.EXTRA_LOCATION, course.location)
-            putExtra(ReminderReceiver.EXTRA_SECTION, periodLabel(course.periods))
-            putExtra(ReminderReceiver.EXTRA_CLASS_START_AT, classStartMillis)
-        }
+    private fun createPendingIntent(context: Context, plan: ReminderPlan): PendingIntent {
+        val classStartMillis = plan.classStart
+            .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        // 课前这一段实况量的是"这段等待过去了多少"：收铃时刻就是上课时刻，
+        // 所以 start/end 先都填上课时间，真正开跑时由接收器把 start 改成"此刻"。
+        val window = ClassProgressScheduler.ClassWindow(
+            courseId = plan.course.id,
+            courseName = plan.course.displayName,
+            location = plan.course.location,
+            sectionText = periodLabel(plan.segment),
+            startMillis = classStartMillis,
+            endMillis = classStartMillis,
+            // 以下四项是课前倒计时那条实况此前缺的全部信息：
+            // 与上课铃共用一套 extras 序列化，才不会又只补齐其中一条链。
+            teacher = plan.course.teacher,
+            week = plan.week,
+            dayOfWeek = plan.classStart.dayOfWeek.value,
+            colorArgb = courseColor(plan.course).toArgb(),
+        )
+        val intent = baseIntent(context).apply { putExtras(window.toExtras()) }
         return PendingIntent.getBroadcast(
             context,
             0,
@@ -179,25 +209,42 @@ object ReminderScheduler {
         )
     }
 
+    /**
+     * 该课程「下一次将要开始」的那一段：周次升序 × 段升序即时间升序，取第一个晚于 now 的。
+     *
+     * 必须按**节次段**枚举，口径与 [ClassProgressScheduler.planNextClassWindow] 一致。
+     * 此前它只取整门课第一节课的时间，于是 `[1,2,9,10]` 这种跨午休的课：上午那段一上课，
+     * 本周就再没有"晚于 now 的第一节"，挑到的下一次直接跳到**下周**——下午那节的课前提醒
+     * 整学期都不会发。节次文案同理，见 [createPendingIntent]。
+     *
+     * 缺时间表时跳过该段，不兜底成 08:00：那会凭空造出一节 8 点的课，
+     * 让一门没有任何时间信息的课每天早上被提醒一次（与课堂窗口同一取舍）。
+     */
     private fun nextOccurrence(
         course: Course,
         semesterStart: LocalDate,
-        timeSlots: List<TimeSlot>,
+        slots: Map<Int, Pair<LocalTime, LocalTime>>,
+        gapMinutes: (Int, Int) -> Long?,
         now: LocalDateTime,
-    ): LocalDateTime? {
-        val firstPeriod = course.startPeriod
-        val startTime = timeSlots.firstOrNull { it.number == firstPeriod }?.startTime ?: "08:00"
-        val start = runCatching { LocalTime.parse(startTime) }.getOrDefault(LocalTime.of(8, 0))
-
+    ): Occurrence? {
+        val segments = course.periods.toPeriodSegments(gapMinutes)
         for (week in course.weeks.sorted()) {
             val date = semesterStart.plusWeeks((week - 1).toLong())
                 .plusDays((course.dayOfWeek - 1).toLong())
-            val dateTime = date.atTime(start)
-            if (dateTime.isAfter(now)) {
-                return dateTime
+            for (segment in segments) {
+                val start = slots[segment.first]?.first ?: continue
+                val dateTime = date.atTime(start)
+                if (dateTime.isAfter(now)) return Occurrence(segment, dateTime, week)
             }
         }
         return null
     }
+
+    /** 一次未来上课的开始：节次段 + 时刻 + 教学周 */
+    private data class Occurrence(
+        val segment: IntRange,
+        val classStart: LocalDateTime,
+        val week: Int,
+    )
 
 }

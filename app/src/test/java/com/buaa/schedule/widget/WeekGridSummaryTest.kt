@@ -58,7 +58,7 @@ class WeekGridSummaryTest {
         val many = (1..7).map { course("课程$it", 3, it) }
         val lines = weekGridDaySummary(many).lines()
         assertEquals(WEEK_GRID_MAX_LINES, lines.size)
-        assertEquals("＋2", lines.last())
+        assertEquals("＋3", lines.last())
     }
 
     @Test
@@ -107,7 +107,7 @@ class WeekGridDensityTest {
         }
         val lines = weekGridDaySummary(many, maxLines = roomy.gridMaxLines).lines()
         assertEquals(3, lines.size)
-        assertEquals("＋4", lines.last())
+        assertEquals("＋5", lines.last())
     }
 
     @Test

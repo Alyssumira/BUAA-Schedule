@@ -96,7 +96,14 @@ fun ImportScreen(
     ),
 ) {
     val context = LocalContext.current
-    var termCode by remember { mutableStateOf("2026-2027-1") }
+    // 初值取当前学期代码（此前硬编码 "2026-2027-1"：第二学期用 ICS/文本导入时，
+    // 用户不动默认值就会把课导进错误的学期）；本地没有学期时退回 ViewModel 的待用代码
+    var termCode by remember {
+        mutableStateOf(
+            viewModel.uiState.value.semester?.termCode?.takeIf { it.isNotBlank() }
+                ?: viewModel.buaaTermCode.value
+        )
+    }
     // -1 = 未展开任何次要来源；北航不再占用该状态（它有自己的 Hero 区）
     var expandedSource by remember { mutableIntStateOf(SOURCE_NONE) }
     var shareCode by remember { mutableStateOf("") }
@@ -115,6 +122,19 @@ fun ImportScreen(
         viewModel.buaaReloginRequests.collect { onStartBuaaLogin() }
     }
     val scope = rememberCoroutineScope()
+    // 「待确认导入」是本页第一个块：抓取完成落回本页时先把它带到眼前。
+    // 只有状态从 null 变成有值的那一次才滚（初次进页读到上一次残留的待确认不滚，
+    // 那时用户是来看 Hero 的，不该被拽到卡片上）
+    val scrollState = rememberScrollState()
+    var hadPendingImport by remember { mutableStateOf(pendingImport != null) }
+    LaunchedEffect(pendingImport) {
+        if (pendingImport != null && !hadPendingImport) {
+            hadPendingImport = true
+            scrollState.scrollTo(0)
+        } else if (pendingImport == null) {
+            hadPendingImport = false
+        }
+    }
     val icsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri ->
@@ -175,7 +195,7 @@ fun ImportScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scrollState)
                 .imePadding()
                 // 手机悬浮玻璃底栏为 overlay 布局：内容延伸到栏体背后滚动，
                 // 底部需要让出"栏体高度 + 系统导航栏"的空隙

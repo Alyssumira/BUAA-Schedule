@@ -122,7 +122,10 @@ class MainActivity : ComponentActivity() {
      */
     private val requestedDayOfWeek = mutableStateOf<Int?>(null)
 
-    /** 引导最后一步选择的落点（"import" / "home" / null = 默认首页）；进程重建即失效 */
+    /**
+     * 引导最后一步选择的落点（"import" / "editor/-1" / null = 默认首页）；进程重建即失效。
+     * "home" 与 null 等价。
+     */
     private val pendingStartRoute = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -185,12 +188,24 @@ class MainActivity : ComponentActivity() {
         // 登记当前窗口（弱引用）：会话 WebView 的隐藏宿主必须挂在活着的窗口上，
         // 转屏后迟到的 onPageFinished 才不会把宿主挂回已销毁的旧窗口
         com.buaa.schedule.data.import.BuaaWebSession.setCurrentActivity(this)
-        // 进程重启后尝试用持久化 Cookie 重建 byxt 会话，避免每次冷启动都要重新登录
-        com.buaa.schedule.data.import.BuaaWebSession.restore(this)
-        // 已有会话时也要把隐藏宿主迁回当前 Activity：
-        // Activity 重建不会自动迁移，旧窗口销毁后 WebView 会脱离窗口，
-        // 导致「复用会话刷新课表」恒定时超时（R4 P1-1）。
-        com.buaa.schedule.data.import.BuaaWebSession.reattachTo(this)
+        // 进程重启后尝试用持久化 Cookie 重建 byxt 会话，避免每次冷启动都要重新登录；
+        // 已有会话时也要把隐藏宿主迁回当前 Activity（Activity 重建不会自动迁移，
+        // 旧窗口销毁后 WebView 会脱离窗口，导致「复用会话刷新课表」恒定时超时，R4 P1-1）。
+        //
+        // 这两件事排在首帧之后：restore 会在主线程上新建一个 WebView（Chromium 视图树，
+        // 冷启动里最贵的一步）、解密读一次落盘 Cookie、再发一次网络加载，而它服务的
+        // 只是"用户不点导入时也能静默刷新"。挂在 decorView 上，等窗口真正附加、
+        // 首帧已排期之后再动手，用户看到课表的时间不受影响。
+        window.decorView.post {
+            // 排到首帧之后就要认这个空窗：期间用户可能已经又退到后台
+            // （点组件进、马上划走）。那时定时器已在后台档，再建 WebView 并 loadUrl
+            // 等于偷偷在后台加载教务页面，与「退到后台不耗电」的约定相反。
+            if (isFinishing || isDestroyed ||
+                !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+            ) return@post
+            com.buaa.schedule.data.import.BuaaWebSession.restore(this)
+            com.buaa.schedule.data.import.BuaaWebSession.reattachTo(this)
+        }
         // Sleepy 式状态驱动兜底：进前台即校准「课程进行中」实况。
         // 上课铃被 ROM 省电策略吞掉时，用户课堂中打开 App 也能当场补起实况，
         // 而不是等到下一节课（详见 reminder.LiveClassResyncer）。
@@ -340,14 +355,27 @@ private fun BUAAScheduleApp(
     // 深色偏好要按**枚举**回传：以前这里收的是 Boolean，设置页选「跟随系统」
     // 会被折算成 LIGHT 写回 prefs —— 之后系统切换深浅色自然毫无反应，
     // 而且这个错误选择还落了盘，重启也不会自愈。
-    val onDarkThemeChange: (DarkModePreference) -> Unit = { pref ->
-        darkModePref = pref
-        prefs.edit {
-            putString(DarkModePreference.PREF_KEY, pref.name)
-            putBoolean("dark_theme", pref == DarkModePreference.DARK)
+    // remember 住身份：这个 lambda 一路传到 NavHost 的各个目的地，根组合每次重组
+    // 都换新实例的话，整棵导航树跟着重组（下载进度原先就是这里的噪声源，P2）。
+    val onDarkThemeChange: (DarkModePreference) -> Unit = remember(prefs) {
+        { pref ->
+            darkModePref = pref
+            prefs.edit {
+                putString(DarkModePreference.PREF_KEY, pref.name)
+                putBoolean("dark_theme", pref == DarkModePreference.DARK)
+            }
         }
     }
     val navController = rememberNavController()
+    // 引导最后一步「手动添加课程」交回来的是 editor/-1 这种**一次性**路由，不能当
+    // startDestination：NavHost 找起点是按 route 模板（editor/{courseId}）匹配的，
+    // 传具体值根本找不到起点；而且编辑器成了根栈就没有可返回的上一级，
+    // 返回键等于直接退出应用。所以起点仍是首页，编辑器在后面用一次 navigate 叠上去，
+    // 消费完立刻清空 —— 转屏或重组都不会再跳第二次（P2）。
+    val navStartRoute = startRoute?.takeUnless { it.startsWith("editor/") }
+    var pendingEditorRoute by remember(startRoute) {
+        mutableStateOf(startRoute?.takeIf { it.startsWith("editor/") })
+    }
     val viewModel: ScheduleViewModel = viewModel(
         factory = ScheduleViewModel.Factory(context.applicationContext as android.app.Application),
     )
@@ -358,7 +386,9 @@ private fun BUAAScheduleApp(
     LaunchedEffect(requestedCourseId, uiState.loading) {
         val id = requestedCourseId ?: return@LaunchedEffect
         if (uiState.loading) return@LaunchedEffect
-        navController.navigate("editor/$id")
+        // launchSingleTop：Activity 是 singleTop，连着点两次组件的同一行会送来两次
+        // 请求，不加这个参数编辑器就会叠在编辑器自己身上，返回键要按两下才出得去。
+        navController.navigate("editor/$id") { launchSingleTop = true }
         onCourseRequestConsumed()
     }
     // 桌面组件 4×2 格子 → 那一天的日视图（T-26）。
@@ -374,10 +404,9 @@ private fun BUAAScheduleApp(
     val topLevelRoutes = remember { navItems.map { it.route }.toSet() }
     val showBottomBar = currentDestination?.hierarchy?.any { it.route in topLevelRoutes } == true
 
-    // 更新检测：每天第一次打开自动查一次（节流在 UpdateCheck 内部），
-    // 结果统一由下面的全局弹窗表达；设置页的"手动检查"复用同一个状态源。
-    val updateState by UpdateCheck.state.collectAsState()
-    LaunchedEffect(Unit) { UpdateCheck.check(context, force = false) }
+    // 更新检测的状态**不在这里 collect**：下载时每来一个数据块就有一个新百分比，
+    // 挂在根组合上等于每一块重画一次主题 + 整棵导航树（P2）。
+    // 见下方 UpdateDialogHost：它自己 collect，重组只限这一小块。
 
     // 深色主题用亮色状态栏图标，浅色主题用暗色图标，与 XML 主题的固定配置解耦
     val view = LocalView.current
@@ -456,7 +485,7 @@ private fun BUAAScheduleApp(
                                 uiState = uiState,
                                 reminders = reminders,
                                 onDarkThemeChange = onDarkThemeChange,
-                                startRoute = startRoute,
+                                startRoute = navStartRoute,
                                 requestedDayOfWeek = requestedDayOfWeek,
                                 onDayRequestConsumed = onDayRequestConsumed,
                                 contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
@@ -475,7 +504,7 @@ private fun BUAAScheduleApp(
                             uiState = uiState,
                             reminders = reminders,
                             onDarkThemeChange = onDarkThemeChange,
-                            startRoute = startRoute,
+                            startRoute = navStartRoute,
                             requestedDayOfWeek = requestedDayOfWeek,
                             onDayRequestConsumed = onDayRequestConsumed,
                             contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
@@ -501,30 +530,56 @@ private fun BUAAScheduleApp(
                 }
             }
         }
+        // 引导落点里的一次性 editor 路由。刻意声明在 NavHost **之后**：side effect
+        // 按组合顺序执行，排在后面才能保证 NavHost 已经装好 navigator，
+        // 否则这里 navigate 会撞上"NavController 尚未与 NavigationHost 关联"。
+        LaunchedEffect(pendingEditorRoute) {
+            val route = pendingEditorRoute ?: return@LaunchedEffect
+            // 先清后跳：这条路由只生效这一次
+            pendingEditorRoute = null
+            navController.navigate(route) { launchSingleTop = true }
+        }
         // 更新弹窗挂在主题层而不是某个页面：自动检测可能在任意页面弹出，
         // 下载进度也要在用户离开设置页后继续可见。
-        if (updateState.visible) {
-            val info = when (val s = updateState) {
-                is UpdateUiState.Available -> s.info
-                is UpdateUiState.NeedsInstallPermission -> s.info
-                is UpdateUiState.InstallBlocked -> s.info
-                else -> null
-            }
-            UpdateDialog(
-                state = updateState,
-                currentVersion = BuildConfig.VERSION_NAME,
-                onDismiss = { UpdateCheck.dismiss() },
-                onDownload = { (updateState as? UpdateUiState.Available)?.info?.let { UpdateCheck.startDownload(context, it) } },
-                onCancelDownload = { UpdateCheck.cancelDownload() },
-                onIgnore = { info?.let { UpdateCheck.ignore(context, it) } },
-                onOpenReleasePage = {
-                    openExternalUrl(context, info?.pageUrl ?: RELEASES_PAGE_URL)
-                    UpdateCheck.dismiss()
-                },
-                onOpenInstallPermissionSettings = { UpdateCheck.openInstallPermissionSettings(context) },
-                onRetryInstall = { UpdateCheck.retryInstall(context) },
-            )
+        // （状态 collect 也在弹窗自己的宿主里，理由见 UpdateDialogHost）
+        UpdateDialogHost(context)
+    }
+}
+
+/**
+ * 更新检测的状态宿主：collect 与弹窗单独成一小撮组合。
+ *
+ * 下载期间 UpdateCheck 每收到一块就发一个新的百分比，此前这个 collect 挂在
+ * BUAAScheduleApp 的根上 —— 等于每一块都要重画一遍主题、场景背景、共享模糊层
+ * 和整棵导航树（P2）。挪进来之后进度变化只重组这一小块，弹窗关掉时它整体退出组合。
+ * 首次自动检查也一起搬过来：宿主与主题同生命周期，LaunchedEffect(Unit) 仍然只跑一次
+ * （真正的每日节流在 UpdateCheck 内部），设置页的"手动检查"复用同一个状态源。
+ */
+@Composable
+private fun UpdateDialogHost(context: Context) {
+    val updateState by UpdateCheck.state.collectAsState()
+    LaunchedEffect(Unit) { UpdateCheck.check(context, force = false) }
+    if (updateState.visible) {
+        val info = when (val s = updateState) {
+            is UpdateUiState.Available -> s.info
+            is UpdateUiState.NeedsInstallPermission -> s.info
+            is UpdateUiState.InstallBlocked -> s.info
+            else -> null
         }
+        UpdateDialog(
+            state = updateState,
+            currentVersion = BuildConfig.VERSION_NAME,
+            onDismiss = { UpdateCheck.dismiss() },
+            onDownload = { (updateState as? UpdateUiState.Available)?.info?.let { UpdateCheck.startDownload(context, it) } },
+            onCancelDownload = { UpdateCheck.cancelDownload() },
+            onIgnore = { info?.let { UpdateCheck.ignore(context, it) } },
+            onOpenReleasePage = {
+                openExternalUrl(context, info?.pageUrl ?: RELEASES_PAGE_URL)
+                UpdateCheck.dismiss()
+            },
+            onOpenInstallPermissionSettings = { UpdateCheck.openInstallPermissionSettings(context) },
+            onRetryInstall = { UpdateCheck.retryInstall(context) },
+        )
     }
 }
 
@@ -665,7 +720,12 @@ private fun AppNavHost(
         composable("import") {
             CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
                 ImportScreen(
-                    onBack = { navController.popBackStack() },
+                    // 引导以「导入课表」收尾时会把 startRoute 定成 import，那一刻 import
+                    // 就是起始目的地：栈里没有更低的条目，popBackStack 返回 false，
+                    // 左上角返回箭头点了没反应（用户读作"卡在导入页"）。弹不动就回首页。
+                    onBack = {
+                        if (!navController.popBackStack()) navController.navigateTopLevel("home")
+                    },
                     onStartBuaaLogin = { navController.navigate("buaa_login") },
                     onOpenHistory = { navController.navigate("import_history") },
                     bottomBarVisible = bottomBarVisible,
@@ -685,7 +745,9 @@ private fun AppNavHost(
                     // 抓取完成 → 落到导入页看预览卡片并确认，确认前不落库。
                     // 注意：登录成功后**不能**在这里 popBackStack：
                     // 页面内抓取还在这个页面的协程里跑，提前返回会把预览链路一起取消。
-                    onImportPrepared = { navController.navigateTopLevel("import") },
+                    onImportPrepared = {
+                        navController.openImportPreviewAfterFetch()
+                    },
                     viewModel = viewModel,
                 )
             }
@@ -810,6 +872,21 @@ private fun androidx.navigation.NavHostController.navigateTopLevel(route: String
         launchSingleTop = true
         restoreState = true
     }
+}
+
+/**
+ * 教务抓取完成后的落点：回到导入页看那张「待确认导入」。
+ *
+ * 原先两条路径都走 [navigateTopLevel]，而它是 `popUpTo(home){saveState}` + `restoreState`：
+ * 首页 → 导入页 → 登录页这条最常见路径下，登录页会被一并存进返回栈，用户反映
+ * "点底部的查看导入预览没反应、页面也不自动跳"。预览是**已经落在导入页上的一件内容**，
+ * 不是新的一次导航，所以 import 已在栈上时直接回退过去 —— 不出栈、不存状态，
+ * 同时把登录页清掉（返回键回到课表而不是再进一次登录）。
+ */
+private fun androidx.navigation.NavHostController.openImportPreviewAfterFetch() {
+    // import 已在栈上时返回 true 并停在它上面（登录页随之出栈）；
+    // 不在栈上（从别处直接抓完）返回 false，退回常规的一级跳转。
+    if (!popBackStack("import", inclusive = false)) navigateTopLevel("import")
 }
 
 /** 悬浮液态玻璃底部导航（LiquidBottomTabs + 折射指示器） */

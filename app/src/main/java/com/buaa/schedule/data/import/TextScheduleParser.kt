@@ -22,7 +22,10 @@ object TextScheduleParser {
     ): List<Course> {
         val result = mutableListOf<Course>()
         content.lineSequence().forEachIndexed { index, rawLine ->
-            val line = rawLine.trim()
+            // 群里复制的课表常混着全角空格/全角逗号/全角数字，不归一整个字段会错位、
+            // 整行 parts<6 被静默丢掉（用户看到的是"解析结果为空"）
+            val line = com.buaa.schedule.domain.schedule.WeekParser
+                .normalizeWidths(rawLine).trim()
             if (line.isBlank() || line.startsWith("#") || line.startsWith("//")) return@forEachIndexed
 
             // 不做空字段过滤：空教师/空地点必须占位，否则后续字段会整体左移错位

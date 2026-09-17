@@ -15,7 +15,7 @@ object WeekParser {
 
     fun parse(description: String?): List<Int> {
         if (description.isNullOrBlank()) return emptyList()
-        val trimmed = description.trim()
+        val trimmed = normalizeWidths(description).trim()
         // 仅长字符串才可能是位图；"10"/"11" 这类 1-2 位输入应按数字周次解析，
         // 否则 "10" 会被误判为位图解析成第 1 周。
         if (trimmed.length >= 3 && trimmed.all { it == '0' || it == '1' }) {
@@ -29,17 +29,27 @@ object WeekParser {
             .replace(" ", "")
             .replace("，", ",")
 
+        // 全局奇偶修饰符："1-16周,单周" 里裸的「单」段清成空串后，
+        // 奇偶约束本该套到整份描述的所有数字区间上，而不是随该段一起被丢掉
+        var globalOdd = false
+        var globalEven = false
+        clean.split(",").forEach { segment ->
+            val parity = stripParity(segment)
+            if (parity.isNotBlank()) return@forEach
+            if (segment.contains("单")) globalOdd = true
+            if (segment.contains("双")) globalEven = true
+        }
+        // 同时出现裸「单」与裸「双」是矛盾输入，退回按段解析、不做强加约束
+        if (globalOdd && globalEven) {
+            globalOdd = false
+            globalEven = false
+        }
+
         clean.split(",").forEach { segment ->
             if (segment.isBlank()) return@forEach
-            val isOdd = segment.contains("单") || segment.contains("(单)") || segment.contains("（单）")
-            val isEven = segment.contains("双") || segment.contains("(双)") || segment.contains("（双）")
-            val normalized = segment
-                .replace("(单)", "")
-                .replace("（单）", "")
-                .replace("(双)", "")
-                .replace("（双）", "")
-                .replace("单", "")
-                .replace("双", "")
+            val isOdd = segment.contains("单") || globalOdd
+            val isEven = segment.contains("双") || globalEven
+            val normalized = stripParity(segment)
 
             val range = normalized.split("-").mapNotNull { it.toIntOrNull() }
             when {
@@ -68,6 +78,32 @@ object WeekParser {
 
         // 超出教学周范围的输入（如 1-999）截断到合法区间，防止无界列表
         return weeks.filter { it in 1..CourseConstraints.MAX_WEEK }.sorted()
+    }
+
+    /** 去掉段内的「单/双」（含括号写法），只留数字与连字符 */
+    private fun stripParity(segment: String): String = segment
+        .replace("(单)", "")
+        .replace("（单）", "")
+        .replace("(双)", "")
+        .replace("（双）", "")
+        .replace("单", "")
+        .replace("双", "")
+
+    /**
+     * 全角 → 半角：从群里/QQ 复制的课表常带全角数字、全角空格、全角连字符，
+     * `toIntOrNull` 不认全角数字，整段会被静默丢光（用户只见"解析结果为空"）。
+     */
+    internal fun normalizeWidths(text: String): String = buildString(text.length) {
+        text.forEach { c ->
+            when {
+                c in '０'..'９' -> append((c - '０' + '0'.code).toChar())
+                c == '　' -> append(' ')
+                c == '－' -> append('-')
+                c in 'Ａ'..'Ｚ' -> append((c - 'Ａ' + 'A'.code).toChar())
+                c in 'ａ'..'ｚ' -> append((c - 'ａ' + 'a'.code).toChar())
+                else -> append(c)
+            }
+        }
     }
 
     fun parseBitmap(bitmap: String): List<Int> {

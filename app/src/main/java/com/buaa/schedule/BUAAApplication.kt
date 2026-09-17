@@ -40,7 +40,10 @@ class BUAAApplication : Application() {
             runCatching {
                 // 旧版本的固定周期 Widget 轮询退出，改为事件驱动 + 每日零点刷新
                 BackgroundSync.cancelLegacyPeriodicWork(this@BUAAApplication)
-                BackgroundSync.rescheduleReminders(this@BUAAApplication)
+                // 冷启动自愈：勿扰记录已过恢复期限还没等到下课铃（含旧版本无期限的残留）时恢复；
+                // 正在上课的那节课期限未到，不会被误恢复
+                com.buaa.schedule.reminder.ClassProgressDnd.selfCheck(this@BUAAApplication)
+                BackgroundSync.rescheduleRemindersAndBells(this@BUAAApplication)
                 BackgroundSync.refreshWidgets(this@BUAAApplication)
                 BackgroundSync.scheduleWidgetMidnight(this@BUAAApplication)
                 BackgroundSync.scheduleTomorrowPreview(this@BUAAApplication)

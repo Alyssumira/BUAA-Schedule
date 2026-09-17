@@ -13,10 +13,16 @@ import android.view.View
 import android.widget.RemoteViews
 import com.buaa.schedule.MainActivity
 import com.buaa.schedule.R
+import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
+import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.model.TimeSlotProfile
+import com.buaa.schedule.domain.model.WEEKDAY_LABELS
 import com.buaa.schedule.domain.model.startLocalDate
+import com.buaa.schedule.domain.model.toStartEndTimes
 import com.buaa.schedule.domain.schedule.WeekCalculator
 import com.buaa.schedule.reminder.ClassProgressScheduler
+import com.buaa.schedule.reminder.clockOf
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,9 +30,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.ZoneId
 
-private val DAY_NAMES = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+private val DAY_NAMES = WEEKDAY_LABELS
 
 /** Widget 内容模式 */
 enum class ListWidgetMode { TODAY, TOMORROW, WEEK }
@@ -43,6 +50,14 @@ object WidgetCommon {
     private const val WEEK_BROWSE_REQUEST_CODE_BASE = 200_000
 
     private const val BOOTSTRAP_INTERVAL_MS = 60_000L
+
+    /** 「下一节课」组件常态下顶端那一行；正在上课时会换成状态句，见 [nextWidgetLabel] */
+    private const val NEXT_LABEL_IDLE = "下一节课"
+
+    // 箭头是给"点这里翻页"的暗示：光秃秃的「上周」两个字更像标签而不是按钮
+    private const val PREV_WEEK_LABEL = "‹ 上周"
+    private const val NEXT_WEEK_LABEL = "下周 ›"
+
     @Volatile private var lastBootstrapAt: Long = 0L
 
     private const val TAG = "WidgetCommon"
@@ -215,7 +230,12 @@ object WidgetCommon {
         applyBlurredBackground(context, views, appearance)
         views.setTextViewText(R.id.widget_title, title)
         views.setTextViewText(R.id.widget_subtitle, subtitle)
-        views.setTextViewText(R.id.widget_empty, emptyText)
+        // 空态只回答"没有课"是不够的，用户真正要问的是"那什么时候又有课"。
+        // 第二行给下一节；widget_empty 那个 TextView 没有 maxLines，可以直接换行。
+        views.setTextViewText(
+            R.id.widget_empty,
+            withNextClassHint(emptyText, semester, data.courses, data.timeSlots),
+        )
         if (mode == ListWidgetMode.WEEK) {
             applyWeekBrowse(
                 context = context,
@@ -224,6 +244,8 @@ object WidgetCommon {
                 appearance = appearance,
                 providerClass = WeekWidgetProvider::class.java,
                 enabled = semester != null,
+                week = displayWeek,
+                totalWeeks = totalWeeksOf(semester),
             )
         }
 
@@ -353,18 +375,28 @@ object WidgetCommon {
         val layoutRes = R.layout.widget_next
         val views = RemoteViews(context.packageName, layoutRes)
         val appearance = WidgetAppearanceStore.load(context, appWidgetId)
+        val nowMillis = System.currentTimeMillis()
+        val inClass = nextWidgetInClass(window, nowMillis)
         if (window == null) {
             views.setTextViewText(R.id.widget_next_name, "暂无课程")
             views.setTextViewText(R.id.widget_next_meta, "导入课表后显示下一节课")
+            views.setTextViewText(R.id.widget_next_label, NEXT_LABEL_IDLE)
+            views.setViewVisibility(R.id.widget_next_bar, View.INVISIBLE)
         } else {
             val zone = ZoneId.systemDefault()
             val start = java.time.Instant.ofEpochMilli(window.startMillis).atZone(zone)
             val dayName = DAY_NAMES[start.dayOfWeek.value - 1]
-            // Locale 钉死为 US：避免部分语言环境下输出非 ASCII 数字
-            val timeText = start.format(
-                java.time.format.DateTimeFormatter.ofPattern("HH:mm", java.util.Locale.US)
-            )
+            val timeText = clockOf(window.startMillis)
             views.setTextViewText(R.id.widget_next_name, window.courseName)
+            views.setTextViewText(R.id.widget_next_label, nextWidgetLabel(inClass, window))
+            // 课程色条：与课表卡片、列表行同一种识别方式，2×1 上唯一的彩色元素
+            val barColor = window.colorArgb
+            if (barColor != null) {
+                views.setInt(R.id.widget_next_bar, "setColorFilter", barColor)
+                views.setViewVisibility(R.id.widget_next_bar, View.VISIBLE)
+            } else {
+                views.setViewVisibility(R.id.widget_next_bar, View.INVISIBLE)
+            }
             // 段落与顺序交给 rowFields（审查 3.2 + 3.7）：默认口径把教师排在节次之前，
             // 因为"第5-6节"在 14:00 里已经隐含，而教师才回答"是不是我该去的那个班"。
             val fields = appearance.effectiveRowFields(WidgetAppearance.DEFAULT_NEXT_ROW_FIELDS)
@@ -372,7 +404,7 @@ object WidgetCommon {
                 R.id.widget_next_meta,
                 fields.mapNotNull { field ->
                     when (field) {
-                        WidgetRowField.TIME -> "$dayName $timeText"
+                        WidgetRowField.TIME -> listOfNotNull(dayName, timeText).joinToString(" ")
                         WidgetRowField.TEACHER -> window.teacher?.takeIf { it.isNotBlank() }
                         WidgetRowField.PERIODS -> window.sectionText.takeIf { it.isNotBlank() }
                         WidgetRowField.LOCATION -> window.location?.takeIf { it.isNotBlank() }
@@ -389,7 +421,12 @@ object WidgetCommon {
         views.setTextColor(R.id.widget_next_name, appearance.titleColorFor(bg))
         views.setTextColor(R.id.widget_next_label, appearance.bodyColorFor(bg))
         views.setTextColor(R.id.widget_next_meta, appearance.bodyColorFor(bg))
-        views.setViewVisibility(R.id.widget_next_label, if (appearance.showTitle) View.VISIBLE else View.GONE)
+        // 「正在上课」不是标题，是状态：关了 showTitle 只该去掉「下一节课」那几个字，
+        // 不该连"此刻正在上课"这个唯一会变的事实也一起藏掉。
+        views.setViewVisibility(
+            R.id.widget_next_label,
+            if (appearance.showTitle || inClass) View.VISIBLE else View.GONE,
+        )
 
         val pendingIntent = PendingIntent.getActivity(
             context,
@@ -400,6 +437,27 @@ object WidgetCommon {
         views.setOnClickPendingIntent(R.id.widget_root, pendingIntent)
         appWidgetManager.updateAppWidget(appWidgetId, views)
     }
+
+    /**
+     * 此刻是否正在上课。窗口口径与课程进行中通知同一条 [ClassProgressScheduler.ClassWindow]：
+     * 结束时刻取开区间，下课铃那一分钟起就该换成「下一节课」而不是还挂着"正在上课"。
+     */
+    internal fun nextWidgetInClass(window: ClassProgressScheduler.ClassWindow?, nowMillis: Long): Boolean =
+        window != null && window.startMillis <= nowMillis && nowMillis < window.endMillis
+
+    /**
+     * 「下一节课」组件顶端那一行。
+     *
+     * 它以前永远是静态的「下一节课」，而 [ClassProgressScheduler.planNextClassWindow] 给的是
+     * "尚未结束的最早一次课"（**含正在上的这一节**）：课已经上了四十分钟，
+     * 组件还在说"下一节 08:00"。这里按是否在进行中分家。
+     *
+     * 只写墙钟时刻、不写"还剩几分钟"：组件没有分钟级重绘，
+     * 一个会走的数字只会停在下发的那一分钟，比不写更容易被当成不准。
+     */
+    internal fun nextWidgetLabel(inClass: Boolean, window: ClassProgressScheduler.ClassWindow?): String =
+        if (!inClass || window == null) NEXT_LABEL_IDLE
+        else clockOf(window.endMillis)?.let { "正在上课 · $it 下课" } ?: "正在上课"
 
     /** 只刷新某一个实例（配置页保存后立即生效） */
     suspend fun updateSingle(context: Context, appWidgetId: Int, mode: ListWidgetMode) =
@@ -424,6 +482,134 @@ object WidgetCommon {
         launchRefresh(null) {
             updateNextWidget(appContext, AppWidgetManager.getInstance(appContext), appWidgetId)
         }
+    }
+
+    /**
+     * 课堂转折点（上课铃 / 下课铃）的轻量重绘：刷「今日课程」「下一节课」「今明课表」。
+     *
+     * 这三个组件画的是"此刻"——今日列表里哪一行该标「进行中」、下一节课还剩几分钟、
+     * 今明两栏的 ▸ 落在哪一节，都在上课/下课那一秒翻面。此前 reminder 链路里没有任何一处
+     * 会去碰组件，于是装机之后组件上的时间信息要一直等到零点闹钟或 12 小时兜底才动。
+     *
+     * 不走 [BackgroundSync.refreshWidgets]：那一条要先让快照失效、重写全学期
+     * `widget_snapshots` 再问五遍 `getAppWidgetIds`，而这一刻的课表一个字都没改。
+     * 明日/周课表/周网格与"现在几点"无关，也不该跟着一起重绘。
+     */
+    fun requestLiveRefresh(context: Context) {
+        val appContext = context.applicationContext
+        launchRefresh(null) {
+            updateAllOfProviderNext(appContext, NextClassWidgetProvider::class.java)
+            updateAllOfProvider(appContext, TodayWidgetProvider::class.java, ListWidgetMode.TODAY)
+            updateAllOfProviderTwoDay(appContext, TwoDayWidgetProvider::class.java)
+        }
+    }
+
+    // ---- 4x2 今明两栏 ----
+
+    fun goAsyncUpdateTwoDay(
+        context: Context,
+        appWidgetIds: IntArray,
+        pendingResult: BroadcastReceiver.PendingResult?,
+    ) {
+        launchRefresh(pendingResult) {
+            bootstrapBackgroundSync(context)
+            val manager = AppWidgetManager.getInstance(context)
+            appWidgetIds.forEach { updateTwoDayWidget(context, manager, it) }
+        }
+    }
+
+    suspend fun updateAllOfProviderTwoDay(
+        context: Context,
+        providerClass: Class<*>,
+    ): Boolean = withContext(Dispatchers.IO) {
+        val manager = AppWidgetManager.getInstance(context)
+        val ids = manager.getAppWidgetIds(ComponentName(context, providerClass))
+        if (ids.isEmpty()) return@withContext false
+        ids.forEach { updateTwoDayWidget(context, manager, it) }
+        true
+    }
+
+    /**
+     * 左栏今天、右栏明天。两栏各是一整块文本，每行一节课的「时刻 + 短名」。
+     *
+     * 每栏取的是**那一天各自的教学周**：明日的课要按明天的周次过滤，
+     * 单双周下周日晚上看右栏，否则显示的是本周同一节次的课（与「明日课程」同一口径）。
+     */
+    suspend fun updateTwoDayWidget(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetId: Int,
+    ) {
+        val binding = WidgetBindingStore.load(context, appWidgetId)
+        val data = WidgetDataCache.get(context, binding.semesterCode)
+        val semester = data.semester
+        val slotTimes = (if (data.timeSlots.isNotEmpty()) data.timeSlots else TimeSlotProfile.DEFAULT)
+            .toStartEndTimes()
+        val today = LocalDate.now()
+        val now = LocalDateTime.now()
+
+        val layoutRes = R.layout.widget_two_day
+        val views = RemoteViews(context.packageName, layoutRes)
+        val appearance = WidgetAppearanceStore.load(context, appWidgetId)
+        applyAppearance(context, views, appearance, isListLayout = false)
+        applyBlurredBackground(context, views, appearance)
+        val bg = appearance.resolvedBackground(context)
+        val titleColor = appearance.titleColorFor(bg)
+        val bodyColor = appearance.bodyColorFor(bg)
+        views.setTextViewText(R.id.widget_title, context.getString(R.string.widget_two_day_label))
+        views.setTextViewText(
+            R.id.widget_subtitle,
+            weekSubtitle(semester, currentWeekOrNull(semester, today), today),
+        )
+        views.setTextColor(R.id.widget_title, titleColor)
+        views.setTextColor(R.id.widget_subtitle, bodyColor)
+        // 标题行是用户可关的（showTitle）；栏头不是，关了标题两栏就没了归属，所以栏头始终留着
+        views.setViewVisibility(
+            R.id.widget_title,
+            if (appearance.showTitle) View.VISIBLE else View.GONE,
+        )
+
+        val columns = listOf(
+            "今天" to today,
+            "明天" to today.plusDays(1),
+        )
+        val columnTitles = listOf(R.id.widget_column_title_left, R.id.widget_column_title_right)
+        val columnBodies = listOf(R.id.widget_column_body_left, R.id.widget_column_body_right)
+        columns.forEachIndexed { index, (label, date) ->
+            val titleId = columnTitles[index]
+            val bodyId = columnBodies[index]
+            views.setTextColor(titleId, titleColor)
+            views.setTextColor(bodyId, bodyColor)
+            views.setTextViewText(titleId, "$label ${WEEKDAY_LABELS[date.dayOfWeek.value - 1]}")
+            views.setTextViewText(
+                bodyId,
+                twoDayBodyText(semester, data.courses, date, slotTimes, now),
+            )
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            appWidgetId + HEADER_REQUEST_CODE_OFFSET,
+            Intent(context, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        views.setOnClickPendingIntent(R.id.widget_root, pendingIntent)
+        appWidgetManager.updateAppWidget(appWidgetId, views)
+    }
+
+    /** 一栏的正文：先落到"有没有学期 / 那天在不在学周"，才有资格说有没有课 */
+    private fun twoDayBodyText(
+        semester: Semester?,
+        courses: List<Course>,
+        date: LocalDate,
+        slotTimes: Map<Int, Pair<LocalTime, LocalTime>>,
+        now: LocalDateTime,
+    ): String {
+        if (semester == null) return "导入课表后显示"
+        val week = currentWeekOrNull(semester, date) ?: return "假期中"
+        val dayCourses = courses.filter { it.dayOfWeek == date.dayOfWeek.value && it.weeks.contains(week) }
+            .sortedBy { it.startPeriod }
+        return twoDayColumnLines(dayCourses, slotTimes, date, now).ifBlank { "没有课" }
     }
 
     // ---- 4x2 紧凑周视图 ----
@@ -473,11 +659,16 @@ object WidgetCommon {
         views.setTextViewText(R.id.widget_subtitle, subtitle)
         views.setTextViewText(
             R.id.widget_empty,
-            if (displayWeek != null && displayWeek != currentWeekOrNull(semester, today)) {
-                "这一周没有课"
-            } else {
-                "本周没有课"
-            },
+            withNextClassHint(
+                if (displayWeek != null && displayWeek != currentWeekOrNull(semester, today)) {
+                    "这一周没有课"
+                } else {
+                    "本周没有课"
+                },
+                semester,
+                data.courses,
+                data.timeSlots,
+            ),
         )
         applyWeekBrowse(
             context = context,
@@ -486,6 +677,8 @@ object WidgetCommon {
             appearance = appearance,
             providerClass = WeekGridWidgetProvider::class.java,
             enabled = semester != null,
+            week = displayWeek,
+            totalWeeks = totalWeeksOf(semester),
         )
 
         val serviceIntent = Intent(context, WeekGridWidgetService::class.java).apply {
@@ -544,14 +737,20 @@ object WidgetCommon {
         appearance: WidgetAppearance,
         providerClass: Class<out AppWidgetProvider>,
         enabled: Boolean,
+        week: Int?,
+        totalWeeks: Int,
     ) {
         val ink = appearance.bodyColorFor(appearance.resolvedBackground(context))
         listOf(R.id.widget_week_prev to -1, R.id.widget_week_next to 1).forEach { (viewId, delta) ->
-            views.setTextViewText(viewId, if (delta < 0) "上周" else "下周")
+            views.setTextViewText(viewId, if (delta < 0) PREV_WEEK_LABEL else NEXT_WEEK_LABEL)
             views.setTextColor(viewId, ink)
-            // 没有学期就没有可浏览的周次：留着两个点了没反应的方块比藏起来更糟
-            views.setViewVisibility(viewId, if (enabled) View.VISIBLE else View.GONE)
-            if (!enabled) return@forEach
+            // 没有学期就没有可浏览的周次：留着两个点了没反应的方块比藏起来更糟。
+            // 到了学期边界的那一侧同理——点下去什么都不会发生，界面上又没有任何地方
+            // 告诉用户"这就是第 1 周了"，隐藏掉才是诚实的答案。
+            // 浏览周算不出来时（week 为 null）保留两侧，与改动前行为一致。
+            val atEdge = week != null && (if (delta < 0) week <= 1 else week >= totalWeeks)
+            views.setViewVisibility(viewId, if (enabled && !atEdge) View.VISIBLE else View.GONE)
+            if (!enabled || atEdge) return@forEach
             val intent = Intent(context, providerClass).apply {
                 action = WidgetNavigation.ACTION_BROWSE_WEEK
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
@@ -659,6 +858,8 @@ object WidgetCommon {
                     updateNextWidget(appContext, manager, appWidgetId)
                 WeekGridWidgetProvider::class.java.name ->
                     updateWeekGridWidget(appContext, manager, appWidgetId)
+                TwoDayWidgetProvider::class.java.name ->
+                    updateTwoDayWidget(appContext, manager, appWidgetId)
                 else -> updateListWidget(appContext, manager, appWidgetId, mode)
             }
             // 重绘在前：补注册与这次保存无关，不该挡在它前面。
@@ -697,6 +898,47 @@ object WidgetCommon {
     /** 今日/明日副标题后缀的周次：未设置学期或假期里没有可标的周就不加 */
     private fun weekSuffix(semester: Semester?, date: LocalDate): String =
         currentWeekOrNull(semester, date)?.let { " · 第 $it 周" } ?: ""
+
+    /**
+     * 空态文案 + 第二行「下一节 · 周四 08:00 高等数学」。
+     *
+     * 空态光说"没有课"没有落点——用户接着要问的就是"那什么时候又有课"。
+     * 取不到可提示的下一节时原样返回单行。
+     */
+    private fun withNextClassHint(
+        emptyText: String,
+        semester: Semester?,
+        courses: List<Course>,
+        timeSlots: List<TimeSlot>,
+    ): String = nextClassHint(semester, courses, timeSlots)?.let { "$emptyText\n$it" } ?: emptyText
+
+    /**
+     * 空态的第二行文案：「下一节 · 周四 08:00 高等数学」。
+     *
+     * 口径与「下一节课」组件同一条 [ClassProgressScheduler.planNextClassWindow]，
+     * 两处各算一份迟早会打架（一个显示正在上的课、另一个显示下一节）。
+     * 无学期 / 学期已结束 / 课表为空时返回 null。
+     */
+    private fun nextClassHint(
+        semester: Semester?,
+        courses: List<Course>,
+        timeSlots: List<TimeSlot>,
+    ): String? {
+        val semesterStart = semester?.startLocalDate ?: return null
+        val window = ClassProgressScheduler.planNextClassWindow(
+            courses = courses,
+            semesterStart = semesterStart,
+            timeSlots = timeSlots,
+            now = LocalDateTime.now(),
+        ) ?: return null
+        val dayName = window.dayOfWeek?.let { DAY_NAMES.getOrNull(it - 1) }
+        val clock = clockOf(window.startMillis)
+        return listOfNotNull(
+            "下一节",
+            listOfNotNull(dayName, clock).joinToString(" ").takeIf { it.isNotBlank() },
+            window.courseName.takeIf { it.isNotBlank() },
+        ).joinToString(" · ")
+    }
 
     private fun currentWeekOrNull(semester: Semester?, today: LocalDate): Int? {
         val start = semester?.startLocalDate ?: return null

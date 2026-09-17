@@ -13,13 +13,27 @@
         android:contentDescription="@null"
         android:src="@drawable/widget_bg_r20" />
 
+    <!-- 课程色条：与课表卡片、列表行同一识别方式。必须是 ImageView（setColorFilter 只在这上面有）。
+         默认隐藏：没有下一节课时这根条没有颜色可给。 -->
+    <ImageView
+        android:id="@+id/widget_next_bar"
+        android:layout_width="3dp"
+        android:layout_height="30dp"
+        android:layout_gravity="start|center_vertical"
+        android:layout_marginStart="5dp"
+        android:visibility="invisible"
+        android:scaleType="fitXY"
+        android:importantForAccessibility="no"
+        android:contentDescription="@null"
+        android:src="@drawable/widget_item_bar" />
+
     <LinearLayout
         android:id="@+id/widget_root"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
         android:gravity="center_vertical"
-        android:paddingStart="12dp"
+        android:paddingStart="16dp"
         android:paddingEnd="12dp">
 
         <TextView

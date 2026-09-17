@@ -46,8 +46,6 @@ object BuaaScheduleParser {
         val weeksUpperBound = totalWeeks.coerceIn(1, CourseConstraints.MAX_TOTAL_WEEKS)
         val fallbackWeeks = (1..weeksUpperBound).toList()
         val result = mutableListOf<Course>()
-        var fallbackWeekCourses = 0
-        var unknownTeacherCourses = 0
         items.forEachIndexed { index, item ->
             val courseName = item.courseName ?: "未知课程"
             val day = item.dayOfWeek ?: return@forEachIndexed
@@ -68,8 +66,6 @@ object BuaaScheduleParser {
             val teacherWeekPairs = extractTeacherWeekPairs(item)
 
             if (teacherWeekPairs.isEmpty()) {
-                fallbackWeekCourses++
-                unknownTeacherCourses++
                 result.add(
                     Course(
                         name = courseName,
@@ -88,7 +84,6 @@ object BuaaScheduleParser {
                 teacherWeekPairs.forEach { (teacher, weeksDesc) ->
                     val weeks = WeekParser.parse(weeksDesc)
                     if (weeks.isEmpty()) return@forEach
-                    if (teacher == "未知教师") unknownTeacherCourses++
                     result.add(
                         Course(
                             name = courseName,
@@ -106,7 +101,33 @@ object BuaaScheduleParser {
                 }
             }
         }
-        return ParseOutcome(result, fallbackWeekCourses, unknownTeacherCourses)
+        // 教务 type=week&week=N 按周返回：同一门课在它上的每个周都出现一次，19 轮汇总后
+        // 直译会让预览每门课重复十几行、「新增 N 门」虚高、同源行两两判成假冲突
+        // （落库有 ImportPlanner 并键兜住，预览此前没有这一步；BuaaScheduleImporter.merge
+        // 的 KDoc 描述的就是这里该做的事，但它本身已无人调用）。
+        val merged = mergeSameSlotOccurrences(result)
+        return ParseOutcome(
+            courses = merged,
+            fallbackWeekCourses = merged.count { it.teacher == "未知教师" && it.weeks == fallbackWeeks },
+            unknownTeacherCourses = merged.count { it.teacher == "未知教师" },
+        )
+    }
+
+    /** 身份键完全相同、只有周次不同的行并成一条（周次取并集）；其余行原样保留、维持原序 */
+    private fun mergeSameSlotOccurrences(courses: List<Course>): List<Course> {
+        val byKey = LinkedHashMap<List<Any?>, MutableList<Course>>()
+        courses.forEach { course ->
+            // 空 id 的预览行没有可靠主键，用身份字段组合；weeks 不参与判同（它正是要并的）
+            val key = listOf(
+                course.sourceGroupKey, course.name, course.teacher, course.location,
+                course.campus, course.dayOfWeek, course.periods, course.semesterCode,
+            )
+            byKey.getOrPut(key) { mutableListOf() }.add(course)
+        }
+        return byKey.values.map { group ->
+            if (group.size == 1) group.first()
+            else group.first().copy(weeks = group.flatMap { it.weeks }.distinct().sorted())
+        }
     }
 
     /**

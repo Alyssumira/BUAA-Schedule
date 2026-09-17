@@ -11,6 +11,7 @@ import androidx.work.WorkManager
 import com.buaa.schedule.data.repository.scheduleRepository
 import com.buaa.schedule.domain.model.ReminderMode
 import com.buaa.schedule.domain.model.startLocalDate
+import com.buaa.schedule.reminder.ClassProgressScheduler
 import com.buaa.schedule.reminder.ReminderScheduler
 import com.buaa.schedule.reminder.TomorrowPreviewReceiver
 import com.buaa.schedule.reminder.TomorrowPreviewScheduler
@@ -53,7 +54,7 @@ object BackgroundSync {
             // 永不消失的常驻通知与永久勿扰。
             runCatching {
                 ReminderScheduler.cancelAll(context)
-                com.buaa.schedule.reminder.ClassProgressScheduler.cancelAll(context)
+                ClassProgressScheduler.cancelAll(context)
             }.onFailure { Log.w(TAG, "日历模式下清理应用内闹钟失败", it) }
             return false
         }
@@ -80,6 +81,26 @@ object BackgroundSync {
     }
 
     /**
+     * 「重排提醒」+「课堂铃兜底」的完整一次调用：[rescheduleReminders] 的返回值契约
+     * 由这里就地兑现，调用方不必（也没法）再各自记得补那一步。
+     *
+     * 为什么要有这个包装：`false` 的含义是"本轮课堂铃没人排"（① 系统日历提醒模式；
+     * ② 没有下一条提醒，rescheduleAll 在那条分支里连上/下课铃一起收掉了），
+     * 而 [rescheduleReminders] 是个返回 Boolean 的 suspend 函数，
+     * 广播接收器 / ViewModel / Application 那几处调用点全都在 `launch { }` 里直接丢弃了返回值 ——
+     * 丢弃的后果不是少一行日志，而是这两类用户此后再也不会有「课程进行中」实况与
+     * 上课自动勿扰（R5 F-12 的兜底链断在调用点）。把补排收进同一个函数，
+     * 新调用点忘接返回值也不会再出错。
+     */
+    suspend fun rescheduleRemindersAndBells(context: Context) {
+        if (!rescheduleReminders(context)) {
+            // 与 WidgetFallbackWorker 同一口径：只在提醒那条链没接手课堂铃时才补排，
+            // 无条件再排一遍等于把刚排上的上课铃撤了重排。
+            ClassProgressScheduler.rescheduleNextWindow(context)
+        }
+    }
+
+    /**
      * 刷新全部桌面组件。
      *
      * ⚠️ 必须先让组件数据源失效并重写快照。组件与 RemoteViewsFactory 读的都是
@@ -92,7 +113,7 @@ object BackgroundSync {
         runCatching {
             WidgetDataCache.invalidate()
             // 一个组件都没放时，下面的全量快照 sync（逐个学期查库 + JSON + upsert）与
-            // 5 次 getAppWidgetIds 都没有读者 —— 开机/改时间/12 小时兜底每次都白跑一遍。
+            // 6 次 getAppWidgetIds 都没有读者 —— 开机/改时间/12 小时兜底每次都白跑一遍。
             if (!hasAnyWidgetSafely(context)) return
             WidgetDataSynchronizer.sync(context)
             TodayWidgetProvider.updateAll(context)
@@ -100,6 +121,7 @@ object BackgroundSync {
             WeekWidgetProvider.updateAll(context)
             WeekGridWidgetProvider.updateAll(context)
             NextClassWidgetProvider.updateAll(context)
+            TwoDayWidgetProvider.updateAll(context)
         }.onFailure { Log.w(TAG, "刷新 Widget 失败", it) }
     }
 
@@ -178,6 +200,7 @@ object BackgroundSync {
             WeekWidgetProvider::class.java,
             WeekGridWidgetProvider::class.java,
             NextClassWidgetProvider::class.java,
+            TwoDayWidgetProvider::class.java,
         ).any { clazz -> manager.getAppWidgetIds(ComponentName(context, clazz)).isNotEmpty() }
     }
 

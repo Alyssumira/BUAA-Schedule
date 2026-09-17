@@ -7,7 +7,7 @@ import android.content.Context
 import android.os.Bundle
 
 /**
- * 五个桌面组件 Provider 的共同底座。
+ * 各桌面组件 Provider 的共同底座。
  *
  * 只为一件事存在（真机反馈：「编辑保存后会刷新，但是长按后又会变为原样」）：
  * 长按进编辑模式、宿主恢复、拖拽改尺寸这些动作会让 Launcher **重新绑定**这个实例，

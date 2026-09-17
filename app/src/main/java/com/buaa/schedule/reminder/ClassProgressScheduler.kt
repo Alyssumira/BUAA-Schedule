@@ -7,7 +7,9 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import androidx.compose.ui.graphics.toArgb
 import com.buaa.schedule.MainActivity
+import com.buaa.schedule.core.designsystem.courseColor
 import com.buaa.schedule.data.repository.scheduleRepository
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.TimeSlot
@@ -46,7 +48,86 @@ object ClassProgressScheduler {
         val endMillis: Long,
         /** 授课教师：同名课在不同班之间只能靠它区分（「下一节课」组件显示） */
         val teacher: String? = null,
-    )
+        /** 这一次上课所在的教学周（1 起）：实况卡片与组件的「第 N 周」都取它，没有学期时为 null */
+        val week: Int? = null,
+        /** 星期几（1=周一…7=周日）：与 [week] 一起定位"这是哪一天的一节课" */
+        val dayOfWeek: Int? = null,
+        /** 课程色（ARGB）：实况通知的着色、岛上高亮色、组件色条共用，与课表卡片同一口径 */
+        val colorArgb: Int? = null,
+    ) {
+
+        /** 写进任意 Bundle 的 extras：上/下课铃、课前提醒、前台服务共用这一份实现 */
+        fun putInto(target: Bundle) = target.apply {
+            putLong(KEY_ID, courseId)
+            putString(KEY_NAME, courseName)
+            putString(KEY_LOCATION, location)
+            putString(KEY_SECTION, sectionText)
+            putLong(KEY_START, startMillis)
+            putLong(KEY_END, endMillis)
+            putString(KEY_TEACHER, teacher)
+            putInt(KEY_WEEK, week ?: NO_VALUE)
+            putInt(KEY_DAY, dayOfWeek ?: NO_VALUE)
+            putInt(KEY_COLOR, colorArgb ?: NO_COLOR)
+        }
+
+        /** [putInto] 的独立 Bundle 版：Intent 只接受 `putExtras(Bundle)` */
+        fun toExtras(): Bundle = putInto(Bundle())
+
+        companion object {
+            /**
+             * 一条课堂链路上有四个进程边界要传这个窗口（下课铃、上课铃、课前提醒、前台服务）。
+             * 此前每个边界各写一份 `putExtra`，键名还各起一套 —— 加字段时漏掉哪一条就只有
+             * 那一条不显示，而且零报错。教师就是这样在整个实况链路上丢了很久：
+             * [planNextClassWindow] 早就算好了它，只有「下一节课」组件读得到。
+             *
+             * 键取的是原 `ClassProgressReceiver.EXTRA_*` 的同名字符串，
+             * 因此升级后仍在系统里的旧 PendingIntent（闹钟已排出的那一节课）照旧读得出。
+             */
+            private const val KEY_ID = "extra_course_id"
+            private const val KEY_NAME = "extra_course_name"
+            private const val KEY_LOCATION = "extra_location"
+            private const val KEY_SECTION = "extra_section"
+            private const val KEY_START = "extra_start"
+            private const val KEY_END = "extra_end"
+            private const val KEY_TEACHER = "extra_teacher"
+            private const val KEY_WEEK = "extra_week"
+            private const val KEY_DAY = "extra_day_of_week"
+            private const val KEY_COLOR = "extra_color"
+
+            /** 可空 Int 的哨兵：-1 表示"这项没有"（0 是个真实的周次/星期） */
+            private const val NO_VALUE = -1
+
+            /** 颜色为 0 即全透明，等价于"没着色"，与 null 同一含义 */
+            private const val NO_COLOR = 0
+
+            /**
+             * 覆盖安装兼容：旧版本的课前提醒闹钟（那时 [ReminderScheduler] 自己排铃、
+             * 且课前那一段的"结束时刻"就是上课时刻）把时刻写在 `extra_class_start_at` 下，
+             * 键名与 [KEY_END] 不同。系统里那些已排出、还没响的闹钟改不了，
+             * 升级后读不到新键就得回退读旧键，否则那一节课的实况/勿扰会拿到一个 0 时刻。
+             */
+            private const val LEGACY_KEY_CLASS_START_AT = "extra_class_start_at"
+
+            /** [putInto] 的逆运算；缺键一律按"没有这项"处理，不抛异常 */
+            fun from(extras: Bundle?): ClassWindow {
+                val e = extras ?: Bundle()
+                return ClassWindow(
+                    courseId = e.getLong(KEY_ID, 0L),
+                    courseName = e.getString(KEY_NAME) ?: "课程",
+                    location = e.getString(KEY_LOCATION)?.takeIf { it.isNotBlank() },
+                    sectionText = e.getString(KEY_SECTION) ?: "",
+                    startMillis = e.getLong(KEY_START, 0L),
+                    // 0 = 新键缺失，回退旧键；两个键都没有时保持 0（消费侧按"没有这项"处理）
+                    endMillis = e.getLong(KEY_END, 0L).takeIf { it != 0L }
+                        ?: e.getLong(LEGACY_KEY_CLASS_START_AT, 0L),
+                    teacher = e.getString(KEY_TEACHER)?.takeIf { it.isNotBlank() },
+                    week = e.getInt(KEY_WEEK, NO_VALUE).takeIf { it != NO_VALUE },
+                    dayOfWeek = e.getInt(KEY_DAY, NO_VALUE).takeIf { it != NO_VALUE },
+                    colorArgb = e.getInt(KEY_COLOR, NO_COLOR).takeIf { it != NO_COLOR },
+                )
+            }
+        }
+    }
 
     // 动作串只认 [ClassProgressReceiver] 里的那一份（ACTION_START / ACTION_END）。
     // 这里曾自设过一对取值不同的私有常量：广播照排照发，接收器的 when 却永远落空，
@@ -98,6 +179,9 @@ object ClassProgressScheduler {
             startMillis = window.begin.atZone(zone).toInstant().toEpochMilli(),
             endMillis = window.end.atZone(zone).toInstant().toEpochMilli(),
             teacher = course.teacher,
+            week = window.week,
+            dayOfWeek = window.begin.dayOfWeek.value,
+            colorArgb = courseColor(course).toArgb(),
         )
     }
 
@@ -126,7 +210,7 @@ object ClassProgressScheduler {
                 // 学期会被整门忽略，表现为"常驻通知突然不再出现"。按默认时长兜底继续算。
                 val end = segmentEndTime(segment, date, slots)
                     ?: begin.plusMinutes(DEFAULT_CLASS_MINUTES)
-                if (end.isAfter(now)) return SegmentWindow(begin, end, segment)
+                if (end.isAfter(now)) return SegmentWindow(begin, end, segment, week)
             }
         }
         return null
@@ -145,11 +229,17 @@ object ClassProgressScheduler {
         return date.atTime(end)
     }
 
-    /** 某个连续节次段的一次上课窗口 */
+    /**
+     * 某个连续节次段的一次上课窗口。
+     *
+     * [week] 必须跟着窗口走：窗口可能是"下周三第 9-10 节"，事后按 `LocalDate.now()`
+     * 反推周次必然推错，而实况卡片和组件都要显示「第 N 周」。
+     */
     private data class SegmentWindow(
         val begin: LocalDateTime,
         val end: LocalDateTime,
         val segment: IntRange,
+        val week: Int,
     )
 
     /**
@@ -263,8 +353,13 @@ object ClassProgressScheduler {
         }
     }
 
-    /** 闹钟图标点击时打开 App（setAlarmClock 的展示意图，固定复用一个） */
-    private fun alarmShowIntent(context: Context): PendingIntent =
+    /**
+     * 闹钟图标点击时打开 App（setAlarmClock 的展示意图，固定复用一个）。
+     *
+     * internal 是因为 [ClassProgressDnd] 的勿扰看门狗同样用 `setAlarmClock`，
+     * 复用这一份展示意图而不是再造一个 requestCode + 另一份 MainActivity 意图。
+     */
+    internal fun alarmShowIntent(context: Context): PendingIntent =
         PendingIntent.getActivity(
             context,
             REQUEST_ALARM_SHOW,
@@ -320,7 +415,7 @@ object ClassProgressScheduler {
     }
 
     /**
-     * 完整撤除：上/下课铃 + 常驻通知 + 恢复勿扰状态。
+     * 完整撤除：上/下课铃 + 勿扰看门狗闹钟 + 常驻通知 + 恢复勿扰状态。
      *
      * 用于"数据被清空""提醒模式切到系统日历""用户关掉本功能"等所有取消路径。
      * 只调 [cancel] 会留下两个后果：已发出的常驻通知永不消失、
@@ -331,6 +426,11 @@ object ClassProgressScheduler {
         CourseFluidService.stop(context)
         ReminderNotifications.cancelClassOngoing(context)
         ClassProgressDnd.restore(context)
+        // 看门狗也收掉：restore 成功时它已经自己取消过，这里覆盖的是取消路径 ——
+        // 用户都关掉功能/清空课表了，不该再留一条会唤醒设备的闹钟。
+        // restore 因权限被撤而失败时同样取消：那一刻排着闹钟也恢复不了什么，
+        // 记录仍在 prefs 里，等重新授权后的冷启动 selfCheck 自愈。
+        ClassProgressDnd.cancelWatchdog(context)
     }
 
     private fun startPendingIntent(context: Context, window: ClassWindow): PendingIntent =
@@ -360,13 +460,9 @@ object ClassProgressScheduler {
 
     private fun emptyWindow(): ClassWindow = ClassWindow(0L, "", null, "", 0L, 0L)
 
-    private fun ClassWindow.toBundle(action: String): Bundle = Bundle().apply {
-        putString(ClassProgressReceiver.EXTRA_ACTION, action)
-        putLong(ClassProgressReceiver.EXTRA_COURSE_ID, courseId)
-        putString(ClassProgressReceiver.EXTRA_COURSE_NAME, courseName)
-        putString(ClassProgressReceiver.EXTRA_LOCATION, location)
-        putString(ClassProgressReceiver.EXTRA_SECTION, sectionText)
-        putLong(ClassProgressReceiver.EXTRA_START, startMillis)
-        putLong(ClassProgressReceiver.EXTRA_END, endMillis)
-    }
+    private fun ClassWindow.toBundle(action: String): Bundle =
+        Bundle().apply {
+            putString(ClassProgressReceiver.EXTRA_ACTION, action)
+            putAll(this@toBundle.toExtras())
+        }
 }

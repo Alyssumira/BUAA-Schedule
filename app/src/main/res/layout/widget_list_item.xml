@@ -1,54 +1,77 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 组件列表的单行：课程色条 + 名称/教室 + 节次 -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!--
+  根是 FrameLayout 而不是行本身：正在上的那一节要在文字**底下**铺一层课程色的圆角底，
+  RemoteViews 没有"插入一个视图"的能力，只能把这一层预先摆好、运行时改可见性。
+  点击与整行透明度仍然落在根上（id 沿用 widget_item_row，工厂那边按它下发 fillInIntent）。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_item_row"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="horizontal"
-    android:gravity="center_vertical"
     android:paddingTop="5dp"
     android:paddingBottom="5dp">
 
-    <!-- 必须是 ImageView：RemoteViews 着色的 setColorFilter 只存在于 ImageView。
-         用 <View> 时反射取不到方法，会抛 ActionException 导致色条始终是纯白。 -->
+    <!-- 必须是 ImageView：着色的 setColorFilter 只存在于 ImageView 上。
+         底子是纯白不透明（与 widget_bg_* 同一约定），半透明由工厂 setFloat(setAlpha) 给。 -->
     <ImageView
-        android:id="@+id/widget_item_bar"
-        android:layout_width="3dp"
-        android:layout_height="26dp"
+        android:id="@+id/widget_item_active"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
         android:scaleType="fitXY"
+        android:visibility="invisible"
         android:importantForAccessibility="no"
         android:contentDescription="@null"
-        android:src="@drawable/widget_item_bar" />
+        android:src="@drawable/widget_bg_r8" />
 
     <LinearLayout
-        android:layout_width="0dp"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_weight="1"
-        android:layout_marginStart="8dp"
-        android:orientation="vertical">
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <!-- 必须是 ImageView：RemoteViews 着色的 setColorFilter 只存在于 ImageView。
+             用 <View> 时反射取不到方法，会抛 ActionException 导致色条始终是纯白。 -->
+        <ImageView
+            android:id="@+id/widget_item_bar"
+            android:layout_width="3dp"
+            android:layout_height="26dp"
+            android:scaleType="fitXY"
+            android:importantForAccessibility="no"
+            android:contentDescription="@null"
+            android:src="@drawable/widget_item_bar" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/widget_item_name"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:maxLines="1"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/widget_item_meta"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="11sp"
+                android:maxLines="1"
+                android:ellipsize="end" />
+        </LinearLayout>
 
         <TextView
-            android:id="@+id/widget_item_name"
-            android:layout_width="match_parent"
+            android:id="@+id/widget_item_time"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="12sp"
-            android:maxLines="1"
-            android:ellipsize="end" />
-
-        <TextView
-            android:id="@+id/widget_item_meta"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
             android:textSize="11sp"
-            android:maxLines="1"
-            android:ellipsize="end" />
+            android:maxLines="1" />
     </LinearLayout>
-
-    <TextView
-        android:id="@+id/widget_item_time"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="8dp"
-        android:textSize="11sp"
-        android:maxLines="1" />
-</LinearLayout>
+</FrameLayout>

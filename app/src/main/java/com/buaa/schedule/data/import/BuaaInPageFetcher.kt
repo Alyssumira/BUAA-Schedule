@@ -216,7 +216,13 @@ object BuaaInPageFetcher {
                 parsed = fetch(
                     webView, "POST",
                     "/jwapp/sys/homeapp/api/home/student/getMyScheduleDetail.do", body,
-                )?.let { runCatching { json.decodeFromString<BuaaScheduleResponse>(it) }.getOrNull() }
+                )?.let { raw ->
+                    runCatching { json.decodeFromString<BuaaScheduleResponse>(raw) }.getOrNull()
+                        // 教务限流/会话半失效时会返回 HTTP 200 的 {"code":"-1","datas":null}：
+                        // JSON 解得动但没有数据，若记成功会让 isComplete 通过覆盖导入闸门，
+                        // 把那些周的课程直接删没。判据与 BuaaApi.fetchSchedule 同口径。
+                        ?.takeIf { it.datas != null || it.code == null || it.code == "0" }
+                }
             }
             if (parsed == null) {
                 failed += week

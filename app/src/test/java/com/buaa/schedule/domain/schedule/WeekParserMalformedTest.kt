@@ -75,4 +75,24 @@ class WeekParserMalformedTest {
         assertTrue(WeekParser.parse("   ").isEmpty())
         assertTrue(WeekParser.parseBitmap("").isEmpty())
     }
+
+    @Test
+    fun bareParitySegmentAppliesToWholeDescription() {
+        // "1-16周,单周"：裸「单」段清掉后只剩空串，此前奇偶约束随该段一起被丢掉，
+        // 解析成完整 1..16；现在它是整份描述的全局修饰符
+        assertEquals((1..16).step(2).toList(), WeekParser.parse("1-16周,单周"))
+    }
+
+    @Test
+    fun conflictingBareParityFallsBackToPerSegment() {
+        // 同时出现裸「单」与裸「双」是矛盾输入：不猜意图，退回按段解析
+        assertEquals((1..10).toList(), WeekParser.parse("1-10周,单周,双周"))
+    }
+
+    @Test
+    fun fullWidthDigitsAndDashParseLikeHalfwidth() {
+        // 群里复制的课表常带全角数字/连字符，toIntOrNull 不认，整段会被静默丢光
+        assertEquals((1..16).toList(), WeekParser.parse("１－１６"))
+        assertEquals((1..15).step(2).toList(), WeekParser.parse("１－１５单"))
+    }
 }

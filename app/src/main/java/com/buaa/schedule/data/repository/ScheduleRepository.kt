@@ -13,6 +13,7 @@ import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.schedule.CourseConstraints
 import com.buaa.schedule.domain.schedule.ImportPlanner
+import com.buaa.schedule.domain.schedule.WeekCalculator
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
@@ -100,6 +101,8 @@ class ScheduleRepository(
             val target = semesterDao.getByTermCode(termCode) ?: return@withTransaction false
             semesterDao.deleteByTermCode(termCode)
             semesterDao.insert(target.copy(id = 0L))
+            // 换学期后撤销栈里全是旧学期视图下的操作，pop 回来会插错学期
+            UndoManager.clear()
             true
         }
     }
@@ -249,10 +252,19 @@ class ScheduleRepository(
         }
     }
 
-    /** 删除课程同时清掉对应提醒，避免孤儿提醒继续触发 */
-    suspend fun deleteCourse(course: Course) {
-        writeMutex.withLock {
-            db.withTransaction { deleteCourseRow(course) }
+    /**
+     * 删除课程同时清掉对应提醒，避免孤儿提醒继续触发。
+     * 返回被清掉的提醒快照：撤销删除时按 [com.buaa.schedule.data.undo.UndoManager.UndoAction.Delete]
+     * 原样挂回，口径与组删除的 [deleteCourseGroup] 一致。
+     */
+    suspend fun deleteCourse(course: Course): List<ReminderSetting> {
+        return writeMutex.withLock {
+            db.withTransaction {
+                val snapshot = reminderDao.getByCourse(course.id)?.toDomain()
+                    .let { listOfNotNull(it) }
+                deleteCourseRow(course)
+                snapshot
+            }
         }
     }
 
@@ -289,7 +301,8 @@ class ScheduleRepository(
         writeMutex.withLock {
             db.withTransaction {
                 when (action) {
-                    is UndoManager.UndoAction.Delete -> insertWithReminders(listOf(action.course), emptyList())
+                    is UndoManager.UndoAction.Delete ->
+                        insertWithReminders(listOf(action.course), action.reminders)
                     is UndoManager.UndoAction.DeleteGroup ->
                         insertWithReminders(action.courses, action.reminders)
                     is UndoManager.UndoAction.Create ->
@@ -349,6 +362,22 @@ class ScheduleRepository(
                 semesterDao.deleteByTermCode(semester.termCode)
                 semesterDao.insert(semester.toEntity())
             }
+        }
+    }
+
+    /**
+     * 学期「重命名」：把挂在 [oldCode] 下的课程整体改挂到 [newCode] 并移除旧学期行。
+     *
+     * 设置页的学期代码是可编辑框，用户改代码的本意就是给当前课表换代码；
+     * 只动 semesters 行会让课程仍挂旧代码，CourseFilter 一过滤，
+     * 保存瞬间课表整体"消失"。新代码下已有别的课表时拒绝，防止两份课表搅成一份。
+     */
+    suspend fun renameSemesterCourses(oldCode: String, newCode: String): Boolean = writeMutex.withLock {
+        db.withTransaction {
+            if (courseDao.getBySemester(newCode).isNotEmpty()) return@withTransaction false
+            courseDao.reassignSemester(oldCode, newCode)
+            semesterDao.deleteByTermCode(oldCode)
+            true
         }
     }
 
@@ -419,6 +448,8 @@ class ScheduleRepository(
             db.withTransaction {
                 replaceSemesterCoursesInTx(semester, importedCourses.mapNotNull(CourseConstraints::normalize))
             }
+            // 整学期已被替换，之前攒的撤销快照指向的都是旧行，再 pop 会插回旧数据或删掉新数据
+            UndoManager.clear()
         }
     }
 
@@ -440,6 +471,7 @@ class ScheduleRepository(
                 replaceSemesterCoursesInTx(semester, importedCourses.mapNotNull(CourseConstraints::normalize))
                 importHistoryDao.insert(history.toEntity())
             }
+            UndoManager.clear()
         }
     }
 
@@ -535,6 +567,19 @@ class ScheduleRepository(
         val skippedInvalid = courses.size - normalized.size
         if (normalized.isEmpty() && !allowEmptyReplacement) return@withTransaction RestoreResult.EmptyBackup
 
+        // 备份可能来自手工编辑或更早版本：学期原点必须过 mondayOf、总周数必须限幅，
+        // 否则 ScheduleOccurrences 全表按 dayOfWeek-1 偏日期、currentWeekOrNull 返回越界周次
+        // （今日视图与提醒静默全空）。节次表同理——坏时间会让整个时间轴错位。
+        val safeSemester = backupSemester?.let { s ->
+            val monday = runCatching { WeekCalculator.mondayOf(LocalDate.parse(s.startDate)) }.getOrNull()
+                ?: fallbackStartDate
+            s.copy(
+                startDate = monday.toString(),
+                totalWeeks = CourseConstraints.normalizeTotalWeeks(s.totalWeeks),
+            )
+        }
+        val safeSlots = timeSlots.filter { com.buaa.schedule.ui.settings.isValidTimeSlot(it) }
+
         val mainCode = backupSemester?.termCode ?: normalized.firstNotNullOfOrNull { it.semesterCode }
         val manual = normalized.filter { it.semesterCode == null }
         val semesterGroups = normalized
@@ -547,9 +592,9 @@ class ScheduleRepository(
                 replaceCoursesForExistingSemesterInTx(code, group, fallbackStartDate)
             }
         }
-        if (backupSemester != null && mainCode != null) {
+        if (safeSemester != null && mainCode != null) {
             // 主学期：恢复备份中的学期配置并整体替换课程
-            replaceSemesterCoursesInTx(backupSemester, semesterGroups[mainCode].orEmpty())
+            replaceSemesterCoursesInTx(safeSemester, semesterGroups[mainCode].orEmpty())
         } else if (mainCode != null) {
             replaceCoursesForExistingSemesterInTx(mainCode, semesterGroups[mainCode].orEmpty(), fallbackStartDate)
         }
@@ -562,10 +607,10 @@ class ScheduleRepository(
         val manualToInsert = manual.filter { ImportPlanner.courseKey(it) !in existingManualKeys }
         courseDao.insertAll(manualToInsert.map { it.toEntity() })
 
-        // 备份没带节次表就保持现状：恢复课表不等于清空用户的节次时间
-        if (timeSlots.isNotEmpty()) {
+        // 备份没带节次表（或带的全是非法行）就保持现状：恢复课表不等于清空用户的节次时间
+        if (safeSlots.isNotEmpty()) {
             timeSlotDao.deleteAll()
-            timeSlotDao.upsertAll(timeSlots.map { it.toEntity() })
+            timeSlotDao.upsertAll(safeSlots.map { it.toEntity() })
         }
 
         // 按 courseKey 回查 id 时同样不要全表扫：提醒只可能指向
@@ -591,6 +636,9 @@ class ScheduleRepository(
                 )
             }
         }
+
+        // 整表已被备份替换，内存里攒的撤销快照指向的都是替换前的行
+        UndoManager.clear()
 
         RestoreResult.Applied(
             restoredCourses = normalized.size,

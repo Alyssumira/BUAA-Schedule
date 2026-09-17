@@ -71,6 +71,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.EmptyState
@@ -152,11 +153,14 @@ fun HomeScreen(
             pulseCourseId = -1L
         }
     }
-    var selectedTab by remember { mutableIntStateOf(0) }
+    // 转屏 = Activity 重建。这里几项一律 rememberSaveable（下面 menuOpen / 冲突向导 /
+    // 校区筛选早就是 saveable 的）：用 remember 的话转一次屏，用户翻到的那一周、
+    // 选中的页签、挑中的那一天全被静默清零，读起来像"应用把我的课表重置了"（P2）。
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     // 首帧不要"先画周课表、再跳到今日"：数据到位前先决定页签，
     // 决定完成之前不渲染课表内容，这样第一帧画出来就是正确的页签。
     // （此前是先把 selectedTab=0 的周视图画出来，LaunchedEffect 再改成 1，肉眼可见地闪一下。）
-    var tabDecided by remember { mutableStateOf(false) }
+    var tabDecided by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(state.loading, hasTodayCourses) {
         if (!state.loading && !tabDecided) {
             selectedTab = if (hasTodayCourses) 1 else 0
@@ -169,9 +173,21 @@ fun HomeScreen(
         // 假期/调休标注：先读缓存，再尝试联网补抓（无教务会话时静默跳过）
         viewModel.refreshSpecialDays()
     }
-    // null = 跟随当前教学周/今天
-    var browseWeek by remember { mutableStateOf<Int?>(null) }
-    var browseDate by remember { mutableStateOf<LocalDate?>(null) }
+    // 「浏览到哪一周 / 哪一天」null = 跟随当前教学周、今天。
+    // 转屏要活下来，所以存的是**非空原始类型**：rememberSaveable 的类型参数上界是 Any，
+    // 直接写 mutableStateOf<Int?>(null) / <LocalDate?> 一个能存进 Bundle 的都没有
+    // （LocalDate 连编译都过不去，Int? 会静默不落盘），一律用 -1 当"没手动选过"。
+    var browseWeekState by rememberSaveable { mutableIntStateOf(-1) }
+    val browseWeek: Int? = browseWeekState.takeIf { it >= 0 }
+    fun setBrowseWeek(week: Int?) {
+        browseWeekState = week ?: -1
+    }
+    var browseDateEpochDay by rememberSaveable { mutableLongStateOf(-1L) }
+    val browseDate: LocalDate? =
+        if (browseDateEpochDay < 0L) null else LocalDate.ofEpochDay(browseDateEpochDay)
+    fun setBrowseDate(date: LocalDate?) {
+        browseDateEpochDay = date?.toEpochDay() ?: -1L
+    }
     // 桌面组件 4×2 格子 → 那一天的日视图（T-26）。
     // 必须等数据到位：日期是从"当前浏览的那一教学周"推出来的，学期没读到就会算错周。
     LaunchedEffect(widgetDayOfWeek, state.loading) {
@@ -179,12 +195,12 @@ fun HomeScreen(
         if (state.loading) return@LaunchedEffect
         val week = browseWeek ?: state.currentWeek
         val semesterStart = state.semester?.startLocalDate
-        browseDate = if (semesterStart != null && week != null) {
+        setBrowseDate(if (semesterStart != null && week != null) {
             semesterStart.plusDays((week - 1) * 7L + (dow - 1))
         } else {
             // 假期 / 未设学期：没有周可依据，退成"最近的那个星期几"（今天也算）
             today.minusDays(((today.dayOfWeek.value - dow + 7) % 7).toLong())
-        }
+        })
         selectedTab = 1
         // 首帧页签决策不能再把这次跳转改回周视图
         tabDecided = true
@@ -254,11 +270,19 @@ fun HomeScreen(
     val moveWeek = browseWeek
     val moveCurrentWeek = state.currentWeek
     val handleCourseMove: (Course, Int, Int, Boolean) -> Unit = remember(viewModel, scope, moveWeek, moveCurrentWeek) {
-        { course, newDayIndex, newStartPeriod, thisWeekOnly ->
+        // move@ 具名标签：这里的早退要退出的是"这一次移动"，而不是 remember 的
+        // lambda 本身（那个 lambda 的返回值是 handler，不能空手 return）。
+        move@{ course, newDayIndex, newStartPeriod, thisWeekOnly ->
             val delta = newStartPeriod - course.startPeriod
+            val shiftedPeriods = course.periods.map { it + delta }.sorted()
+            // 拖动的是非首段时，整课平移会把别的段推出课表（1..MAX_PERIOD）之外。
+            // 越界就静默取消这次移动：卡片自己回弹即可，写库报错弹窗只会平白吓人。
+            if (shiftedPeriods.any { it < 1 || it > com.buaa.schedule.domain.schedule.CourseConstraints.MAX_PERIOD }) {
+                return@move
+            }
             val shifted = course.copy(
                 dayOfWeek = newDayIndex + 1,
-                periods = course.periods.map { it + delta }.sorted(),
+                periods = shiftedPeriods,
             )
             scope.launch {
                 if (thisWeekOnly) {
@@ -302,6 +326,16 @@ fun HomeScreen(
                 if (result == SnackbarResult.ActionPerformed) viewModel.undo()
             }
         }
+    }
+
+    // 首页操作写进 importMessage 的反馈（拖课/改节次失败、撤销结果、刷新进度）
+    // 此前只有导入/设置页会渲染 —— 同一块 StateFlow，用户在课表页上看不见（U-04）。
+    // 桥接到本页已有的 SnackbarHost；读完即清，避免下次回到首页再弹一遍陈旧提示。
+    val importMessage by viewModel.importMessage.collectAsState()
+    LaunchedEffect(importMessage) {
+        val message = importMessage ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(message)
+        viewModel.clearImportMessage()
     }
 
     val sceneBackdrop = LocalSceneBackdrop.current
@@ -373,7 +407,7 @@ fun HomeScreen(
                 currentWeek = state.currentWeek,
                 totalWeeks = (state.semester?.totalWeeks ?: 20)
                     .coerceIn(1, com.buaa.schedule.domain.schedule.CourseConstraints.MAX_TOTAL_WEEKS),
-                onBrowseWeekChange = { browseWeek = it },
+                onBrowseWeekChange = { setBrowseWeek(it) },
                 termSlot = if (termOptions.isNotEmpty()) {
                     {
                         TermPickerButton(
@@ -466,7 +500,7 @@ fun HomeScreen(
                             timeSlots = state.timeSlots,
                             currentWeek = state.currentWeek,
                             displayWeek = browseWeek ?: state.currentWeek,
-                            onBrowseWeekChange = { browseWeek = it },
+                            onBrowseWeekChange = { setBrowseWeek(it) },
                             onCourseClick = onCourseClick,
                             conflictCourseIds = conflictCourseIds,
                             specialDays = specialDays,
@@ -481,7 +515,7 @@ fun HomeScreen(
                             semester = state.semester,
                             timeSlots = state.timeSlots,
                             date = browseDate ?: LocalDate.now(),
-                            onDateChange = { browseDate = it },
+                            onDateChange = { setBrowseDate(it) },
                             onCourseClick = onCourseClick,
                             modifier = Modifier.weight(2f),
                         )
@@ -502,7 +536,7 @@ fun HomeScreen(
                                 timeSlots = state.timeSlots,
                                 currentWeek = state.currentWeek,
                                 displayWeek = browseWeek ?: state.currentWeek,
-                                onBrowseWeekChange = { browseWeek = it },
+                                onBrowseWeekChange = { setBrowseWeek(it) },
                                 onCourseClick = onCourseClick,
                                 conflictCourseIds = conflictCourseIds,
                                 specialDays = specialDays,
@@ -516,7 +550,7 @@ fun HomeScreen(
                                 semester = state.semester,
                                 timeSlots = state.timeSlots,
                                 date = browseDate ?: LocalDate.now(),
-                                onDateChange = { browseDate = it },
+                                onDateChange = { setBrowseDate(it) },
                                 onCourseClick = onCourseClick,
                             )
                         }
@@ -536,19 +570,27 @@ fun HomeScreen(
 
         // 菜单打开时点击空白处关闭（必须在 FAB 之下，否则挡住 FAB 的开合点击）
         if (showConflictWizard) {
-            val conflictScope = rememberCoroutineScope()
             ConflictWizardDialog(
                 groups = com.buaa.schedule.domain.schedule.CourseConflictResolution
                     .groupConflicts(state.conflicts),
                 allCourses = state.courses,
                 onApplyShift = { target, newPeriods ->
-                    // 只改冲突周：partialWeeks 会拆出新行，其余周保持原排课
-                    conflictScope.launch {
-                        viewModel.updateCourse(
+                    // 只改冲突周：partialWeeks 会拆出新行，其余周保持原排课。
+                    // 作用域必须是 viewModelScope，不能用 rememberCoroutineScope()：
+                    // 后者绑在对话框这次 composition 上，用户点完「只改这些周」顺手划走
+                    // 对话框，协程就被取消——界面已经显示「已应用」，库里其实没写（P1）。
+                    var saved = false
+                    val job = viewModel.viewModelScope.launch {
+                        saved = viewModel.updateCourse(
                             target.copy(periods = newPeriods),
                             com.buaa.schedule.domain.model.CourseSaveOptions(partialWeeks = true),
-                        )
+                        ) != null
                     }
+                    // join 而非 fire-and-forget：调用方要拿到落库结果才能决定
+                    // 这一行是标成「已应用」还是把按钮还原让用户重试。
+                    // join 只等完成、不传播取消，所以对话框关了也不会打断写入。
+                    job.join()
+                    saved
                 },
                 onDismiss = { showConflictWizard = false },
             )
@@ -584,8 +626,8 @@ fun HomeScreen(
                     if (!viewModel.refreshFromBuaa()) onImportBuaa()
                 },
                 LiquidMenuItem(Icons.Default.EventAvailable, "跳到本周") {
-                    browseWeek = null
-                    browseDate = null
+                    setBrowseWeek(null)
+                    setBrowseDate(null)
                 },
                 LiquidMenuItem(Icons.AutoMirrored.Filled.ListAlt, "课表管理") { onCourseManagement() },
             ),

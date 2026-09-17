@@ -68,8 +68,10 @@ import com.buaa.schedule.core.designsystem.motionSpec
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.model.periodGapMinutesOf
 import com.buaa.schedule.domain.model.periodLabel
 import com.buaa.schedule.domain.model.startLocalDate
+import com.buaa.schedule.domain.model.toPeriodSegments
 import com.buaa.schedule.domain.schedule.SlotStatus
 import com.buaa.schedule.domain.schedule.TodayPlanner
 import com.buaa.schedule.domain.schedule.WeekCalculator
@@ -106,8 +108,11 @@ fun DayView(
         }
     }
     val dayCourses = when {
-        semesterStart == null -> courses.filter { it.dayOfWeek == date.dayOfWeek.value }
-        week == null -> emptyList()
+        // 完全没设学期：按星期几降级展示，手动课程对新用户仍可见
+        semester == null -> courses.filter { it.dayOfWeek == date.dayOfWeek.value }
+        // 学期在、开学日期却解析失败（旧库脏数据）：TodayPlanner 此时返回 EMPTY，
+        // 列表不能再放行全部周次，否则"列表有课、Hero 与进度条全空"同屏打架
+        semesterStart == null || week == null -> emptyList()
         else -> courses.filter { it.dayOfWeek == date.dayOfWeek.value && it.weeks.contains(week) }
     }.sortedBy { it.startPeriod }
 
@@ -126,18 +131,14 @@ fun DayView(
     val plan = remember(date, courses, semester, timeSlots, nowTickState.value) {
         if (isToday) TodayPlanner.plan(courses, semester, timeSlots, date, nowTickState.value) else null
     }
-    // 按课程 id 建索引：此前每个列表项都 firstOrNull 线性扫一遍 plan.slots（O(N²)），
-    // 一天十几门课没问题，但翻周/每分钟 tick 都会整列重算，白烧 CPU。
-    val slotByCourseId = remember(plan) { plan?.slots?.associateBy { it.course.id } }
-
-    // 节次 → 墙钟时间。今日计划（plan）只有**今天**才有，而日视图可以翻到任何一天，
-    // 所以列表卡上的上课时间必须直接从节次表算：此前只有时间轴内部解析了节次时间，
-    // 列表卡干脆没有时间可显示（用户反馈「今日界面课程不显示对应时间」）。
+    // 一行一段：一门跨午休的课（第1-2、9-10节）在列表与时间轴里是两块，
+    // 每块的时间、状态、色块高度都以**自己那一段**为准。
+    // 此前按 startPeriod..endPeriod 取区间，显示出来是 08:00–18:15 这种横跨整个白天的假区间；
+    // 而按课程 id 建的槽位索引会被后一段覆盖，上午正在上课的那张卡写着"未开始"。
     val periodTimes = remember(timeSlots) { parsePeriodTimes(timeSlots) }
-    fun clockOf(course: Course): Pair<String, String>? {
-        val start = periodTimes[course.startPeriod]?.first ?: return null
-        val end = periodTimes[course.endPeriod]?.second ?: return null
-        return hhmm(start) to hhmm(end)
+    val gapMinutes = remember(timeSlots) { periodGapMinutesOf(periodTimes) }
+    val rows = remember(dayCourses, plan, periodTimes, gapMinutes) {
+        buildDayRows(dayCourses, plan, periodTimes, gapMinutes)
     }
 
     val weekText = when {
@@ -267,7 +268,7 @@ fun DayView(
             ) { timeline ->
                 if (timeline) {
                     DayTimelineCourseList(
-                        courses = dayCourses,
+                        rows = rows,
                         periodTimes = periodTimes,
                         onClick = onCourseClick,
                     )
@@ -275,15 +276,13 @@ fun DayView(
                     LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
                     ) {
-                        items(dayCourses, key = { it.id }) { course ->
-                            val slot = slotByCourseId?.get(course.id)
-                            val clock = clockOf(course)
+                        items(rows, key = { "${it.course.id}-${it.segment.first}" }) { row ->
                             CourseTimelineCard(
-                                course = course,
-                                status = slot?.status,
-                                startTime = clock?.first,
-                                endTime = clock?.second,
-                                onClick = { onCourseClick(course) },
+                                course = row.course,
+                                status = row.status,
+                                startTime = row.startTime,
+                                endTime = row.endTime,
+                                onClick = { onCourseClick(row.course) },
                                 // 换日期/删课/挪课时整批行不会瞬间替换（items 有稳定 key 才能生效）
                                 modifier = Modifier.animateItem(),
                             )
@@ -292,6 +291,42 @@ fun DayView(
                 }
             }
         }
+    }
+}
+
+/** 日视图的一行：一门课的一个**节次段**（跨午休的课会有两行） */
+private data class DayCourseRow(
+    val course: Course,
+    val segment: IntRange,
+    val status: SlotStatus?,
+    val startTime: String?,
+    val endTime: String?,
+)
+
+/**
+ * 把当天的课按节次表切成「课程 + 段」的行。
+ *
+ * 今日计划（plan）已经按段展开过每门课，但它只有**今天**才有，而日视图可以翻到任何
+ * 一天；所以段在这里自己切，状态与精确到段的墙钟时间再回查 plan。
+ * 同一门课的多个段各自成一行 —— 一段对应一张卡、一个色块。
+ */
+private fun buildDayRows(
+    courses: List<Course>,
+    plan: com.buaa.schedule.domain.schedule.TodayPlan?,
+    periodTimes: Map<Int, Pair<LocalTime, LocalTime>>,
+    gapMinutes: (Int, Int) -> Long?,
+): List<DayCourseRow> = courses.flatMap { course ->
+    course.periods.toPeriodSegments(gapMinutes).map { segment ->
+        val slot = plan?.slots?.firstOrNull {
+            it.course.id == course.id && it.segment.first == segment.first
+        }
+        DayCourseRow(
+            course = course,
+            segment = segment,
+            status = slot?.status,
+            startTime = slot?.start?.let(::hhmm) ?: periodTimes[segment.first]?.first?.let(::hhmm),
+            endTime = slot?.end?.let(::hhmm) ?: periodTimes[segment.last]?.second?.let(::hhmm),
+        )
     }
 }
 
@@ -304,7 +339,7 @@ private const val BlockTintAlpha = DesignTokens.dayBlockTintAlpha
 /** 日视图时间网格：按真实时间线性定位的课程时间轴 */
 @Composable
 private fun DayTimelineCourseList(
-    courses: List<Course>,
+    rows: List<DayCourseRow>,
     periodTimes: Map<Int, Pair<LocalTime, LocalTime>>,
     onClick: (Course) -> Unit,
     modifier: Modifier = Modifier,
@@ -331,9 +366,10 @@ private fun DayTimelineCourseList(
                 .fillMaxWidth()
                 .height(totalHeight),
         ) {
-            courses.forEach { course ->
-                val start = periodTimes[course.startPeriod]?.first
-                val end = periodTimes[course.endPeriod]?.second
+            rows.forEach { row ->
+                val course = row.course
+                val start = periodTimes[row.segment.first]?.first
+                val end = periodTimes[row.segment.last]?.second
                 if (start != null && end != null) {
                     val y = heightPerMinute *
                         java.time.Duration.between(minStart, start).toMinutes().toFloat()
@@ -380,7 +416,7 @@ private fun DayTimelineCourseList(
                             )
                             if (blockHeight >= 38.dp) {
                                 Text(
-                                    text = "${hhmm(start)}–${hhmm(end)} · ${periodLabel(course.periods)}",
+                                    text = "${hhmm(start)}–${hhmm(end)} · ${periodLabel(row.segment)}",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = onBlock,
                                     maxLines = 1,

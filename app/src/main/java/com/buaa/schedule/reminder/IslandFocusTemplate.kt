@@ -90,10 +90,7 @@ object IslandFocusTemplate {
         context: Context,
         notification: Notification,
         notificationId: Int,
-        courseId: Long,
-        courseName: String,
-        sectionText: String,
-        startMillis: Long,
+        window: ClassProgressScheduler.ClassWindow,
     ) {
         if (!enabled(context)) return
         runCatching {
@@ -103,10 +100,11 @@ object IslandFocusTemplate {
                 paramJson(
                     packageName = context.packageName,
                     notificationId = notificationId,
-                    courseName = courseName,
-                    sectionText = sectionText,
-                    startMillis = startMillis,
+                    courseName = window.courseName,
+                    sectionText = window.sectionText,
+                    startMillis = window.startMillis,
                     nowMillis = System.currentTimeMillis(),
+                    highlightColor = highlightColorOf(window.colorArgb),
                 ),
             )
             extras.putBundle(
@@ -121,11 +119,21 @@ object IslandFocusTemplate {
                 Notification.Action.Builder(
                     null,
                     "查看这节课",
-                    ReminderNotifications.courseLaunchPendingIntent(context, courseId),
+                    ReminderNotifications.courseLaunchPendingIntent(context, window.courseId),
                 ).build(),
             )
         }
     }
+
+    /**
+     * 岛上的高亮色 = 这门课在课表上的颜色。
+     *
+     * 小米规定这里是 `#RRGGBB` **字符串**（不是颜色 int），所以丢掉 alpha 通道；
+     * 没有课程色时沿用默认橙，而不是发一个 `#000000` 过去把岛上染成黑的。
+     */
+    internal fun highlightColorOf(argb: Int?): String = argb?.let {
+        "#%06X".format(it and 0xFFFFFF)
+    } ?: HIGHLIGHT_COLOR
 
     /**
      * 纯函数版载荷，供 JVM 单测直接断言字段名与 timer 语义（不需要 Android 运行时）。
@@ -140,6 +148,7 @@ object IslandFocusTemplate {
         sectionText: String,
         startMillis: Long,
         nowMillis: Long,
+        highlightColor: String = HIGHLIGHT_COLOR,
     ): String {
         val ticker = sectionText.ifBlank { courseName }
         val timerWhen = if (startMillis > 0L) startMillis else nowMillis
@@ -153,7 +162,7 @@ object IslandFocusTemplate {
                 islandPriority = 1,
                 islandTimeout = Int.MAX_VALUE,
                 islandProperty = 2,
-                highlightColor = HIGHLIGHT_COLOR,
+                highlightColor = highlightColor,
                 bigIslandArea = FocusBigArea(
                     imageTextInfoLeft = FocusImageText(
                         type = 1,

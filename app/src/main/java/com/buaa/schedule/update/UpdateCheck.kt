@@ -260,6 +260,8 @@ object UpdateCheck {
                     throw IOException("服务端返回的是页面而不是安装包（Content-Type: $type）")
                 }
                 val total = connection.contentLengthLong.coerceAtLeast(0L)
+                // -2 而不是 -1：-1 是"已拿到链接、还没开始收字节"的那个状态值
+                var lastPercent = -2
                 connection.inputStream.use { input ->
                     part.outputStream().buffered(64 * 1024).use { output ->
                         val buffer = ByteArray(32 * 1024)
@@ -269,11 +271,19 @@ object UpdateCheck {
                             output.write(buffer, 0, read)
                             written += read
                             if (total > 0) {
-                                _state.value = UpdateUiState.Downloading(
-                                    info,
-                                    percent = ((written * 100) / total).toInt().coerceAtMost(100),
-                                    totalBytes = total,
-                                )
+                                // 进度按**整数百分比**去重再发：这个循环按 32KB 一块跑，
+                                // 一个 APK 下来能产生上千次赋值。StateFlow 虽然挡得住
+                                // 结构相等的值，但每次仍要新建实例再比较，而且百分比
+                                // 没动的这些通知对 UI 毫无意义（P2：与下载块数解耦）。
+                                val percent = ((written * 100) / total).toInt().coerceAtMost(100)
+                                if (percent != lastPercent) {
+                                    lastPercent = percent
+                                    _state.value = UpdateUiState.Downloading(
+                                        info,
+                                        percent = percent,
+                                        totalBytes = total,
+                                    )
+                                }
                             }
                             // socket read 自己不看 Job：不主动检查的话，
                             // 点"取消"要等整个 APK 传完才停得下来

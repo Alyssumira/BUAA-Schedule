@@ -109,4 +109,28 @@ class TodayPlannerTest {
         )
         assertEquals(0, plan.slots.size)
     }
+
+    @Test
+    fun partialMinuteCountsAsOneMinute() {
+        // 07:59:30 距 08:00 只剩 30 秒：按分钟向下取整会读出"0 分钟后开始"，
+        // 而实况通知的 minutesLeft 是向上取整，同一节课两处差一分钟。
+        val upcoming = TodayPlanner.plan(
+            courses = listOf(course),
+            semester = semester,
+            timeSlots = emptyList(),
+            today = today,
+            now = LocalTime.of(7, 59, 30),
+        )
+        assertEquals(1L, upcoming.minutesToNext)
+
+        // 09:34:30 → 09:35 下课，同理不能显示"还有 0 分钟下课"
+        val whileOngoing = TodayPlanner.plan(
+            courses = listOf(course),
+            semester = semester,
+            timeSlots = emptyList(),
+            today = today,
+            now = LocalTime.of(9, 34, 30),
+        )
+        assertEquals(1L, whileOngoing.minutesRemaining)
+    }
 }

@@ -1,12 +1,11 @@
 package com.buaa.schedule.reminder
 
-import android.app.PendingIntent
+import android.app.Notification
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import com.buaa.schedule.MainActivity
 import com.buaa.schedule.R
 import com.buaa.schedule.data.local.AppDatabase
 import com.buaa.schedule.data.repository.ScheduleRepository
@@ -17,11 +16,10 @@ import kotlinx.coroutines.launch
 class ReminderReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        val courseId = intent.getLongExtra(EXTRA_COURSE_ID, 0L)
-        val courseName = intent.getStringExtra(EXTRA_COURSE_NAME) ?: "课程"
-        val location = intent.getStringExtra(EXTRA_LOCATION) ?: ""
-        val sectionText = intent.getStringExtra(EXTRA_SECTION) ?: ""
-        val classStartAt = intent.getLongExtra(EXTRA_CLASS_START_AT, 0L)
+        // 与上课铃共用一份 extras 反序列化：这里曾自己摊着读五个 getStringExtra，
+        // 于是排程侧新加的教师/周次/课程色在这条链上永远读不到。
+        val scheduled = ClassProgressScheduler.ClassWindow.from(intent.extras)
+        val classStartAt = scheduled.endMillis
         val now = System.currentTimeMillis()
 
         // 开启“课程进行中”时，课前提醒同时起一段**倒计时实况**（流体云 / 超级岛载体），
@@ -39,16 +37,12 @@ class ReminderReceiver : BroadcastReceiver() {
             if (livePhase != null) {
                 ReminderNotifications.startLiveWindow(
                     context = context,
-                    courseId = courseId,
-                    courseName = courseName,
-                    location = location.ifBlank { null },
-                    sectionText = sectionText,
-                    startMillis = now,
-                    endMillis = classStartAt,
+                    // 课前这一段进度条量的是"这段等待"，所以起点是此刻而不是上课时间
+                    window = scheduled.copy(startMillis = now),
                     phase = livePhase,
                 )
             }
-            notifyCourse(context, courseId, courseName, location, sectionText, classStartAt)
+            notifyCourse(context, scheduled)
         }.onFailure { android.util.Log.w(TAG, "课前提醒展示失败（实况/通知）", it) }
 
         // 闹钟触发后链式调度下一次提醒；goAsync 保证广播进程存活到调度完成，
@@ -77,32 +71,48 @@ class ReminderReceiver : BroadcastReceiver() {
         .getSharedPreferences(ClassProgressReceiver.PREFS_NAME, Context.MODE_PRIVATE)
         .getBoolean(ClassProgressReceiver.PREF_CLASS_PROGRESS, true)
 
-    private fun notifyCourse(
-        context: Context,
-        courseId: Long,
-        courseName: String,
-        location: String,
-        sectionText: String,
-        classStartAt: Long,
-    ) {
+    /**
+     * 课前提醒的横幅通知。
+     *
+     * 折叠那一行是用户在锁屏与状态栏上唯一必看的一句，所以只装"还剩多久 + 几点上课 + 在哪"；
+     * 节次、教师、下课时刻这些要用户自己展开才看得到的信息交给 BigText ——
+     * 默认折叠样式只渲染 contentText 的第一行，把两行正文写进 contentText 等于没写。
+     */
+    private fun notifyCourse(context: Context, window: ClassProgressScheduler.ClassWindow) {
         // 渠道统一由 ReminderNotifications 创建（分级：课程提醒 / 明日预告）
         ReminderNotifications.ensureChannels(context)
         val pendingIntent = ReminderNotifications.courseReminderLaunchPendingIntent(context)
         val now = System.currentTimeMillis()
+        val startText = clockOf(window.endMillis)
+        val countdown = liveCountdownLine(LivePhase.BEFORE_CLASS, window.endMillis, now)
+        val location = window.location?.takeIf { it.isNotBlank() }
+        val teacher = window.teacher?.takeIf { it.isNotBlank() }
+
+        val headline = listOfNotNull(
+            countdown.takeIf { window.endMillis > now },
+            startText?.let { "$it 上课" },
+            location,
+        ).joinToString(" · ").ifBlank { sectionOrCourse(window) }
+
+        val detail = listOfNotNull(
+            window.sectionText.takeIf { it.isNotBlank() },
+            startText?.let { "$it 上课" },
+            listOfNotNull(location, teacher).joinToString(" · ").takeIf { it.isNotBlank() },
+            countdown.takeIf { window.endMillis > now },
+        ).joinToString("\n")
 
         val builder = NotificationCompat.Builder(context, ReminderNotifications.CHANNEL_COURSE)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("课程提醒：$courseName")
-            .setContentText(buildString {
-                if (location.isNotBlank()) append("$location ")
-                if (sectionText.isNotBlank()) append("$sectionText ")
-                // 横幅自己带一句静态倒计时：用户不展开实况也能知道大概还剩多久
-                if (classStartAt > now) append(liveCountdownLine(LivePhase.BEFORE_CLASS, classStartAt, now))
-            }.trim())
+            .setContentTitle("课程提醒：${window.courseName}")
+            .setContentText(headline)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(detail))
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setShowWhen(false)
+            // 与课表卡片同色：着色此前交给系统按应用图标取主色，
+            // 于是同一门课在课表上是绿的、在通知栏里是蓝的，扫一眼认不出是哪一节。
+            .setColor(window.colorArgb ?: Notification.COLOR_DEFAULT)
 
         // 这里刻意**不用** `setUsesChronometer` / `setChronometerCountDown`：
         // 会走的倒计时已经归实况载体（每分钟重发一次，岛与胶囊都靠它），
@@ -113,20 +123,19 @@ class ReminderReceiver : BroadcastReceiver() {
             // 用 tag 携带课程 id，而不是 courseId.toInt()：
             // Long→Int 截断会让不同课程的通知共用同一个 id 而互相覆盖。
             NotificationManagerCompat.from(context)
-                .notify(notificationTag(courseId), NOTIFY_ID_COURSE, builder.build())
+                .notify(notificationTag(window.courseId), NOTIFY_ID_COURSE, builder.build())
         } catch (_: SecurityException) {
             // 用户未授予通知权限，静默忽略。
         }
     }
 
+    /** 什么都没有时的落底文案 */
+    private fun sectionOrCourse(window: ClassProgressScheduler.ClassWindow): String =
+        window.sectionText.takeIf { it.isNotBlank() } ?: "${window.courseName} 要上课了"
+
     companion object {
         private const val TAG = "ReminderReceiver"
         const val CHANNEL_ID = "course_reminder"
-        const val EXTRA_COURSE_ID = "extra_course_id"
-        const val EXTRA_COURSE_NAME = "extra_course_name"
-        const val EXTRA_LOCATION = "extra_location"
-        const val EXTRA_SECTION = "extra_section"
-        const val EXTRA_CLASS_START_AT = "extra_class_start_at"
 
         /** 课程提醒的固定通知 id，课程维度由 tag 区分 */
         private const val NOTIFY_ID_COURSE = 20_260_003

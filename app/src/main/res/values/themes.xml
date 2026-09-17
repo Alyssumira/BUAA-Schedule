@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.BUAASchedule" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- 首帧之前的窗口底：与 Compose 的场景背景同色系，避免冷启动闪一段纯白 -->
+        <item name="android:windowBackground">@drawable/window_background</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>

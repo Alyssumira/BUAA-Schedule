@@ -104,6 +104,31 @@ countdown chronometer 承担，不依赖这个循环；下课（或课程实况�
 
 **收益**：每次重排提醒 / 取消提醒时减少 PendingIntent 对象创建与跨进程调用。
 
+### 1.7 冷启动关键路径瘦身（启动速度优化）
+
+**问题**：从"点图标"到"看见课表"这段路径上挂着三件与首帧无关的开销：
+
+1. `BUAAApplication.onCreate` 调 `BuaaWebSession.init()`，其中 `CookieManager.getInstance()`
+   要求系统装载并绑定 WebView provider —— 而绝大多数启动全程不碰教务导入；
+2. `MainActivity.onStart` 调 `BuaaWebSession.restore()`，会在主线程上**新建一个 WebView**
+   （Chromium 视图树，冷启动里最贵的一步）、解密读一次落盘 Cookie、再发一次网络加载；
+   它服务的只是"用户没点导入时也能静默刷新课表"。这两处都排在 Compose 首帧之前；
+3. `Theme.BUAASchedule` 没有 `windowBackground`，首帧之前是一段系统默认的近白窗口底。
+
+**改动**：
+- `BuaaWebSession.kt`：`init()` 只寄存 Context；新增私有 `cookieManager()` 统一入口，
+  第一次真正读写 Cookie（落盘 / 注回 / 退出登录 / 建会话 WebView）时才拉起 provider，
+  `setAcceptCookie` 由其一次性配置。
+- `MainActivity.kt`：`restore()` 与 `reattachTo()` 改挂 `window.decorView.post{}`，
+  即窗口附加、首帧排期之后；前后台状态登记与活动窗口登记仍在 `onStart` 原位。
+  post 里补 `STARTED` 判定——期间用户可能已经又退到后台，那时不该在后台偷偷加载教务页。
+- `res/drawable(-night)/window_background.xml` + `res/values(-night)/themes.xml`：
+  窗口底换成与 `SceneBackground` 内置渐变同色的三段渐变；深色档同时把
+  `windowLightStatusBar` 翻成 false，避免"深底 + 深图标"。
+
+**收益**：冷启动主线程少一次 WebView provider 绑定和一次 WebView 构造/加密读盘，
+首帧前的窗口不再是纯白。（真机数值待回归：仪器化启动基准需要连机，本轮只跑 JVM 单测。）
+
 ---
 
 ## 2. 维持现状的取舍（不建议轻易改动）

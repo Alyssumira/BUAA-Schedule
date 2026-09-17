@@ -153,8 +153,13 @@
         <receiver
             android:name=".widget.WidgetRefreshReceiver"
             android:exported="false">
+            <!-- 时间类变化（TIME_SET / TIMEZONE_CHANGED / DATE_CHANGED）的唯一入口，
+                 BootReceiver 不再订阅，避免同一事件被两个接收器各跑一遍。
+                 注意：系统改时间派发的是 android.intent.action.TIME_SET ——
+                 代码里读的常量 Intent.ACTION_TIME_CHANGED 只是它的别名，
+                 清单写成 "TIME_CHANGED" 会变成永不匹配的死过滤器 -->
             <intent-filter>
-                <action android:name="android.intent.action.TIME_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
                 <action android:name="android.intent.action.DATE_CHANGED" />
                 <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
@@ -162,7 +167,7 @@
         </receiver>
 
         <!--
-            五个组件都额外声明 APPWIDGET_RESTORED：长按/拖动后宿主重新绑定视图时
+            每个组件都额外声明 APPWIDGET_RESTORED：长按/拖动后宿主重新绑定视图时
             只会派发 manifest 里出现过的 action，而 ScheduleAppWidgetProvider 正是
             靠 onRestored 在这类重绑之后把外观设置重绘回来。
         -->
@@ -229,6 +234,19 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/next_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.TwoDayWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_two_day_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="android.appwidget.action.APPWIDGET_RESTORED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/two_day_widget_info" />
         </receiver>
     </application>
 

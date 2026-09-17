@@ -67,25 +67,29 @@ import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.reminder.ClassProgressReceiver
 import com.buaa.schedule.ui.settings.ReminderGuidance
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
- * 引导的五个步骤。顺序即用户看到的顺序。
+ * 引导的四个步骤。顺序即用户看到的顺序。
  *
  * 「环境自检」与「厂商后台放行」原本是两步，这里合为一步（审查 I-03 / A-01）：
  * 二者机制上是同一件事 —— 都在决定"提醒能不能可靠送达"，且设置页里各有入口，
  * 并列摆出来只是多花用户一次「下一步」。6 步时点下一步要 5 次，验收线是 ≤4。
+ *
+ * 「导入课表」排在最后（真机反馈：引导的落点就该是课表本身）。它原先后面还跟着
+ * 一页「完成」，那页只有实况与勿扰两个开关 —— 两个开关都属"提醒可靠不可靠"，
+ * 并入上一步的可靠性页；省掉一页后点最后一步的按钮即结束引导，不必再确认一次。
  */
 private const val STEP_WELCOME = 0
 private const val STEP_PRIVACY = 1
 private const val STEP_RELIABILITY = 2
 private const val STEP_IMPORT = 3
-private const val STEP_DONE = 4
-private const val STEP_COUNT = 5
+private const val STEP_COUNT = 4
 
 /**
- * 首启引导页：欢迎 → 隐私同意 → 提醒可靠性（环境自检 + 厂商后台放行）→ 导入课表 → 完成。
+ * 首启引导页：欢迎 → 隐私同意 → 提醒可靠性（环境自检 + 厂商后台放行 + 实况/勿扰开关）→ 导入课表。
  *
  * 结构直接借自 HyperIsland 的 `OnboardingPage.kt`，因为那套结构解决的正是我们的问题：
  * - 每一步只讲一件事，`HorizontalPager(userScrollEnabled = false)` 禁止用户滑过；
@@ -113,6 +117,18 @@ fun OnboardingScreen(
     var vendorConfirmed by remember { mutableStateOf(false) }
     var showEnvironmentDialog by remember { mutableStateOf(false) }
 
+    // 实况与勿扰：原「完成」页删掉后住进可靠性页（见文件头步序注释）。
+    // 直接读写 prefs —— 这两项的运行时消费方本来就是读 prefs 的通知链路
+    val progressPrefs = remember(context) {
+        context.getSharedPreferences(ClassProgressReceiver.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+    }
+    var liveEnabled by remember {
+        mutableStateOf(progressPrefs.getBoolean(ClassProgressReceiver.PREF_CLASS_PROGRESS, true))
+    }
+    var dndEnabled by remember {
+        mutableStateOf(progressPrefs.getBoolean(ClassProgressReceiver.PREF_DND, false))
+    }
+
     fun goTo(page: Int) {
         scope.launch { pagerState.animateScrollToPage(page.coerceIn(0, STEP_COUNT - 1)) }
     }
@@ -121,9 +137,11 @@ fun OnboardingScreen(
         if (checking) return
         checking = true
         scope.launch {
-            // 探针里有 Settings.System / PowerManager 查询，让它们离开主线程
-            delay(1L)
-            checks = EnvironmentCheck.runAll(context)
+            // 探针里是 Settings.System 查询、build.prop 读文件、NotificationManager 取活跃通知
+            // ——全是阻塞 IO。此前直接在主线程跑 runAll（只 delay(1L) 让转圈先画出来），
+            // 首启进这一步就会掉帧甚至 ANR：换 Default 调度器把它们挪离主线程（P1）。
+            // 调度器切换本身就会让主线程有机会画出 spinner，原来的 delay(1L) 不再需要。
+            checks = withContext(Dispatchers.Default) { EnvironmentCheck.runAll(context) }
             checking = false
         }
     }
@@ -200,13 +218,25 @@ fun OnboardingScreen(
                 },
                 vendorConfirmed = vendorConfirmed,
                 onVendorConfirmedChange = { vendorConfirmed = it },
+                liveEnabled = liveEnabled,
+                onLiveEnabledChange = {
+                    liveEnabled = it
+                    progressPrefs.edit { putBoolean(ClassProgressReceiver.PREF_CLASS_PROGRESS, it) }
+                },
+                dndEnabled = dndEnabled,
+                onDndEnabledChange = {
+                    dndEnabled = it
+                    progressPrefs.edit { putBoolean(ClassProgressReceiver.PREF_DND, it) }
+                },
                 onImportBuaa = {
                     FirstRun.completeOnboarding(context)
                     onFinished("import")
                 },
                 onAddCourse = {
                     FirstRun.completeOnboarding(context)
-                    onFinished("home")
+                    // 「手动添加课程」此前只是回首页：按钮写着添加，点了什么也不会发生。
+                    // editor/-1 与首页 FAB 用的是同一条路由（-1 = 新建课程）。
+                    onFinished("editor/-1")
                 },
             )
         }
@@ -227,7 +257,9 @@ fun OnboardingScreen(
                         val unmet = EnvironmentCheck.unmetBlockers(checks.orEmpty())
                         if (unmet.isEmpty()) goTo(STEP_IMPORT) else showEnvironmentDialog = true
                     }
-                    STEP_DONE -> {
+                    STEP_IMPORT -> {
+                        // 最后一步点「下一步」= 现在不导入。引导到此为止，
+                        // 落回首页（导入页随时能从底栏再进）
                         FirstRun.completeOnboarding(context)
                         onFinished(null)
                     }
@@ -290,6 +322,10 @@ private fun OnboardingStepPage(
     onFixCheck: (CheckItem) -> Unit,
     vendorConfirmed: Boolean,
     onVendorConfirmedChange: (Boolean) -> Unit,
+    liveEnabled: Boolean,
+    onLiveEnabledChange: (Boolean) -> Unit,
+    dndEnabled: Boolean,
+    onDndEnabledChange: (Boolean) -> Unit,
     onImportBuaa: () -> Unit,
     onAddCourse: () -> Unit,
 ) {
@@ -317,9 +353,12 @@ private fun OnboardingStepPage(
                     onFixCheck = onFixCheck,
                     vendorConfirmed = vendorConfirmed,
                     onVendorConfirmedChange = onVendorConfirmedChange,
+                    liveEnabled = liveEnabled,
+                    onLiveEnabledChange = onLiveEnabledChange,
+                    dndEnabled = dndEnabled,
+                    onDndEnabledChange = onDndEnabledChange,
                 )
-                STEP_IMPORT -> ImportStep(onImportBuaa, onAddCourse)
-                else -> DoneStep()
+                else -> ImportStep(onImportBuaa, onAddCourse)
             }
             Spacer(Modifier.height(DesignTokens.spaceXL))
         }
@@ -383,7 +422,7 @@ private fun PrivacyStep(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
 }
 
 /**
- * 可靠性自检：探针 + 厂商放行合在一步。
+ * 可靠性自检：探针 + 厂商放行 + 实况/勿扰开关合在一步。
  *
  * 合并的理由（I-03）是这两段讲的是同一件事 —— 提醒能不能可靠送达；拆成两步时用户
  * 要点两次「下一步」，而第二步没有任何新判据，只是把探针读不到的开关列一遍。
@@ -391,6 +430,9 @@ private fun PrivacyStep(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
  * 没有做成"探针失败才展开厂商清单"的折叠区：MIUI「后台弹出界面」这类开关根本没有
  * 探针，失败与否都不会出现在上面的清单里，折叠起来等于把最隐蔽的一项藏起来。
  * 探针还在跑时只把探针那一块换成加载圈，厂商清单照常渲染 —— 它不依赖探针结果。
+ *
+ * 实况与勿扰两个开关原本站在已删除的「完成」页上（导入课表改成最后一步后那一页没了）。
+ * 它们决定的同样是"铃响时用户能不能被通知到"，放这里比放到导入页更顺。
  */
 @Composable
 private fun ReliabilityStep(
@@ -400,6 +442,10 @@ private fun ReliabilityStep(
     onFixCheck: (CheckItem) -> Unit,
     vendorConfirmed: Boolean,
     onVendorConfirmedChange: (Boolean) -> Unit,
+    liveEnabled: Boolean,
+    onLiveEnabledChange: (Boolean) -> Unit,
+    dndEnabled: Boolean,
+    onDndEnabledChange: (Boolean) -> Unit,
 ) {
     StepHeading(
         "提醒可靠性",
@@ -420,6 +466,22 @@ private fun ReliabilityStep(
             }
         }
         VendorGuidance(vendorConfirmed, onVendorConfirmedChange)
+        SectionHeading(
+            "上课期间的行为",
+            "两项随时能在「设置 → 提醒」里改，先按默认走也不影响后面的导入",
+        )
+        ToggleRow(
+            title = "课程进行中实况",
+            summary = "上课期间常驻进度通知，尽量显示在岛 / 流体云上",
+            checked = liveEnabled,
+            onCheckedChange = onLiveEnabledChange,
+        )
+        ToggleRow(
+            title = "上课自动勿扰",
+            summary = "上课期间自动进入勿扰，下课恢复原设置",
+            checked = dndEnabled,
+            onCheckedChange = onDndEnabledChange,
+        )
     }
 }
 
@@ -597,43 +659,6 @@ private fun ImportStep(onImportBuaa: () -> Unit, onAddCourse: () -> Unit) {
 }
 
 @Composable
-private fun DoneStep() {
-    val context = LocalContext.current
-    val prefs = remember(context) {
-        context.getSharedPreferences(ClassProgressReceiver.PREFS_NAME, android.content.Context.MODE_PRIVATE)
-    }
-    var liveEnabled by remember { mutableStateOf(prefs.getBoolean(ClassProgressReceiver.PREF_CLASS_PROGRESS, true)) }
-    var dndEnabled by remember { mutableStateOf(prefs.getBoolean(ClassProgressReceiver.PREF_DND, false)) }
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        StepHeading("准备好了", "下面两项随时能在「设置 → 提醒」里改", Icons.Filled.Check)
-        Spacer(Modifier.height(DesignTokens.spaceL))
-        ToggleRow(
-            title = "课程进行中实况",
-            summary = "上课期间常驻进度通知，尽量显示在岛 / 流体云上",
-            checked = liveEnabled,
-            onCheckedChange = {
-                liveEnabled = it
-                prefs.edit { putBoolean(ClassProgressReceiver.PREF_CLASS_PROGRESS, it) }
-            },
-        )
-        Spacer(Modifier.height(DesignTokens.spaceS))
-        ToggleRow(
-            title = "上课自动勿扰",
-            summary = "上课期间自动进入勿扰，下课恢复原设置",
-            checked = dndEnabled,
-            onCheckedChange = {
-                dndEnabled = it
-                prefs.edit { putBoolean(ClassProgressReceiver.PREF_DND, it) }
-            },
-        )
-    }
-}
-
-@Composable
 private fun ToggleRow(title: String, summary: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     GlassSurface(
         variant = GlassVariant.PANEL,
@@ -715,7 +740,7 @@ private fun OnboardingControls(
                 .weight(1f)
                 .heightIn(min = DesignTokens.minTouchTarget),
         ) {
-            Text(if (currentPage == STEP_DONE) "开始使用" else "下一步")
+            Text(if (currentPage == STEP_IMPORT) "开始使用" else "下一步")
         }
     }
 }

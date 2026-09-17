@@ -78,10 +78,18 @@ class TomorrowPreviewReceiver : BroadcastReceiver() {
         // （还要查三张表）。找不到这样的日子就不再续排 —— 链条停下，等
         // 改课表 / 开机 / 改时间这些事件重新对齐（BootReceiver 与
         // WidgetRefreshReceiver 都会调 BackgroundSync.scheduleTomorrowPreview）。
-        val nextPreviewDay = nextPreviewDay(courses, semester, today)
-        if (nextPreviewDay != null) {
-            runCatching { TomorrowPreviewScheduler.schedule(context, nextPreviewDay) }
-                .onFailure { Log.w(TAG, "续排明日预告失败", it) }
+        val candidate = nextPreviewDay(courses, semester, today)
+        if (candidate != null) {
+            // ⚠️ 复核的是**真正会响的那一天**：22:00 已过时候选日会被顺延一天（闹钟排在
+            // 过去永远不会响，链条会当场断），而顺延出来的那一天从没参与过上面的搜索 ——
+            // 学期最后一节课的预告之后那一晚就是这么空转醒一次的。
+            val fireDay = TomorrowPreviewScheduler.fireDay(candidate)
+            if (hasPreviewContentOn(fireDay, courses, semester)) {
+                runCatching { TomorrowPreviewScheduler.schedule(context, fireDay) }
+                    .onFailure { Log.w(TAG, "续排明日预告失败", it) }
+            } else {
+                Log.d(TAG, "$fireDay 的次日已没有课可推，明日预告链在此停下")
+            }
         }
     }
 
@@ -96,6 +104,26 @@ class TomorrowPreviewReceiver : BroadcastReceiver() {
         private const val MAX_SEARCH_DAYS = 120
 
         /**
+         * 这一天 22:00 有没有东西可推：预告推的是**次日**的课，所以判据是
+         * 「次日落在教学周内且有课」。
+         *
+         * [nextPreviewDay] 的循环体与续排前的复核用的是同一条判定，必须只有一份实现 ——
+         * 各写一遍时，漏掉"顺延后的那一天"这类边界的代价是设备每晚白醒一次。
+         */
+        internal fun hasPreviewContentOn(
+            previewDay: LocalDate,
+            courses: List<Course>,
+            semester: Semester?,
+        ): Boolean {
+            val term = semester ?: return false
+            val start = term.startLocalDate ?: return false
+            val target = previewDay.plusDays(1)
+            val week = WeekCalculator.currentWeekOrNull(start, term.totalWeeks, target)
+                ?: return false
+            return courses.any { it.dayOfWeek == target.dayOfWeek.value && it.weeks.contains(week) }
+        }
+
+        /**
          * 下一个"值得在 22:00 醒来推预告"的日期：该日的**次日**落在教学周内且有课。
          * 找不到（学期结束 / 课表为空）返回 null。
          */
@@ -104,16 +132,10 @@ class TomorrowPreviewReceiver : BroadcastReceiver() {
             semester: Semester?,
             from: LocalDate,
         ): LocalDate? {
-            val start = semester?.startLocalDate ?: return null
-            val totalWeeks = semester.totalWeeks
+            if (semester?.startLocalDate == null) return null
             for (offset in 0L..MAX_SEARCH_DAYS.toLong()) {
                 val dayBefore = from.plusDays(offset)
-                val target = dayBefore.plusDays(1)
-                val week = WeekCalculator.currentWeekOrNull(start, totalWeeks, target)
-                    ?: continue
-                if (courses.any { it.dayOfWeek == target.dayOfWeek.value && it.weeks.contains(week) }) {
-                    return dayBefore
-                }
+                if (hasPreviewContentOn(dayBefore, courses, semester)) return dayBefore
             }
             return null
         }
@@ -174,12 +196,22 @@ object TomorrowPreviewScheduler {
         context.getSystemService(AlarmManager::class.java)?.cancel(pendingIntent(context))
     }
 
-    /** [previewDay] 当天的 22:00；已过则顺延一天（排在过去的闹钟永远不会响，链条会当场断） */
-    internal fun nextFireTime(previewDay: LocalDate, now: LocalDateTime = LocalDateTime.now()): Long {
-        var next = previewDay.atTime(LocalTime.of(FIRE_HOUR, 0))
-        if (!next.isAfter(now)) next = next.plusDays(1)
-        return next.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    /**
+     * [previewDay] 当天 22:00 若已过则顺延到次日 —— 返回**闹钟真正会响的那一天**。
+     *
+     * 抽出来是为了让调用方看得见这次顺延：[TomorrowPreviewReceiver] 搜索到的是
+     * "下一个明天有课的日子"，顺延出来的那一天并没有参与搜索，
+     * 不复核就照排等于在学期结束后多排一次必空转的闹钟。
+     */
+    internal fun fireDay(previewDay: LocalDate, now: LocalDateTime = LocalDateTime.now()): LocalDate {
+        val cutoff = previewDay.atTime(LocalTime.of(FIRE_HOUR, 0))
+        return if (cutoff.isAfter(now)) previewDay else previewDay.plusDays(1)
     }
+
+    /** [previewDay] 当天的 22:00；已过则顺延一天（排在过去的闹钟永远不会响，链条会当场断） */
+    internal fun nextFireTime(previewDay: LocalDate, now: LocalDateTime = LocalDateTime.now()): Long =
+        fireDay(previewDay, now).atTime(LocalTime.of(FIRE_HOUR, 0))
+            .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
     /** 旧口径：以「今天」为预告日（22:00 前落今天、之后落明天），纯函数测试钉的就是这条 */
     internal fun nextFireTime(now: LocalDateTime): Long =

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import com.buaa.schedule.reminder.WakeLocks
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -32,25 +33,37 @@ class WidgetRefreshReceiver : BroadcastReceiver() {
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                if (action == ACTION_MIDNIGHT_REFRESH || timeChanged) {
-                    // 零点会醒两次：系统 00:00 的 ACTION_DATE_CHANGED 与我们自排的
-                    // ACTION_MIDNIGHT_REFRESH 都落到这里，各跑一遍"全学期快照 sync +
-                    // 组件重绘"。自排那条是对抗 ROM 的兜底（它同样可能吞掉系统广播），
-                    // 两条都留，但重复的那次全量刷新没有意义。
-                    if (claimRolloverRefresh()) {
-                        BackgroundSync.refreshWidgets(context)
+                // goAsync 只保证进程存活、不保证 CPU 醒着：零点/改时间多半在 Doze 里，
+                // 这段要查库重算快照并重排闹钟，中途睡回去就会留下"组件停在昨天"
+                // （唤醒锁用法同 ReminderReceiver）
+                WakeLocks.withPartialWakeLock(
+                    context,
+                    "widget_refresh",
+                    // 这一段比 ReminderReceiver 的单条提醒重排重得多（全学期快照 sync +
+                    // 6 个组件重绘），默认 5 秒不够，会被系统提前收回
+                    timeoutMs = 10_000L,
+                ) {
+                    if (action == ACTION_MIDNIGHT_REFRESH || timeChanged) {
+                        // 零点会醒两次：系统 00:00 的 ACTION_DATE_CHANGED 与我们自排的
+                        // ACTION_MIDNIGHT_REFRESH 都落到这里，各跑一遍"全学期快照 sync +
+                        // 组件重绘"。自排那条是对抗 ROM 的兜底（它同样可能吞掉系统广播），
+                        // 两条都留，但重复的那次全量刷新没有意义。
+                        if (claimRolloverRefresh()) {
+                            BackgroundSync.refreshWidgets(context)
+                        }
+                        BackgroundSync.scheduleWidgetMidnight(context)
                     }
-                    BackgroundSync.scheduleWidgetMidnight(context)
-                }
-                if (timeChanged || exactAlarmPermissionChanged) {
-                    // 时间/时区变化会让已注册的触发时间失准，权限变化可升级为精确闹钟
-                    BackgroundSync.rescheduleReminders(context)
-                }
-                if (timeChanged) {
-                    // 明日预告按 22:00 定时，时间/时区变化后要重新对齐；
-                    // 通知渠道也需要确保存在（原先由 BootReceiver 顺带做）
-                    BackgroundSync.scheduleTomorrowPreview(context)
-                    com.buaa.schedule.reminder.ReminderNotifications.ensureChannels(context)
+                    if (timeChanged || exactAlarmPermissionChanged) {
+                        // 时间/时区变化会让已注册的触发时间失准，权限变化可升级为精确闹钟；
+                        // 这里的 Boolean 同样不能丢——改完时间课堂铃窗口也要重排
+                        BackgroundSync.rescheduleRemindersAndBells(context)
+                    }
+                    if (timeChanged) {
+                        // 明日预告按 22:00 定时，时间/时区变化后要重新对齐；
+                        // 通知渠道也需要确保存在（原先由 BootReceiver 顺带做）
+                        BackgroundSync.scheduleTomorrowPreview(context)
+                        com.buaa.schedule.reminder.ReminderNotifications.ensureChannels(context)
+                    }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // 协程取消是控制流信号，不是错误：绝不能在这里吞掉，

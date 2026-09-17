@@ -233,6 +233,29 @@ class IcsParserTest {
         assertEquals(listOf(1), courses[0].weeks)
     }
 
+    @Test
+    fun bydayExpandsToSeparateWeekdayRows() {
+        // RRULE:FREQ=WEEKLY;BYDAY=MO,WE 一周上两天。此前 BYDAY 被无视，
+        // 整门课只落在 DTSTART 的周一，周三那一半直接消失。
+        val content = """
+            BEGIN:VCALENDAR
+            BEGIN:VEVENT
+            SUMMARY:大学物理
+            DTSTART:20260907T080000
+            DTEND:20260907T084500
+            RRULE:FREQ=WEEKLY;BYDAY=MO,WE;UNTIL=20260930
+            END:VEVENT
+            END:VCALENDAR
+        """.trimIndent()
+
+        val courses = IcsParser.parse(content, LocalDate.of(2026, 9, 7), "T", maxWeeks = 4)
+
+        assertEquals(2, courses.size)
+        assertEquals(listOf(1, 3), courses.map { it.dayOfWeek }.sorted())
+        // 两条序列各自覆盖 4 个教学周（9/7、9/9 起，UNTIL 到 9/30）
+        courses.forEach { assertEquals((1..4).toList(), it.weeks) }
+    }
+
     // ---- 畸形 / 边界 RRULE：这些输入此前能让解析器死循环 ----
 
     @Test

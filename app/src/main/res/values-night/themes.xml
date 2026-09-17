@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      系统深色档：窗口底换成深色渐变（见 drawable-night/window_background），
+      状态栏图标也要跟着换成浅色，否则首帧之前是"深底 + 深图标"。
+      真正的深浅色由 Compose 的 darkTheme 决定，用户强制深色而系统跟随浅色时
+      这里对不上——那与改造前（恒为近白窗口底）同等，不会更差。
+    -->
+    <style name="Theme.BUAASchedule" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@drawable/window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

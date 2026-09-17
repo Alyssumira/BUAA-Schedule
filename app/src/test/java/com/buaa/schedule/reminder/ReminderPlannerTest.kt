@@ -151,4 +151,58 @@ class ReminderPlannerTest {
         assertEquals(10, plan?.advanceMinutes)
         assertEquals(mills(mondayFirstPeriod) - 10 * 60_000L, plan?.triggerAtMillis)
     }
+
+    @Test
+    fun picksLaterSegmentOfTheSameDayNotNextWeek() {
+        // 跨午休的课：上午 1-2 节（08:00）、下午 9-10 节（16:40）。
+        // 09:00 时上午那段已经开课，旧实现只看 course.startPeriod，本周再无"晚于 now 的
+        // 第一节"，于是一路跳到下周 08:00 —— 下午那节的课前提醒整学期都不会发。
+        val spanning = Course(
+            id = 1,
+            name = "跨午休",
+            dayOfWeek = 1,
+            periods = listOf(1, 2, 9, 10),
+            weeks = (1..16).toList(),
+        )
+        val now = LocalDateTime.of(2026, 9, 7, 9, 0)
+
+        val plan = ReminderScheduler.planNextReminder(
+            courses = listOf(spanning),
+            semesterStart = semesterStart,
+            timeSlots = emptyList(),
+            reminders = emptyMap(),
+            now = now,
+            nowMillis = mills(now),
+            zone = zone,
+        )
+
+        assertEquals(IntRange(9, 10), plan?.segment)
+        assertEquals(LocalDateTime.of(2026, 9, 7, 16, 40), plan?.classStart)
+    }
+
+    @Test
+    fun skipsSegmentWithoutPeriodTime() {
+        // 节次表里没有第 20 节：不兜底成 08:00（那会凭空造出一节早上 8 点的课，
+        // 让一门没有任何时间信息的课每天早上响一次），没有可靠时间就是不排提醒。
+        val ghost = Course(
+            id = 1,
+            name = "越界节次",
+            dayOfWeek = 1,
+            periods = listOf(20),
+            weeks = listOf(1),
+        )
+        val now = LocalDateTime.of(2026, 9, 7, 7, 0)
+
+        val plan = ReminderScheduler.planNextReminder(
+            courses = listOf(ghost),
+            semesterStart = semesterStart,
+            timeSlots = emptyList(),
+            reminders = emptyMap(),
+            now = now,
+            nowMillis = mills(now),
+            zone = zone,
+        )
+
+        assertNull(plan)
+    }
 }

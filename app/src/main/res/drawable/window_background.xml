@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  冷启动窗口背景：与 SceneBackground 的内置渐变同色（浅色档）。
+  不设的话系统用主题默认的近白窗口底，"点图标 → Compose 首帧"之间是一段纯白，
+  读起来像闪屏；首帧之后真正的场景背景盖上来，颜色也对不上。
+  这里只是窗口底，画不了光斑，取渐变的三段主色即可。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="270"
+        android:startColor="#FFEAF1FD"
+        android:centerColor="#FFDCE9FB"
+        android:endColor="#FFE6E3F6"
+        android:type="linear" />
+</shape>

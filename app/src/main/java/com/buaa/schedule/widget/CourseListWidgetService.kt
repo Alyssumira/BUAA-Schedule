@@ -11,8 +11,13 @@ import com.buaa.schedule.R
 import com.buaa.schedule.core.designsystem.courseColor
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
+import com.buaa.schedule.domain.model.TimeSlotProfile
+import com.buaa.schedule.domain.model.WEEKDAY_LABELS
+import com.buaa.schedule.domain.model.periodGapMinutesOf
 import com.buaa.schedule.domain.model.periodLabel
 import com.buaa.schedule.domain.model.startLocalDate
+import com.buaa.schedule.domain.model.toPeriodSegments
+import com.buaa.schedule.domain.model.toStartEndTimes
 import com.buaa.schedule.domain.schedule.WeekCalculator
 import com.buaa.schedule.domain.schedule.WeekParser
 import androidx.compose.ui.graphics.toArgb
@@ -22,6 +27,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
 
 /**
  * 列表型组件（今日/明日/本周）的数据源。
@@ -73,6 +80,8 @@ class CourseListFactory(
         val startTime: String?,
         val color: Int,
         val dayTag: String?,
+        /** 这一节相对此刻的位置；只有今日组件会算，其余模式恒为 [WidgetRowStatus.UPCOMING] */
+        val status: WidgetRowStatus = WidgetRowStatus.UPCOMING,
     )
 
     override fun onCreate() = Unit
@@ -101,6 +110,11 @@ class CourseListFactory(
         semester = data.semester
         courses = data.courses
         timeByPeriod = data.timeSlots.associateBy({ it.number }, { it.startTime })
+        // 进行中/已结束要按**下课时间**判断，而 timeByPeriod 只有上课时间；
+        // 节次表为空时用默认节次表，与 [com.buaa.schedule.reminder.ClassProgressScheduler] 同一口径。
+        val slotTimes = (if (data.timeSlots.isNotEmpty()) data.timeSlots else TimeSlotProfile.DEFAULT)
+            .toStartEndTimes()
+        val now = LocalDateTime.now()
 
         val today = LocalDate.now()
         // 每行取数必须用**目标日期**对应的教学周：明日组件的课要按"明天"的周次过滤，
@@ -154,6 +168,11 @@ class CourseListFactory(
                 startTime = course.periods.minOrNull()?.let { timeByPeriod[it] },
                 color = courseColor(course).toArgb(),
                 dayTag = dayTag,
+                status = if (mode == ListWidgetMode.TODAY) {
+                    widgetRowStatus(course.periods, targetDate, slotTimes, now)
+                } else {
+                    WidgetRowStatus.UPCOMING
+                },
             )
         }
     }
@@ -182,14 +201,17 @@ class CourseListFactory(
         val fields = appearance.effectiveRowFields(WidgetAppearance.DEFAULT_LIST_ROW_FIELDS)
         views.setTextViewText(
             R.id.widget_item_meta,
-            widgetRowMeta(
-                fields,
-                WidgetRowFields(
-                    dayTag = row.dayTag,
-                    teacher = row.teacher,
-                    location = row.location,
-                    periodsText = widgetPeriodsText(row.periods),
-                    weeksText = row.weeksText,
+            widgetRowStatusMark(
+                row.status,
+                widgetRowMeta(
+                    fields,
+                    WidgetRowFields(
+                        dayTag = row.dayTag,
+                        teacher = row.teacher,
+                        location = row.location,
+                        periodsText = widgetPeriodsText(row.periods),
+                        weeksText = row.weeksText,
+                    ),
                 ),
             ),
         )
@@ -208,6 +230,25 @@ class CourseListFactory(
         // 课程色条：纯白条按课程色着色（setColorFilter 只存在于 ImageView，
         // 布局里该控件必须是 ImageView，否则反射取不到方法会抛 ActionException）
         views.setInt(R.id.widget_item_bar, "setColorFilter", row.color)
+        // 时间状态（只在今日组件里有意义）：正在上的这一节铺一层课程色的圆角底，
+        // 已经下课的行整行压暗——一眼能看出"还剩几节"，而这正是今日组件唯一值钱的问题。
+        // setColorFilter 只在 ImageView 上有，所以那一层在布局里必须是 ImageView。
+        val ongoing = row.status == WidgetRowStatus.ONGOING
+        views.setViewVisibility(
+            R.id.widget_item_active,
+            if (ongoing) View.VISIBLE else View.INVISIBLE,
+        )
+        if (ongoing) {
+            // 底色 drawable 保持纯白不透明，半透明交给 setAlpha：与「今天」胶囊同一套约定，
+            // 把 alpha 烘进 setColorFilter 的颜色里会在浅色组件上偏成一团糊。
+            views.setInt(R.id.widget_item_active, "setColorFilter", row.color)
+            views.setFloat(R.id.widget_item_active, "setAlpha", ACTIVE_ROW_ALPHA)
+        }
+        views.setFloat(
+            R.id.widget_item_row,
+            "setAlpha",
+            if (row.status == WidgetRowStatus.PAST) PAST_ROW_ALPHA else 1f,
+        )
         // 点击整行 → 打开应用（模板 PendingIntent 由 WidgetCommon 统一设置）
         views.setOnClickFillInIntent(
             R.id.widget_item_row,
@@ -235,6 +276,9 @@ class CourseListFactory(
             row.dayTag ?: "",
             row.periods.joinToString(","),
             row.color,
+            // 状态也是画出来的内容：不折进来的话，下课那一刻 id 不变，
+            // 宿主把缓存里那份"还亮着进行中底色"的行直接贴回来。
+            row.status,
         ).hashCode()
         return WidgetCommon.itemKey(position, content.toLong() + appearance.viewIdStamp())
     }
@@ -252,7 +296,13 @@ class CourseListFactory(
         const val EXTRA_MODE = "com.buaa.schedule.widget.EXTRA_MODE"
         const val EXTRA_COURSE_ID = MainActivity.EXTRA_COURSE_ID
 
-        private val DAY_NAMES = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+        private val DAY_NAMES = WEEKDAY_LABELS
+
+        /** 已下课的行的整行透明度：还能读，但绝不与正在上的那一节抢眼球 */
+        private const val PAST_ROW_ALPHA = 0.45f
+
+        /** 进行中那一行的课程色底透明度：压到浅色组件上也不糊字的程度 */
+        private const val ACTIVE_ROW_ALPHA = 0.22f
     }
 }
 
@@ -291,3 +341,57 @@ internal fun widgetRowMeta(
 /** 节次的短标签：第1-2节 → 1-2节（与改动前的 meta 口径逐字一致） */
 internal fun widgetPeriodsText(periods: List<Int>): String =
     periodLabel(periods).removePrefix("第").removeSuffix("节").trim() + "节"
+
+/** 今日组件里一行的时间状态 */
+internal enum class WidgetRowStatus { UPCOMING, ONGOING, PAST }
+
+/** 节次表缺下课时间时的单节兜底时长，与 [com.buaa.schedule.reminder] 那条链同一取值 */
+private const val DEFAULT_LESSON_MINUTES = 45L
+
+/**
+ * 一行今天的课相对此刻的位置。
+ *
+ * 按**连续节次段**判，而不是把首节到末节拉成一个区间：`[5,6]` 这种节次号相邻、
+ * 中间隔着午饭的课，用整段区间会把整个中午算成"正在进行"，于是下午那节课提前亮起底色
+ * （课堂窗口那条链上早已踩过同一个坑，口径必须一致）。
+ *
+ * 一段都取不到时间时返回 [WidgetRowStatus.UPCOMING] 而不是 PAST：缺节次表是数据问题，
+ * 不该表现成"今天的课全上完了"，那会把整列课抹成灰的。
+ */
+internal fun widgetRowStatus(
+    periods: List<Int>,
+    date: LocalDate,
+    slotTimes: Map<Int, Pair<LocalTime, LocalTime>>,
+    now: LocalDateTime,
+): WidgetRowStatus {
+    val gapMinutes = periodGapMinutesOf(slotTimes)
+    var anyTimeKnown = false
+    var ongoing = false
+    var upcoming = false
+    for (segment in periods.toPeriodSegments(gapMinutes)) {
+        val start = slotTimes[segment.first]?.first ?: continue
+        anyTimeKnown = true
+        val stop = slotTimes[segment.last]?.second?.takeIf { it.isAfter(start) }
+            ?: start.plusMinutes(DEFAULT_LESSON_MINUTES)
+        val begin = date.atTime(start)
+        val end = date.atTime(stop)
+        when {
+            now < begin -> upcoming = true
+            now < end -> ongoing = true
+        }
+    }
+    if (!anyTimeKnown) return WidgetRowStatus.UPCOMING
+    return when {
+        ongoing -> WidgetRowStatus.ONGOING
+        upcoming -> WidgetRowStatus.UPCOMING
+        else -> WidgetRowStatus.PAST
+    }
+}
+
+/** 进行中的那一行在副行最前面标一句「进行中」；状态放句首，窄屏截断时它才留得住 */
+internal fun widgetRowStatusMark(status: WidgetRowStatus, meta: String): String =
+    if (status == WidgetRowStatus.ONGOING) {
+        if (meta.isBlank()) "进行中" else "进行中 · $meta"
+    } else {
+        meta
+    }

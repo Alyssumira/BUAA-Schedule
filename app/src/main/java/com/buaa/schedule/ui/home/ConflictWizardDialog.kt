@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -24,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.periodLabel
 import com.buaa.schedule.domain.schedule.CourseConflictResolution
+import kotlinx.coroutines.launch
 
 private val DAY_NAMES = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
@@ -60,7 +62,8 @@ private fun Course.wizardKey(): String = if (id != 0L) id.toString() else "n:$na
 fun ConflictWizardDialog(
     groups: List<CourseConflictResolution.ConflictGroup>,
     allCourses: List<Course>,
-    onApplyShift: (Course, List<Int>) -> Unit,
+    /** 平移落库：挂起直到写完，返回 true 表示确实写进了库。 */
+    onApplyShift: suspend (Course, List<Int>) -> Boolean,
     onDismiss: () -> Unit,
 ) {
     // 「已应用过位移」记在弹窗这一层、按课程身份（wizardKey）索引：
@@ -69,6 +72,9 @@ fun ConflictWizardDialog(
     // 于是「重复位移保护」形同虚设，连点会把同一门课越挪越远；
     // 行滚出 LazyColumn 视口时同样会丢标记（R5 F-54）。
     var shiftedCourses by remember { mutableStateOf(setOf<String>()) }
+    // 同样记在弹窗层：写入是异步的，「正在写哪几门」如果记在行内，
+    // 写入过程中该行因为课表变化而重建，按钮就又变回可点的了。
+    var pendingCourses by remember { mutableStateOf(setOf<String>()) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("课程冲突处理") },
@@ -85,7 +91,13 @@ fun ConflictWizardDialog(
                             group = group,
                             allCourses = allCourses,
                             shiftedCourses = shiftedCourses,
-                            onShiftApplied = { id -> shiftedCourses = shiftedCourses + id },
+                            pendingCourses = pendingCourses,
+                            onShiftStart = { id -> pendingCourses = pendingCourses + id },
+                            onShiftEnd = { id, saved ->
+                                pendingCourses = pendingCourses - id
+                                // 只有真的写进库才算「已应用」；失败要把按钮还给用户重试
+                                if (saved) shiftedCourses = shiftedCourses + id
+                            },
                             onApplyShift = onApplyShift,
                         )
                     }
@@ -103,13 +115,18 @@ private fun ConflictGroupRow(
     group: CourseConflictResolution.ConflictGroup,
     allCourses: List<Course>,
     shiftedCourses: Set<String>,
-    onShiftApplied: (String) -> Unit,
-    onApplyShift: (Course, List<Int>) -> Unit,
+    pendingCourses: Set<String>,
+    onShiftStart: (String) -> Unit,
+    onShiftEnd: (String, Boolean) -> Unit,
+    onApplyShift: suspend (Course, List<Int>) -> Boolean,
 ) {
     val target = group.courses.firstOrNull() ?: return
+    val courseKey = target.wizardKey()
     // 建议基于"处理前的课表"计算：一旦应用过一次就不再重复给建议，
     // 避免连续点击把同一门课越挪越远
-    val applied = target.wizardKey() in shiftedCourses
+    val applied = courseKey in shiftedCourses
+    val pending = courseKey in pendingCourses
+    val rowScope = rememberCoroutineScope()
     val suggestion = remember(group, allCourses, applied) {
         if (applied) null else CourseConflictResolution.suggestNearestFreeShift(target, allCourses)
     }
@@ -145,10 +162,18 @@ private fun ConflictGroupRow(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    TextButton(onClick = {
-                        onShiftApplied(target.wizardKey())
-                        onApplyShift(target, suggestion.periods)
-                    }) { Text("只改这些周") }
+                    TextButton(
+                        // 写完之前禁用：此前点一下按钮立刻自我标记「已应用」，
+                        // 而真正的写库协程还挂在对话框的 composition 上，
+                        // 用户随手划走弹窗就等于把这次保存取消了（P1）。
+                        enabled = !pending,
+                        onClick = {
+                            onShiftStart(courseKey)
+                            rowScope.launch {
+                                onShiftEnd(courseKey, onApplyShift(target, suggestion.periods))
+                            }
+                        },
+                    ) { Text(if (pending) "写入中…" else "只改这些周") }
                 }
             }
             applied -> {

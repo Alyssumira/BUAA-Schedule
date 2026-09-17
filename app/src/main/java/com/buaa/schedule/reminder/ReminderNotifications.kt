@@ -9,12 +9,14 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.edit
 import androidx.core.net.toUri
 import com.buaa.schedule.MainActivity
 import com.buaa.schedule.R
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.periodLabel
+import com.buaa.schedule.domain.model.weekdayLabel
 import java.time.LocalDate
 
 /**
@@ -59,12 +61,26 @@ object ReminderNotifications {
         ChannelSpec(CHANNEL_CLASS_PROGRESS, "课程进行中", "上课期间常驻的课程进度", NotificationManager.IMPORTANCE_DEFAULT),
     )
 
+    /** 旧版「课程进行中」渠道 id：IMPORTANCE_LOW，只能删掉重建（见 [CHANNEL_CLASS_PROGRESS]） */
+    private const val LEGACY_CHANNEL_CLASS_PROGRESS = "class_progress"
+
+    /** 上面那条迁移只做一次用的标志位（与开关设置同一份 prefs） */
+    private const val KEY_LEGACY_CHANNEL_DELETED = "legacy_class_progress_channel_deleted"
+
     /** 幂等创建全部渠道（渠道一旦创建，重要性只能由用户在系统设置里改） */
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        val prefs = context.getSharedPreferences(ClassProgressReceiver.PREFS_NAME, Context.MODE_PRIVATE)
         // 旧版「课程进行中」渠道为 IMPORTANCE_LOW，重要性无法程序修改，直接删除。
         // 用户在系统设置里会看到旧条目消失、新条目（同名）出现。
-        manager.deleteNotificationChannel("class_progress")
+        // 这是一次性迁移，不是每轮的常规动作：ensureChannels 在**每条通知下发前**都会跑，
+        // 无条件删一个早已不存在的渠道等于每次发通知都白送一次 binder 调用 + 一条系统告警。
+        if (!prefs.getBoolean(KEY_LEGACY_CHANNEL_DELETED, false)) {
+            manager.deleteNotificationChannel(LEGACY_CHANNEL_CLASS_PROGRESS)
+            // apply（非 commit）：这条路径会在主线程发通知时走到，同步落盘等于主线程磁盘 I/O。
+            // 标志位万一丢失的最坏后果只是"下次再多删一次不存在的渠道"，无损正确性。
+            prefs.edit { putBoolean(KEY_LEGACY_CHANNEL_DELETED, true) }
+        }
         CHANNEL_SPECS.forEach { (id, name, description, importance) ->
             val channel = NotificationChannel(id, name, importance).apply {
                 this.description = description
@@ -181,6 +197,17 @@ object ReminderNotifications {
             countdownClassStart == classStartMillis &&
             classStartMillis > System.currentTimeMillis()
 
+    /**
+     * 课前倒计时的**归属**是否还挂在这节课上 —— [isCountingDownTo] 去掉时间那一判。
+     *
+     * 调用场景是"倒计时数到上课铃的那一秒"：此刻 `classStart > now` 必然为假，
+     * 用 [isCountingDownTo] 判"上课铃到没到"会得到永远相同的答案，等于没有守卫。
+     * 归属是清得掉的（ACTION_START 以 IN_CLASS 重新下发实况时归零），所以只有它能区分
+     * "广播处理过了"与"广播被省电策略吞了"。
+     */
+    internal fun ownsCountdownTo(courseId: Long, classStartMillis: Long): Boolean =
+        countdownCourseId == courseId && countdownClassStart == classStartMillis
+
     /** 实况提升诊断日志的 tag：`adb logcat -s BUAA-LiveUpdate` 只看这条链 */
     private const val LIVE_TAG = "BUAA-LiveUpdate"
 
@@ -199,44 +226,21 @@ object ReminderNotifications {
      */
     fun startLiveWindow(
         context: Context,
-        courseId: Long,
-        courseName: String,
-        location: String?,
-        sectionText: String,
-        startMillis: Long,
-        endMillis: Long,
+        window: ClassProgressScheduler.ClassWindow,
         phase: LivePhase,
     ) {
         ensureChannels(context)
         // 先记归属再下发：紧随其后的重排链（ReminderReceiver 的 goAsync 块）
         // 要靠这份状态区分"课前倒计时"和"下课铃被吞的遗留"。
         if (phase == LivePhase.BEFORE_CLASS) {
-            countdownCourseId = courseId
-            countdownClassStart = endMillis
+            countdownCourseId = window.courseId
+            countdownClassStart = window.endMillis
         } else {
             countdownCourseId = 0L
             countdownClassStart = 0L
         }
-        postClassOngoing(
-            context = context,
-            courseId = courseId,
-            courseName = courseName,
-            location = location,
-            sectionText = sectionText,
-            startMillis = startMillis,
-            endMillis = endMillis,
-            phase = phase,
-        )
-        CourseFluidService.start(
-            context = context,
-            courseId = courseId,
-            courseName = courseName,
-            location = location,
-            sectionText = sectionText,
-            startMillis = startMillis,
-            endMillis = endMillis,
-            phase = phase,
-        )
+        postClassOngoing(context, window, phase)
+        CourseFluidService.start(context, window, phase)
     }
 
     /**
@@ -257,35 +261,38 @@ object ReminderNotifications {
      */
     fun postClassOngoing(
         context: Context,
-        courseId: Long,
-        courseName: String,
-        location: String?,
-        sectionText: String,
-        startMillis: Long,
-        endMillis: Long,
+        window: ClassProgressScheduler.ClassWindow,
         phase: LivePhase,
     ) {
         ensureChannels(context)
-        val body = liveBody(sectionText, startMillis, endMillis, location, phase, System.currentTimeMillis())
-        val chip = chipCountdownLabel(endMillis)
+        val now = System.currentTimeMillis()
+        val body = liveBody(
+            window.sectionText, window.startMillis, window.endMillis, window.location, phase, now,
+        )
+        val chip = chipCountdownLabel(window.endMillis)
+        val accent = window.colorArgb ?: Notification.COLOR_DEFAULT
 
         val builder = NotificationCompat.Builder(context, CHANNEL_CLASS_PROGRESS)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(courseName)
+            .setContentTitle(window.courseName)
             .setContentText(body)
+            // 标题右侧那一格一直没被用过：周次、星期、教师三项都在数据里，
+            // 但两行正文的位置已经被"节次 · 时间 · 地点"和倒计时占满，
+            // 硬塞只会把最该看的数字挤掉。subText 正是给这类辅助标识留的槽位。
+            .setSubText(liveSubText(window.week, window.dayOfWeek, window.teacher))
             // 两行正文必须配 BigText：默认折叠样式只渲染一行，第二行的倒计时会被整个吃掉，
             // 卡片"简陋"的一半原因是信息根本没地方显示（对齐 SleepDown 的 BigText 基座）
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-            .setContentIntent(courseLaunchPendingIntent(context, courseId))
+            .setContentIntent(courseLaunchPendingIntent(context, window.courseId))
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setOngoing(true)
             // 不 setSilent：静默通知会被 ROM 的实况/焦点提升逻辑忽略（对齐 SleepDown）。
             // 广播这条与前台服务那条共用同一通知 id，setOnlyAlertOnce 保证只响第一声。
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
-            // SleepDown 实况形状里我们唯一没跟的一项：COLOR_DEFAULT = 交给渲染方按
-            // 应用图标取主色，而不是把这条当成"没有着色的普通通知"。
-            .setColor(Notification.COLOR_DEFAULT)
+            // 课程色与课表卡片一致；拿不到颜色时才交回 COLOR_DEFAULT
+            // （= 让渲染方按应用图标取主色，而不是"这条没有着色"）
+            .setColor(accent)
         // androidx.core 1.17+：请求系统把这条常驻通知提升为「实况窗/流体云」样式
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
             runCatching { builder.setRequestPromotedOngoing(true) }
@@ -297,15 +304,7 @@ object ReminderNotifications {
             applyPromotedOngoingExtras(notification, chip)
             logPromotionShape("postClassOngoing", notification)
             // 小米专属、默认关闭的自定义岛内容；内部全程 runCatching
-            IslandFocusTemplate.attach(
-                context,
-                notification,
-                NOTIFY_ID_CLASS_PROGRESS,
-                courseId,
-                courseName,
-                sectionText,
-                startMillis,
-            )
+            IslandFocusTemplate.attach(context, notification, NOTIFY_ID_CLASS_PROGRESS, window)
             NotificationManagerCompat.from(context).notify(NOTIFY_ID_CLASS_PROGRESS, notification)
         } catch (_: SecurityException) {
         }
@@ -506,6 +505,20 @@ internal fun liveMetaLine(sectionText: String, timeRange: String?, location: Str
         location?.takeIf { it.isNotBlank() },
     ).joinToString(" · ")
 
+/**
+ * 标题右侧那一格的辅助标识：第 N 周 · 周X · 教师。
+ *
+ * 三项都在课表数据里，此前在实况上却一个字都没出现——正文两行已被
+ * "节次 · 时间 · 地点"和倒计时占满，硬挤只会把最该看的数字挤掉。
+ * 全空时返回 null（`setSubText(null)` 即不显示这一格，而不是显示一个空串）。
+ */
+internal fun liveSubText(week: Int?, dayOfWeek: Int?, teacher: String?): String? =
+    listOfNotNull(
+        week?.let { "第 $it 周" },
+        dayOfWeek?.let(::weekdayLabel),
+        teacher?.takeIf { it.isNotBlank() },
+    ).joinToString(" · ").takeIf { it.isNotBlank() }
+
 /** 卡片第二行：这一段里唯一自己会变的数字，所以它值得单独占一行 */
 internal fun liveCountdownLine(phase: LivePhase, endMillis: Long, nowMillis: Long): String {
     val minutes = minutesLeft(endMillis, nowMillis)
@@ -526,14 +539,31 @@ internal fun liveBody(
 ): String = liveMetaLine(sectionText, liveTimeRange(startMillis, endMillis), location) +
     "\n" + liveCountdownLine(phase, endMillis, nowMillis)
 
-/** 起止时间区间（HH:mm–HH:mm）；时钟异常等解析失败时返回 null，正文少一段而不是整个发不出去 */
-internal fun liveTimeRange(startMillis: Long, endMillis: Long): String? = runCatching {
-    val zone = java.time.ZoneId.systemDefault()
-    // 必须钉死 Locale.US：默认 locale 的 DecimalStyle 在部分语言下会输出
-    // 非 ASCII 数字（如 ar / fa 的 ٠١٢），而这里是给通知与时间戳用的，
-    // 一旦变成非 ASCII 数字，下游解析与展示都会出错。
-    val fmt = java.time.format.DateTimeFormatter.ofPattern("HH:mm", java.util.Locale.US)
-    val start = java.time.Instant.ofEpochMilli(startMillis).atZone(zone).format(fmt)
-    val end = java.time.Instant.ofEpochMilli(endMillis).atZone(zone).format(fmt)
-    "$start–$end"
-}.getOrNull()
+/** 起止时间区间（HH:mm–HH:mm）；任一端解析失败时返回 null，正文少一段而不是整个发不出去 */
+internal fun liveTimeRange(startMillis: Long, endMillis: Long): String? {
+    val start = clockOf(startMillis) ?: return null
+    val end = clockOf(endMillis) ?: return null
+    return "$start–$end"
+}
+
+/**
+ * 毫秒 → HH:mm：通知正文、实况卡片与桌面组件共用的同一口径。
+ *
+ * 必须钉死 Locale.US：默认 locale 的 DecimalStyle 在部分语言下会输出
+ * 非 ASCII 数字（如 ar / fa 的 ٠١٢），而这里是给通知与时间戳用的，
+ * 一旦变成非 ASCII 数字，下游解析与展示都会出错。
+ * 解析失败返回 null，让调用方整段跳过，而不是显示一个空时间。
+ *
+ * **`<= 0` 是"这一端时刻缺失"的哨兵，同样返回 null**：0 在 `ofEpochMilli` 那里不是
+ * "没有值"而是 1970-01-01，东八区读出来正好是「08:00」——覆盖安装后旧闹钟 extras 缺
+ * end 键、[ClassProgressScheduler.scheduleEnd] 用的空窗口都会走到这里，
+ * 少一个守卫就是往通知正文里凭空写一个上课时间。
+ */
+internal fun clockOf(millis: Long): String? {
+    if (millis <= 0L) return null
+    return runCatching {
+        java.time.Instant.ofEpochMilli(millis)
+            .atZone(java.time.ZoneId.systemDefault())
+            .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm", java.util.Locale.US))
+    }.getOrNull()
+}

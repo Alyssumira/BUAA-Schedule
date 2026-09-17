@@ -11,6 +11,9 @@
     <!-- 4x2 周网格组件与"本周课表"列表组件是两个不同形态，选择器里必须有区分度 -->
     <string name="widget_week_grid_label">本周网格</string>
     <string name="widget_week_grid_desc">4×2 网格，一屏看全本周七天，可自定义背景色、透明度与圆角</string>
+    <!-- 与「今日课程」「明日课程」必须在选择器里一眼能分：这一族是把两天并排对照 -->
+    <string name="widget_two_day_label">今明课表</string>
+    <string name="widget_two_day_desc">左栏今天、右栏明天并排对照，带每节课的上课时刻，可自定义背景色、透明度与圆角</string>
     <string name="widget_today_label">今日课程</string>
     <string name="widget_tomorrow_label">明日课程</string>
     <string name="widget_week_label">本周课表</string>
@@ -22,6 +25,9 @@
     <string name="widget_none_placeholder">暂无课程</string>
     <string name="widget_empty_today">今天没有课</string>
     <string name="widget_empty_week">本周没有课</string>
+    <!-- 两栏组件的栏头占位：首帧之前显示，onUpdate 会换成「今天 周四」这样带星期的整句 -->
+    <string name="widget_column_today">今天</string>
+    <string name="widget_column_tomorrow">明天</string>
 
     <!--
       组件预览素材（R5 F-27）：initialLayout / previewLayout 是静态渲染的，
@@ -45,4 +51,7 @@
     <string name="widget_preview_cell_4">周四\n线代\n体育</string>
     <string name="widget_preview_cell_5">周五\n英语\n数构</string>
     <string name="widget_preview_cell_rest">周六\n周日\n无课</string>
+    <!-- 两栏预览：格式与 twoDayColumnLines 真实输出逐字一致（时刻 + 4 字短名，末行溢出计数） -->
+    <string name="widget_preview_two_day_left">今天 周四\n08:00 高等数\n10:00 线性代\n14:00 大学英\n＋2</string>
+    <string name="widget_preview_two_day_right">明天 周五\n08:50 体育（\n10:40 英语听</string>
 </resources>

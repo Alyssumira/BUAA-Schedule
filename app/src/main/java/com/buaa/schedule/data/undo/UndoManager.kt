@@ -17,7 +17,8 @@ import com.buaa.schedule.domain.model.ReminderSetting
 object UndoManager {
 
     sealed interface UndoAction {
-        data class Delete(val course: Course) : UndoAction
+        /** [reminders] 是删除时被连带清掉的提醒设置；缺了它撤销只回得来课程、回不来提醒 */
+        data class Delete(val course: Course, val reminders: List<ReminderSetting> = emptyList()) : UndoAction
 
         /**
          * 一次删掉同一门课的全部片段：整组连同各自的提醒设置只有**一条**记录。
@@ -58,7 +59,8 @@ object UndoManager {
     }
 
     @Synchronized
-    fun pushDelete(course: Course) = push(UndoAction.Delete(course), "删除课程")
+    fun pushDelete(course: Course, reminders: List<ReminderSetting> = emptyList()) =
+        push(UndoAction.Delete(course, reminders), "删除课程")
 
     @Synchronized
     fun pushDeleteGroup(courses: List<Course>, reminders: List<ReminderSetting>) =

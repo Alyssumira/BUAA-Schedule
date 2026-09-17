@@ -48,6 +48,10 @@ interface CourseDao {
     @Query("DELETE FROM courses WHERE semesterCode = :semesterCode")
     suspend fun deleteBySemester(semesterCode: String)
 
+    /** 学期重命名：把挂在旧代码下的课程整体改挂到新代码（提醒按 courseId 关联，无需动） */
+    @Query("UPDATE courses SET semesterCode = :newCode WHERE semesterCode = :oldCode")
+    suspend fun reassignSemester(oldCode: String, newCode: String)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(course: CourseEntity): Long
 
