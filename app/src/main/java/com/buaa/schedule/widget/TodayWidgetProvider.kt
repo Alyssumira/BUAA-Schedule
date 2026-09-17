@@ -1,10 +1,19 @@
 package com.buaa.schedule.widget
 
 import android.appwidget.AppWidgetManager
-import android.appwidget.AppWidgetProvider
+import android.content.BroadcastReceiver
 import android.content.Context
 
-class TodayWidgetProvider : AppWidgetProvider() {
+class TodayWidgetProvider : ScheduleAppWidgetProvider() {
+
+    /** 宿主重绑后按「今日」口径重绘（见 [ScheduleAppWidgetProvider]） */
+    override fun rerenderAfterRebind(
+        context: Context,
+        appWidgetIds: IntArray,
+        pendingResult: BroadcastReceiver.PendingResult?,
+    ) {
+        WidgetCommon.goAsyncUpdate(context, appWidgetIds, pendingResult, ListWidgetMode.TODAY)
+    }
 
     /**
      * 首个实例被添加时注册后台刷新链路。
@@ -15,8 +24,11 @@ class TodayWidgetProvider : AppWidgetProvider() {
      */
     override fun onEnabled(context: Context) {
         super.onEnabled(context)
-        BackgroundSync.scheduleWidgetMidnight(context)
-        WidgetFallbackWorker.ensure(context)
+        // 必须走 WidgetCommon 那份带保护的实现：onEnabled 跑在广播接收器的主线程上，
+        // 而这两步各自有会抛的调用 —— hasAnyWidget 要跨 binder 问 Launcher，
+        // WorkManager.getInstance 在它自己还没初始化好的进程里抛 IllegalStateException。
+        // 异常从 onReceive 逃出就是当场崩溃，组件停在半初始化态。
+        WidgetCommon.bootstrapBackgroundSync(context)
     }
 
     override fun onUpdate(

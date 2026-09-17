@@ -17,8 +17,9 @@ import androidx.core.content.edit
  */
 object Personalization {
     /**
-     * 玻璃档位：0 关闭（大面积面板退化为普通卡片，仅留小面积玻璃）/ 1 标准 / 2 增强。
-     * 设置页只暴露「关闭 / 开启」两项（旧数据里的增强档在读入时收敛到标准）。
+     * 玻璃档位：0 关闭（大面积面板退化为普通卡片，仅留小面积玻璃）/ 1 标准。
+     * 只有两级——曾经的「增强」档没有任何入口能到达，已随材质令牌一并删除（②V-14）；
+     * 旧数据里的 2 在读入时收敛到标准档。
      *
      * 默认标准档：玻璃是这套界面的主视觉，装完就该看到。开销与机型不适配由
      * [GlassGovernance] 的运行期上限兜底（低内存/少核自行降到关闭，掉帧时再降），
@@ -52,8 +53,24 @@ object Personalization {
     /** 周视图卡片圆角（dp）：小屏 10，宽屏/大卡片 14；用户滑块在 0–24 间覆盖 */
     var weekCornerRadiusDp by mutableFloatStateOf(0f)
 
+    /**
+     * 课程卡副信息位的优先级（③C-01）：那张卡的行数预算只放得下**一个**副信息，
+     * 之前写死成教室，想看老师就得点开详情。这里不是"两个都要"而是"哪个先"：
+     * 首选为空时自动回落到另一个（教室没定的课显示教师，反之同理）。
+     * 0 = 教室优先（与历史行为一致），1 = 教师优先。
+     */
+    var courseCardMetaPreference by mutableIntStateOf(META_ROOM_FIRST)
+
     /** 壁纸模糊强度（dp，0 = 不模糊）。API 31 以下由 Compose 自动降级为无模糊。 */
     var wallpaperBlurDp by mutableFloatStateOf(DEFAULT_BLUR_DP)
+
+    /**
+     * 大面板（设置页 / 导入页的卡片）的高斯模糊半径，dp，0 = 只剩一层薄 tint。
+     *
+     * 与 [wallpaperBlurDp] 的分工：那一个糊的是**看得见的背景本身**，这一个糊的是
+     * **卡片底下那一块** —— 面板越糊，越接近"一层磨砂"而不是"一块玻璃板"。
+     */
+    var panelBlurDp by mutableFloatStateOf(DEFAULT_PANEL_BLUR_DP)
 
     /** 壁纸亮度系数（0.35 = 压得很暗，1.0 = 原始亮度） */
     var wallpaperBrightness by mutableFloatStateOf(DEFAULT_BRIGHTNESS)
@@ -63,6 +80,8 @@ object Personalization {
 
     const val MIN_BLUR_DP = 0f
     const val MAX_BLUR_DP = 20f
+    const val MIN_PANEL_BLUR_DP = 0f
+    const val MAX_PANEL_BLUR_DP = 28f
     const val MIN_BRIGHTNESS = 0.35f
     const val MAX_BRIGHTNESS = 1f
     const val MIN_ZOOM = 1f
@@ -73,6 +92,11 @@ object Personalization {
     const val MAX_WEEK_CORNER = 24f
 
     const val DEFAULT_BLUR_DP = 0f
+    /**
+     * 面板上的 tint 太实就等于一块不透明灰板（真机反馈「大块玻璃太多了有点丑」），
+     * 默认直接给到磨砂档，而不是沿用 dialog 材质那 4dp。
+     */
+    const val DEFAULT_PANEL_BLUR_DP = 12f
     const val DEFAULT_BRIGHTNESS = 1f
     const val DEFAULT_ZOOM = 1f
     const val DEFAULT_USE_SYSTEM_WALLPAPER = true
@@ -80,6 +104,8 @@ object Personalization {
     const val DEFAULT_GLASS_TIER = DesignTokens.GLASS_TIER_STANDARD
     const val WEEK_GRID_PERIOD = 0
     const val WEEK_GRID_TIME_24H = 1
+    const val META_ROOM_FIRST = 0
+    const val META_TEACHER_FIRST = 1
 
     /** 背景是否为真实壁纸（自定义拾取 或 提取的系统桌面壁纸） */
     val hasWallpaperBackdrop: Boolean
@@ -133,8 +159,19 @@ object Personalization {
         weekCornerRadiusDp = prefs.getFloat("week_corner_radius_dp", 0f)
             .coerceIn(MIN_WEEK_CORNER, MAX_WEEK_CORNER)
         weekFitViewport = prefs.getBoolean("week_fit_viewport", false)
+        // 新键：老安装读不到 = 教室优先，与升级前的写死行为一致，因此不需要迁移
+        courseCardMetaPreference = if (
+            prefs.getInt("course_card_meta", META_ROOM_FIRST) == META_TEACHER_FIRST
+        ) {
+            META_TEACHER_FIRST
+        } else {
+            META_ROOM_FIRST
+        }
         wallpaperBlurDp = prefs.getFloat("wallpaper_blur_dp", DEFAULT_BLUR_DP)
             .coerceIn(MIN_BLUR_DP, MAX_BLUR_DP)
+        // 新键：老安装读不到就是默认磨砂档，与升级前的观感预期一致，不需要迁移
+        panelBlurDp = prefs.getFloat("panel_blur_dp", DEFAULT_PANEL_BLUR_DP)
+            .coerceIn(MIN_PANEL_BLUR_DP, MAX_PANEL_BLUR_DP)
         wallpaperBrightness = prefs.getFloat("wallpaper_brightness", DEFAULT_BRIGHTNESS)
             .coerceIn(MIN_BRIGHTNESS, MAX_BRIGHTNESS)
         wallpaperZoom = prefs.getFloat("wallpaper_zoom", DEFAULT_ZOOM)
@@ -154,9 +191,11 @@ object Personalization {
             putFloat("week_row_scale", weekRowScale)
             putFloat("week_corner_radius_dp", weekCornerRadiusDp)
             putBoolean("week_fit_viewport", weekFitViewport)
+            putInt("course_card_meta", courseCardMetaPreference)
             putFloat("wallpaper_blur_dp", wallpaperBlurDp)
             putFloat("wallpaper_brightness", wallpaperBrightness)
             putFloat("wallpaper_zoom", wallpaperZoom)
+            putFloat("panel_blur_dp", panelBlurDp)
         }
     }
 

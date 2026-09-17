@@ -2,6 +2,7 @@ package com.buaa.schedule.core.designsystem
 
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -52,7 +53,11 @@ fun GlassTopBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (onBack != null) {
-                TextButton(onClick = onBack) { Text("返回") }
+                // M3 TextButton 默认最小高 40dp：在 48dp 的栏体里仍够不到触控下限（U-10）
+                TextButton(
+                    onClick = onBack,
+                    modifier = Modifier.defaultMinSize(minHeight = DesignTokens.minTouchTarget),
+                ) { Text("返回") }
             }
             Text(
                 text = title,

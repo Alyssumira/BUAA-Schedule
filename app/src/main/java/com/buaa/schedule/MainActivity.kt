@@ -17,11 +17,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -45,6 +46,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -55,6 +57,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
@@ -62,6 +65,7 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
@@ -91,6 +95,7 @@ import com.buaa.schedule.ui.importing.BuaaLoginScreen
 import com.buaa.schedule.ui.importing.ImportHistoryScreen
 import com.buaa.schedule.ui.importing.ImportScreen
 import com.buaa.schedule.ui.settings.SettingsScreen
+import com.buaa.schedule.widget.WidgetNavigation
 import com.buaa.schedule.core.openExternalUrl
 import com.buaa.schedule.update.RELEASES_PAGE_URL
 import com.buaa.schedule.update.UpdateCheck
@@ -110,6 +115,13 @@ class MainActivity : ComponentActivity() {
      */
     private val requestedCourseId = mutableStateOf<Long?>(null)
 
+    /**
+     * 4×2 网格组件的格子点击传入的星期序号（ISO：1=周一 … 7=周日，null = 无请求）。
+     * 一格背后可能有多门课，所以点格子的语义是「跳到那一天」而不是「打开某一节课」；
+     * 课程 id 从一开始就不进这个 deeplink。
+     */
+    private val requestedDayOfWeek = mutableStateOf<Int?>(null)
+
     /** 引导最后一步选择的落点（"import" / "home" / null = 默认首页）；进程重建即失效 */
     private val pendingStartRoute = mutableStateOf<String?>(null)
 
@@ -123,6 +135,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         requestedCourseId.value = courseIdFrom(intent)
+        requestedDayOfWeek.value = dayOfWeekFrom(intent)
         // 老用户（引导已完成）没有自检步可走，通知权限仍在启动时补申请一次
         if (FirstRun.onboardingCompleted(this)) maybeRequestNotificationPermission()
         setContent {
@@ -134,6 +147,8 @@ class MainActivity : ComponentActivity() {
                 BUAAScheduleApp(
                     requestedCourseId = requestedCourseId.value,
                     onCourseRequestConsumed = { requestedCourseId.value = null },
+                    requestedDayOfWeek = requestedDayOfWeek.value,
+                    onDayRequestConsumed = { requestedDayOfWeek.value = null },
                     startRoute = pendingStartRoute.value,
                 )
             } else {
@@ -160,6 +175,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         courseIdFrom(intent)?.let { requestedCourseId.value = it }
+        dayOfWeekFrom(intent)?.let { requestedDayOfWeek.value = it }
     }
 
     override fun onStart() {
@@ -200,6 +216,13 @@ class MainActivity : ComponentActivity() {
     private fun courseIdFrom(intent: Intent?): Long? =
         intent?.getLongExtra(EXTRA_COURSE_ID, -1L)?.takeIf { it >= 0L }
 
+    /**
+     * 从启动 Intent 里取 4×2 网格格子的星期序号（ISO 1..7）。
+     * 模板缺省值是 0，非组件进来的普通启动则完全没有这个键 —— 两者都按"无请求"处理。
+     */
+    private fun dayOfWeekFrom(intent: Intent?): Int? =
+        intent?.getIntExtra(WidgetNavigation.EXTRA_DAY_OF_WEEK, 0)?.takeIf { it in 1..7 }
+
     /** Android 13+ 需要运行时申请通知权限；仅申请一次（后续由设置页引导） */
     private fun maybeRequestNotificationPermission() {
         if (Build.VERSION.SDK_INT < 33) return
@@ -231,6 +254,44 @@ private val navItems = listOf(
     NavItem("settings", R.string.tab_settings, Icons.Default.Settings),
 )
 
+/**
+ * 三个导航条（悬浮玻璃底栏 / 旧式底栏 / 宽屏导航栏）共用的图标 + 标签。
+ *
+ * 同一条目此前有三份拷贝，而两条修复只落在了主分支上：
+ * ①选中态主题色要在**看得见的那一排**上就成立（旧拷贝只差两个字重，强光下等于没有）；
+ * ②图标不能再带 contentDescription —— 下面那行 Text 已经播报过标签，
+ *   两处都给就会念成「首页 首页」（①C-01）。
+ *
+ * 定义在 `ColumnScope` 上：三处调用点本身就在 Column 内容位，不必为共用再包一层节点。
+ *
+ * @param accentTint 玻璃底栏的折射指示器压在这一项上时也要主题色：
+ *   它比用户的手指更快到位，画成灰色会读成"没选中"
+ */
+@Composable
+private fun ColumnScope.NavItemContent(
+    item: NavItem,
+    selected: Boolean,
+    accentTint: Boolean = false,
+) {
+    val emphasized = selected || accentTint
+    val itemColor = if (emphasized) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Icon(
+        imageVector = item.icon,
+        contentDescription = null,
+        tint = itemColor,
+    )
+    Text(
+        text = stringResource(item.labelRes),
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = if (emphasized) FontWeight.SemiBold else FontWeight.Normal,
+        color = itemColor,
+    )
+}
+
 /** 深色模式偏好：跟随系统 / 强制浅色 / 强制深色 */
 enum class DarkModePreference(val label: String) {
     FOLLOW_SYSTEM("跟随系统"),
@@ -257,6 +318,9 @@ enum class DarkModePreference(val label: String) {
 private fun BUAAScheduleApp(
     requestedCourseId: Long? = null,
     onCourseRequestConsumed: () -> Unit = {},
+    /** 4×2 网格格子点击要打开的那一天（ISO 1..7，null = 无请求） */
+    requestedDayOfWeek: Int? = null,
+    onDayRequestConsumed: () -> Unit = {},
     /** 引导结束时选择的落点；null = 首页 */
     startRoute: String? = null,
 ) {
@@ -297,6 +361,13 @@ private fun BUAAScheduleApp(
         navController.navigate("editor/$id")
         onCourseRequestConsumed()
     }
+    // 桌面组件 4×2 格子 → 那一天的日视图（T-26）。
+    // 这里只负责把人带回首页：具体落哪个日期要等课表数据到位（周次决定日期），
+    // 那是 HomeScreen 的事，它只在 home 这一条 destination 上存在，所以先导航过去。
+    LaunchedEffect(requestedDayOfWeek) {
+        if (requestedDayOfWeek == null) return@LaunchedEffect
+        navController.navigateTopLevel("home")
+    }
     val reminders by viewModel.reminders.collectAsState()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
@@ -330,8 +401,18 @@ private fun BUAAScheduleApp(
         // 课程卡共享模糊前缀：整屏 0.48x 降采样 + blur/vibrancy 一次烘焙，
         // 各课程卡走直采样快路径（仅保留自身 lens）
         val density = androidx.compose.ui.platform.LocalDensity.current
-        val sharedCourseBackdrop = remember(sceneBackdrop, density) {
-            com.kyant.backdrop.backdrops.SharedBlurBackdrop(
+        // 玻璃档位为 OFF 时这一整层是纯白付：SharedBlurBackdrop 一挂载就创建
+        // GraphicsLayer，并在每一帧录制里保留那张降采样 + blur 的离屏纹理
+        // （1080×2400 的 0.48x ≈ 2.3MB RGBA，另加一张整屏记录层）。
+        // 而 OFF 恰恰发生在"内存 ≤128MB / 4 核以下"的静态钳制与运行时掉帧降档之后 ——
+        // 最吃不起的机型付这笔。玻璃消费端本就按该层是否为 null 走降级绘制。
+        val glassTierOn = com.buaa.schedule.core.designsystem.GlassGovernance
+            .effectiveTier(com.buaa.schedule.core.designsystem.Personalization.glassTier) >=
+            com.buaa.schedule.core.designsystem.DesignTokens.GLASS_TIER_STANDARD
+        val sharedCourseBackdrop: com.kyant.backdrop.backdrops.SharedBlurBackdrop? =
+            remember(sceneBackdrop, density, glassTierOn) {
+            if (!glassTierOn) null
+            else com.kyant.backdrop.backdrops.SharedBlurBackdrop(
                 source = sceneBackdrop,
                 radiusPx = with(density) { 14.dp.toPx() },
                 vibrant = true,
@@ -341,10 +422,10 @@ private fun BUAAScheduleApp(
             modifier = Modifier
                 .fillMaxSize()
                 .then(
-                    sharedCourseBackdrop.preRenderModifier {
+                    sharedCourseBackdrop?.preRenderModifier {
                         // 背景仅在壁纸 / 主题变化时重录
                         com.buaa.schedule.core.designsystem.Personalization.wallpaperUri to darkTheme
-                    }
+                    } ?: Modifier
                 )
         ) {
             SceneBackground(darkTheme = darkTheme, backdrop = sceneBackdrop)
@@ -376,6 +457,8 @@ private fun BUAAScheduleApp(
                                 reminders = reminders,
                                 onDarkThemeChange = onDarkThemeChange,
                                 startRoute = startRoute,
+                                requestedDayOfWeek = requestedDayOfWeek,
+                                onDayRequestConsumed = onDayRequestConsumed,
                                 contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                             )
                         }
@@ -393,6 +476,8 @@ private fun BUAAScheduleApp(
                             reminders = reminders,
                             onDarkThemeChange = onDarkThemeChange,
                             startRoute = startRoute,
+                            requestedDayOfWeek = requestedDayOfWeek,
+                            onDayRequestConsumed = onDayRequestConsumed,
                             contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                             bottomBarVisible = showBottomBar,
                         )
@@ -404,8 +489,11 @@ private fun BUAAScheduleApp(
                                     .align(Alignment.BottomCenter)
                                     .fillMaxWidth()
                                     .navigationBarsPadding()
-                                    // 左右比页面常规边距再宽一档：贴边的玻璃长条在小屏上很压迫
-                                    .padding(horizontal = DesignTokens.spaceXL, vertical = DesignTokens.spaceS),
+                                    // 左右内缩以左侧时间列为准（真机反馈：底栏遮住了「08:00」那一列）
+                                    .padding(
+                                        horizontal = DesignTokens.bottomBarHorizontalInset,
+                                        vertical = DesignTokens.spaceS,
+                                    ),
                             )
                         }
                     }
@@ -449,12 +537,36 @@ private fun AppNavHost(
     onDarkThemeChange: (DarkModePreference) -> Unit,
     /** 引导结束时选定的落点页；null = home */
     startRoute: String? = null,
+    /** 4×2 网格格子点击要打开的那一天（ISO 1..7，null = 无请求） */
+    requestedDayOfWeek: Int? = null,
+    onDayRequestConsumed: () -> Unit = {},
     contentPadding: androidx.compose.foundation.layout.PaddingValues,
     /** 手机端当前路由是否显示悬浮底栏（宽屏导航栏分支恒为 false） */
     bottomBarVisible: Boolean = false,
 ) {
     val reduceMotion = LocalReduceMotion.current
-    val motion = MotionTokens.DURATION_MEDIUM
+    // 刚从编辑器保存的课程：首页给那张卡做一次"定位脉冲"（④机会#4）。
+    // 放在这一层是因为编辑器与首页分属两个 destination，返回时唯一的公共祖先就是这里。
+    // 拆成「待送达 / 已送达」两格：编辑器也可能从课程管理页打开，保存后落点是管理页，
+    // 直接把 id 交给首页会攒到用户下次进首页时才闪一下——那一次脉冲毫无来由。
+    var pendingPulseCourseId by remember { mutableLongStateOf(-1L) }
+    var pulseCourseId by remember { mutableLongStateOf(-1L) }
+    LaunchedEffect(navController) {
+        navController.currentBackStackEntryFlow.collect { entry ->
+            when {
+                entry.destination.route == "home" -> {
+                    if (pendingPulseCourseId >= 0L) {
+                        pulseCourseId = pendingPulseCourseId
+                    }
+                    pendingPulseCourseId = -1L
+                }
+                // 编辑器自己不参与判定：保存与返回之间它仍是当前页
+                entry.destination.route?.startsWith("editor/") != true -> {
+                    pendingPulseCourseId = -1L
+                }
+            }
+        }
+    }
     @OptIn(ExperimentalSharedTransitionApi::class)
     SharedTransitionLayout(modifier = Modifier.fillMaxSize()) {
         val sharedTransitionScope = this
@@ -470,36 +582,16 @@ private fun AppNavHost(
             .padding(contentPadding)
             .statusBarsPadding(),
         enterTransition = {
-            if (reduceMotion) EnterTransition.None else {
-                slideInHorizontally(
-                    animationSpec = tween(motion, easing = MotionTokens.EasingStandard),
-                    initialOffsetX = { it / 6 },
-                ) + fadeIn(tween(motion))
-            }
+            navEnter(navMotionFor(initialState, targetState), reduceMotion, enterFromRight = true)
         },
         exitTransition = {
-            if (reduceMotion) ExitTransition.None else {
-                slideOutHorizontally(
-                    animationSpec = tween(motion, easing = MotionTokens.EasingStandard),
-                    targetOffsetX = { -it / 6 },
-                ) + fadeOut(tween(motion))
-            }
+            navExit(navMotionFor(initialState, targetState), reduceMotion, exitToRight = false)
         },
         popEnterTransition = {
-            if (reduceMotion) EnterTransition.None else {
-                slideInHorizontally(
-                    animationSpec = tween(motion, easing = MotionTokens.EasingStandard),
-                    initialOffsetX = { -it / 6 },
-                ) + fadeIn(tween(motion))
-            }
+            navEnter(navMotionFor(initialState, targetState), reduceMotion, enterFromRight = false)
         },
         popExitTransition = {
-            if (reduceMotion) ExitTransition.None else {
-                slideOutHorizontally(
-                    animationSpec = tween(motion, easing = MotionTokens.EasingStandard),
-                    targetOffsetX = { it / 6 },
-                ) + fadeOut(tween(motion))
-            }
+            navExit(navMotionFor(initialState, targetState), reduceMotion, exitToRight = true)
         },
     ) {
         composable("home") {
@@ -510,6 +602,10 @@ private fun AppNavHost(
                     onCourseManagement = { navController.navigate("course_management") },
                     onCourseClick = { course -> navController.navigate("editor/${course.id}") },
                     bottomBarVisible = bottomBarVisible,
+                    highlightCourseId = pulseCourseId,
+                    onHighlightConsumed = { pulseCourseId = -1L },
+                    widgetDayOfWeek = requestedDayOfWeek,
+                    onWidgetDayConsumed = onDayRequestConsumed,
                     viewModel = viewModel,
                 )
             }
@@ -545,11 +641,15 @@ private fun AppNavHost(
                         initialCourse = course,
                         initialReminder = course?.let { c -> reminders.firstOrNull { it.courseId == c.id } },
                         onSave = { edited, options ->
-                            if (edited.id == 0L) {
+                            // 写库返回最终落库行 id，null = 失败（编辑器据此保留草稿）
+                            val savedId = if (edited.id == 0L) {
                                 viewModel.saveCourse(edited)
                             } else {
                                 viewModel.updateCourse(edited, options)
                             }
+                            // 新增的课程也有真实 id 了，能定位到刚建的那张卡；失败则不脉冲
+                            if (savedId != null) pendingPulseCourseId = savedId
+                            savedId
                         },
                         onDelete = { viewModel.deleteCourse(it) },
                         onBack = { navController.popBackStack() },
@@ -600,6 +700,7 @@ private fun AppNavHost(
                     onOpenSection = { section ->
                         navController.navigate("settings/${section.id}")
                     },
+                    onOpenCourseManagement = { navController.navigate("course_management") },
                     bottomBarVisible = bottomBarVisible,
                 )
             }
@@ -612,11 +713,93 @@ private fun AppNavHost(
                     onDarkThemeChange = onDarkThemeChange,
                     section = com.buaa.schedule.ui.settings.SettingsSection
                         .fromId(entry.arguments?.getString("section")),
+                    onOpenCourseManagement = { navController.navigate("course_management") },
                 )
             }
         }
         }
         }
+    }
+}
+
+/** 一次跳转该配哪种转场，取值由 [navMotionFor] 判定 */
+private enum class NavMotion {
+    FADE_THROUGH,
+    CONTAINER_YIELD,
+    SLIDE,
+}
+
+/** 课程卡会同时出现在两端、因而触发 sharedElement 的那一族页面 */
+private fun isCourseCardPage(entry: NavBackStackEntry?): Boolean {
+    val route = entry?.destination?.route ?: return false
+    return route == "home" || route == "course_management" ||
+        // 只有已存在的课程才有配对的卡片；新增课程（id = -1）那一格没有
+        (route == "editor/{courseId}" && (entry.arguments?.getLong("courseId") ?: -1L) >= 0L)
+}
+
+/**
+ * 转场编排（④M-07a / §7.2）：先问"这两个页面是什么关系"，再决定容器怎么动，
+ * 而不是把一套 slide 发给所有 destination。
+ *
+ * - 两个一级 tab 之间：**Fade through**。首页 / 导入 / 设置是平行跳转，横滑会读成层级。
+ * - 课程卡在两端都可见：**容器让位**，位移交给 sharedElement，整页再滑一次就是
+ *   两股动画抢注意力。
+ * - 其余（登录页、导入历史、设置子页）：继续 slide，那才是"进入下一层"。
+ *
+ * `initialState` / `targetState` 在进出场两侧读到的是同一次跳转的两端，
+ * 所以一个判定就能同时约束进页与出页，不会出现"新页淡入、旧页还在滑"。
+ */
+private fun navMotionFor(
+    from: androidx.navigation.NavBackStackEntry?,
+    to: androidx.navigation.NavBackStackEntry?,
+): NavMotion = when {
+    navItems.any { it.route == from?.destination?.route } &&
+        navItems.any { it.route == to?.destination?.route } -> NavMotion.FADE_THROUGH
+    isCourseCardPage(from) && isCourseCardPage(to) -> NavMotion.CONTAINER_YIELD
+    else -> NavMotion.SLIDE
+}
+
+/**
+ * @param reduceMotion 由组合期捕获：转场 lambda 不在组合里求值，取不到 LocalReduceMotion
+ * @param enterFromRight push 时新页从右侧推入，pop 时从左侧回来
+ */
+private fun navEnter(
+    style: NavMotion,
+    reduceMotion: Boolean,
+    enterFromRight: Boolean,
+): EnterTransition {
+    if (reduceMotion) return EnterTransition.None
+    return when (style) {
+        // 旧页先退净，新页才进来，中间不留两张半透明的页叠在一起
+        NavMotion.FADE_THROUGH -> fadeIn(
+            tween(
+                MotionTokens.DURATION_FADE_THROUGH_ENTER,
+                delayMillis = MotionTokens.DURATION_FADE_THROUGH_EXIT,
+            ),
+        )
+        // 让位不等于设 None：那样旧页会在动画收尾的一刻硬切消失
+        NavMotion.CONTAINER_YIELD -> fadeIn(tween(MotionTokens.DURATION_SHORT))
+        NavMotion.SLIDE -> slideInHorizontally(
+            animationSpec = tween(MotionTokens.DURATION_MEDIUM, easing = MotionTokens.EasingStandard),
+            initialOffsetX = { if (enterFromRight) it / 6 else -it / 6 },
+        ) + fadeIn(tween(MotionTokens.DURATION_MEDIUM))
+    }
+}
+
+/** @param exitToRight push 时旧页退向左侧，pop 时退向右侧 */
+private fun navExit(
+    style: NavMotion,
+    reduceMotion: Boolean,
+    exitToRight: Boolean,
+): ExitTransition {
+    if (reduceMotion) return ExitTransition.None
+    return when (style) {
+        NavMotion.FADE_THROUGH -> fadeOut(tween(MotionTokens.DURATION_FADE_THROUGH_EXIT))
+        NavMotion.CONTAINER_YIELD -> fadeOut(tween(MotionTokens.DURATION_SHORT))
+        NavMotion.SLIDE -> slideOutHorizontally(
+            animationSpec = tween(MotionTokens.DURATION_MEDIUM, easing = MotionTokens.EasingStandard),
+            targetOffsetX = { if (exitToRight) it / 6 else -it / 6 },
+        ) + fadeOut(tween(MotionTokens.DURATION_MEDIUM))
     }
 }
 
@@ -661,35 +844,19 @@ private fun FloatingGlassBottomBar(
         modifier = modifier,
         containerHeight = 64.dp,
         indicatorHeight = 56.dp,
-                        isLightTheme = !darkTheme,
-                        // 底栏表面色：过高会像不透明色条，0.20 让背景能透出来
-                        containerAlpha = 0.20f,
-                        containerColor = if (darkTheme) {
-                            com.buaa.schedule.core.designsystem.DarkGlassTint
-                        } else {
-                            com.buaa.schedule.core.designsystem.LightGlassTint
-                        },
+        isLightTheme = !darkTheme,
+        // 底栏表面色：过高会像不透明色条，0.20 让背景能透出来
+        containerAlpha = 0.20f,
+        containerColor = if (darkTheme) {
+            com.buaa.schedule.core.designsystem.DarkGlassTint
+        } else {
+            com.buaa.schedule.core.designsystem.LightGlassTint
+        },
         tabContent = { index ->
             val item = navItems[index]
-            // 主行 tab 一律中性色；选中态内容由指示器以主题色承载（玻璃上叠内容）
             val accentTint = com.buaa.schedule.core.designsystem.liquid.LocalLiquidBottomTabAccentTint.current
             val selected = currentRoute?.hierarchy?.any { it.route == item.route } == true
-            val itemColor = if (accentTint) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            }
-            Icon(
-                imageVector = item.icon,
-                contentDescription = stringResource(item.labelRes),
-                tint = itemColor,
-            )
-            Text(
-                text = stringResource(item.labelRes),
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (selected || accentTint) FontWeight.SemiBold else FontWeight.Normal,
-                color = itemColor,
-            )
+            NavItemContent(item, selected = selected, accentTint = accentTint)
         },
     )
 }
@@ -708,29 +875,15 @@ private fun LegacyBottomBarContent(
             val selected = currentRoute?.hierarchy?.any { it.route == item.route } == true
             Column(
                 modifier = Modifier
-                    .clickable { onNavigate(item.route) }
+                    .selectable(
+                        selected = selected,
+                        role = Role.Tab,
+                        onClick = { onNavigate(item.route) },
+                    )
                     .padding(horizontal = DesignTokens.spaceL, vertical = DesignTokens.spaceS),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Icon(
-                    imageVector = item.icon,
-                    contentDescription = stringResource(item.labelRes),
-                    tint = if (selected) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-                Text(
-                    text = stringResource(item.labelRes),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (selected) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
+                NavItemContent(item, selected = selected)
             }
         }
     }
@@ -758,28 +911,17 @@ private fun GlassNavRail(
                 val selected = currentRoute?.hierarchy?.any { it.route == item.route } == true
                 Column(
                     modifier = Modifier
-                        .clickable { onNavigate(item.route) }
+                        // 与底栏同一套 tab 语义：这里此前是 clickable，屏幕阅读器
+                        // 只念得出「标签，按钮」，念不出「已选中」（①C-01 的宽屏半边）
+                        .selectable(
+                            selected = selected,
+                            role = Role.Tab,
+                            onClick = { onNavigate(item.route) },
+                        )
                         .padding(vertical = DesignTokens.spaceL),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Icon(
-                        imageVector = item.icon,
-                        contentDescription = stringResource(item.labelRes),
-                        tint = if (selected) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                    Text(
-                        text = stringResource(item.labelRes),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (selected) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
+                    NavItemContent(item, selected = selected)
                 }
             }
         }

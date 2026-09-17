@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.DesignTokens
+import com.buaa.schedule.core.designsystem.LocalSemanticColors
 
 /**
  * 更新流程的唯一弹窗。挂在应用根节点上，因此自动检测和设置页手动检查共用一个出口。
@@ -115,7 +116,7 @@ private fun AvailableDialog(
                     Text(
                         text = "这个版本没有可直接下载的安装包附件，将打开发布页下载。",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.tertiary,
+                        color = LocalSemanticColors.current.warning,
                     )
                 }
             }

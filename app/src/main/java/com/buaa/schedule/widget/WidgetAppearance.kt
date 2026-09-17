@@ -7,6 +7,7 @@ import android.view.ContextThemeWrapper
 import androidx.compose.ui.graphics.Color
 import androidx.core.content.edit
 import com.buaa.schedule.R
+import com.buaa.schedule.core.designsystem.contentOnLuma
 import com.buaa.schedule.core.designsystem.readableLuminance
 
 /**
@@ -41,7 +42,26 @@ data class WidgetAppearance(
     val colorMode: Int = COLOR_MODE_CUSTOM,
     /** 是否使用壁纸模糊玻璃感背景（生成静态 Bitmap，非实时模糊） */
     val blurBackground: Boolean = false,
+    /**
+     * 周网格一格画几节课（审查 U-09）。
+     *
+     * 4×2 组件的一列只有约 30dp：字号与"每格几节"在物理上只能取其一，
+     * 因此把它交给用户。默认 [GRID_LINES_DENSE]，与老版本显示效果一致。
+     */
+    val gridMaxLines: Int = GRID_LINES_DENSE,
+    /**
+     * 行副字段选哪些、按什么顺序拼（审查 3.7：配置页 30+ 个外观项、内容只有 2 项）。
+     *
+     * `null` = 用户没动过，各组件类型沿用自己的既有口径（见 [DEFAULT_LIST_ROW_FIELDS] /
+     * [DEFAULT_NEXT_ROW_FIELDS]）—— 升级不会把任何已有组件的显示内容改掉。
+     * 只作用于列表型组件与 2×1「下一节课」：4×2 的格子摘要刻意不带这些字段（审查 §6.1）。
+     */
+    val rowFields: List<WidgetRowField>? = null,
 ) {
+
+    /** 密集档 9sp（列宽所限），宽松档 10sp。见 `widget_week_grid_item.xml` */
+    val gridRowTextSizeSp: Float
+        get() = if (gridMaxLines <= GRID_LINES_ROOMY) 10f else 9f
 
     val cornerDrawableRes: Int
         get() = CORNER_DRAWABLES[cornerBucket.coerceIn(0, CORNER_DRAWABLES.lastIndex)]
@@ -68,20 +88,46 @@ data class WidgetAppearance(
         else -> backgroundColor
     }
 
-    /** 标题字色（ARGB）。[background] 必须传"实际着色后的背景色"。 */
-    fun titleColorFor(background: Int): Int = when (textMode) {
-        TEXT_LIGHT -> COLOR_TEXT_LIGHT
-        TEXT_DARK -> COLOR_TEXT_DARK
-        else -> if (autoShouldUseDarkText(background, alphaPercent)) COLOR_TEXT_DARK
-        else COLOR_TEXT_LIGHT
+    /**
+     * 这一 background 上该用深色墨还是浅色墨。
+     *
+     * [titleColorFor] / [bodyColorFor] / 「今天」的高亮胶囊必须共用它，
+     * 否则三处判定一旦漂移就会出现"白胶囊压白字"。
+     */
+    fun usesDarkInk(background: Int): Boolean = when (textMode) {
+        TEXT_LIGHT -> false
+        TEXT_DARK -> true
+        else -> autoShouldUseDarkText(background, alphaPercent)
     }
 
-    fun bodyColorFor(background: Int): Int = when (textMode) {
-        TEXT_LIGHT -> COLOR_TEXT_LIGHT_SUBTLE
-        TEXT_DARK -> COLOR_TEXT_DARK_SUBTLE
-        else -> if (autoShouldUseDarkText(background, alphaPercent)) COLOR_TEXT_DARK_SUBTLE
-        else COLOR_TEXT_LIGHT_SUBTLE
-    }
+    /** 标题字色（ARGB）。[background] 必须传"实际着色后的背景色"。 */
+    fun titleColorFor(background: Int): Int =
+        if (usesDarkInk(background)) COLOR_TEXT_DARK else COLOR_TEXT_LIGHT
+
+    fun bodyColorFor(background: Int): Int =
+        if (usesDarkInk(background)) COLOR_TEXT_DARK_SUBTLE else COLOR_TEXT_LIGHT_SUBTLE
+
+    /**
+     * 4×2「今天」表头的胶囊底色（审查 3.4）。
+     *
+     * 与墨色**同侧**：深底墨色是白 → 白胶囊，浅底墨色是黑 → 黑胶囊。
+     * 走 [usesDarkInk] 而不是另判一次亮度，用户换背景色/透明度时它会跟着翻面，
+     * 于是永远不可能出现"白胶囊压白底"。胶囊里那几个字取反侧，见 [onTodayHighlightFor]。
+     */
+    fun todayHighlightFor(background: Int): Int =
+        if (usesDarkInk(background)) COLOR_TEXT_DARK else COLOR_TEXT_LIGHT
+
+    /** 胶囊上那个星期几的字色：与胶囊异侧（= 与正文同侧） */
+    fun onTodayHighlightFor(background: Int): Int =
+        if (usesDarkInk(background)) COLOR_TEXT_LIGHT else COLOR_TEXT_DARK
+
+    /** 胶囊不透明度：不透的色块会把表头列压成一个亮点，留一点透出组件底色 */
+    val todayHighlightAlpha: Float
+        get() = TODAY_HIGHLIGHT_ALPHA
+
+    /** 用户没勾过就用本组件类型的既有口径（见 [rowFields]） */
+    fun effectiveRowFields(default: List<WidgetRowField>): List<WidgetRowField> =
+        rowFields ?: default
 
     companion object {
         const val DEFAULT_BACKGROUND = 0xFF16203A.toInt()
@@ -97,6 +143,46 @@ data class WidgetAppearance(
 
         val TEXT_MODE_LABELS = listOf("自动", "浅色文字", "深色文字")
         val COLOR_MODE_LABELS = listOf("自定义配色", "跟随系统取色")
+
+        const val GRID_LINES_DENSE = 5
+        const val GRID_LINES_ROOMY = 3
+
+        /** 下标即配置页 ChipRow 选项序号；[GRID_LINES_DENSE] 在前以保持默认观感 */
+        val GRID_LINE_OPTIONS = listOf(GRID_LINES_DENSE, GRID_LINES_ROOMY)
+        val GRID_LINE_LABELS = listOf("每格 5 节（字略小）", "每格 3 节（字更大）")
+
+        /** 「今天」表头胶囊的不透明度（见 [todayHighlightFor]） */
+        const val TODAY_HIGHLIGHT_ALPHA = 0.85f
+
+        /**
+         * 列表型组件（今日/明日/本周）的既有口径：右侧一列时间 + meta 行「地点 · 节次」。
+         * [TIME] 在这里控制右侧那列，而不是拼进 meta。
+         */
+        val DEFAULT_LIST_ROW_FIELDS = listOf(
+            WidgetRowField.TIME,
+            WidgetRowField.LOCATION,
+            WidgetRowField.PERIODS,
+        )
+        val LIST_ROW_FIELD_CHOICES = listOf(
+            WidgetRowField.TEACHER,
+            WidgetRowField.LOCATION,
+            WidgetRowField.PERIODS,
+            WidgetRowField.WEEKS,
+            WidgetRowField.TIME,
+        )
+
+        /**
+         * 2×1「下一节课」的口径：时间打头，**教师排在节次之前**（审查 3.2 ——
+         * 节次在"14:00"里已经隐含，教师才是"是不是我该去的那个班"的判据）。
+         * 没有「周次」：这一格的周次由日期隐含，再写一遍只是占位。
+         */
+        val DEFAULT_NEXT_ROW_FIELDS = listOf(
+            WidgetRowField.TIME,
+            WidgetRowField.TEACHER,
+            WidgetRowField.PERIODS,
+            WidgetRowField.LOCATION,
+        )
+        val NEXT_ROW_FIELD_CHOICES = DEFAULT_NEXT_ROW_FIELDS
 
         /** 圆角档位对应的实际 dp（配置页预览与 RemoteViews 素材一一对应） */
         val CORNER_RADII_DP = listOf(0, 8, 16, 20, 24, 28)
@@ -168,7 +254,10 @@ data class WidgetAppearance(
                 (((r * 255f).toInt().coerceIn(0, 255)) shl 16) or
                 (((g * 255f).toInt().coerceIn(0, 255)) shl 8) or
                 ((b * 255f).toInt().coerceIn(0, 255))
-            return Color(composited.toLong()).readableLuminance() > 0.45f
+            // 与 App 内课程卡同一个口径：取对比度更高的一侧。
+            // 此前这里又抄了一遍"亮度 > 0.45 用深色字"，而黑/白等对比度的交点在 0.203，
+            // 于是 0.203~0.45 这一段被判给了浅色文字，最差只有 2.2:1。
+            return contentOnLuma(Color(composited.toLong()).readableLuminance()) != Color.White
         }
 
         /** 取某条通道的 0..1 归一化值（shift = 16/8/0） */
@@ -176,6 +265,28 @@ data class WidgetAppearance(
             ((argb shr shift) and 0xFF) / 255f
     }
 }
+
+/**
+ * 组件行副标题能显示的字段（审查 3.7）。
+ *
+ * 每一项都是数据里早就有、只是没被显示出来的信息。
+ */
+enum class WidgetRowField(val label: String) {
+    TEACHER("教师"),
+    LOCATION("地点"),
+    PERIODS("节次"),
+    WEEKS("周次"),
+    TIME("时间"),
+}
+
+/**
+ * 勾选 / 取消一个行副字段：新选中的排到末尾 ——
+ * "按什么顺序拼接"因此就是用户的点击顺序，不需要再做拖拽排序的 UI。
+ */
+internal fun toggleRowField(
+    current: List<WidgetRowField>,
+    field: WidgetRowField,
+): List<WidgetRowField> = if (field in current) current - field else current + field
 
 /**
  * Material You 动态取色（官方做法：Android 12+ 让组件根主题使用
@@ -209,11 +320,27 @@ object WidgetAppearanceStore {
     private const val KEY_SHOW_TITLE = "show_title"
     private const val KEY_COLOR_MODE = "color_mode"
     private const val KEY_BLUR = "blur"
+    private const val KEY_GRID_LINES = "grid_lines"
+    private const val KEY_ROW_FIELDS = "row_fields"
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     private fun key(appWidgetId: Int, field: String) = "w$appWidgetId.$field"
+
+    /**
+     * 行副字段存枚举名而不是序号：枚举以后插一个新字段就会让老用户的配置
+     * 整体错位成另一套字段，而按名字解析失败的项会被直接丢掉（读到"少一个字段"而不是"错一个字段"）。
+     */
+    private fun encodeRowFields(fields: List<WidgetRowField>?): String? =
+        fields?.joinToString(",") { it.name }
+
+    private fun decodeRowFields(raw: String?): List<WidgetRowField>? {
+        if (raw == null) return null
+        return raw.split(',').mapNotNull { name ->
+            WidgetRowField.entries.firstOrNull { it.name == name }
+        }
+    }
 
     /** 该实例是否已被用户配置过（用于区分"默认外观"与"自定义外观"） */
     fun isConfigured(context: Context, appWidgetId: Int): Boolean =
@@ -231,6 +358,9 @@ object WidgetAppearanceStore {
             showTitle = p.getBoolean(key(appWidgetId, KEY_SHOW_TITLE), defaults.showTitle),
             colorMode = p.getInt(key(appWidgetId, KEY_COLOR_MODE), defaults.colorMode),
             blurBackground = p.getBoolean(key(appWidgetId, KEY_BLUR), defaults.blurBackground),
+            gridMaxLines = p.getInt(key(appWidgetId, KEY_GRID_LINES), defaults.gridMaxLines)
+                .coerceIn(WidgetAppearance.GRID_LINES_ROOMY, WidgetAppearance.GRID_LINES_DENSE),
+            rowFields = decodeRowFields(p.getString(key(appWidgetId, KEY_ROW_FIELDS), null)),
         )
     }
 
@@ -244,6 +374,8 @@ object WidgetAppearanceStore {
             putBoolean(key(appWidgetId, KEY_SHOW_TITLE), appearance.showTitle)
             putInt(key(appWidgetId, KEY_COLOR_MODE), appearance.colorMode)
             putBoolean(key(appWidgetId, KEY_BLUR), appearance.blurBackground)
+            putInt(key(appWidgetId, KEY_GRID_LINES), appearance.gridMaxLines)
+            putString(key(appWidgetId, KEY_ROW_FIELDS), encodeRowFields(appearance.rowFields))
         }
     }
 
@@ -259,6 +391,8 @@ object WidgetAppearanceStore {
             remove(key(appWidgetId, KEY_SHOW_TITLE))
             remove(key(appWidgetId, KEY_COLOR_MODE))
             remove(key(appWidgetId, KEY_BLUR))
+            remove(key(appWidgetId, KEY_GRID_LINES))
+            remove(key(appWidgetId, KEY_ROW_FIELDS))
         }
         return WidgetAppearance()
     }
@@ -275,6 +409,8 @@ object WidgetAppearanceStore {
                 remove(key(id, KEY_SHOW_TITLE))
                 remove(key(id, KEY_COLOR_MODE))
                 remove(key(id, KEY_BLUR))
+                remove(key(id, KEY_GRID_LINES))
+                remove(key(id, KEY_ROW_FIELDS))
             }
         }
     }

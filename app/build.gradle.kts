@@ -121,6 +121,14 @@ android {
         versionCode = releaseVersionCode
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // 只投中/英两种语言的资源。本应用自己没有 values-* 目录，
+        // 带多语言的资源全部来自 AndroidX / Compose（material3 日期选择器、
+        // work、emoji2 等），上百个语言里用户真正能触发的只有系统语言那一种；
+        // 其他语言走默认（英文）回退，不会因为过滤器而找不到资源。
+        androidResources {
+            localeFilters += listOf("zh", "en")
+        }
     }
 
     signingConfigs {
@@ -179,6 +187,24 @@ android {
         checkDependencies = false
         abortOnError = true
     }
+
+    packaging {
+        resources {
+            // 下面每一项都是**编译期/工具链元数据**，运行时没有任何读取方：
+            // kotlin 的 builtins 表只有 kotlin-reflect 会读（本工程没有这个依赖），
+            // .kotlin_module 给编译器做跨模块内联，.version 是每个依赖 7 字节的版本标记，
+            // DebugProbesKt.bin 是协程调试 agent 的探针表。
+            // 依赖许可证（META-INF 下各 androidx 包的 LICENSE.txt）一个都不动 ——
+            // Kyant0 液态玻璃走的 Apache-2.0 归因要靠它。
+            excludes += setOf(
+                "kotlin/**",
+                "kotlin-tooling-metadata.json",
+                "META-INF/*.kotlin_module",
+                "META-INF/*.version",
+                "DebugProbesKt.bin",
+            )
+        }
+    }
 }
 
 ksp {
@@ -226,7 +252,8 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.okhttp)
+    // okhttp 已移除：全部网络请求走 HttpURLConnection（BuaaApi）与页面内 fetch
+    // （BuaaInPageFetcher），R8 早把它整个剥掉，留在包里只剩 41KB 的 publicsuffixes.gz。
     implementation(libs.androidx.work.runtime.ktx)
 
     testImplementation(libs.junit)

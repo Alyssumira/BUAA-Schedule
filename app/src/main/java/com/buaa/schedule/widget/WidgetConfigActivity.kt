@@ -96,6 +96,17 @@ class WidgetConfigActivity : ComponentActivity() {
             ?.provider
             ?.className
         val mode = WidgetCommon.modeOfProvider(providerClassName) ?: ListWidgetMode.TODAY
+        // 「显示内容」可勾的字段按组件类型区分（审查 3.7）：空列表 = 这一档对该组件没有意义，整块隐藏。
+        // 4×2 的格子摘要刻意不带教师/地点（审查 §6.1），所以它没有这个面板。
+        val rowFieldChoices = when (providerClassName) {
+            NextClassWidgetProvider::class.java.name -> WidgetAppearance.NEXT_ROW_FIELD_CHOICES
+            WeekGridWidgetProvider::class.java.name -> emptyList()
+            else -> WidgetAppearance.LIST_ROW_FIELD_CHOICES
+        }
+        val rowFieldsDefault = when (providerClassName) {
+            NextClassWidgetProvider::class.java.name -> WidgetAppearance.DEFAULT_NEXT_ROW_FIELDS
+            else -> WidgetAppearance.DEFAULT_LIST_ROW_FIELDS
+        }
         val initial = WidgetAppearanceStore.load(this, appWidgetId)
         val initialBinding = WidgetBindingStore.load(this, appWidgetId)
         val repository = (application as? com.buaa.schedule.BUAAApplication)?.repository
@@ -122,6 +133,9 @@ class WidgetConfigActivity : ComponentActivity() {
                             repository = repository,
                             previewTitle = sampleTitle(mode),
                             previewBody = sampleBody(mode),
+                            isWeekGrid = providerClassName == WeekGridWidgetProvider::class.java.name,
+                            rowFieldChoices = rowFieldChoices,
+                            rowFieldsDefault = rowFieldsDefault,
                             onCancel = {
                                 setResult(RESULT_CANCELED)
                                 finish()
@@ -193,6 +207,12 @@ private fun WidgetConfigScreen(
     repository: ScheduleRepository,
     previewTitle: String,
     previewBody: String,
+    /** 只有 4×2 周网格需要"每格显示几节"这一档（审查 U-09），其它组件不显示 */
+    isWeekGrid: Boolean = false,
+    /** 该组件类型可勾的行副字段；空列表 = 没有这一档（4×2），面板隐藏 */
+    rowFieldChoices: List<WidgetRowField> = emptyList(),
+    /** 用户没勾过时该组件类型的既有口径（审查 3.7：默认必须等于升级前的显示内容） */
+    rowFieldsDefault: List<WidgetRowField> = WidgetAppearance.DEFAULT_LIST_ROW_FIELDS,
     onCancel: () -> Unit,
     onSave: (WidgetAppearance, WidgetBinding) -> Unit,
 ) {
@@ -295,7 +315,10 @@ private fun WidgetConfigScreen(
                     WidgetAppearance.STYLE_PRESETS.forEach { preset ->
                         FilterChip(
                             selected = appearance == preset.appearance,
-                            onClick = { appearance = preset.appearance },
+                            onClick = {
+                                // 预设只承诺"观感"，不该顺手把用户勾好的显示内容清成默认
+                                appearance = preset.appearance.copy(rowFields = appearance.rowFields)
+                            },
                             label = { Text(preset.label) },
                         )
                     }
@@ -311,13 +334,13 @@ private fun WidgetConfigScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(
                         selected = binding.semesterCode == null,
-                        onClick = { binding = WidgetBinding(null) },
+                        onClick = { binding = binding.copy(semesterCode = null) },
                         label = { Text("跟随当前学期") },
                     )
                     semesters.forEach { semester ->
                         FilterChip(
                             selected = binding.semesterCode == semester.termCode,
-                            onClick = { binding = WidgetBinding(semester.termCode) },
+                            onClick = { binding = binding.copy(semesterCode = semester.termCode) },
                             label = { Text(semester.termName.ifBlank { semester.termCode }) },
                         )
                     }
@@ -404,6 +427,72 @@ private fun WidgetConfigScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+
+            if (rowFieldChoices.isNotEmpty()) {
+                val effectiveFields = appearance.effectiveRowFields(rowFieldsDefault)
+                Panel(title = "显示内容") {
+                    Text(
+                        text = "选择每行副字段要显示哪些信息。拼接顺序就是你的点击顺序——" +
+                            "先点「教师」再点「地点」，出来就是「教师 · 地点」。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
+                        verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceXS),
+                    ) {
+                        rowFieldChoices.forEach { field ->
+                            FilterChip(
+                                selected = field in effectiveFields,
+                                onClick = {
+                                    appearance = appearance.copy(
+                                        rowFields = toggleRowField(effectiveFields, field),
+                                    )
+                                },
+                                label = { Text(field.label) },
+                            )
+                        }
+                    }
+                    // 预览区是写死的示例文本，反映不了这一档，只能把顺序回显成文字
+                    val orderLabel = if (effectiveFields.isEmpty()) {
+                        "（只保留课程名）"
+                    } else {
+                        effectiveFields.joinToString(" · ") { it.label }
+                    }
+                    Text(
+                        text = "当前顺序：$orderLabel",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (appearance.rowFields != null) {
+                        OutlinedButton(
+                            onClick = { appearance = appearance.copy(rowFields = null) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("恢复该组件的默认字段") }
+                    }
+                }
+            }
+
+            if (isWeekGrid) {
+                Panel(title = "每格显示") {
+                    ChipRow(
+                        items = WidgetAppearance.GRID_LINE_LABELS,
+                        selectedIndex = WidgetAppearance.GRID_LINE_OPTIONS
+                            .indexOf(appearance.gridMaxLines)
+                            .coerceAtLeast(0),
+                        onSelect = { index ->
+                            appearance = appearance.copy(
+                                gridMaxLines = WidgetAppearance.GRID_LINE_OPTIONS[index],
+                            )
+                        },
+                    )
+                    Text(
+                        text = "4×2 组件一列只有约 30dp：要么一天多列几节、字小一点，要么只列前 3 节、字大一点。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             Panel(title = "内容") {
@@ -507,7 +596,7 @@ private fun WidgetPreview(
         Text(
             text = "壁纸",
             color = contentOn(Color(0xFF8A8F99)),
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelMedium,
             modifier = Modifier.align(Alignment.BottomEnd),
         )
     }
@@ -593,7 +682,7 @@ private fun ColorSwatch(
         }
         Text(
             text = label,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }

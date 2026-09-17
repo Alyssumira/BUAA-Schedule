@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.material3.Button
@@ -41,6 +43,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -48,9 +51,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -74,17 +81,21 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Widgets
 import com.buaa.schedule.core.designsystem.DesignTokens
+import com.buaa.schedule.core.designsystem.GlassSegmentedControl
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
+import com.buaa.schedule.core.designsystem.LocalSemanticColors
 import com.buaa.schedule.core.designsystem.Personalization
 import com.buaa.schedule.core.designsystem.SettingsGroup
 import com.buaa.schedule.core.designsystem.SettingsRow
 import com.buaa.schedule.core.designsystem.SettingsSwitchRow
+import com.buaa.schedule.core.designsystem.fieldError
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlotProfile
 import com.buaa.schedule.domain.schedule.CourseConstraints
@@ -145,6 +156,8 @@ fun SettingsScreen(
     /** null = 分类列表（根界面）；非 null = 只显示该分类的设置项 */
     section: SettingsSection? = null,
     onOpenSection: (SettingsSection) -> Unit = {},
+    /** 通往「课表管理」的通路（①A-02）：不改底栏，只在设置里补一条入口 */
+    onOpenCourseManagement: () -> Unit = {},
     /** 手机端悬浮玻璃底栏是否在本页显示：显示时滚动内容要在底部让位 */
     bottomBarVisible: Boolean = false,
     viewModel: ScheduleViewModel = viewModel(
@@ -165,7 +178,7 @@ fun SettingsScreen(
     val settingsScope = rememberCoroutineScope()
     // 隐私同意的状态要在设置页看得见、也能撤回。存成 state 而不是每次直接读盘：
     // 撤回之后行内文案必须立刻变，否则用户只会觉得"点了没反应"。
-    var privacyConsentAt by remember { mutableStateOf(FirstRun.privacyConsentAt(context)) }
+    var privacyConsentAt by remember { mutableLongStateOf(FirstRun.privacyConsentAt(context)) }
     var showPrivacyDialog by remember { mutableStateOf(false) }
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -255,6 +268,7 @@ fun SettingsScreen(
     // 松手（onValueChangeFinished）时才写全局 + 持久化。
     var weekRowScaleDraft by remember { mutableFloatStateOf(Personalization.weekRowScale) }
     var weekCornerDraft by remember { mutableFloatStateOf(Personalization.weekCornerRadiusDp) }
+    var panelBlurDraft by remember { mutableFloatStateOf(Personalization.panelBlurDp) }
 
     // ---- 系统日历同步：状态机在 ScheduleViewModel.calendarSync 里 ----
     val calendarSync by viewModel.calendarSync.collectAsState()
@@ -366,6 +380,8 @@ fun SettingsScreen(
                 label = { Text("学期名称（如 2025-2026-1）") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
+                keyboardOptions = fieldImeOptions(),
+                keyboardActions = fieldImeActions(),
             )
             OutlinedTextField(
                 value = termCode,
@@ -373,13 +389,25 @@ fun SettingsScreen(
                 label = { Text("学期代码（教务接口使用）") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
+                keyboardOptions = fieldImeOptions(),
+                keyboardActions = fieldImeActions(),
             )
+            // ①C-04：校验结果落在字段上。这些判断此前写在四个字段**之后**，
+            // 而 isError 从未置位——用户看到一行红字，却不知道是哪一格错了。
+            val startDateValid = runCatching { LocalDate.parse(startDate) }.isSuccess
+            val weeksNumber = totalWeeks.toIntOrNull()
+            val totalWeeksValid = weeksNumber != null && weeksNumber in
+                1..CourseConstraints.MAX_TOTAL_WEEKS
             OutlinedTextField(
                 value = startDate,
                 onValueChange = { startDate = it },
                 label = { Text("开学日期（yyyy-MM-dd，周一）") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
+                keyboardOptions = fieldImeOptions(),
+                keyboardActions = fieldImeActions(),
+                isError = !startDateValid,
+                supportingText = fieldError(!startDateValid, "格式错误，应为 yyyy-MM-dd（如 2026-09-07）"),
             )
             OutlinedTextField(
                 value = totalWeeks,
@@ -387,21 +415,18 @@ fun SettingsScreen(
                 label = { Text("总周数") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
+                keyboardOptions = fieldImeOptions(numeric = true, last = true),
+                keyboardActions = fieldImeActions(last = true),
+                isError = !totalWeeksValid,
+                supportingText = fieldError(
+                    !totalWeeksValid,
+                    "总周数应为 1–${CourseConstraints.MAX_TOTAL_WEEKS} 的整数",
+                ),
             )
-
-            // 非法开学日期一旦入库会让周次计算全程崩溃，保存前先校验
-            val startDateValid = runCatching { LocalDate.parse(startDate) }.isSuccess
-            if (!startDateValid) {
-                Text(
-                    text = "开学日期格式错误，应为 yyyy-MM-dd（如 2026-09-07）",
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
 
             Button(
                 onClick = {
-                    val weeks = CourseConstraints.normalizeTotalWeeks(totalWeeks.toIntOrNull() ?: 20)
+                    val weeks = CourseConstraints.normalizeTotalWeeks(weeksNumber ?: 20)
                     // 全应用的课次日期都是 startDate.plusWeeks(w-1).plusDays(dow-1)，
                     // 非周一起点会让整张课表偏移且周次编号错位，保存前按自然周归一
                     val parsed = LocalDate.parse(startDate)
@@ -419,7 +444,7 @@ fun SettingsScreen(
                     if (monday != parsed) viewModel.showMessage("开学日期已按周一对齐为 $monday")
                 },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = startDateValid,
+                enabled = startDateValid && totalWeeksValid,
             ) {
                 Text("保存学期设置")
             }
@@ -468,8 +493,19 @@ fun SettingsScreen(
             }
             }
 
+            // ①A-02：这门课表到底有哪些课、想删想改，以前只能从首页找；
+            // 不升第四 tab，但至少要有一条说得出名字的通路。
+            item(key = "courseManagement") {
+            SettingsRow(
+                icon = Icons.Filled.School,
+                title = "课表管理",
+                summary = "查看、编辑、删除全部课程（当前 ${state.courses.size} 门）",
+                showChevron = true,
+                onClick = onOpenCourseManagement,
+            )
             }
 
+            }
             // 编辑期间只改本地草稿，点「保存」才落库；时间格式 HH:mm（零填充），
             // 因此字符串比较等价于时间先后
             val effectiveSlots = remember(state.timeSlots) {
@@ -507,6 +543,8 @@ fun SettingsScreen(
                 label = { Text("首节开始（HH:mm）") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = fieldImeOptions(),
+                keyboardActions = fieldImeActions(),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
@@ -515,6 +553,8 @@ fun SettingsScreen(
                     label = { Text("每节(分)") },
                     singleLine = true,
                     modifier = Modifier.weight(1f),
+                    keyboardOptions = fieldImeOptions(numeric = true),
+                    keyboardActions = fieldImeActions(),
                 )
                 OutlinedTextField(
                     value = smartBreak,
@@ -522,6 +562,8 @@ fun SettingsScreen(
                     label = { Text("节间(分)") },
                     singleLine = true,
                     modifier = Modifier.weight(1f),
+                    keyboardOptions = fieldImeOptions(numeric = true),
+                    keyboardActions = fieldImeActions(),
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -531,6 +573,8 @@ fun SettingsScreen(
                     label = { Text("午休在第几节后") },
                     singleLine = true,
                     modifier = Modifier.weight(1f),
+                    keyboardOptions = fieldImeOptions(numeric = true),
+                    keyboardActions = fieldImeActions(),
                 )
                 OutlinedTextField(
                     value = smartLunch,
@@ -538,6 +582,8 @@ fun SettingsScreen(
                     label = { Text("午休(分)") },
                     singleLine = true,
                     modifier = Modifier.weight(1f),
+                    keyboardOptions = fieldImeOptions(numeric = true, last = true),
+                    keyboardActions = fieldImeActions(last = true),
                 )
             }
             val smartParams = remember(smartFirst, smartPeriod, smartBreak, smartLunchAfter, smartLunch) {
@@ -588,6 +634,8 @@ fun SettingsScreen(
                         singleLine = true,
                         isError = !isValidTimeSlot(slot),
                         modifier = Modifier.weight(1f),
+                        keyboardOptions = fieldImeOptions(),
+                        keyboardActions = fieldImeActions(),
                     )
                     OutlinedTextField(
                         value = slot.endTime,
@@ -600,6 +648,8 @@ fun SettingsScreen(
                         singleLine = true,
                         isError = !isValidTimeSlot(slot),
                         modifier = Modifier.weight(1f),
+                        keyboardOptions = fieldImeOptions(),
+                        keyboardActions = fieldImeActions(),
                     )
                 }
             }
@@ -848,7 +898,7 @@ fun SettingsScreen(
                             )
                             Text(
                                 text = label,
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MaterialTheme.typography.labelMedium,
                                 color = if (selected) {
                                     MaterialTheme.colorScheme.primary
                                 } else {
@@ -924,6 +974,39 @@ fun SettingsScreen(
                     )
                 }
             }
+            item(key = "courseCardMeta") {
+                Column {
+                    Text(
+                        text = "课程卡副信息",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        text = "周课表的卡片只放得下一行副信息，选先看教师还是先看教室；" +
+                            "对应字段没登记时自动显示另一个。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    GlassSegmentedControl(
+                        options = listOf("教室优先", "教师优先"),
+                        selectedIndex = if (
+                            Personalization.courseCardMetaPreference == Personalization.META_TEACHER_FIRST
+                        ) {
+                            1
+                        } else {
+                            0
+                        },
+                        onSelect = { index ->
+                            Personalization.courseCardMetaPreference = if (index == 1) {
+                                Personalization.META_TEACHER_FIRST
+                            } else {
+                                Personalization.META_ROOM_FIRST
+                            }
+                            Personalization.save(context)
+                        },
+                        modifier = Modifier.padding(top = DesignTokens.spaceS),
+                    )
+                }
+            }
             item(key = "glassTier") {
             // 注意：SettingsGroup 的每条 item 会被包进 GlassSurface，而 GlassSurface 的
             // 内容容器是 Box —— 多个子控件不包 Column 就会全叠在左上角（文字重叠的根因）。
@@ -958,6 +1041,32 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            }
+            }
+            item(key = "panelBlur", visible = glassTier >= DesignTokens.GLASS_TIER_STANDARD) {
+            // 同本页其它条目：多个子控件必须待在 Column 里，否则全叠在左上角
+            Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
+                Text(
+                    text = "面板模糊：${panelBlurDraft.roundToInt()}dp",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Slider(
+                    value = panelBlurDraft,
+                    onValueChange = { panelBlurDraft = it },
+                    // 拖动期间只动草稿：材质是玻璃 effect 的 key，每帧写全局等于让
+                    // 整屏面板同时重算 blur（与上面 cardAlpha 同口径，R5 F-22）
+                    onValueChangeFinished = {
+                        Personalization.panelBlurDp = panelBlurDraft
+                        Personalization.save(context)
+                    },
+                    valueRange = Personalization.MIN_PANEL_BLUR_DP..Personalization.MAX_PANEL_BLUR_DP,
+                )
+                Text(
+                    text = "设置页与导入页的大卡片是透明磨砂：底下透什么就是什么，" +
+                        "这一档决定糊到什么程度，拖到 0 只剩一层薄色。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             }
             item(key = "glassPreview") {
@@ -1479,6 +1588,8 @@ fun SettingsScreen(
                 label = { Text("日历提醒提前分钟") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
+                keyboardOptions = fieldImeOptions(numeric = true, last = true),
+                keyboardActions = fieldImeActions(last = true),
             )
             }
             item(key = "sync") {
@@ -1753,7 +1864,7 @@ fun SettingsScreen(
                         Text(
                             text = "有 ${calendarSync.skippedOccurrences} 个课次因节次时间缺失被跳过",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.tertiary,
+                            color = LocalSemanticColors.current.warning,
                         )
                     }
                     if (reminderMode == com.buaa.schedule.domain.model.ReminderMode.APP) {
@@ -1867,6 +1978,31 @@ fun SettingsScreen(
 
 /** HH:mm（零填充）。零填充保证字符串比较等价于时间先后。 */
 private val TIME_OF_DAY_PATTERN = Regex("^\\d{2}:\\d{2}$")
+
+/**
+ * 设置页字段的键盘声明（审查 U-05：此前全仓 0 处 KeyboardOptions）。
+ *
+ * `numeric` 只给**纯整数**字段（总周数、每节分钟数）。
+ * 日期（`2026-09-07`）与节次时间（`08:00`）**故意**留在字母键盘上：
+ * 数字面板没有 `-` 和 `:`，换了键盘等于让人打不出这个值。
+ */
+@Composable
+private fun fieldImeOptions(numeric: Boolean = false, last: Boolean = false): KeyboardOptions =
+    KeyboardOptions(
+        keyboardType = if (numeric) KeyboardType.Number else KeyboardType.Text,
+        imeAction = if (last) ImeAction.Done else ImeAction.Next,
+    )
+
+/** 与 [fieldImeOptions] 配对：「下一个」沿竖直表单向下移焦点，「完成」收起键盘。 */
+@Composable
+private fun fieldImeActions(last: Boolean = false): KeyboardActions {
+    val focusManager = LocalFocusManager.current
+    return if (last) {
+        KeyboardActions(onDone = { focusManager.clearFocus() })
+    } else {
+        KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) })
+    }
+}
 
 /**
  * 单条节次时间是否合法：格式必须为 HH:mm，且结束晚于开始。

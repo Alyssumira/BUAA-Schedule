@@ -38,16 +38,80 @@ object DesignTokens {
     /** 最小触控区域 */
     val minTouchTarget = 48.dp
 
-    /** 玻璃材质档位：0 关闭（普通 surface）/ 1 标准 / 2 增强 */
-    const val GLASS_TIER_OFF = 0
-    const val GLASS_TIER_STANDARD = 1
-    const val GLASS_TIER_ENHANCED = 2
+    /**
+     * 图标尺寸刻度。此前全站有 9 种尺寸，其中 21/22 与 13/14 各差 1dp 且毫无意图
+     * （审查②V-13）。统一到 4 档，选档按"它在版面里承担什么角色"，不是按"原来是多少"。
+     */
+    /** 行内辅助、状态标记（原 13/14/16dp） */
+    val iconSmall = 16.dp
+
+    /** 行首图标、箭头、菜单项（原 18/20/21/22dp） */
+    val iconMedium = 20.dp
+
+    /** 主操作、导航（原 24/28dp） */
+    val iconLarge = 24.dp
+
+    /** 空态与首启的标题级图标（原 40dp） */
+    val iconHero = 40.dp
 
     /**
-     * 档位 → 材质强度倍率。所有变体共用同一倍率，
-     * 避免同一档位下不同控件的强度变化幅度不一致。
+     * 用户「卡片透明度」滑条 → 玻璃表面 alpha 倍率。
+     *
+     * 四类玻璃表面（面板 / 底栏 / FAB / 菜单）必须共用这一个口径：此前 FAB 与菜单的
+     * 下限写死 0.5、面板是 0.18，同一根滑条拉到最左时面板明显变透、FAB 和菜单只动了
+     * 一半幅度，而 `LiquidMenu` 的注释还写着"与 GlassSurface 口径一致"（审查②V-12）。
+     *
+     * 0.88 是滑条的默认值，"默认 = 1.0 倍"由此而来；1.25 封顶让滑到最右也不会实心。
+     * 各表面在这之上仍可再加自己的上限（菜单要一直看得见底下的内容），
+     * 但**下限不再各写一套**。
      */
-    fun glassIntensity(tier: Int): Float = if (tier >= GLASS_TIER_ENHANCED) 1.3f else 1f
+    fun cardAlphaScale(userAlpha: Float): Float = (userAlpha / 0.88f).coerceIn(0.18f, 1.25f)
+
+    /**
+     * 周视图网格的几何基准。这几个值互相耦合，改一个要同时看另一堆：
+     * 时间列 + 7 列 = 屏宽，行高 × 节次数 = 网格总高。
+     */
+    /** 左侧节次/小时列宽。与 7 列课程网格共享屏宽，调大必然挤压卡片宽度（曾按 48dp 与卡片 43dp 取舍过） */
+    val weekTimeColumnWidth = 48.dp
+
+    /**
+     * 悬浮底栏的左右内缩。
+     *
+     * 底栏是 overlay，课表内容会一直延伸到它背后滚动 —— 内缩小于左侧时间列时，
+     * 「08:00」那一列就永久压在玻璃底下（真机反馈：底栏左右收紧一点，别遮时间栏）。
+     * 所以这个值必须以 [weekTimeColumnWidth] 为基准，而不是跟着页面边距走；
+     * 胶囊自己还有 4dp 内边距，一并算进来。
+     */
+    val bottomBarHorizontalInset = weekTimeColumnWidth + spaceS
+
+    /** 单节行的基准高度（用户缩放系数 `Personalization.weekRowScale` 乘在它上面） */
+    val weekRowHeight = 64.dp
+
+    /** 24 小时制下每小时的行高，同上受 weekRowScale 缩放 */
+    val weekHourHeight = 56.dp
+
+    /** 窄屏一屏放得下的天数：七天等宽挤到 48dp 以下时改成横向滚动，每屏露这么多天 */
+    const val weekCompactVisibleDays = 5
+
+    /** 日视图时间轴：每分钟占多高，与 [dayBlockTintAlpha] 一起决定时间块的可读性与触控高度 */
+    val dayHeightPerMinute = 1.05.dp
+
+    /** 日视图时间块的课程色底板浓度：低于这个值课程色会被面板灰吃掉 */
+    const val dayBlockTintAlpha = 0.72f
+
+    /** 首页 FAB 相对底栏的抬升量（悬浮底栏与 FAB 的让位几何，成对改） */
+    val fabLift = 60.dp
+
+    /**
+     * 玻璃材质档位：0 关闭（大面板退化成实心卡片）/ 1 开启。
+     *
+     * 曾经的第三档「增强」(1.3x 强度) 已删除（审查②V-14）：设置页只暴露关闭/开启，
+     * `Personalization.load()` 又把读到的档位夹回 0..1，用户无论如何到不了那一档，
+     * 留着常量只会让人以为调 `glassIntensity` 能改变观感。
+     * 要恢复这一档，得同时给设置页第三个选项并重新钉 [surfaceUsesGlass] 的语义。
+     */
+    const val GLASS_TIER_OFF = 0
+    const val GLASS_TIER_STANDARD = 1
 
     /**
      * 某一玻璃档位下，该变体是否仍渲染真液态玻璃（AGSL 折射 + 模糊）。
@@ -78,6 +142,19 @@ object DesignTokens {
      * 结果只被 [GLASS_HARD_MIN_ALPHA] 托底：场景本身够安全时玻璃就该真的透
      * （内置深色渐变下约 0.34，比原来写死的 0.55 通透一档），
      * 场景很亮时才被迫压实。此前那个按主题写死的下限两头都错。
+     *
+     * ## 上层有两个入口，别随手挑（审查①C-05）
+     *
+     * 两者**都收敛到本函数**，所以数值口径永远一致；区别只在返回形态：
+     *
+     * | 你手上有什么 | 用哪个 |
+     * |---|---|
+     * | 只有底色，**前景色还要一起定**（课程色卡片、日程时间块） | [legibleTintPlate] → `TintPlate` |
+     * | 前景色**已定**（主题 `onSurface`），只要知道底板至少多实（[GlassSurface]、分段控件、底栏） | [legibilityAlphaFloor] → `Float` |
+     *
+     * 也就是说：`legibleTintPlate` 是"选字 + 压实"的完整流程（先试黑白色、再抬 alpha、
+     * 最后才动底色），`legibilityAlphaFloor` 是它的第 2 步单独拿出来用。
+     * 已经定了文字色还去调 `legibleTintPlate`，它会擅自替你换成黑或白。
      */
     fun glassAlphaFloor(
         surfaceLuma: Float,
@@ -100,23 +177,60 @@ object DesignTokens {
     }
 
     /**
-     * 变体 + 档位 → 液态玻璃材质。**这是档位映射的唯一真源**。
+     * 变体 → 液态玻璃材质。**这是变体映射的唯一真源**。
      *
      * 此前存在两套并行映射（`glassSpec()` 与 `LiquidGlassMaterial`），
      * 改一处不会同步，测试通过但行为不变。现在 [GlassSurface] 与测试都走这里。
+     *
+     * 档位不参与这里的取值（②V-14）：能到得了的档位只有开/关，
+     * 关的是 [surfaceUsesGlass] 决定的"要不要走玻璃"，而不是把同一块玻璃调得更折。
      */
-    fun glassMaterial(variant: GlassVariant, tier: Int): LiquidGlassMaterial {
-        val intensity = glassIntensity(tier)
-        return when (variant) {
-            // 底部导航 / 顶栏更强调折射，基准强度高于其他变体
-            GlassVariant.CHROME -> LiquidGlassMaterial.pill(CHROME_BASE_INTENSITY * intensity)
-            GlassVariant.PANEL -> LiquidGlassMaterial.dialog(intensity)
-            GlassVariant.COMPACT -> LiquidGlassMaterial.pill(intensity)
-            GlassVariant.ALERT -> LiquidGlassMaterial.dialog(intensity)
-        }
+    fun glassMaterial(
+        variant: GlassVariant,
+        panelBlurDp: Float = Personalization.DEFAULT_PANEL_BLUR_DP,
+    ): LiquidGlassMaterial = when (variant) {
+        // 底部导航 / 顶栏更强调折射，基准强度高于其他变体
+        GlassVariant.CHROME -> LiquidGlassMaterial.pill(CHROME_BASE_INTENSITY)
+        GlassVariant.PANEL -> panelMaterial(panelBlurDp)
+        GlassVariant.COMPACT -> LiquidGlassMaterial.pill()
+        GlassVariant.ALERT -> LiquidGlassMaterial.dialog()
     }
 
-    /** CHROME 变体在标准档下的基准强度 */
+    /**
+     * 大面板（设置页 / 导入页那种整屏卡片）的材质：透明底板 + 高斯模糊，**不做折射**。
+     *
+     * 真机反馈「大块玻璃太多了有点丑」——丑的是 dialog 材质那套 lens：几十条 item
+     * 每条一块透镜，边缘被折射拉出亮暗带，叠在一起就成了"一摞玻璃板"。这里把 lens
+     * 关掉、tint 压到 pill 那一档，剩下的是纯磨砂：底下透什么就是什么，糊到什么程度交给用户
+     * （[Personalization.panelBlurDp]）。
+     *
+     * 内外阴影同步减淡：它们原本是为"厚玻璃"雕立体感的，板子薄了还按原浓度画，
+     * 等于给每张卡蒙一圈灰边。
+     */
+    fun panelMaterial(blurDp: Float): LiquidGlassMaterial = LiquidGlassMaterial.dialog().copy(
+        blur = blurDp.coerceIn(
+            Personalization.MIN_PANEL_BLUR_DP,
+            Personalization.MAX_PANEL_BLUR_DP,
+        ).dp,
+        lensHeight = 0.dp,
+        lensAmount = 0.dp,
+        depthEffect = false,
+        surfaceAlpha = PANEL_SURFACE_ALPHA,
+        // vibrancy 会把采到的背景提亮增饱和。tint 还有 0.34 压着时它是"通透"的来源；
+        // 底板压到 0.18 后它就直接透到文字底下了——跟着壁纸颜色晃，还不是磨砂该有的中性灰。
+        useVibrancy = false,
+        shadowAlpha = 0.09f,
+        innerShadowAlpha = 0.05f,
+        innerShadowRadius = 3.dp,
+    )
+
+    /**
+     * 大面板 tint 的基准浓度：与 pill 同档，比 dialog 的 0.34 透一档。
+     * 实际还要过 [glassAlphaFloor] 的对比度下限，所以这是"能多透就多透"的意图值。
+     */
+    const val PANEL_SURFACE_ALPHA = 0.18f
+
+    /** CHROME 变体相对其它变体的折射/模糊强度倍率 */
     const val CHROME_BASE_INTENSITY = 1.3f
 }
 

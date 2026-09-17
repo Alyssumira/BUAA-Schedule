@@ -135,16 +135,45 @@ object BuaaWebSession {
     fun setAppForeground(fg: Boolean) {
         if (appForeground == fg) return
         appForeground = fg
-        val web = sessionWebView ?: return
-        Handler(Looper.getMainLooper()).post {
-            if (fg) {
-                web.onResume()
-                web.resumeTimers()
-            } else {
-                web.onPause()
-                web.pauseTimers()
-            }
-        }
+        Handler(Looper.getMainLooper()).post { applyTimerGate(sessionWebView) }
+    }
+
+    /**
+     * 前后台定时器闸门：后台挂起、前台恢复。
+     *
+     * ⚠️ `pauseTimers()` / `resumeTimers()` 挂起的是**整个进程**里所有 WebView 的
+     * 定时器（官方口径），但在 SDK 36 的桩里它们是实例方法 —— 只能借某一个
+     * WebView 实例调得到。于是"手里有实例才调得到"这条约束本身成了坑：
+     * 退到后台（挂起生效）→ 内存压力销毁唯一的会话 WebView → 回前台时
+     * [sessionWebView] 已是 null，早退处再没人能 `resumeTimers()` ——
+     * 进程的定时器就永久停在挂起态，之后新建的登录页连 `onPageFinished`
+     * 都不回调，页面内 fetch 只能一路静默超时。用户看到的是"身份认证登录后
+     * 卡在打开导入预览界面"，而且没有任何报错。
+     *
+     * 所以不变式做在两个时机：状态翻转时用手上的实例施加；实例**生**（见
+     * [createSessionWebView] 与登录页的 WebView）和**灭**（见 [releaseForMemory]、
+     * [abandonRestore]）之前各调一次 [alignTimersWithForeground] 兜住没有实例的空窗。
+     * 必须在主线程调用。
+     */
+    private fun applyTimerGate(web: WebView?) {
+        val fg = appForeground
+        if (web == null) return
+        runCatching { if (fg) web.resumeTimers() else web.pauseTimers() }
+            .onFailure { Log.w(TAG, "切换 WebView 定时器失败 fg=$fg", it) }
+        runCatching { if (fg) web.onResume() else web.onPause() }
+    }
+
+    /**
+     * 借一个具体实例把进程定时器对齐到"当前在前台"。
+     *
+     * 新建的 WebView 会**继承**进程现有的挂起态 —— 一出生 JS 就不跑，
+     * 所以每个创建点都要在配置完 settings 之后调一次；销毁实例之前同样调一次，
+     * 别把挂起态留给下一个实例。后台时不动手：那时挂起本来就是对的。
+     */
+    fun alignTimersWithForeground(web: WebView) {
+        if (!appForeground) return
+        runCatching { web.resumeTimers() }
+            .onFailure { Log.w(TAG, "对齐 WebView 定时器失败", it) }
     }
 
     /** 应用启动时调用一次（任意线程） */
@@ -183,11 +212,9 @@ object BuaaWebSession {
         // 立刻把会话 Cookie 加密落盘：CookieManager 不会持久化"会话 Cookie"，
         // 不落盘的话用户划掉应用后登录态就没了。
         persistCookies()
-        // 若保留时应用已在后台（理论上不会从 UI 路径发生，但兜底）
-        if (!appForeground) {
-            webView.onPause()
-            webView.pauseTimers()
-        }
+        // 若保留时应用已在后台（理论上不会从 UI 路径发生，但兜底）：闸门会同时
+        // 处理进程级定时器与这个 WebView 的 onPause
+        applyTimerGate(webView)
     }
 
     /**
@@ -403,6 +430,9 @@ object BuaaWebSession {
         // 放开只会让页面里任意第三方 iframe 带上会话 Cookie（行为是对的，
         // 之前的注释写反了 —— R5 F-48）
         CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
+        // 新建的 WebView 会继承进程遗留的定时器挂起态（上次后台 pause 之后没有
+        // 实例能 resume）—— 不清掉的话这个页面一出生 JS 就是冻结的。
+        alignTimersWithForeground(this)
         // 这个 WebView 的 Context 是 application：默认的 JS 对话框实现会拿它去建
         // AlertDialog，没有窗口令牌 → BadTokenException 直接崩进程。页面弹 alert
         // （教务系统偶尔这么干）时一律取消，让脚本继续跑。
@@ -441,12 +471,45 @@ object BuaaWebSession {
         restoreGuard = null
     }
 
+    /**
+     * 系统施加内存压力时释放那个只为「静默刷新」存在的隐藏会话 WebView。
+     *
+     * 值得放掉的理由：这个 WebView 挂着一个已加载的 byxt 页面，Chromium 侧的渲染堆
+     * 是整个应用里最大的一块单体驻留内存，而它只在用户点「同步教务」时才真正干活。
+     * Cookie 早已由 [BuaaCookieStore] 加密落盘，下次回前台 [restore] 会照原样重建，
+     * 用户唯一能感知的是这期间发起的一次静默刷新要等页面重新装好 —— 而内存吃紧时
+     * 本来就不该抢着做后台刷新。
+     *
+     * 线程口径同 [retain]：WebView 的 destroy 必须回到创建它的主线程。
+     */
+    fun releaseForMemory() {
+        Handler(Looper.getMainLooper()).post {
+            val web = sessionWebView ?: return@post
+            Log.i(TAG, "内存压力：释放隐藏会话 WebView，下次前台按 Cookie 重建")
+            // 先摘引用再 destroy：WeakReference 本身挡不住视图树那侧的强引用，
+            // 真正让 WebView 可回收的是下面的 removeView + destroy。
+            sessionWebView = null
+            lastUrl = null
+            // 拆之前先把进程定时器对齐到当前状态：这个实例很可能正是"当初被 pause
+            // 的那一个"，destroy 之后就没有任何实例能替我们 resumeTimers() 了。
+            alignTimersWithForeground(web)
+            runCatching {
+                (web.parent as? ViewGroup)?.removeView(web)
+                web.stopLoading()
+                web.destroy()
+            }.onFailure { Log.w(TAG, "释放会话 WebView 失败", it) }
+            hiddenHost = null
+        }
+    }
+
     /** 加载失败/被踢到站外：把这次恢复用的 WebView 彻底拆掉，避免半死实例继续吃内存 */
     private fun abandonRestore(web: WebView, reason: String) {
         Log.w(TAG, "放弃会话恢复：$reason")
         cancelRestoreGuard()
         restoreInFlight = false
         lastRestoreFailureAt = System.currentTimeMillis()
+        // 同 releaseForMemory：destroy 之前用这个实例清掉进程挂起态
+        alignTimersWithForeground(web)
         runCatching {
             (web.parent as? ViewGroup)?.removeView(web)
             web.stopLoading()

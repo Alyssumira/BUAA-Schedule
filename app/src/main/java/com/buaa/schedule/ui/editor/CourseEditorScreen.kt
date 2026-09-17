@@ -1,6 +1,7 @@
 package com.buaa.schedule.ui.editor
 
 import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,6 +17,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.material.icons.Icons
@@ -47,7 +50,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.CourseColors
 import com.buaa.schedule.core.designsystem.DesignTokens
@@ -56,6 +64,8 @@ import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalAnimatedVisibilityScope
 import com.buaa.schedule.core.designsystem.LocalSharedTransitionScope
 import com.buaa.schedule.core.designsystem.contentOn
+import com.buaa.schedule.core.designsystem.fieldError
+import com.buaa.schedule.core.designsystem.motionSpec
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.CourseSaveOptions
 import com.buaa.schedule.domain.model.ReminderSetting
@@ -109,6 +119,36 @@ fun CourseEditorScreen(
     }
     val weeks = remember(weeksText) { WeekParser.parse(weeksText) }
     val canSave = weeks.isNotEmpty() && periods.isNotEmpty() && !saving
+
+    // 字段级校验：判定与 parsePeriods 一一对应，这样"红框"和"存不存得进去"永远同步，
+    // 不会出现标了红却能保存、或者没标红却被拦住。
+    val startPeriodNumber = startSection.trim().toIntOrNull()
+    val endPeriodNumber = endSection.trim().toIntOrNull()
+    val startSectionInvalid = startPeriodNumber == null ||
+        startPeriodNumber !in 1..CourseConstraints.MAX_PERIOD
+    val endSectionInvalid = endPeriodNumber == null ||
+        endPeriodNumber !in 1..CourseConstraints.MAX_PERIOD ||
+        (startPeriodNumber != null && endPeriodNumber < startPeriodNumber)
+    // 额外节次是可选的：留空不算错，填了就必须能解析成 1..MAX_PERIOD 的节次
+    val extraPeriodsInvalid = extraPeriods.isNotBlank() &&
+        WeekParser.parse(extraPeriods).let { list ->
+            list.isEmpty() || list.any { it !in 1..CourseConstraints.MAX_PERIOD }
+        }
+    val weeksInvalid = weeks.isEmpty()
+
+    // 键盘流转：表单是一条竖向 Column，所以「下一个」直接用 FocusDirection.Down，
+    // 比给 11 个字段各挂一个 focusRequester 少一半代码，也不会漏配。
+    val focusManager = LocalFocusManager.current
+    val nextFieldOptions = KeyboardOptions(imeAction = ImeAction.Next)
+    val doneFieldOptions = KeyboardOptions(imeAction = ImeAction.Done)
+    val numberFieldOptions = KeyboardOptions(
+        keyboardType = KeyboardType.Number,
+        imeAction = ImeAction.Next,
+    )
+    val nextFieldActions = KeyboardActions(
+        onNext = { focusManager.moveFocus(FocusDirection.Down) },
+    )
+    val doneActions = KeyboardActions(onDone = { focusManager.clearFocus() })
 
     fun performSave() {
         val course = Course(
@@ -212,16 +252,11 @@ fun CourseEditorScreen(
                 .padding(horizontal = DesignTokens.spaceL),
             verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM),
         ) {
-            if (periods.isEmpty()) {
+            // 详细原因已经落到出错的字段旁边（isError + supportingText），
+            // 顶部只留一条汇总——它负责"为什么保存按钮是灰的"，不负责指出是哪一格。
+            if (periods.isEmpty() || weeks.isEmpty()) {
                 Text(
-                    text = "节次无效，请检查开始/结束节次与额外节次",
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            if (weeks.isEmpty()) {
-                Text(
-                    text = "周次解析为空，请检查格式",
+                    text = "还有字段未通过校验，请检查标红的输入框",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -234,6 +269,8 @@ fun CourseEditorScreen(
                     label = { Text("课程名称") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
+                    keyboardOptions = nextFieldOptions,
+                    keyboardActions = nextFieldActions,
                 )
                 OutlinedTextField(
                     value = alias,
@@ -241,6 +278,8 @@ fun CourseEditorScreen(
                     label = { Text("课程别名（可选，仅改显示）") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
+                    keyboardOptions = nextFieldOptions,
+                    keyboardActions = nextFieldActions,
                 )
                 OutlinedTextField(
                     value = teacher,
@@ -248,6 +287,8 @@ fun CourseEditorScreen(
                     label = { Text("教师") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
+                    keyboardOptions = nextFieldOptions,
+                    keyboardActions = nextFieldActions,
                 )
                 OutlinedTextField(
                     value = location,
@@ -255,6 +296,8 @@ fun CourseEditorScreen(
                     label = { Text("地点") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
+                    keyboardOptions = nextFieldOptions,
+                    keyboardActions = nextFieldActions,
                 )
                 OutlinedTextField(
                     value = campus,
@@ -262,6 +305,8 @@ fun CourseEditorScreen(
                     label = { Text("校区") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
+                    keyboardOptions = nextFieldOptions,
+                    keyboardActions = nextFieldActions,
                 )
             }
 
@@ -274,6 +319,13 @@ fun CourseEditorScreen(
                         label = { Text("开始节次") },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
+                        keyboardOptions = numberFieldOptions,
+                        keyboardActions = nextFieldActions,
+                        isError = startSectionInvalid,
+                        supportingText = fieldError(
+                            startSectionInvalid,
+                            "节次范围 1–${CourseConstraints.MAX_PERIOD}",
+                        ),
                     )
                     OutlinedTextField(
                         value = endSection,
@@ -281,14 +333,32 @@ fun CourseEditorScreen(
                         label = { Text("结束节次") },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
+                        keyboardOptions = numberFieldOptions,
+                        keyboardActions = nextFieldActions,
+                        isError = endSectionInvalid,
+                        supportingText = fieldError(
+                            endSectionInvalid,
+                            if (startPeriodNumber != null && endPeriodNumber != null &&
+                                endPeriodNumber < startPeriodNumber
+                            ) "结束需晚于开始" else "节次范围 1–${CourseConstraints.MAX_PERIOD}"
+                        ),
                     )
                 }
+                // 额外节次/周次**故意**不用数字键盘：值里有 '-'、','（乃至「1-16单」的汉字），
+                // 数字面板打不出来，为了"看起来统一"而换键盘只会让人无法输入。
                 OutlinedTextField(
                     value = extraPeriods,
                     onValueChange = { extraPeriods = it },
                     label = { Text("额外节次（可选，如 9-10 或 9,10）") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
+                    keyboardOptions = nextFieldOptions,
+                    keyboardActions = nextFieldActions,
+                    isError = extraPeriodsInvalid,
+                    supportingText = fieldError(
+                        extraPeriodsInvalid,
+                        "无法解析，且每一项都要在 1–${CourseConstraints.MAX_PERIOD} 内",
+                    ),
                 )
             }
 
@@ -304,6 +374,12 @@ fun CourseEditorScreen(
                     },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
+                    // 新建课程时「提醒」那一组不存在，周次就是最后一个字段——
+                    // 这时给"下一个"等于按了没反应，应该是收起键盘。
+                    keyboardOptions = if (initialCourse == null) doneFieldOptions else nextFieldOptions,
+                    keyboardActions = if (initialCourse == null) doneActions else nextFieldActions,
+                    isError = weeksInvalid,
+                    supportingText = fieldError(weeksInvalid, "周次解析为空，可用 1-16 / 1-16单 / 1,3,5"),
                 )
             }
 
@@ -341,6 +417,11 @@ fun CourseEditorScreen(
                         label = { Text("提前分钟（0-${CourseConstraints.MAX_ADVANCE_MINUTES}）") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Done,
+                        ),
+                        keyboardActions = doneActions,
                     )
                 }
             }
@@ -415,7 +496,11 @@ private fun EditorSection(
         shape = RoundedCornerShape(DesignTokens.cornerPanel),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM)) {
+        // material3 自己不动画 supportingText 的出现，字段报错时整块面板在这里平滑长高
+        Column(
+            modifier = Modifier.animateContentSize(motionSpec<IntSize>()),
+            verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM),
+        ) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleSmall,
@@ -631,13 +716,13 @@ private fun ColorDot(
                     imageVector = Icons.Default.Check,
                     contentDescription = "已选择",
                     tint = contentOn(color),
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(DesignTokens.iconMedium),
                 )
             }
             if (label != null) {
                 Text(
                     text = label,
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelMedium,
                     color = contentOn(color),
                 )
             }

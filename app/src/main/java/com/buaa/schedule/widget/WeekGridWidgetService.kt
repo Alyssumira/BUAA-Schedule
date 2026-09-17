@@ -2,7 +2,10 @@ package com.buaa.schedule.widget
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.util.Log
+import android.util.TypedValue
+import android.view.View
 import android.widget.RemoteViews
 import android.widget.RemoteViewsService
 import com.buaa.schedule.R
@@ -35,10 +38,19 @@ class WeekGridFactory(
         android.appwidget.AppWidgetManager.INVALID_APPWIDGET_ID,
     )
 
-    private data class DayCell(val dayName: String, val summary: String)
+    private data class DayCell(
+        val dayName: String,
+        val summary: String,
+        /** 这一列是不是「今天」（审查 3.4）。只在正在看本周时为 true */
+        val isToday: Boolean,
+    )
 
     private var cells: List<DayCell> = emptyList()
     private var appearance: WidgetAppearance = WidgetAppearance()
+
+    /** 本次渲染的教学周与「今天」所在列：进 itemId，见 [getItemId] */
+    private var weekOfGrid: Int = 0
+    private var todayColumn: Int = 0
 
     /** 快照未命中时补数据用的后台作用域（onDataSetChanged 在主线程，不能自己查库） */
     private val refetchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -48,32 +60,44 @@ class WeekGridFactory(
     override fun onDataSetChanged() {
         val semester: Semester?
         val courses: List<com.buaa.schedule.domain.model.Course>
-        val bindingCode = WidgetBindingStore.load(context, appWidgetId).semesterCode
+        val binding = WidgetBindingStore.load(context, appWidgetId)
         // 同 CourseListFactory：onDataSetChanged 在主线程，不能在这里阻塞查库。
         // 未命中就渲染空网格，**并自己补一次数据再通知**，不能干等着没人管（R5 F-17）。
-        val data = WidgetDataCache.peek(bindingCode)
+        val data = WidgetDataCache.peek(binding.semesterCode)
         appearance = WidgetAppearanceStore.load(context, appWidgetId)
         if (data == null) {
             Log.w(TAG, "快照未就绪，本次渲染空网格并异步补数据")
             cells = emptyList()
-            refetchAndNotify(bindingCode)
+            refetchAndNotify(binding.semesterCode)
             return
         }
         semester = data.semester
         courses = data.courses
 
-        val week = semester?.startLocalDate?.let {
-            WeekCalculator.currentWeekOrNull(it, semester.totalWeeks, LocalDate.now())
+        val today = LocalDate.now()
+        // 浏览周从 store 现读，而不是从 adapter intent 的 extras 拿：
+        // 宿主用 Intent.filterEquals 判等，它**不含 extras**，只改 extras 根本不会重建工厂，
+        // 于是翻周点下去还是老那一周（真机最容易踩的 RemoteViews 坑之一）。
+        val week = displayWeekOf(semester, today, binding)
+        weekOfGrid = week ?: 0
+        // 「今天」只在正在看本周时才高亮：翻到下周还亮着周四，用户会以为那天就是今天。
+        val realWeek = semester?.startLocalDate?.let {
+            WeekCalculator.currentWeekOrNull(it, semester.totalWeeks, today)
         }
+        todayColumn = if (week != null && week == realWeek) today.dayOfWeek.value else 0
         val names = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
         cells = if (semester == null || week == null || courses.isEmpty()) {
-            names.map { DayCell(it, "") }
+            names.map { DayCell(it, "", false) }
         } else {
             names.mapIndexed { index, dayName ->
                 val day = index + 1
                 val dayCourses = courses.filter { it.dayOfWeek == day && it.weeks.contains(week) }
                     .sortedBy { it.startPeriod }
-                DayCell(dayName, weekGridDaySummary(dayCourses))
+                DayCell(
+                    dayName = dayName,
+                    summary = weekGridDaySummary(dayCourses, maxLines = appearance.gridMaxLines),
+                    isToday = day == todayColumn,
+                )
             }
         }
     }
@@ -98,9 +122,37 @@ class WeekGridFactory(
         val views = RemoteViews(context.packageName, R.layout.widget_week_grid_item)
         views.setTextViewText(R.id.widget_grid_day, cell.dayName)
         views.setTextViewText(R.id.widget_grid_courses, cell.summary)
+        // U-09：宽松档（每格 3 节）把课程行从 9sp 提到 10sp——密集档是列宽所限，
+        // 但既然只列三节，就没有理由继续用接近不可读的字号。
+        // RemoteViews 改字号只有 setTextViewTextSize，而它要 API 33：26~32 上这一档仍然
+        // 只列 3 节、字号留在布局默认的 9sp。为两档字号再造一份只差 textSize 的布局，
+        // 换来的是两处会互相漂移的字号定义，不值当。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            views.setTextViewTextSize(
+                R.id.widget_grid_courses,
+                TypedValue.COMPLEX_UNIT_SP,
+                appearance.gridRowTextSizeSp,
+            )
+        }
         val bg = appearance.resolvedBackground(context)
-        views.setTextColor(R.id.widget_grid_day, appearance.titleColorFor(bg))
+        // 今天的表头（审查 3.4）：胶囊底是一块纯白圆角 ImageView，运行时按配色口径着色
+        // ——TextView 上直接 setBackgroundColor 会把背景换成方角色块、圆角就没了。
+        if (cell.isToday) {
+            views.setInt(R.id.widget_grid_day_pill, "setColorFilter", appearance.todayHighlightFor(bg))
+            views.setFloat(R.id.widget_grid_day_pill, "setAlpha", appearance.todayHighlightAlpha)
+            views.setViewVisibility(R.id.widget_grid_day_pill, View.VISIBLE)
+            views.setTextColor(R.id.widget_grid_day, appearance.onTodayHighlightFor(bg))
+        } else {
+            views.setViewVisibility(R.id.widget_grid_day_pill, View.GONE)
+            views.setTextColor(R.id.widget_grid_day, appearance.titleColorFor(bg))
+        }
         views.setTextColor(R.id.widget_grid_courses, appearance.bodyColorFor(bg))
+        // 格子点击（审查 3.6）：模板 PendingIntent 由 WidgetCommon 下发，这里只带行级 extras。
+        // 一格代表一天，点它就到那一天的日视图——列了多达 5 节课的格子不该替用户决定打开哪一门。
+        views.setOnClickFillInIntent(
+            R.id.widget_grid_item_root,
+            Intent().putExtra(WidgetNavigation.EXTRA_DAY_OF_WEEK, position + 1),
+        )
         return views
     }
 
@@ -108,11 +160,16 @@ class WeekGridFactory(
 
     override fun getViewTypeCount(): Int = 1
 
-    // 位置 + 外观之外还要折进这一格真正画出来的文字：宿主按 id 缓存单元格，
-    // id 不变就不看工厂新算的内容（改课后网格还是老课表，见 WidgetCommon.itemKey）。
+    /**
+     * 位置 + 外观之外还要折进这一格真正画出来的文字：宿主按 id 缓存单元格，
+     * id 不变就不看工厂新算的内容（改课后网格还是老课表，见 WidgetCommon.itemKey）。
+     *
+     * 「今天」与浏览周也必须折进来：两者都不在 [appearance] 里，跨零点后 isToday 翻面、
+     * 翻周后 weekOfGrid 变化，若某天两格的文字恰好一样，id 不变 → 高亮停在昨天。
+     */
     override fun getItemId(position: Int): Long {
         val cell = cells.getOrNull(position) ?: return WidgetCommon.itemKey(position, position.toLong())
-        val content = (cell.dayName + cell.summary).hashCode()
+        val content = (cell.dayName + cell.summary + cell.isToday + weekOfGrid).hashCode()
         return WidgetCommon.itemKey(position, content.toLong() + appearance.viewIdStamp())
     }
 
@@ -135,15 +192,56 @@ internal const val WEEK_GRID_MAX_LINES = 5
 internal const val WEEK_GRID_NAME_CHARS = 3
 
 /**
- * 短名：别名优先（用户自己起的通常已经很短），去掉教务原名里的括号补充与空格，
- * 再截到 [WEEK_GRID_NAME_CHARS] 个字。
+ * 短名：别名优先（用户自己起的通常已经很短），再把**括号里的区分字内联**进来截断。
+ *
+ * 旧写法先 `substringBefore('(')` 再 take(3)，于是「大学物理(上)」与「大学物理(下)」、
+ * 「体育(篮球)」与「体育(游泳)」全都变成同一个名字——括号里那几个字恰恰是唯一
+ * 的区分信息（审查 3.3）。这里让主干让出一个字给括号首字：
+ * 「大学上」「大学下」「体育篮」「体育游」「毛概1」。
+ *
+ * 另一类旧写法治不到的撞名：`高等数学A` / `高等数学B` 这种**没有括号、班型写在末尾**
+ * 的北航公共课，截断后都是「高等数」（统筹文档 §2.2 实测补的规则）。
+ * 末位是 ASCII 字母/数字时同样让一个字给后缀：「高等A」「高等B」。
  */
-internal fun weekGridShortName(name: String, maxChars: Int = WEEK_GRID_NAME_CHARS): String =
-    name.substringBefore('(')
-        .substringBefore('（')
-        .replace(" ", "")
-        .trim()
-        .take(maxChars)
+internal fun weekGridShortName(name: String, maxChars: Int = WEEK_GRID_NAME_CHARS): String {
+    val cleaned = name.replace(" ", "").trim()
+    val trunkChars = (maxChars - 1).coerceAtLeast(1)
+    parenInner(cleaned)?.let { inner ->
+        return cleaned.take(trunkChars) + inner
+    }
+    asciiSuffix(cleaned)?.let { suffix ->
+        return cleaned.dropLast(suffix.length).take(trunkChars) + suffix
+    }
+    return cleaned.take(maxChars)
+}
+
+/** 首个中英文括号里的第一个字；括号在最前、括号为空时返回 null */
+private fun parenInner(cleaned: String): String? {
+    val open = cleaned.indexOfFirst { it == '(' || it == '（' }
+    if (open <= 0) return null
+    val tail = cleaned.substring(open + 1)
+    // 教务导出的脏数据里有半截括号（「大学物理(上」），没有闭括号就取到结尾
+    val inner = tail.substringBefore(')').substringBefore('）')
+    return inner.firstOrNull()?.takeUnless { it == '(' || it == '（' }?.toString()
+}
+
+/**
+ * 末尾的 ASCII 字母/数字尾巴（班型后缀），只取**最后一个字**；
+ * 尾巴之前必须还有非 ASCII 文字，否则「Math101」这种整名都是拉丁的课
+ * 让位后只剩「Ma1」，比直接截「Mat」更糟。
+ *
+ * 多位尾巴（「高等数学2024」）不能整段留下：短名的预算就是 maxChars 个字。
+ */
+private fun asciiSuffix(cleaned: String): String? {
+    if (cleaned.isEmpty()) return null
+    if (!cleaned.last().isClassSuffixChar()) return null
+    val trunkEnd = cleaned.indexOfLast { !it.isClassSuffixChar() }
+    if (trunkEnd <= 0) return null
+    return cleaned.substring(trunkEnd + 1).takeLast(1)
+}
+
+private fun Char.isClassSuffixChar(): Boolean =
+    this in 'A'..'Z' || this in 'a'..'z' || this in '0'..'9'
 
 /**
  * 一格（一天）的摘要：每节课一行「节次号 + 短名」，装不下时最后一行换成「＋N」。

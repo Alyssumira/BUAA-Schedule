@@ -38,6 +38,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,12 +51,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.edit
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.buaa.schedule.R
 import com.buaa.schedule.core.FirstRun
 import com.buaa.schedule.core.designsystem.DesignTokens
@@ -66,22 +70,28 @@ import com.buaa.schedule.ui.settings.ReminderGuidance
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** 引导的六个步骤。顺序即用户看到的顺序 */
+/**
+ * 引导的五个步骤。顺序即用户看到的顺序。
+ *
+ * 「环境自检」与「厂商后台放行」原本是两步，这里合为一步（审查 I-03 / A-01）：
+ * 二者机制上是同一件事 —— 都在决定"提醒能不能可靠送达"，且设置页里各有入口，
+ * 并列摆出来只是多花用户一次「下一步」。6 步时点下一步要 5 次，验收线是 ≤4。
+ */
 private const val STEP_WELCOME = 0
 private const val STEP_PRIVACY = 1
-private const val STEP_ENVIRONMENT = 2
-private const val STEP_VENDOR = 3
-private const val STEP_IMPORT = 4
-private const val STEP_DONE = 5
-private const val STEP_COUNT = 6
+private const val STEP_RELIABILITY = 2
+private const val STEP_IMPORT = 3
+private const val STEP_DONE = 4
+private const val STEP_COUNT = 5
 
 /**
- * 首启引导页：欢迎 → 隐私同意 → 环境自检 → 厂商后台放行 → 导入课表 → 完成。
+ * 首启引导页：欢迎 → 隐私同意 → 提醒可靠性（环境自检 + 厂商后台放行）→ 导入课表 → 完成。
  *
  * 结构直接借自 HyperIsland 的 `OnboardingPage.kt`，因为那套结构解决的正是我们的问题：
  * - 每一步只讲一件事，`HorizontalPager(userScrollEnabled = false)` 禁止用户滑过；
+ *   步序有依赖（隐私没同意不该看到自检，自检没跑完不该看到导入），所以不给乱序滑动；
  * - 隐私步必须勾选才能继续（`nextEnabled` 判据在 `OnboardingPage.kt:280-282`）；
- * - 环境步是**逐项探针卡**（转圈 / ✓ / ✗），而不是一个"请自行去设置里开"的文字段落；
+ * - 可靠性步是**逐项探针卡**（转圈 / ✓ / ✗），而不是一个"请自行去设置里开"的文字段落；
  * - 探针没过时不是死路：Next 会弹「继续（稍后配置）/ 重试」，用户永远能出去
  *   （`OnboardingPage.kt:294-301`）。
  *
@@ -122,10 +132,12 @@ fun OnboardingScreen(
         ActivityResultContracts.RequestPermission(),
     ) { runChecks() }
 
-    // 进入自检步才申请通知权限，并顺手跑一遍探针：
-    // 冷启动就弹权限框等于在用户还没知道这应用是干什么的时候就索要权限
+    // 进入可靠性步才申请通知权限，并顺手跑一遍探针：
+    // 冷启动就弹权限框等于在用户还没知道这应用是干什么的时候就索要权限。
+    // 引导内的申请点只有这一个 —— 自检与厂商放行的合页只动布局，
+    // 没多出弹窗，也没把索要权限提前到欢迎/隐私步
     LaunchedEffect(pagerState.currentPage) {
-        if (pagerState.currentPage == STEP_ENVIRONMENT) {
+        if (pagerState.currentPage == STEP_RELIABILITY) {
             if (android.os.Build.VERSION.SDK_INT >= 33 &&
                 context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
                 android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -135,6 +147,23 @@ fun OnboardingScreen(
                 runChecks()
             }
         }
+    }
+
+    // 自检项与厂商项都会把用户送到系统页，回来时结论已经变了。两步时代靠翻页改变
+    // currentPage 重触发上面的 LaunchedEffect，合并后页面序号不动，所以显式挂 ON_RESUME
+    // 重跑只读探针。checks 非空是防重入门闩：首次那一趟由权限回调负责，别抢它
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME &&
+                pagerState.currentPage == STEP_RELIABILITY &&
+                checks != null
+            ) {
+                runChecks()
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
     }
 
     Column(
@@ -167,7 +196,7 @@ fun OnboardingScreen(
                 onRetryChecks = { runChecks() },
                 onFixCheck = { item ->
                     EnvironmentCheck.openFix(context, item.id)
-                    // 授权页返回后结果已变：离开时由 LaunchedEffect 重跑，这里先给即时反馈
+                    // 跳系统页时页面序号不变：回到本页由上面的 ON_RESUME 监听重跑探针
                 },
                 vendorConfirmed = vendorConfirmed,
                 onVendorConfirmedChange = { vendorConfirmed = it },
@@ -192,11 +221,11 @@ fun OnboardingScreen(
                 when (pagerState.currentPage) {
                     STEP_PRIVACY -> {
                         if (privacyChecked) FirstRun.acceptPrivacy(context)
-                        goTo(STEP_ENVIRONMENT)
+                        goTo(STEP_RELIABILITY)
                     }
-                    STEP_ENVIRONMENT -> {
+                    STEP_RELIABILITY -> {
                         val unmet = EnvironmentCheck.unmetBlockers(checks.orEmpty())
-                        if (unmet.isEmpty()) goTo(STEP_VENDOR) else showEnvironmentDialog = true
+                        if (unmet.isEmpty()) goTo(STEP_IMPORT) else showEnvironmentDialog = true
                     }
                     STEP_DONE -> {
                         FirstRun.completeOnboarding(context)
@@ -213,7 +242,7 @@ fun OnboardingScreen(
             onDismiss = { showEnvironmentDialog = false },
             onContinue = {
                 showEnvironmentDialog = false
-                goTo(STEP_VENDOR)
+                goTo(STEP_IMPORT)
             },
             onRetry = {
                 showEnvironmentDialog = false
@@ -241,9 +270,11 @@ private fun OnboardingHeader(currentPage: Int, onClose: () -> Unit) {
             )
         }
         Spacer(Modifier.weight(1f))
-        // 右上角永远给一条退路：引导不是必须走完才能用应用
+        // 右上角永远给一条退路：引导不是必须走完才能用应用。
+        // 文案带上「稍后」并把颜色提到 onSurface（I-03）：两个字的次级色按钮看着像
+        // 装饰，用户会以为必须走完才能出去；点它和走完流程一样会落盘"引导已完成"
         TextButton(onClick = onClose) {
-            Text("跳过", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("先跳过，稍后设置", color = MaterialTheme.colorScheme.onSurface)
         }
     }
 }
@@ -279,8 +310,14 @@ private fun OnboardingStepPage(
             when (page) {
                 STEP_WELCOME -> WelcomeStep()
                 STEP_PRIVACY -> PrivacyStep(privacyChecked, onPrivacyCheckedChange)
-                STEP_ENVIRONMENT -> EnvironmentStep(checking, checks, onRetryChecks, onFixCheck)
-                STEP_VENDOR -> VendorStep(vendorConfirmed, onVendorConfirmedChange)
+                STEP_RELIABILITY -> ReliabilityStep(
+                    checking = checking,
+                    checks = checks,
+                    onRetryChecks = onRetryChecks,
+                    onFixCheck = onFixCheck,
+                    vendorConfirmed = vendorConfirmed,
+                    onVendorConfirmedChange = onVendorConfirmedChange,
+                )
                 STEP_IMPORT -> ImportStep(onImportBuaa, onAddCourse)
                 else -> DoneStep()
             }
@@ -345,31 +382,44 @@ private fun PrivacyStep(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     }
 }
 
+/**
+ * 可靠性自检：探针 + 厂商放行合在一步。
+ *
+ * 合并的理由（I-03）是这两段讲的是同一件事 —— 提醒能不能可靠送达；拆成两步时用户
+ * 要点两次「下一步」，而第二步没有任何新判据，只是把探针读不到的开关列一遍。
+ *
+ * 没有做成"探针失败才展开厂商清单"的折叠区：MIUI「后台弹出界面」这类开关根本没有
+ * 探针，失败与否都不会出现在上面的清单里，折叠起来等于把最隐蔽的一项藏起来。
+ * 探针还在跑时只把探针那一块换成加载圈，厂商清单照常渲染 —— 它不依赖探针结果。
+ */
 @Composable
-private fun EnvironmentStep(
+private fun ReliabilityStep(
     checking: Boolean,
     checks: List<CheckItem>?,
-    onRetry: () -> Unit,
-    onFix: (CheckItem) -> Unit,
+    onRetryChecks: () -> Unit,
+    onFixCheck: (CheckItem) -> Unit,
+    vendorConfirmed: Boolean,
+    onVendorConfirmedChange: (Boolean) -> Unit,
 ) {
     StepHeading(
-        "关键开关自检",
-        "提醒能不能准时响、课堂实况能不能出现，取决于这几项",
+        "提醒可靠性",
+        "上课铃响不响、课堂实况出不出得来，取决于下面这些开关",
         Icons.Filled.Settings,
     )
-    if (checking && checks == null) {
-        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(modifier = Modifier.size(28.dp))
-        }
-        return
-    }
     Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM)) {
-        checks.orEmpty().forEach { item ->
-            CheckCard(item, enabled = !checking, onFix = { onFix(item) })
+        if (checking && checks == null) {
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(modifier = Modifier.size(28.dp))
+            }
+        } else {
+            checks.orEmpty().forEach { item ->
+                CheckCard(item, enabled = !checking, onFix = { onFixCheck(item) })
+            }
+            TextButton(onClick = onRetryChecks, enabled = !checking) {
+                Text(if (checking) "正在检测…" else "重新检测")
+            }
         }
-        TextButton(onClick = onRetry, enabled = !checking) {
-            Text(if (checking) "正在检测…" else "重新检测")
-        }
+        VendorGuidance(vendorConfirmed, onVendorConfirmedChange)
     }
 }
 
@@ -432,11 +482,10 @@ private fun StatusMark(status: CheckStatus, enabled: Boolean) {
  * 用户点「省电策略」「后台弹出界面」也被扔到自启动列表，只能自己再翻一遍。
  */
 @Composable
-private fun VendorStep(confirmed: Boolean, onConfirmedChange: (Boolean) -> Unit) {
-    StepHeading(
-        "厂商后台放行",
-        "国产 ROM 会主动清理后台，这一步不做，上课铃可能整个学期都不响",
-        Icons.Filled.Settings,
+private fun VendorGuidance(confirmed: Boolean, onConfirmedChange: (Boolean) -> Unit) {
+    SectionHeading(
+        "下面几项系统读不到，只能自己去开",
+        "国产 ROM 会主动清理后台，这几项不做，上课铃可能整个学期都不响",
     )
     Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM)) {
         VendorRow(
@@ -444,6 +493,9 @@ private fun VendorStep(confirmed: Boolean, onConfirmedChange: (Boolean) -> Unit)
             summary = "允许本应用在后台自启动，避免重启手机后提醒失效",
             onOpen = { ReminderGuidance.openAutoStartSettings(it) },
         )
+        // 与上面探针里的「电池优化豁免」跳的是同一个系统页，挡的却不是同一刀：
+        // 探针读的是 AOSP 白名单位，MIUI 另有一档读不到的私有"省电策略"，
+        // 它能把 AlarmManager 闹钟直接吞掉（docs/VENDOR_NOTES.md「杀后台」条），两行都得留
         VendorRow(
             title = "省电策略：无限制",
             summary = "MIUI 路径：安全中心 → 应用管理 → BUAA 课表 → 省电策略 → 无限制；" +
@@ -466,6 +518,28 @@ private fun VendorStep(confirmed: Boolean, onConfirmedChange: (Boolean) -> Unit)
                 color = MaterialTheme.colorScheme.onSurface,
             )
         }
+    }
+}
+
+/**
+ * 一步之内的分节标题。合并后的那一步里有两个小节，再各自挂一个带 40dp 图标的
+ * [StepHeading] 会让一屏出现两个同级大标题，读起来像两步没拆开。
+ */
+@Composable
+private fun SectionHeading(title: String, subtitle: String) {
+    Column {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -594,7 +668,7 @@ private fun StepHeading(title: String, subtitle: String, icon: ImageVector) {
         imageVector = icon,
         contentDescription = null,
         tint = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.size(40.dp),
+        modifier = Modifier.size(DesignTokens.iconHero),
     )
     Spacer(Modifier.height(DesignTokens.spaceM))
     Text(
@@ -654,7 +728,7 @@ private fun EnvironmentUnmetDialog(onDismiss: () -> Unit, onContinue: () -> Unit
         text = {
             Text(
                 "通知权限没开时，上课提醒与课堂实况都不会出现。" +
-                    "可以先去开，也可以选择稍后在设置页里配置。",
+                    "这一页就能跳去系统设置，也可以稍后在设置页里配置。",
                 style = MaterialTheme.typography.bodyMedium,
             )
         },

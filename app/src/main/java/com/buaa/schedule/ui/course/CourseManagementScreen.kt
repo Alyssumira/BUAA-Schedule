@@ -1,6 +1,7 @@
 package com.buaa.schedule.ui.course
 
 import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +20,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
@@ -49,7 +52,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buaa.schedule.core.designsystem.CourseColors
@@ -59,6 +65,7 @@ import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.contentOn
+import com.buaa.schedule.core.designsystem.motionSpec
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.CourseSaveOptions
 import com.buaa.schedule.domain.model.periodLabel
@@ -82,6 +89,7 @@ fun CourseManagementScreen(
     onEditCourse: (Course) -> Unit,
 ) {
     val state by viewModel.uiState.collectAsState()
+    val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     var query by rememberSaveable { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<CourseGroup?>(null) }
@@ -114,6 +122,9 @@ fun CourseManagementScreen(
                 singleLine = true,
                 label = { Text("搜索课程 / 教师") },
                 modifier = Modifier.fillMaxWidth(),
+                // 结果是边打字边过滤的，「搜索」没有额外动作可做——收掉键盘，把列表让出来
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
             )
 
             if (groups.isEmpty()) {
@@ -149,6 +160,8 @@ fun CourseManagementScreen(
                             },
                             onEdit = { onEditCourse(group.fragments.first()) },
                             onRequestDelete = { pendingDelete = group },
+                            // 删课/换色分组时整列重排有过渡，不是瞬间抽走
+                            modifier = Modifier.animateItem(),
                         )
                     }
                     item { Spacer(modifier = Modifier.height(DesignTokens.spaceXL)) }
@@ -160,7 +173,7 @@ fun CourseManagementScreen(
     pendingDelete?.let { group ->
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
-            title = { Text("删除「${group.name}」？") },
+            title = { Text("删除「${group.displayName}」？") },
             text = {
                 Text(
                     text = "将删除这门课的全部 ${group.fragments.size} 个片段" +
@@ -175,7 +188,7 @@ fun CourseManagementScreen(
                     scope.launch {
                         viewModel.deleteCourseGroup(target.fragments)
                         val result = snackbarHostState.showSnackbar(
-                            message = "已删除「${target.fragments.firstOrNull()?.name ?: "课程"}」",
+                            message = "已删除「${target.displayName}」",
                             actionLabel = "撤销",
                             duration = SnackbarDuration.Long,
                         )
@@ -200,6 +213,7 @@ private fun CourseGroupCard(
     onPickColor: (Int) -> Unit,
     onEdit: () -> Unit,
     onRequestDelete: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val primary = group.fragments.first()
     val color = com.buaa.schedule.core.designsystem.courseColor(primary)
@@ -221,7 +235,10 @@ private fun CourseGroupCard(
         variant = GlassVariant.PANEL,
         contentPadding = DesignTokens.spaceL,
         shape = RoundedCornerShape(DesignTokens.cornerPanel),
-        modifier = Modifier.fillMaxWidth().then(sharedModifier),
+        modifier = modifier
+            .fillMaxWidth()
+            .animateContentSize(motionSpec<IntSize>())
+            .then(sharedModifier),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -243,7 +260,7 @@ private fun CourseGroupCard(
                             imageVector = Icons.Default.Palette,
                             contentDescription = "更改颜色",
                             tint = contentOn(color),
-                            modifier = Modifier.size(14.dp),
+                            modifier = Modifier.size(DesignTokens.iconSmall),
                         )
                     }
                 }
@@ -253,16 +270,21 @@ private fun CourseGroupCard(
                         .padding(start = DesignTokens.spaceS),
                 ) {
                     Text(
-                        text = group.name,
+                        text = group.displayName,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
                         text = listOfNotNull(
                             group.teacher,
+                            // 别名生效时才提一句原名：管理页得能看出这个别名挂在哪门课上
+                            if (group.name != group.displayName) "原名 ${group.name}" else null,
                             fragmentSummary(group.fragments),
                             "${group.fragments.size} 段",
-                        ).joinToString(" · "),
+                        )
+                            // 空串也要滤：只判 null 的话，摘要为空就拼出「 · 5 段」这种悬空分隔符
+                            .filter { it.isNotBlank() }
+                            .joinToString(" · "),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -327,12 +349,24 @@ private fun CourseGroupCard(
     }
 }
 
-private fun fragmentSummary(fragments: List<Course>): String =
-    fragments.joinToString(" ") { fragment ->
+/** 摘要里最多铺开几段课次；剩下的用「 …」表示，总数由调用方的「N 段」说明 */
+private const val MaxSummaryFragments = 3
+
+/**
+ * 一门课的课次摘要，如「周一 1-2 周三 3-4」。
+ *
+ * 原来是要素拼完再 `.take(60)` 按**字符**硬截：60 会砍在「周三 3-」这种半截上，
+ * 读者既不知道被截了、也不知道还剩几段（审查①V-03）。限量单位改成"段"。
+ */
+private fun fragmentSummary(fragments: List<Course>): String {
+    if (fragments.isEmpty()) return ""
+    val shown = fragments.take(MaxSummaryFragments).joinToString(" ") { fragment ->
         "${DAY_NAMES.getOrElse(fragment.dayOfWeek - 1) { "周?" }} ${
             periodLabel(fragment.periods).removePrefix("第").removeSuffix("节").trim()
         }"
-    }.take(60)
+    }
+    return if (fragments.size > MaxSummaryFragments) "$shown …" else shown
+}
 
 /**
  * 按"同一门课"归并：优先用 [Course.sourceGroupKey]（导入课程），
@@ -345,7 +379,10 @@ internal fun groupCourses(courses: List<Course>, query: String): List<CourseGrou
         courses
     } else {
         courses.filter {
+            // 两个名字都要能命中：日常界面看到的是别名，用户到这里只会打别名；
+            // 但教务原名才是这门课的"真名"，按它搜也该出来（别名可以是「物理」这种无信息量的词）
             it.name.contains(keyword, ignoreCase = true) ||
+                it.displayName.contains(keyword, ignoreCase = true) ||
                 it.teacher?.contains(keyword, ignoreCase = true) == true
         }
     }
@@ -356,18 +393,30 @@ internal fun groupCourses(courses: List<Course>, query: String): List<CourseGrou
             CourseGroup(
                 key = key,
                 name = primary.name,
+                displayName = groupDisplayNameOf(fragments, primary),
                 teacher = primary.teacher,
                 fragments = fragments.sortedWith(
                     compareBy({ it.dayOfWeek }, { it.startPeriod })
                 ),
             )
         }
-        .sortedBy { it.name }
+        .sortedBy { it.displayName }
 }
+
+/**
+ * 一节课的门面名：别名可能只登记在某个片段上（编辑器逐条保存），
+ * 所以整组里只要有一个非空别名就以它为准，不能只看 primary。
+ */
+private fun groupDisplayNameOf(fragments: List<Course>, primary: Course): String =
+    fragments.firstNotNullOfOrNull { it.alias?.trim()?.takeIf { a -> a.isNotEmpty() } }
+        ?: primary.displayName
 
 internal data class CourseGroup(
     val key: String,
+    /** 教务原名：分组真源，也是搜索与"别名指向哪门课"的兜底 */
     val name: String,
+    /** 给用户看的名字：别名优先 */
+    val displayName: String,
     val teacher: String?,
     val fragments: List<Course>,
 )

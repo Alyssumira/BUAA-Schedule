@@ -33,7 +33,13 @@ class WidgetRefreshReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 if (action == ACTION_MIDNIGHT_REFRESH || timeChanged) {
-                    BackgroundSync.refreshWidgets(context)
+                    // 零点会醒两次：系统 00:00 的 ACTION_DATE_CHANGED 与我们自排的
+                    // ACTION_MIDNIGHT_REFRESH 都落到这里，各跑一遍"全学期快照 sync +
+                    // 组件重绘"。自排那条是对抗 ROM 的兜底（它同样可能吞掉系统广播），
+                    // 两条都留，但重复的那次全量刷新没有意义。
+                    if (claimRolloverRefresh()) {
+                        BackgroundSync.refreshWidgets(context)
+                    }
                     BackgroundSync.scheduleWidgetMidnight(context)
                 }
                 if (timeChanged || exactAlarmPermissionChanged) {
@@ -66,5 +72,27 @@ class WidgetRefreshReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "WidgetRefreshReceiver"
         const val ACTION_MIDNIGHT_REFRESH = "com.buaa.schedule.action.WIDGET_MIDNIGHT_REFRESH"
+
+        /**
+         * 跨天全量刷新的去重窗口。两个信号（系统 DATE_CHANGED、自排零点闹钟）
+         * 正常都在 00:00±几十秒内到达，留足余量又不至于长到让真实的数据变化被吞掉。
+         */
+        private const val ROLLOVER_SUPPRESS_MS = 120_000L
+
+        @Volatile
+        private var lastRolloverAt = 0L
+
+        /**
+         * 领取这一次跨天刷新的"全量刷新"配额；已被领走则返回 false。
+         *
+         * 计时用 `elapsedRealtime`（单调）而不是墙上时钟：用户改时间本身就会
+         * 以 `ACTION_TIME_CHANGED` 走到这个分支，拿被改的时钟判窗口等于判不出来。
+         */
+        private fun claimRolloverRefresh(): Boolean {
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now - lastRolloverAt < ROLLOVER_SUPPRESS_MS) return false
+            lastRolloverAt = now
+            return true
+        }
     }
 }

@@ -57,6 +57,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
+import com.buaa.schedule.core.designsystem.LocalSemanticColors
 import com.buaa.schedule.core.designsystem.SettingsGroup
 import com.buaa.schedule.core.designsystem.SettingsRow
 import com.buaa.schedule.domain.schedule.ImportPlanner
@@ -185,6 +186,118 @@ fun ImportScreen(
                 ),
             verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
         ) {
+            // ---- 待确认导入预览 ----
+            // 放在第一屏：教务登录完成后会直接跳到本页，此前这张卡在滚动内容末尾，
+            // 落地只看到 Hero 和一句"解析完成…"，确认按钮要往下翻——像是卡住了。
+            pendingImport?.let { pending ->
+                GlassSurface(
+                    variant = GlassVariant.PANEL,
+                    contentPadding = DesignTokens.spaceL,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = DesignTokens.spaceL),
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
+                        Text("待确认导入", style = MaterialTheme.typography.titleMedium)
+                        Text("学期：${pending.semester.termName}")
+                        Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceL)) {
+                            Text("新增 ${pending.addedCount}")
+                            Text("更新 ${pending.changedCount}")
+                            Text("已有 ${pending.existingCount}")
+                        }
+                        if (pending.conflicts.isEmpty()) {
+                            Text("无时间冲突", style = MaterialTheme.typography.bodySmall)
+                        } else {
+                            Text(
+                                "存在 ${pending.conflicts.size} 组时间冲突",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            pending.conflicts.take(3).forEach { conflict ->
+                                Text(
+                                    text = "${conflict.first.name} ↔ ${conflict.second.name}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
+                        pending.warnings.forEach { warning ->
+                            Text(
+                                text = "⚠ $warning",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = LocalSemanticColors.current.warning,
+                            )
+                        }
+                        if (pending.keptCount > 0) {
+                            Text(
+                                text = "另保留 ${pending.keptCount} 门已存在课程（本次不改动）",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        // 逐条勾选：取消勾选的课程这次导入不包含；
+                        // 若它本地已存在，会原样保留（不会被删）
+                        val selectedCount = pending.courses.size - pending.excludedKeys.size
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "课程预览（已选 $selectedCount / ${pending.courses.size}）：",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = { viewModel.setAllPendingImportSelected(true) }) {
+                                Text("全选", style = MaterialTheme.typography.labelMedium)
+                            }
+                            TextButton(onClick = { viewModel.setAllPendingImportSelected(false) }) {
+                                Text("全不选", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 260.dp)
+                                .verticalScroll(rememberScrollState()),
+                        ) {
+                            pending.courses.forEach { course ->
+                                val excluded = ImportPlanner.courseKey(course) in pending.excludedKeys
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { viewModel.togglePendingImportCourse(course) },
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Checkbox(
+                                        checked = !excluded,
+                                        onCheckedChange = {
+                                            viewModel.togglePendingImportCourse(course)
+                                        },
+                                    )
+                                    Text(
+                                        text = "周${course.dayOfWeek} " +
+                                            "${com.buaa.schedule.domain.model.periodLabel(course.periods)} " +
+                                            "${course.name} ${course.location ?: ""}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (excluded) MaterialTheme.colorScheme.onSurfaceVariant
+                                        else MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
+                            }
+                        }
+                        Button(
+                            onClick = viewModel::confirmPendingImport,
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = selectedCount > 0,
+                        ) { Text("确认导入（$selectedCount 门）") }
+                        OutlinedButton(
+                            onClick = viewModel::cancelPendingImport,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("取消") }
+                    }
+                }
+            }
+
             // ---- 主入口：北航教务导入（Hero，视觉权重高于所有其他导入方式）----
             BuaaImportHero(
                 termCode = termCode,
@@ -334,116 +447,6 @@ fun ImportScreen(
                     )
                 }
             }
-
-            // ---- 待确认导入预览 ----
-            pendingImport?.let { pending ->
-                GlassSurface(
-                    variant = GlassVariant.PANEL,
-                    contentPadding = DesignTokens.spaceL,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = DesignTokens.spaceL),
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
-                        Text("待确认导入", style = MaterialTheme.typography.titleMedium)
-                        Text("学期：${pending.semester.termName}")
-                        Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceL)) {
-                            Text("新增 ${pending.addedCount}")
-                            Text("更新 ${pending.changedCount}")
-                            Text("已有 ${pending.existingCount}")
-                        }
-                        if (pending.conflicts.isEmpty()) {
-                            Text("无时间冲突", style = MaterialTheme.typography.bodySmall)
-                        } else {
-                            Text(
-                                "存在 ${pending.conflicts.size} 组时间冲突",
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                            pending.conflicts.take(3).forEach { conflict ->
-                                Text(
-                                    text = "${conflict.first.name} ↔ ${conflict.second.name}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                        }
-                        pending.warnings.forEach { warning ->
-                            Text(
-                                text = "⚠ $warning",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.tertiary,
-                            )
-                        }
-                        if (pending.keptCount > 0) {
-                            Text(
-                                text = "另保留 ${pending.keptCount} 门已存在课程（本次不改动）",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        // 逐条勾选：取消勾选的课程这次导入不包含；
-                        // 若它本地已存在，会原样保留（不会被删）
-                        val selectedCount = pending.courses.size - pending.excludedKeys.size
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = "课程预览（已选 $selectedCount / ${pending.courses.size}）：",
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.weight(1f),
-                            )
-                            TextButton(onClick = { viewModel.setAllPendingImportSelected(true) }) {
-                                Text("全选", style = MaterialTheme.typography.labelSmall)
-                            }
-                            TextButton(onClick = { viewModel.setAllPendingImportSelected(false) }) {
-                                Text("全不选", style = MaterialTheme.typography.labelSmall)
-                            }
-                        }
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 260.dp)
-                                .verticalScroll(rememberScrollState()),
-                        ) {
-                            pending.courses.forEach { course ->
-                                val excluded = ImportPlanner.courseKey(course) in pending.excludedKeys
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { viewModel.togglePendingImportCourse(course) },
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Checkbox(
-                                        checked = !excluded,
-                                        onCheckedChange = {
-                                            viewModel.togglePendingImportCourse(course)
-                                        },
-                                    )
-                                    Text(
-                                        text = "周${course.dayOfWeek} " +
-                                            "${com.buaa.schedule.domain.model.periodLabel(course.periods)} " +
-                                            "${course.name} ${course.location ?: ""}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = if (excluded) MaterialTheme.colorScheme.onSurfaceVariant
-                                        else MaterialTheme.colorScheme.onSurface,
-                                    )
-                                }
-                            }
-                        }
-                        Button(
-                            onClick = viewModel::confirmPendingImport,
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = selectedCount > 0,
-                        ) { Text("确认导入（$selectedCount 门）") }
-                        OutlinedButton(
-                            onClick = viewModel::cancelPendingImport,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("取消") }
-                    }
-                }
-            }
         }
     }
 }
@@ -475,7 +478,7 @@ private fun BuaaImportHero(
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // 图标徽章：52dp / 28dp 图标，明显大于组内行的 22dp，强化"主入口"
+                // 图标徽章：52dp 底板，明显大于设置行的行首图标档，强化"主入口"
                 Box(
                     modifier = Modifier
                         .size(52.dp)
@@ -489,7 +492,7 @@ private fun BuaaImportHero(
                         imageVector = Icons.Filled.School,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(28.dp),
+                        modifier = Modifier.size(DesignTokens.iconLarge),
                     )
                 }
                 Box(modifier = Modifier.width(DesignTokens.spaceM))
@@ -546,7 +549,7 @@ private fun BuaaImportHero(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Login,
                     contentDescription = null,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(DesignTokens.iconMedium),
                 )
                 Box(modifier = Modifier.width(DesignTokens.spaceS))
                 Text("登录教务系统并导入")
@@ -558,7 +561,7 @@ private fun BuaaImportHero(
                     Icon(
                         imageVector = Icons.Filled.Refresh,
                         contentDescription = null,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(DesignTokens.iconMedium),
                     )
                     Box(modifier = Modifier.width(DesignTokens.spaceS))
                     Text("取消刷新", color = MaterialTheme.colorScheme.error)
@@ -572,7 +575,7 @@ private fun BuaaImportHero(
                     Icon(
                         imageVector = Icons.Filled.Refresh,
                         contentDescription = null,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(DesignTokens.iconMedium),
                     )
                     Box(modifier = Modifier.width(DesignTokens.spaceS))
                     Text("刷新课表（复用登录会话）")
@@ -612,7 +615,7 @@ private fun BuaaImportHero(
 private fun HeroBadge(text: String) {
     Text(
         text = text,
-        style = MaterialTheme.typography.labelSmall,
+        style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.primary,
         modifier = Modifier
             .background(

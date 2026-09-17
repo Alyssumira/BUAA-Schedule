@@ -161,12 +161,18 @@
             </intent-filter>
         </receiver>
 
+        <!--
+            五个组件都额外声明 APPWIDGET_RESTORED：长按/拖动后宿主重新绑定视图时
+            只会派发 manifest 里出现过的 action，而 ScheduleAppWidgetProvider 正是
+            靠 onRestored 在这类重绑之后把外观设置重绘回来。
+        -->
         <receiver
             android:name=".widget.TodayWidgetProvider"
             android:exported="true"
             android:label="@string/widget_today_label">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="android.appwidget.action.APPWIDGET_RESTORED" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
@@ -179,6 +185,7 @@
             android:label="@string/widget_tomorrow_label">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="android.appwidget.action.APPWIDGET_RESTORED" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
@@ -191,6 +198,7 @@
             android:label="@string/widget_week_label">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="android.appwidget.action.APPWIDGET_RESTORED" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
@@ -203,6 +211,7 @@
             android:label="@string/widget_week_grid_label">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="android.appwidget.action.APPWIDGET_RESTORED" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
@@ -215,6 +224,7 @@
             android:label="@string/widget_next_label">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="android.appwidget.action.APPWIDGET_RESTORED" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"

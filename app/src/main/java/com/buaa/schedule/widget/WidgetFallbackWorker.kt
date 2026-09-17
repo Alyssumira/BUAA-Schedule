@@ -32,18 +32,24 @@ class WidgetFallbackWorker(
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
-        if (BackgroundSync.hasAnyWidget(applicationContext)) {
+        // 探测要跨 binder 问 Launcher，个别 ROM 上会抛；抛了按"有组件"处理 ——
+        // 多刷一次组件，远好于把组件留在昨天（这条链存在的意义就是补漏）。
+        val hasWidget = BackgroundSync.hasAnyWidgetSafely(applicationContext)
+        val bellsHandled = if (hasWidget) {
             BackgroundSync.onDataChanged(applicationContext)
         } else {
             // 没有组件不等于没有提醒：用户可能只开了通知提醒而没放桌面组件。
             // 此时仍然要重排提醒，否则这条兜底链路对这类用户完全失效。
             BackgroundSync.rescheduleReminders(applicationContext)
         }
-        // 课前提醒全关时 rescheduleAll 会走"没有下一条提醒"分支，把上/下课铃一起收掉，
-        // 于是这轮兜底反而杀死了「课程进行中 / 上课自动勿扰」—— 这里独立续排回来（R5 F-12）。
+        // 只有提醒那条链没接手课堂铃时才补排：日历模式，或"没有下一条提醒"
+        // （rescheduleAll 那条分支会把上/下课铃一起收掉，R5 F-12）。
+        // 原来这里无条件再排一遍，等于同一轮多查三张表、把刚排上的上课铃撤了再排。
         // ⚠️ 不要再调 ensure()：它会因为"无组件"把自己注销，
         // 最需要兜底的这类用户第一次跑完就永久失去兜底（R5 F-16）。
-        ClassProgressScheduler.rescheduleNextWindow(applicationContext)
+        if (!bellsHandled) {
+            ClassProgressScheduler.rescheduleNextWindow(applicationContext)
+        }
         return Result.success()
     }
 
@@ -58,17 +64,23 @@ class WidgetFallbackWorker(
          * 而这正是 WorkManager 这条链要对抗的场景。
          */
         fun ensure(context: Context) {
-            val manager = WorkManager.getInstance(context)
-            if (BackgroundSync.hasAnyWidget(context) || BackgroundSync.usesInAppReminders(context)) {
-                manager.enqueueUniquePeriodicWork(
-                    WORK_NAME,
-                    ExistingPeriodicWorkPolicy.KEEP,
-                    PeriodicWorkRequestBuilder<WidgetFallbackWorker>(12, TimeUnit.HOURS)
-                        .build(),
-                )
-            } else {
-                manager.cancelUniqueWork(WORK_NAME)
-            }
+            // 两份调用方（onEnabled 与应用启动块）都指望这里不抛：
+            // getInstance 在 WorkManager 尚未初始化的进程里会抛 IllegalStateException，
+            // hasAnyWidget 要跨 binder 问 Launcher。注册失败的代价只是"这一轮没有兜底"，
+            // 不值得用崩溃换。
+            runCatching {
+                val manager = WorkManager.getInstance(context)
+                if (BackgroundSync.hasAnyWidget(context) || BackgroundSync.usesInAppReminders(context)) {
+                    manager.enqueueUniquePeriodicWork(
+                        WORK_NAME,
+                        ExistingPeriodicWorkPolicy.KEEP,
+                        PeriodicWorkRequestBuilder<WidgetFallbackWorker>(12, TimeUnit.HOURS)
+                            .build(),
+                    )
+                } else {
+                    manager.cancelUniqueWork(WORK_NAME)
+                }
+            }.onFailure { android.util.Log.w("WidgetFallbackWorker", "兜底任务注册失败", it) }
         }
     }
 }

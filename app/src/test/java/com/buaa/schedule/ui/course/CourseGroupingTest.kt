@@ -22,9 +22,11 @@ class CourseGroupingTest {
         weeks: List<Int> = (1..16).toList(),
         groupKey: String? = null,
         teacher: String? = null,
+        alias: String? = null,
     ) = Course(
         id = id,
         name = name,
+        alias = alias,
         dayOfWeek = day,
         periods = periods,
         weeks = weeks,
@@ -93,6 +95,43 @@ class CourseGroupingTest {
             query = "c lang",
         )
         assertEquals(1, groups.size)
+    }
+
+    @Test
+    fun aliasOnAnyFragmentBecomesGroupName() {
+        // 别名是逐片段登记的：primary（起始节次那条）没有别名时，整组仍应显示兄弟片段的别名
+        val groups = groupCourses(
+            listOf(
+                course(1, "高等数学A", day = 1, periods = listOf(1, 2), groupKey = "G1"),
+                course(2, "高等数学A", day = 3, periods = listOf(6, 7), groupKey = "G1", alias = "高数"),
+            ),
+            query = "",
+        )
+        assertEquals(1, groups.size)
+        assertEquals("高数", groups.first().displayName)
+        // 教务原名不能丢：它是分组真源，也是卡片上「原名 X」提示的数据
+        assertEquals("高等数学A", groups.first().name)
+    }
+
+    @Test
+    fun blankAliasKeepsOfficialName() {
+        val groups = groupCourses(
+            listOf(course(1, "高等数学A", alias = "   ")),
+            query = "",
+        )
+        assertEquals("高等数学A", groups.first().displayName)
+    }
+
+    @Test
+    fun searchesByAliasAsWellAsOfficialName() {
+        val courses = listOf(
+            course(1, "高等数学A", alias = "高数"),
+            course(2, "大学英语"),
+        )
+        // 用户在其它界面只见过别名，到这里必然打别名；按教务原名搜同样要能命中
+        assertEquals(listOf("高数"), groupCourses(courses, "高数").map { it.displayName })
+        assertEquals(listOf("高数"), groupCourses(courses, "数学").map { it.displayName })
+        assertEquals(1, groupCourses(courses, "英语").size)
     }
 
     @Test

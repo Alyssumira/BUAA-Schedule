@@ -99,7 +99,7 @@
      `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`（`javap` 核实 android-36 有该常量、
      SleepDown 同款），**先 `resolveActivity` 再跳、解不开退回普通通知设置页** ——
      厂商不保证实现这一页（ColorOS 的「流体云」开关另有其页）。
-  3. ColorOS 分支的文案里写死"未实测"：引导页第 6 步与「实况通道自检」都明确
+  3. ColorOS 分支的文案里写死"未实测"：引导页「提醒可靠性」那一步与「实况通道自检」都明确
      本仓库没有 ColorOS 真机、那条自检在流体云上就是唯一判据。版本串 `ro.build.version.opporom`
      只反射读一次（`//noinspection PrivateApi`，失败退 null），**只用于把版本号显示给用户，
      不参与任何行为判断** —— 我们不想用一个读不到的属性去决定要不要发实况。
@@ -124,7 +124,7 @@
 | 短唤醒锁包闹钟重排 | `WakeLocks` ← ReminderReceiver |
 | 开机/升级/权限变化/时间变化自愈 | `BootReceiver` / `WidgetRefreshReceiver` |
 | 厂商自启动直达页 + 电池白名单 | `ReminderGuidance.openAutoStartSettings` / `requestIgnoreBatteryOptimizations` |
-| 引导页「厂商后台放行」三行分别跳转（自启动 / 电池 / 应用权限页） | `OnboardingScreen.VendorStep` ← `openVendorPermissionPage` |
+| 引导页「厂商后台放行」三行分别跳转（自启动 / 电池 / 应用权限页） | `OnboardingScreen.VendorGuidance`（在 `ReliabilityStep` 内） ← `openVendorPermissionPage` |
 | 上课自动勿扰（含下课恢复） | `ClassProgressDnd` |
 
 ## 真机观察记录（追加区，按日期倒序）

@@ -41,7 +41,8 @@ class WeekGridSummaryTest {
                 course("大学英语听说", 1, 5, 6),
             ),
         )
-        assertEquals("1高等数\n3线性代\n5大学英", summary)
+        // 「高等A」而不是「高等数」：末尾的班型字母是唯一区分信息（审查 3.3 + 统筹 §2.2）
+        assertEquals("1高等A\n3线性代\n5大学英", summary)
     }
 
     @Test
@@ -66,9 +67,52 @@ class WeekGridSummaryTest {
     }
 
     @Test
-    fun `短名去掉括号补充与空格后截到三个字`() {
-        assertEquals("物理实", weekGridShortName("物理实验（大学物理）"))
+    fun `短名让一个字给括号里的区分字`() {
+        // 主干只留两格，第三格给括号首字：括号里那几个字才是撞名时唯一的区分信息
+        assertEquals("物理大", weekGridShortName("物理实验（大学物理）"))
         assertEquals("体育与", weekGridShortName("体育 与健康"))
+    }
+}
+
+/**
+ * 「每格显示几节」档位（审查 U-09）。
+ *
+ * 钉住三条：默认档必须与老版本逐字段一致（否则一次升级就把用户的组件字改小/改大）；
+ * 宽松档确实换来了 10sp；换档必须改动 [WidgetAppearance.viewIdStamp] ——
+ * 宿主是按 itemId 缓存行视图的，指纹不变就等于档位白改。
+ */
+class WeekGridDensityTest {
+
+    private val dense = WidgetAppearance()
+    private val roomy = WidgetAppearance(gridMaxLines = WidgetAppearance.GRID_LINES_ROOMY)
+
+    @Test
+    fun `默认档仍是每格 5 节 9sp`() {
+        assertEquals(WEEK_GRID_MAX_LINES, WidgetAppearance.GRID_LINES_DENSE)
+        assertEquals(9f, dense.gridRowTextSizeSp, 0f)
+    }
+
+    @Test
+    fun `宽松档换成 3 节并提到 10sp`() {
+        assertEquals(10f, roomy.gridRowTextSizeSp, 0f)
+        val many = (1..7).map {
+            Course(
+                id = it.toLong(),
+                name = "课程$it",
+                dayOfWeek = 1,
+                periods = listOf(it),
+                weeks = (1..16).toList(),
+                location = null,
+            )
+        }
+        val lines = weekGridDaySummary(many, maxLines = roomy.gridMaxLines).lines()
+        assertEquals(3, lines.size)
+        assertEquals("＋4", lines.last())
+    }
+
+    @Test
+    fun `换档会改宿主看到的行指纹`() {
+        assertNotEquals(dense.viewIdStamp(), roomy.viewIdStamp())
     }
 }
 

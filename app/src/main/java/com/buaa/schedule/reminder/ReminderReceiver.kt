@@ -32,19 +32,24 @@ class ReminderReceiver : BroadcastReceiver() {
         val livePhase = if (
             classProgressEnabled(context) && classStartAt > now
         ) LivePhase.BEFORE_CLASS else null
-        if (livePhase != null) {
-            ReminderNotifications.startLiveWindow(
-                context = context,
-                courseId = courseId,
-                courseName = courseName,
-                location = location.ifBlank { null },
-                sectionText = sectionText,
-                startMillis = now,
-                endMillis = classStartAt,
-                phase = livePhase,
-            )
-        }
-        notifyCourse(context, courseId, courseName, location, sectionText, classStartAt)
+        // 这两步跑在 goAsync() 之前、在接收器的主线程上：任何逃出的异常都会直接杀进程
+        // （与 ClassProgressReceiver 同口径，那边早已整体兜住）。这里失败只意味着这一节课
+        // 没有实况/通知，链式重排照旧要跑。
+        runCatching {
+            if (livePhase != null) {
+                ReminderNotifications.startLiveWindow(
+                    context = context,
+                    courseId = courseId,
+                    courseName = courseName,
+                    location = location.ifBlank { null },
+                    sectionText = sectionText,
+                    startMillis = now,
+                    endMillis = classStartAt,
+                    phase = livePhase,
+                )
+            }
+            notifyCourse(context, courseId, courseName, location, sectionText, classStartAt)
+        }.onFailure { android.util.Log.w(TAG, "课前提醒展示失败（实况/通知）", it) }
 
         // 闹钟触发后链式调度下一次提醒；goAsync 保证广播进程存活到调度完成，
         // 唤醒锁保证 Doze 下 CPU 不会在 DB 查询/重排中途再度入睡（进程活着 ≠ CPU 醒着）
@@ -82,13 +87,7 @@ class ReminderReceiver : BroadcastReceiver() {
     ) {
         // 渠道统一由 ReminderNotifications 创建（分级：课程提醒 / 明日预告）
         ReminderNotifications.ensureChannels(context)
-        val intent = Intent(context, MainActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(
-            context,
-            0,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+        val pendingIntent = ReminderNotifications.courseReminderLaunchPendingIntent(context)
         val now = System.currentTimeMillis()
 
         val builder = NotificationCompat.Builder(context, ReminderNotifications.CHANNEL_COURSE)

@@ -9,6 +9,7 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.net.toUri
 import com.buaa.schedule.MainActivity
 import com.buaa.schedule.R
 import com.buaa.schedule.domain.model.Course
@@ -96,11 +97,7 @@ object ReminderNotifications {
     fun postTomorrowPreview(context: Context, courses: List<Course>, date: LocalDate, timeSlots: List<TimeSlot>) {
         ensureChannels(context)
         val text = buildTomorrowPreviewText(courses, date, timeSlots)
-        val intent = Intent(context, MainActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(
-            context, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+        val pendingIntent = launchActivityPendingIntent(context, REQUEST_TOMORROW_PREVIEW)
         val builder = NotificationCompat.Builder(context, CHANNEL_TOMORROW)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("明天的课程（${date.monthValue}月${date.dayOfMonth}日）")
@@ -130,7 +127,7 @@ object ReminderNotifications {
                 val startTime = slots.firstOrNull { it.number == course.startPeriod }?.startTime ?: ""
                 buildString {
                     if (startTime.isNotBlank()) append("$startTime ")
-                    append(course.name)
+                    append(course.displayName)
                     course.location?.takeIf { it.isNotBlank() }?.let { append(" · $it") }
                     append(" · ").append(periodLabel(course.periods))
                 }
@@ -141,6 +138,48 @@ object ReminderNotifications {
 
     /** 课程进行中常驻通知的固定 id（下课铃撤的就是它） */
     private const val NOTIFY_ID_CLASS_PROGRESS = 20_260_002
+
+    /**
+     * 通知内容意图的 requestCode —— **每一族一个码段**，不能都写 0。
+     *
+     * PendingIntent 的判等只看 `(requestCode, Intent.filterEquals)`，而 `filterEquals`
+     * **不含 extras**：三族都指向 MainActivity、都用码 0 时，系统在它们之间看到的是
+     * 同一个待处理意图，`FLAG_UPDATE_CURRENT` 让后发的那族把先发的整份覆盖掉 ——
+     * 用户点"下一节课要上"拿到的是课堂实况的目标（或一个没带课程 id 的空启动），
+     * 落到 MainActivity 就是"点了没反应"。码段之外还各带一个 `data`，见
+     * [launchActivityPendingIntent]。
+     *
+     * 每族只用**一个**固定码（不按 courseId 展开）是刻意的：同一族屏幕上同一时刻
+     * 只有一条，码随课程 id 增长会在系统里攒出无法回收的 PendingIntent。
+     */
+    private const val REQUEST_COURSE_REMINDER = 310_000
+    private const val REQUEST_TOMORROW_PREVIEW = 320_000
+    private const val REQUEST_CLASS_LIVE = 300_000
+
+    /**
+     * 课前倒计时正在数的那节课（0 = 没有）。进程内状态，与 [CourseFluidService.isRunning]
+     * 同一套路：进程被杀即归零，语义仍然正确 —— 课中实况由状态驱动校准补起，
+     * 课前那一段则等下一次课前提醒重新下发。
+     */
+    @Volatile
+    internal var countdownCourseId = 0L
+
+    /** [countdownCourseId] 对应的上课绝对时刻（毫秒） */
+    @Volatile
+    internal var countdownClassStart = 0L
+
+    /**
+     * 屏上的实况是不是"正在数这节即将到来的课"。
+     *
+     * [ClassProgressScheduler.rescheduleWindows] 与 [LiveClassResyncer] 共用的判据：
+     * 二者都会把"课还没开始"当成下课铃被吞的遗留来收，少了这一步区分，
+     * 课前倒计时刚上岛就会被拆掉。课程 id 与开课毫秒必须同时对上、
+     * 且课还没开始才算数 —— 课被删或改时间后重排自然对不上，照常回收。
+     */
+    fun isCountingDownTo(courseId: Long, classStartMillis: Long): Boolean =
+        countdownCourseId == courseId &&
+            countdownClassStart == classStartMillis &&
+            classStartMillis > System.currentTimeMillis()
 
     /** 实况提升诊断日志的 tag：`adb logcat -s BUAA-LiveUpdate` 只看这条链 */
     private const val LIVE_TAG = "BUAA-LiveUpdate"
@@ -169,6 +208,15 @@ object ReminderNotifications {
         phase: LivePhase,
     ) {
         ensureChannels(context)
+        // 先记归属再下发：紧随其后的重排链（ReminderReceiver 的 goAsync 块）
+        // 要靠这份状态区分"课前倒计时"和"下课铃被吞的遗留"。
+        if (phase == LivePhase.BEFORE_CLASS) {
+            countdownCourseId = courseId
+            countdownClassStart = endMillis
+        } else {
+            countdownCourseId = 0L
+            countdownClassStart = 0L
+        }
         postClassOngoing(
             context = context,
             courseId = courseId,
@@ -270,17 +318,35 @@ object ReminderNotifications {
      * 只认这一个键，写别的名字等于"点了没反应"。取不到课程 id（<= 0）时不放 extra，
      * 退回首屏，而不是打开一个查不到课程的空编辑器。
      *
-     * requestCode 固定 0 是安全的：屏幕上同一时刻只有一条课堂实况，
-     * FLAG_UPDATE_CURRENT 会把 extra 刷成当前这节课。
-     * （组件那边必须区分 requestCode，因为列表行与头部点击要并存。）
+     * 走课堂实况码段：屏幕上同一时刻只有一条实况，族内固定一个码即可（见
+     * [REQUEST_CLASS_LIVE] 上那段说明），但**不能**再和课前提醒、明日预告共用 0。
      */
-    fun courseLaunchPendingIntent(context: Context, courseId: Long): PendingIntent {
+    fun courseLaunchPendingIntent(context: Context, courseId: Long): PendingIntent =
+        launchActivityPendingIntent(context, REQUEST_CLASS_LIVE, courseId)
+
+    /** 课前提醒通知的内容意图：打开应用即可，具体是哪门课已由通知正文给出，不跳编辑器 */
+    fun courseReminderLaunchPendingIntent(context: Context): PendingIntent =
+        launchActivityPendingIntent(context, REQUEST_COURSE_REMINDER)
+
+    /**
+     * 三族通知共用的启动意图工厂：**码段 + data 双重分家**。
+     *
+     * requestCode 已经能把它们拆开，但仍加上各自的 `data`：PendingIntent 的取消与
+     * 判等在某些 ROM 上按 `Intent.filterEquals` 匹配，而它只看 action/data/type/
+     * class/categories —— 光凭码分家，将来谁改了重建逻辑就会重新撞在一起。
+     */
+    private fun launchActivityPendingIntent(
+        context: Context,
+        requestCode: Int,
+        courseId: Long = 0L,
+    ): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
+            data = "buaa://launch/$requestCode".toUri()
             if (courseId > 0L) putExtra(MainActivity.EXTRA_COURSE_ID, courseId)
         }
         return PendingIntent.getActivity(
             context,
-            0,
+            requestCode,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -407,6 +473,10 @@ object ReminderNotifications {
         "${minutesLeft(endMillis, System.currentTimeMillis())}分钟"
 
     fun cancelClassOngoing(context: Context) {
+        // 撤了通知就不再保护任何一节课：归属必须同点清掉，
+        // 否则下一次重排会对着一条已经不存在的实况手下留情。
+        countdownCourseId = 0L
+        countdownClassStart = 0L
         NotificationManagerCompat.from(context).cancel(NOTIFY_ID_CLASS_PROGRESS)
     }
 }

@@ -124,7 +124,7 @@ private fun ConflictGroupRow(
         group.courses.forEach { course ->
             val locationSuffix = if (course.location.isNullOrBlank()) "" else "，${course.location}"
             Text(
-                text = "• ${course.name}（${periodLabel(course.periods)}$locationSuffix）",
+                text = "• ${course.displayName}（${periodLabel(course.periods)}$locationSuffix）",
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 2.dp),
             )
@@ -133,7 +133,7 @@ private fun ConflictGroupRow(
         when {
             suggestion != null -> {
                 Text(
-                    text = "建议：${target.name} 移到 ${periodLabel(suggestion.periods)}" +
+                    text = "建议：${target.displayName} 移到 ${periodLabel(suggestion.periods)}" +
                         if (suggestion.shiftedBy == 0) "" else
                             "（${if (suggestion.shiftedBy > 0) "后" else "前"}挪 ${kotlin.math.abs(suggestion.shiftedBy)} 节）",
                     style = MaterialTheme.typography.bodySmall,

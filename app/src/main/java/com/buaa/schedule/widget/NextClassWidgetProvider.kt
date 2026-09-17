@@ -1,19 +1,30 @@
 package com.buaa.schedule.widget
 
 import android.appwidget.AppWidgetManager
-import android.appwidget.AppWidgetProvider
+import android.content.BroadcastReceiver
 import android.content.Context
 
 /**
  * 2x1「下一节课」极简组件：一屏只回答「下一节是什么课、几点在哪」。
  * 外观配置与列表组件共用（背景色/透明度/圆角/文字颜色），数据走同一事件驱动刷新。
  */
-class NextClassWidgetProvider : AppWidgetProvider() {
+class NextClassWidgetProvider : ScheduleAppWidgetProvider() {
+
+    /** 宿主重绑后按「下一节课」口径重绘（见 [ScheduleAppWidgetProvider]） */
+    override fun rerenderAfterRebind(
+        context: Context,
+        appWidgetIds: IntArray,
+        pendingResult: BroadcastReceiver.PendingResult?,
+    ) {
+        WidgetCommon.goAsyncUpdateNext(context, appWidgetIds, pendingResult)
+    }
 
     override fun onEnabled(context: Context) {
         super.onEnabled(context)
-        BackgroundSync.scheduleWidgetMidnight(context)
-        WidgetFallbackWorker.ensure(context)
+        // 与 TodayWidgetProvider 同口径：onEnabled 在广播主线程上跑，而
+        // hasAnyWidget 的 binder 调用与 WorkManager.getInstance 都可能抛异常，
+        // 必须走带逐步 runCatching 的那一份。
+        WidgetCommon.bootstrapBackgroundSync(context)
     }
 
     override fun onUpdate(

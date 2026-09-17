@@ -260,7 +260,7 @@ fun BuaaLoginScreen(
                         )
                         Text(
                             text = termCode,
-                            style = MaterialTheme.typography.labelSmall,
+                            style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
@@ -456,6 +456,11 @@ private fun createSsoWebView(
     // 否则部分页面会以桌面宽度排版、只能左右滚动才能看全（"网页尺寸不适配"的根源）
     settings.useWideViewPort = true
     settings.loadWithOverviewMode = true
+
+    // 新建的 WebView 会继承进程遗留的定时器挂起态（上次退后台时 pause、之后手上
+    // 再没有实例能 resume）—— 那样这一页一出生 JS 就是冻结的，onPageFinished
+    // 永不回调，登录看着像卡死。见 BuaaWebSession.applyTimerGate。
+    com.buaa.schedule.data.import.BuaaWebSession.alignTimersWithForeground(this)
 
     webViewClient = object : WebViewClient() {
 

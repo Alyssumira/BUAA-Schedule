@@ -12,11 +12,10 @@ import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.buaa.schedule.BUAAApplication
 import com.buaa.schedule.MainActivity
 import com.buaa.schedule.R
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
@@ -38,7 +37,14 @@ import kotlinx.coroutines.launch
 class CourseFluidService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
-    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /**
+     * 续排用的作用域**不能**挂在本服务上：[finishLiveAndReschedule] 之后紧跟着就是
+     * `stopSelf()`，onDestroy 会在协程还没被调度起来时到达 —— 挂在自己作用域上
+     * 要么取消掉下一节课的窗口（只剩 12 小时兜底），要么干脆永远不取消而泄漏一个作用域。
+     * 应用级作用域两个问题都没有，且闭包只捕获 applicationContext，不会牵住服务实例。
+     */
+    private val ioScope: CoroutineScope
+        get() = (application as BUAAApplication).applicationScope
     private var courseId = 0L
     private var courseName = ""
     private var location: String? = null

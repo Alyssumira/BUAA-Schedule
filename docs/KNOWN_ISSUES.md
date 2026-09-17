@@ -216,6 +216,41 @@
   现在每节课一行、短名截 3 字（`WEEK_GRID_NAME_CHARS`）、9sp、最多 5 行，
   第 5 行留给「＋N」溢出提示（`WEEK_GRID_MAX_LINES`，与布局的 `maxLines` 同值）。
 
+### 4b. 组件被宿主重绑后，第一帧画的是 `initialLayout`
+
+- 真机反馈「小组件编辑保存后会刷新，但是长按后又会变为原样」不是配置被写回，
+  而是**重绑**：长按进编辑、拖拽改尺寸、恢复桌面这些动作会让 Launcher 重新绑定这个实例，
+  系统立刻按 `initialLayout` 画一帧。本项目的 `initialLayout` 指的是静态示例预览
+  （R5 F-27：线上布局是纯白底 + 运行时着色，静态渲染出来是白底白字），
+  于是那一帧看着就是"配置被改回去了"。外观存在 `WidgetAppearanceStore` 里，一个字节都没动。
+- **修法**：`ScheduleAppWidgetProvider` 这个共同底座在两个重绑通知点上补一次重绘 ——
+  `onRestored`（**必须在 manifest 的 intent-filter 里声明 `APPWIDGET_RESTORED`**，
+  否则系统根本不会把这条广播发给 Provider）与 `onAppWidgetOptionsChanged`
+  （宿主把改尺寸发成"带 `EXTRA_OPTIONS` 的 UPDATE"时走这里）。
+  按实例夹 1.5s 时间闸：一次拖拽会连发好几轮 optionsChanged。
+- **一次广播只有一份 `PendingResult`**：AOSP 的 `onReceive` 会在同一条 UPDATE 里先派
+  optionsChanged 再派 `onUpdate`，两边都要续命票。底座只把票给先到的那个，
+  后到的拿到 `null` 照样重绘 —— `goAsync()` 第二次调用返回 null 而不是抛异常。
+  **别写"拿到票就 finish"**：finish 一份已失效的票据会让当前广播的原始结果永久挂起。
+
+### 4c. `WebView.pauseTimers()` 挂起的是**整个进程**的定时器
+
+- 真机反馈「身份认证登录后会卡在打开导入预览界面」的机制在这里：会话 WebView 退后台时
+  `BuaaWebSession` 会 `pauseTimers()` 省电，而它是**进程级**开关 —— 之后一旦内存压力
+  销毁了那份会话 WebView（`releaseForMemory`），回前台时就再没有任何实例去 `resumeTimers()`，
+  整个进程的 WebView 定时器永久冻住。新建的登录 WebView 一出生 JS 就是停的，
+  `onPageFinished` 永不回调，界面停在"正在打开导入预览"。
+- **注意桩与文档不一致**：android-36/37 的 `android.jar` 里 `pauseTimers/resumeTimers`
+  是**实例方法**（`javap -v` 只有 `ACC_PUBLIC`，没有 `ACC_STATIC`），照文档当静态方法调会编译失败。
+  效果却确实是进程级的，所以"对哪个实例调"只决定能不能编译，不决定影响范围。
+- **修法**：闸门改成 `applyTimerGate(web)`（随前后台状态切当前实例），并在**每一个**
+  WebView 诞生点与销毁点上调 `alignTimersWithForeground(web)`：
+  `createSessionWebView()`、`BuaaLoginScreen.createSsoWebView`、`releaseForMemory`、`abandonRestore`。
+  销毁点必须在 `destroy()` **之前**调 —— 销毁之后再 `resumeTimers()` 是空操作。
+  新增任何 WebView 都要照这一条补，否则又是"某一页偶尔整页冻结"。
+- 同一反馈的第二半是纯布局问题：待确认导入那张卡在滚动内容末尾，登录跳转后只看到 Hero
+  与"解析完成…"，确认按钮要往下翻 —— 现在移到导入页第一屏。
+
 ## 开发环境坑（构建 / CI）
 
 ### 5. Gradle 8.14.3 不支持 Java 25

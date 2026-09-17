@@ -8,10 +8,9 @@
 package com.buaa.schedule.core.designsystem.liquid
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -41,8 +40,11 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.Personalization
 import com.buaa.schedule.core.designsystem.legibilityAlphaFloor
+import com.buaa.schedule.core.designsystem.motionSpec
+import com.buaa.schedule.core.designsystem.motionSpring
 import androidx.compose.ui.util.fastCoerceIn
 import androidx.compose.ui.util.fastRoundToInt
 import androidx.compose.ui.util.lerp
@@ -105,14 +107,20 @@ fun LiquidBottomTabs(
 ) {
     val themeBlend by animateFloatAsState(
         targetValue = if (isLightTheme) 1f else 0f,
-        animationSpec = tween(220),
+        // 220ms 的裸 tween 归入 DURATION_MEDIUM，同时接上 reduce-motion（④M-05）
+        animationSpec = motionSpec<Float>(),
         label = "LiquidBottomTabsThemeBlend"
     )
+    // 拖拽松手后的回弹规格必须在组合期取（motionSpring 读 LocalReduceMotion）：
+    // 系统要求无动画时直接 snap 归位，不再走 300ms 的弹簧
+    val settleSpec: AnimationSpec<Float> = motionSpring<Float>(
+        dampingRatio = 1f,
+        stiffness = 300f,
+        visibilityThreshold = 0.5f,
+    )
     // 与 GlassSurface / FAB 口径一致：底栏表面 alpha 也跟随用户「卡片透明度」。
-    // containerAlpha 只作为基准值，用户可以在设置里继续往更透/更实的方向调。
-    // 下限 0.18f 与 GlassSurface 同步：滑条最低 0.3f，以 0.88 归一后倍率只有 0.34，
-    // 此前钳到 0.5f 会让滑条下半段完全失效。
-    val userAlphaScale = (Personalization.cardAlpha / 0.88f).coerceIn(0.18f, 1.25f)
+    // containerAlpha 只作为基准值，倍率口径统一在 DesignTokens.cardAlphaScale（②V-12）。
+    val userAlphaScale = DesignTokens.cardAlphaScale(Personalization.cardAlpha)
     // tab 的图标/文字用的是 onSurfaceVariant，玻璃底下是**未压暗的原始壁纸**，
     // 所以这条栏要多实只能看壁纸有多亮/多暗——原来按主题写死 0.06 / 0.34，
     // 浅色主题配一张暗壁纸时 6% 的底板等于没有，近黑的 tab 文字直接糊在壁纸上。
@@ -166,10 +174,7 @@ fun LiquidBottomTabs(
                     currentIndex = targetIndex
                     animateToValue(targetIndex.toFloat())
                     animationScope.launch {
-                        offsetAnimation.animateTo(
-                            0f,
-                            spring(1f, 300f, 0.5f)
-                        )
+                        offsetAnimation.animateTo(0f, settleSpec)
                     }
                     if (changed) onTabSelected(targetIndex)
                 },
@@ -263,6 +268,7 @@ fun LiquidBottomTabs(
         ) {
             repeat(tabsCount) { index ->
                 LiquidBottomTab(
+                    selected = selectedTabIndex() == index,
                     onClick = { onTabSelected(index) }
                 ) {
                     tabContent(index)
@@ -316,9 +322,11 @@ fun LiquidBottomTabs(
                     .padding(horizontal = horizontalPadding),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // 该层叠在最上层且可命中，点击必须真实生效（同上游）
+                // 该层叠在最上层且可命中，点击必须真实生效（同上游）；
+                // 语义整层清空，"已选中"由可见层那一份播报，不重复念两遍。
                 repeat(tabsCount) { index ->
                     LiquidBottomTab(
+                        selected = selectedTabIndex() == index,
                         onClick = { onTabSelected(index) },
                     ) {
                         tabContent(index)

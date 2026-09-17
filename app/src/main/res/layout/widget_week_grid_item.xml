@@ -1,25 +1,63 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   周网格组件的一天单元：星期 + 节次摘要。
-  两处字号都低于 lint 建议的 11sp，是 4×2 组件在 7 列 × 约 30dp 列宽下的硬约束：
-  再大一档就折行，一格里只剩第一节课（真机反馈）。
+
+  字号：这里的 10sp / 9sp 是**密集档（每格 5 节）**的默认值。4×2 组件一列只有约 30dp，
+  再大一档就折行、一格里只剩第一节课（真机反馈），所以"字更小 / 每格 3 节字更大"两档
+  由组件配置里的 gridMaxLines 决定；Android 13+ 由 WeekGridWidgetService 运行时把宽松档
+  提到 10sp，更低版本改不了 RemoteViews 字号，就用这里的 9sp。
+
+  字色：底图 widget_bg_r20 是**纯白**素材（运行时才 setColorFilter 上色），
+  所以默认值必须配深色字——否则首帧（以及任何着色未生效的场合）就是白字压白底（U-09）。
+  取值与 WidgetAppearance 的 COLOR_TEXT_DARK / _SUBTLE 一致。
+
+  根布局的 id 是格子点击的 fillInIntent 落点（审查 3.6）：GridView 只有拿到
+  setOnClickFillInIntent 的视图才会把 extras 合进模板 PendingIntent。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/widget_grid_item_root"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:padding="2dp">
 
-    <TextView
-        android:id="@+id/widget_grid_day"
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:textColor="#FFFFFF"
-        android:textSize="10sp"
-        android:textStyle="bold"
-        android:maxLines="1"
-        tools:ignore="SmallSp" />
+        android:layout_height="wrap_content">
+
+        <!--
+          「今天」表头的胶囊底（审查 3.4）：走组件背景同一套做法——纯白圆角 shape +
+          setColorFilter 上色，颜色由 WidgetAppearance 的取色口径推导，所以换浅色背景
+          不会白字白底。默认 GONE，只有今天那一列由工厂打开。
+          之所以不直接 setInt(textview, "setBackgroundColor")：那会把背景整个换成
+          方角 ColorDrawable，圆角和 padding 一起没了。
+        -->
+        <ImageView
+            android:id="@+id/widget_grid_day_pill"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="fitXY"
+            android:importantForAccessibility="no"
+            android:contentDescription="@null"
+            android:src="@drawable/widget_today_pill"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/widget_grid_day"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:paddingStart="3dp"
+            android:paddingEnd="3dp"
+            android:paddingTop="1dp"
+            android:paddingBottom="1dp"
+            android:textColor="#FF14161C"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:maxLines="1"
+            tools:ignore="SmallSp" />
+    </FrameLayout>
 
     <!--
       maxLines 与 WeekGridWidgetService.WEEK_GRID_MAX_LINES 同值：数据侧每节课一行、
@@ -29,7 +67,7 @@
         android:id="@+id/widget_grid_courses"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textColor="#D6E1F5"
+        android:textColor="#FF3A3F4B"
         android:textSize="9sp"
         android:maxLines="5"
         android:ellipsize="end"

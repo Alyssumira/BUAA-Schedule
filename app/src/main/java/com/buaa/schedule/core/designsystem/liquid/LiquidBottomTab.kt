@@ -2,12 +2,12 @@
 // Modified for SleepDown-Schedule.
 package com.buaa.schedule.core.designsystem.liquid
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -31,6 +31,7 @@ val LocalLiquidBottomTabAccentTint =
 
 @Composable
 fun RowScope.LiquidBottomTab(
+    selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
@@ -39,7 +40,11 @@ fun RowScope.LiquidBottomTab(
     Column(
         modifier
             .clip(Capsule())
-            .clickable(
+            // selectable 而不是 clickable：只给 Role.Tab 的话屏幕阅读器念不出
+            // "已选中/未选中"，用户无从知道自己停在哪一页。
+            // 反馈仍交给玻璃高光（indication = null），不叠 Material ripple。
+            .selectable(
+                selected = selected,
                 interactionSource = null,
                 indication = null,
                 role = Role.Tab,

@@ -2,7 +2,6 @@ package com.buaa.schedule.core.designsystem.liquid
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,10 +25,21 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.buaa.schedule.core.designsystem.DesignTokens
+import com.buaa.schedule.core.designsystem.LiquidGlassMaterial
+import com.buaa.schedule.core.designsystem.MotionTokens
 import com.buaa.schedule.core.designsystem.Personalization
+import com.buaa.schedule.core.designsystem.contentOnLuma
+import com.buaa.schedule.core.designsystem.degradedPlate
+import com.buaa.schedule.core.designsystem.degradedPlateAlpha
+import com.buaa.schedule.core.designsystem.innerShadow
+import com.buaa.schedule.core.designsystem.motionSpec
+import com.buaa.schedule.core.designsystem.outerShadow
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.BackdropRenderOptions
 import com.kyant.backdrop.drawBackdrop
@@ -37,8 +47,6 @@ import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
 import com.kyant.backdrop.effects.vibrancy
 import com.kyant.backdrop.highlight.Highlight
-import com.kyant.backdrop.shadow.InnerShadow
-import com.kyant.backdrop.shadow.Shadow
 import com.kyant.shapes.RoundedRectangle
 
 /** 弹出菜单项（仿 SleepDown AddMenuAction） */
@@ -56,12 +64,28 @@ private val ItemHeight = 48.dp            // 单项高度 = 触控目标（整�
 private val ContentTopPadding = 6.dp      // 顶部留白
 private val ShellPadding = 11.dp          // 同心内缩（外壳与内容之间）
 
+/** 弹窗背景模糊半径（进 [LiquidGlassMaterial.popup]，不再是 drawBackdrop 里的裸常量） */
+private val MenuBlur = 10.dp
+
+/**
+ * 菜单底板色。没有场景背景时它按**不透明度 1** 直接画出来（[degradedPlate]），
+ * 有背景时只按 [surfaceAlpha] 叠一层——所以两种质感共用同一个基色，
+ * 不会出现"关掉玻璃换了个颜色"。
+ */
+private fun solidMenuPlate(darkTheme: Boolean): Color =
+    if (darkTheme) Color(0xFF1A1C22) else Color(0xFFFAFBFF)
+
+/** 菜单外壳宽度：调用方要靠它把菜单夹进可视区，别自己再抄一份常量 */
+val LiquidMenuWidth: Dp = ContentWidth + ShellPadding * 2
+
+/** 菜单在 [count] 项时的外壳高度（同上，供调用方定位与翻转使用） */
+fun liquidMenuHeight(count: Int): Dp =
+    ItemHeight * count + ContentTopPadding + ShellPadding * 2
+
 // 弹出动画：位置与尺寸各自独立的 cubic-bezier（SleepDown 02:38 调校曲线）
-private val OpenPositionEasing = CubicBezierEasing(0.16f, 0.78f, 0.18f, 1.0f)
+// 位置曲线与 FAB 图标旋转共用 MotionTokens.EasingEmphasized，不再各留一份拷贝
 private val OpenSizeEasing = CubicBezierEasing(0.20f, 0.48f, 0.24f, 1.0f)
 private val CloseEasing = CubicBezierEasing(0.28f, 0.06f, 0.20f, 1.0f)
-private const val OpenDuration = 420
-private const val CloseDuration = 240
 
 /**
  * 液态玻璃弹出菜单（SleepDown HomeAddMenu 样式）。
@@ -73,6 +97,9 @@ private const val CloseDuration = 240
  * - 液态玻璃：vibrancy + blur + 折射 + 定向高光 + 内外阴影。
  *
  * 直接组合在调用方层级中（不用 Popup），保证玻璃能采样场景背景。
+ *
+ * @param menuOrigin 展开动画的锚点。默认右下（从 FAB 那个角长出来）；
+ *   贴在手指按压点上的菜单要传按压点那一角，否则菜单会朝反方向长开。
  */
 @Composable
 fun LiquidMenu(
@@ -81,25 +108,35 @@ fun LiquidMenu(
     onDismiss: () -> Unit,
     backdrop: Backdrop?,
     modifier: Modifier = Modifier,
+    menuOrigin: TransformOrigin = TransformOrigin(1f, 1f),
 ) {
     val darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    // 同 LiquidFab：表面 alpha 跟随用户「卡片透明度」，与 GlassSurface 口径一致
-    val alphaScale = (Personalization.cardAlpha / 0.88f).coerceIn(0.5f, 1.25f)
-    val surfaceAlpha = (0.26f * alphaScale).coerceIn(0.08f, 0.50f)
-    val surface = if (darkTheme) {
-        Color(0xFF1A1C22).copy(alpha = surfaceAlpha)
-    } else {
-        Color(0xFFFAFBFF).copy(alpha = surfaceAlpha)
-    }
+    // 材质取自 LiquidGlassMaterial.popup()（②V-10：这两档以前是"假真源"，
+    // 菜单自己抄了一份已经漂移的参数——highlight 抄成 0.08、表面抄成 0.26，
+    // 改令牌不会作用到菜单）。表面浓度仍走用户的「卡片透明度」，
+    // 但上限压在 0.5：菜单要看得见底下的内容，这是有意的偏离，不是漏抄。
+    val material = remember { LiquidGlassMaterial.popup(MenuBlur) }
+    // 同 GlassSurface：表面 alpha 跟随用户「卡片透明度」，四类表面共用一个倍率口径（②V-12）
+    val alphaScale = DesignTokens.cardAlphaScale(Personalization.cardAlpha)
+    val surfaceAlpha = (material.surfaceAlpha * alphaScale).coerceIn(0.08f, 0.5f)
+    val surface = solidMenuPlate(darkTheme).copy(alpha = surfaceAlpha)
     val baseText = MaterialTheme.colorScheme.onSurface
 
-    // 展开进度：0 = 收拢在 FAB 位置，1 = 完全展开
-    val expansion = remember { Animatable(if (visible) 1f else 0f) }
+    // 展开进度：0 = 收拢在锚点角上，1 = 完全展开
+    // 初值恒为 0：调用方也可以在菜单已经可见时才把它组合进来（课程卡长按菜单就是这么用的），
+    // 那样下面的 animateTo 会补上展开动画，而不是凭空出现一个已经全开的菜单。
+    val expansion = remember { Animatable(0f) }
+    // 时长/缓动/是否瞬到，全部交给 motionSpec 与 MotionTokens：
+    // FAB 的图标旋转读的是同一组值（④M-02 的"两段动画各走各的"）
+    val openSpec = motionSpec<Float>(MotionTokens.DURATION_MENU, MotionTokens.EasingEmphasized)
+    val closeSpec = motionSpec<Float>(MotionTokens.DURATION_MENU_CLOSE, CloseEasing)
+    // key 只留 visible：两个 spec 每次重组都是新实例，拿它们当 key 等于每次重组
+    // 都把展开动画从头跑一遍
     LaunchedEffect(visible) {
         if (visible) {
-            expansion.animateTo(1f, tween(OpenDuration, easing = OpenPositionEasing))
+            expansion.animateTo(1f, openSpec)
         } else {
-            expansion.animateTo(0f, tween(CloseDuration, easing = CloseEasing))
+            expansion.animateTo(0f, closeSpec)
         }
     }
     if (!visible && expansion.value < 0.01f) return
@@ -116,7 +153,7 @@ fun LiquidMenu(
                 alpha = contentAlpha.coerceAtLeast(0.04f)
                 scaleX = sizeProgress
                 scaleY = sizeProgress
-                transformOrigin = TransformOrigin(1f, 1f)
+                transformOrigin = menuOrigin
             }
             .then(
                 if (backdrop != null) {
@@ -125,19 +162,27 @@ fun LiquidMenu(
                         shape = { menuShape },
                         effects = {
                             vibrancy()
-                            blur(10.dp.toPx())
-                            lens(16.dp.toPx(), 28.dp.toPx())
+                            blur(material.blur.toPx())
+                            lens(material.lensHeight.toPx(), material.lensAmount.toPx())
                         },
-                        // 对齐 SleepDown 的 popup 材质：highlight 0.06、innerShadow 6dp/0.10
-                        highlight = { Highlight.Default.copy(alpha = 0.08f) },
-                        shadow = { Shadow.Default },
-                        innerShadow = { InnerShadow(radius = 6.dp, alpha = 0.10f) },
+                        highlight = { Highlight.Default.copy(alpha = material.highlightAlpha) },
+                        shadow = { material.outerShadow() },
+                        innerShadow = { material.innerShadow() },
                         onDrawSurface = { drawRect(surface) },
-                        // effect 输入全是常量（开合动画走 graphicsLayer），固定 effectKey 即可长期缓存
+                        // effect 输入全是常量（材质 remember 过、开合动画走 graphicsLayer），
+                        // 固定 effectKey 即可长期缓存
                         renderOptions = MenuRenderOptions,
                     )
                 } else {
-                    Modifier
+                    // 没有场景背景（低档位 / 治理强制关玻璃）时，表面色本来只由
+                    // drawBackdrop 的 onDrawSurface 画——少了它就只剩浮空的文字。
+                    // 这里必须**实心**：没有背景采样就没有折射，半透明底板等于把文字直接压在壁纸上。
+                    Modifier.degradedPlate(
+                        shape = menuShape,
+                        tint = solidMenuPlate(darkTheme),
+                        borderColor = contentOnLuma(solidMenuPlate(darkTheme).luminance())
+                            .copy(alpha = degradedPlateAlpha(material.highlightAlpha)),
+                    )
                 }
             )
             .padding(ShellPadding)
@@ -168,7 +213,8 @@ private fun LiquidMenuRow(
             .height(ItemHeight)
             .graphicsLayer { alpha = contentAlpha }
             .clip(RoundedRectangle(SelectionCorner))
-            .clickable {
+            // 整行只有文字，不给 role 的话读屏只会念标签，听不出"这是一项可点的菜单"
+            .clickable(role = Role.Button) {
                 onDismiss()
                 item.action()
             },
@@ -184,7 +230,7 @@ private fun LiquidMenuRow(
                 imageVector = item.icon,
                 contentDescription = null,
                 tint = baseText,
-                modifier = Modifier.size(21.dp),
+                modifier = Modifier.size(DesignTokens.iconMedium),
             )
             Text(
                 text = item.label,

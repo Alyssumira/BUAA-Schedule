@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 4x2 紧凑周视图组件：GridView 7 列，每列显示一天课程摘要 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
@@ -23,29 +24,72 @@
         android:paddingTop="8dp"
         android:paddingBottom="8dp">
 
+        <!--
+          表头两侧的「上周 / 下一周」热区（审查 3.5）。文字与颜色都由 WidgetCommon 下发，
+          布局里留空：一是硬编码文案会招 lint，二是没有学期时这两块要整块隐藏。
+          widget_header 保持 weight=1，点标题打开应用的原行为不变。
+          标题因此是"带权重的行里再放带权重的子 View"（NestedWeights）：
+          RemoteViews 用不了 ConstraintLayout，而两端钉住箭头 + 标题吃掉剩余宽度只有这一种写法。
+        -->
         <LinearLayout
-            android:id="@+id/widget_header"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical">
 
             <TextView
-                android:id="@+id/widget_title"
+                android:id="@+id/widget_week_prev"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:text=""
+                android:textColor="#C9D6EE"
+                android:textSize="11sp"
+                android:maxLines="1" />
+
+            <LinearLayout
+                android:id="@+id/widget_header"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="@string/widget_week_label"
-                android:textColor="#FFFFFF"
-                android:textSize="13sp"
-                android:textStyle="bold"
-                android:maxLines="1"
-                android:ellipsize="end" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/widget_title"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    tools:ignore="NestedWeights"
+                    android:text="@string/widget_week_label"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:maxLines="1"
+                    android:ellipsize="end" />
+
+                <TextView
+                    android:id="@+id/widget_subtitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:text=""
+                    android:textColor="#C9D6EE"
+                    android:textSize="11sp"
+                    android:maxLines="1" />
+            </LinearLayout>
 
             <TextView
-                android:id="@+id/widget_subtitle"
+                android:id="@+id/widget_week_next"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
                 android:text=""
                 android:textColor="#C9D6EE"
                 android:textSize="11sp"

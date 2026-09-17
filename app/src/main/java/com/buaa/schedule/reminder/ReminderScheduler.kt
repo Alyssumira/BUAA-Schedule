@@ -166,7 +166,7 @@ object ReminderScheduler {
     private fun createPendingIntent(context: Context, course: Course, classStartMillis: Long): PendingIntent {
         val intent = baseIntent(context).apply {
             putExtra(ReminderReceiver.EXTRA_COURSE_ID, course.id)
-            putExtra(ReminderReceiver.EXTRA_COURSE_NAME, course.name)
+            putExtra(ReminderReceiver.EXTRA_COURSE_NAME, course.displayName)
             putExtra(ReminderReceiver.EXTRA_LOCATION, course.location)
             putExtra(ReminderReceiver.EXTRA_SECTION, periodLabel(course.periods))
             putExtra(ReminderReceiver.EXTRA_CLASS_START_AT, classStartMillis)

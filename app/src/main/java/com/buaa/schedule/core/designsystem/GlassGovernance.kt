@@ -29,13 +29,10 @@ object GlassGovernance {
     private val staticCap: Int by lazy {
         val maxMemoryMb = Runtime.getRuntime().maxMemory() / 1024L / 1024L
         val cores = Runtime.getRuntime().availableProcessors()
-        when {
-            // 128MB 内存或 4 核以下：直接关闭 AGSL 玻璃，走 tint 降级
-            maxMemoryMb <= 128L || cores <= 4 -> DesignTokens.GLASS_TIER_OFF
-            // 256MB 以下：最多标准档
-            maxMemoryMb <= 256L -> DesignTokens.GLASS_TIER_STANDARD
-            else -> DesignTokens.GLASS_TIER_ENHANCED
-        }
+        // 档位只有 OFF / STANDARD 两级（②V-14 删掉了「增强」），所以这里只需判一处：
+        // 128MB 内存或 4 核以下直接关闭 AGSL 玻璃走 tint 降级，其余设备拿满标准档。
+        if (maxMemoryMb <= 128L || cores <= 4) DesignTokens.GLASS_TIER_OFF
+        else DesignTokens.GLASS_TIER_STANDARD
     }
 
     /** 用户偏好 → 经设备能力 + 运行时降档钳制后的实际生效档位 */
@@ -56,9 +53,10 @@ object GlassGovernance {
             val previous = lastLowerAt
             if (previous != null && nowMillis - previous < LOWER_COOLDOWN_MS) return
             lastLowerAt = nowMillis
-            // 基准必须是最高档：从 Int.MAX_VALUE 往下减得到的 MAX-1 经 coerceAtMost 恒等，
-            // 于是"降了一档"实际什么都没降，低端机/热节流场景永不降级（R5 F-18）
-            val from = runtimeCap ?: DesignTokens.GLASS_TIER_ENHANCED
+            // 基准必须是可用的最高档：从 Int.MAX_VALUE 往下减得到的 MAX-1 经 coerceAtMost 恒等，
+            // 于是"降了一档"实际什么都没降，低端机/热节流场景永不降级（R5 F-18）。
+            // 档位只剩两级后，这一步等价于"持续掉帧就关掉玻璃"——冷却窗口是唯一闸门。
+            val from = runtimeCap ?: DesignTokens.GLASS_TIER_STANDARD
             runtimeCap = (from - 1).coerceAtLeast(DesignTokens.GLASS_TIER_OFF)
         }
     }

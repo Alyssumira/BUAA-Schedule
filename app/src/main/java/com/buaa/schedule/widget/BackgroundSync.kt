@@ -10,6 +10,7 @@ import android.util.Log
 import androidx.work.WorkManager
 import com.buaa.schedule.data.repository.scheduleRepository
 import com.buaa.schedule.domain.model.ReminderMode
+import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.reminder.ReminderScheduler
 import com.buaa.schedule.reminder.TomorrowPreviewReceiver
 import com.buaa.schedule.reminder.TomorrowPreviewScheduler
@@ -34,16 +35,48 @@ object BackgroundSync {
     private const val MIDNIGHT_REQUEST_CODE = 10_001
     private const val LEGACY_PERIODIC_WORK = "widget_refresh"
 
-    /** 重排下一条课程提醒（按最新数据库状态） */
-    suspend fun rescheduleReminders(context: Context) {
-        runCatching {
+    /**
+     * 重排下一条课程提醒（按最新数据库状态）。
+     *
+     * @return 本轮 [ReminderScheduler.rescheduleAll] 是否已经把「上/下课铃」一起接手。
+     *   返回 false 时课堂窗口没人排，需要兜底链自己续排一次：
+     *   ①「系统日历提醒」模式（应用内一个闹钟都不排）；
+     *   ② 没有下一条提醒（课表清空 / 学期已结束 / 提醒全关）—— 那条分支里
+     *     rescheduleAll 会把课堂铃一起 cancelAll（否则会留下永不消失的常驻通知 + 永久勿扰），
+     *     而 R5 F-12 要的「课程进行中 / 上课自动勿扰」还得独立续排回来。
+     *   读库失败也返回 true：那种情况下调用方不该再补一遍同样的查询。
+     */
+    suspend fun rescheduleReminders(context: Context): Boolean {
+        if (!usesInAppReminders(context)) {
+            // 日历模式：应用内闹钟与上下课铃一起清干净（口径同
+            // ScheduleViewModel.afterDataChangedInternal），只清课前提醒会留下
+            // 永不消失的常驻通知与永久勿扰。
+            runCatching {
+                ReminderScheduler.cancelAll(context)
+                com.buaa.schedule.reminder.ClassProgressScheduler.cancelAll(context)
+            }.onFailure { Log.w(TAG, "日历模式下清理应用内闹钟失败", it) }
+            return false
+        }
+        return runCatching {
             val repository = context.scheduleRepository()
             val semester = repository.getCurrentSemester()
             val courses = repository.getDisplayCourses(semester)
             val timeSlots = repository.getTimeSlots()
             val reminders = repository.getReminders().associateBy { it.courseId }
             ReminderScheduler.rescheduleAll(context, courses, semester, timeSlots, reminders)
-        }.onFailure { Log.w(TAG, "重排提醒失败", it) }
+            // 与上面 rescheduleAll 用的是同一批已读出的数据，不再查库
+            val semesterStart = semester?.startLocalDate
+            val willRemind = semesterStart != null && courses.isNotEmpty() &&
+                ReminderScheduler.planNextReminder(
+                    courses = courses,
+                    semesterStart = semesterStart,
+                    timeSlots = timeSlots,
+                    reminders = reminders,
+                    now = LocalDateTime.now(),
+                    nowMillis = System.currentTimeMillis(),
+                ) != null
+            willRemind
+        }.onFailure { Log.w(TAG, "重排提醒失败", it) }.getOrDefault(true)
     }
 
     /**
@@ -58,6 +91,9 @@ object BackgroundSync {
     suspend fun refreshWidgets(context: Context) {
         runCatching {
             WidgetDataCache.invalidate()
+            // 一个组件都没放时，下面的全量快照 sync（逐个学期查库 + JSON + upsert）与
+            // 5 次 getAppWidgetIds 都没有读者 —— 开机/改时间/12 小时兜底每次都白跑一遍。
+            if (!hasAnyWidgetSafely(context)) return
             WidgetDataSynchronizer.sync(context)
             TodayWidgetProvider.updateAll(context)
             TomorrowWidgetProvider.updateAll(context)
@@ -67,10 +103,11 @@ object BackgroundSync {
         }.onFailure { Log.w(TAG, "刷新 Widget 失败", it) }
     }
 
-    /** 数据/提醒/学期/外观变化后的统一收尾：重排提醒 + 刷新 Widget */
-    suspend fun onDataChanged(context: Context) {
-        rescheduleReminders(context)
+    /** 数据/提醒/学期/外观变化后的统一收尾：重排提醒 + 刷新 Widget（返回值见 [rescheduleReminders]） */
+    suspend fun onDataChanged(context: Context): Boolean {
+        val bellsHandled = rescheduleReminders(context)
         refreshWidgets(context)
+        return bellsHandled
     }
 
     /**
@@ -143,6 +180,16 @@ object BackgroundSync {
             NextClassWidgetProvider::class.java,
         ).any { clazz -> manager.getAppWidgetIds(ComponentName(context, clazz)).isNotEmpty() }
     }
+
+    /**
+     * [hasAnyWidget] 的不可抛版本：探测要跨 binder 问 Launcher，个别 ROM 上会抛
+     * （DeadObjectException）。失败时按"有组件"处理 —— 宁可多刷一次，
+     * 也不能因为探测失败就把组件留在昨天。
+     */
+    fun hasAnyWidgetSafely(context: Context): Boolean =
+        runCatching { hasAnyWidget(context) }
+            .onFailure { Log.w(TAG, "探测桌面组件失败，按有组件处理", it) }
+            .getOrDefault(true)
 
     /**
      * 提醒是否还走应用内闹钟。

@@ -44,10 +44,14 @@ object ClassProgressScheduler {
         val sectionText: String,
         val startMillis: Long,
         val endMillis: Long,
+        /** 授课教师：同名课在不同班之间只能靠它区分（「下一节课」组件显示） */
+        val teacher: String? = null,
     )
 
-    private const val ACTION_START = "com.buaa.schedule.reminder.ACTION_CLASS_START"
-    private const val ACTION_END = "com.buaa.schedule.reminder.ACTION_CLASS_END"
+    // 动作串只认 [ClassProgressReceiver] 里的那一份（ACTION_START / ACTION_END）。
+    // 这里曾自设过一对取值不同的私有常量：广播照排照发，接收器的 when 却永远落空，
+    // 上课铃不静音、下课铃不恢复、课中实况也不发 —— 全程零报错。不要再写回私有副本。
+
     private const val REQUEST_START = 30_260_031
     private const val REQUEST_END = 30_260_032
     private const val REQUEST_ALARM_SHOW = 30_260_033
@@ -86,11 +90,14 @@ object ClassProgressScheduler {
         val zone = ZoneId.systemDefault()
         return ClassWindow(
             courseId = course.id,
-            courseName = course.name,
+            // 别名优先（审查 3.1）：这个字段同时喂给「课程进行中」常驻通知与「下一节课」组件，
+            // 用教务原名的话用户起的短名在这两处都不生效、长课名还会被截断。
+            courseName = course.displayName,
             location = course.location,
             sectionText = periodLabel(window.segment),
             startMillis = window.begin.atZone(zone).toInstant().toEpochMilli(),
             endMillis = window.end.atZone(zone).toInstant().toEpochMilli(),
+            teacher = course.teacher,
         )
     }
 
@@ -174,7 +181,14 @@ object ClassProgressScheduler {
             cancelAll(context)
             return
         }
-        if (window.startMillis > System.currentTimeMillis()) {
+        if (window.startMillis > System.currentTimeMillis() &&
+            // 课前倒计时挂的就是这节即将到来的课（同一通知 id）。
+            // 此前这里无条件把"课还没开始"当成下课铃被吞的遗留收干净，
+            // ReminderReceiver 自己触发的重排会在倒计时下发后一秒内把它拆掉 ——
+            // 这正是"课中能上岛、课前倒计时上不了岛"剩下的那条机制级根因。
+            // 课被删/时间被改时归属对不上，照常回收，R5 F-11 的清理语义不变。
+            !ReminderNotifications.isCountingDownTo(window.courseId, window.startMillis)
+        ) {
             CourseFluidService.stop(context)
             ReminderNotifications.cancelClassOngoing(context)
             ClassProgressDnd.restore(context)
@@ -286,8 +300,8 @@ object ClassProgressScheduler {
      * 供仪器化测试断言"清空课表后收铃"（R5 F-11）。
      */
     internal fun hasPendingClassBells(context: Context): Boolean =
-        existingPendingIntent(context, REQUEST_START, ACTION_START) != null ||
-            existingPendingIntent(context, REQUEST_END, ACTION_END) != null
+        existingPendingIntent(context, REQUEST_START, ClassProgressReceiver.ACTION_START) != null ||
+            existingPendingIntent(context, REQUEST_END, ClassProgressReceiver.ACTION_END) != null
 
     fun cancel(context: Context) {
         val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
@@ -296,8 +310,8 @@ object ClassProgressScheduler {
         // 只 alarmManager.cancel 不够：PI 记录仍被应用侧的引用钉住，FLAG_NO_CREATE
         // 事后照样查得到（真机实测），于是"铃到底还挂不挂着"无法回答。
         // PendingIntent.cancel() 把记录本身摘掉；重排时 getBroadcast 会再造新的。
-        existingPendingIntent(context, REQUEST_START, ACTION_START)?.cancelWith(alarmManager)
-        existingPendingIntent(context, REQUEST_END, ACTION_END)?.cancelWith(alarmManager)
+        existingPendingIntent(context, REQUEST_START, ClassProgressReceiver.ACTION_START)?.cancelWith(alarmManager)
+        existingPendingIntent(context, REQUEST_END, ClassProgressReceiver.ACTION_END)?.cancelWith(alarmManager)
     }
 
     private fun PendingIntent.cancelWith(alarmManager: AlarmManager) {
@@ -322,14 +336,14 @@ object ClassProgressScheduler {
     private fun startPendingIntent(context: Context, window: ClassWindow): PendingIntent =
         PendingIntent.getBroadcast(
             context, REQUEST_START,
-            baseIntent(context).putExtras(window.toBundle(ACTION_START)),
+            baseIntent(context).putExtras(window.toBundle(ClassProgressReceiver.ACTION_START)),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
     private fun endPendingIntent(context: Context, window: ClassWindow): PendingIntent =
         PendingIntent.getBroadcast(
             context, REQUEST_END,
-            baseIntent(context).putExtras(window.toBundle(ACTION_END)),
+            baseIntent(context).putExtras(window.toBundle(ClassProgressReceiver.ACTION_END)),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 

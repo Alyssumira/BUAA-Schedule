@@ -98,8 +98,15 @@ object WidgetDataCache {
      * 所以这里几乎总能命中；未命中时调用方**不能**画个空态就完事，
      * 必须异步补 [get] 再通知一次（R5 F-17）。
      */
-    fun peek(semesterCode: String?): WidgetData? =
-        entries[semesterCode ?: CURRENT_KEY]?.data
+    fun peek(semesterCode: String?): WidgetData? {
+        val entry = entries[semesterCode ?: CURRENT_KEY] ?: return null
+        // 与 [get] 认同一条窗口：entries 只有显式 invalidate() 才会清，而组件进程
+        // 可能整程都不触发它（用户从不在应用内改课表），不设时限就等于每个绑过
+        // 学期的组件各留一份全量课程列表到进程结束。过期 → 返回 null，
+        // 调用方那条异步补数据 + 二次通知的路径（R5 F-17）会接管。
+        if (System.currentTimeMillis() - entry.at > TTL_MILLIS) return null
+        return entry.data
+    }
 
     /** 数据变化后调用，避免刷新到旧快照 */
     fun invalidate() {

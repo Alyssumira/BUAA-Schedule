@@ -1,7 +1,5 @@
 package com.buaa.schedule.core.designsystem
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
@@ -14,7 +12,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.lerp
@@ -57,21 +54,20 @@ fun GlassSurface(
     val resolvedShape = shape ?: RoundedCornerShape(DesignTokens.cornerPanel)
     val backdrop = LocalSceneBackdrop.current
 
-    // 档位 → 液态玻璃材质（增强档整体强度 ×1.3，更通透）
-    // 映射统一走 DesignTokens.glassMaterial，避免与测试各用一套表
-    val material = remember(variant, tier, darkTheme) {
+    // 变体 → 液态玻璃材质（映射唯一真源在 DesignTokens.glassMaterial，测试也走它）
+    val panelBlurDp = Personalization.panelBlurDp
+    val material = remember(variant, darkTheme, panelBlurDp) {
         // vibrancy 会把采样到的背景提亮、增饱和：浅色档这是"通透"的来源，
         // 深色档却等于往文字底下垫一块亮斑，浅色正文的对比度直接被吃掉。
-        val base = DesignTokens.glassMaterial(variant, tier)
+        val base = DesignTokens.glassMaterial(variant, panelBlurDp = panelBlurDp)
         if (darkTheme) base.copy(useVibrancy = false) else base
     }
 
     val baseTint = semanticTint ?: if (darkTheme) DarkGlassTint else LightGlassTint
     // 用户透明度偏好映射到 tint：cardAlpha 越低玻璃越透。
-    // 下限必须留足空间：滑条范围是 0.3f..1f，而这里以默认值 0.88 归一，
-    // 0.3 只能把倍率压到 0.34 —— 此前下限取 0.5f，于是滑条 0.3~0.44 一整段
-    // 算出来都是同一个 0.5，用户往左拖到底也看不到任何变化（"玻璃不够透明"的直接来源）。
-    val alphaScale = (userAlpha / 0.88f).coerceIn(0.18f, 1.25f)
+    // 倍率口径全站统一在 DesignTokens.cardAlphaScale（②V-12）——下限必须是 0.18 而不是 0.5，
+    // 否则滑条 0.3~0.44 那一段算出来是同一个值，用户往左拖到底看不到任何变化。
+    val alphaScale = DesignTokens.cardAlphaScale(userAlpha)
     val surfaceAlpha = when (variant) {
         GlassVariant.ALERT -> (if (semanticTint != null) 0.45f else material.surfaceAlpha) * alphaScale
         else -> material.surfaceAlpha * alphaScale
@@ -116,10 +112,9 @@ fun GlassSurface(
             ?: colorScheme.surfaceContainerHigh
     }
     val plateModifier = remember(plateColor, resolvedShape, colorScheme) {
-        Modifier
-            .clip(resolvedShape)
-            .background(plateColor)
-            .border(1.dp, colorScheme.outlineVariant, resolvedShape)
+        // 结构与另外两条降级路径共用 degradedPlate；描边色这里能用主题的 outlineVariant，
+        // 是因为面板拿得到 ColorScheme（liquidGlass / 课程卡那条链上没有它）
+        Modifier.degradedPlate(resolvedShape, plateColor, colorScheme.outlineVariant)
     }
 
     Box(
@@ -145,6 +140,9 @@ fun GlassSurface(
  *
  * 不是 `@Composable`：调用方需要在 `remember { }` 里算它。
  * 组合期内读 [SceneLuma] 照样会被记录，换壁纸仍然会触发重算。
+ *
+ * @see legibleTintPlate 前景色**也还没定**（课程色底板这类）时用那个，它会连文字色一起解出来
+ * @see DesignTokens.glassAlphaFloor 两个入口共同的数值口径
  */
 internal fun legibilityAlphaFloor(surfaceTint: Color, text: Color, darkTheme: Boolean): Float {
     val surfaceLuma = surfaceTint.luminance()

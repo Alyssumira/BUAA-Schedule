@@ -1,10 +1,9 @@
 package com.buaa.schedule.core.designsystem.liquid
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -27,9 +26,11 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.buaa.schedule.core.designsystem.LocalReduceMotion
+import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.MotionTokens
 import com.buaa.schedule.core.designsystem.Personalization
+import com.buaa.schedule.core.designsystem.motionSpec
+import com.buaa.schedule.core.designsystem.motionSpring
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.BackdropRenderOptions
 import com.kyant.backdrop.drawBackdrop
@@ -62,26 +63,21 @@ fun LiquidFab(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val pressScale = remember { Animatable(1f) }
-    LaunchedEffect(pressed) {
+    val pressSpec: AnimationSpec<Float> = motionSpring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow)
+    LaunchedEffect(pressed, pressSpec) {
         pressScale.animateTo(
             targetValue = if (pressed) 1f + 3f / 42f else 1f,
-            animationSpec = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow),
+            animationSpec = pressSpec,
         )
     }
 
-    // 图标旋转必须与菜单开合同步：此前是 0f/45f 瞬间跳变，
-    // 与 LiquidMenu 420ms 的展开动画割裂，会看到“菜单在长、加号瞬间变叉”
-    val reduceMotion = LocalReduceMotion.current
+    // 图标旋转必须与菜单开合同步：时长与缓动直接取菜单用的那一组令牌，
+    // 于是"菜单在长、加号还在转"变成"加号转完的一刻菜单正好停住"（④M-02）。
+    // reduce-motion 由 motionSpec 统一处理：系统要求无动画时瞬时到位。
     val iconRotation by animateFloatAsState(
         targetValue = if (expanded) 45f else 0f,
-        animationSpec = tween(
-            durationMillis = if (reduceMotion) {
-                0
-            } else if (expanded) {
-                MotionTokens.DURATION_LONG
-            } else {
-                MotionTokens.DURATION_MEDIUM
-            },
+        animationSpec = motionSpec<Float>(
+            durationMillis = if (expanded) MotionTokens.DURATION_MENU else MotionTokens.DURATION_MENU_CLOSE,
             easing = MotionTokens.EasingEmphasized,
         ),
         label = "fabIconRotation",
@@ -89,10 +85,9 @@ fun LiquidFab(
 
     val darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
     // 表面色叠在"采样到的背景 + 折射"之上，alpha 越高越像实心色块。
-    // 关键：这里必须跟随用户的「卡片透明度」（Personalization.cardAlpha），
-    // 与 GlassSurface 用同一套映射 —— 否则用户把透明度调低时，卡片透了、
-    // 加号/菜单/底栏却还是不透（反馈里"液态玻璃不会透明"就是这么来的）。
-    val alphaScale = (Personalization.cardAlpha / 0.88f).coerceIn(0.5f, 1.25f)
+    // 倍率必须与面板/底栏/菜单同源（DesignTokens.cardAlphaScale，②V-12）：
+    // 此前这里下限写死 0.5f，用户把透明度拉到底时卡片透了、加号还差一半幅度。
+    val alphaScale = DesignTokens.cardAlphaScale(Personalization.cardAlpha)
     val surfaceAlpha = (0.30f * alphaScale).coerceIn(0.08f, 0.55f)
     val surface = if (darkTheme) {
         Color(0xFF121212).copy(alpha = surfaceAlpha)

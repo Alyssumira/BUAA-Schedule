@@ -42,10 +42,13 @@ class WidgetAppearanceTest {
     }
 
     @Test
-    fun autoTextFallsBackToLightWhenFullyTransparent() {
-        // 全透明时不看背景色，按中灰背板折算 → 取浅色文字（与预览一致）
+    fun autoTextOnFullyTransparentBackdropPicksHigherContrastSide() {
+        // 全透明时不看背景色，按中灰背板（0.5）折算 → #808080，相对亮度 0.214：
+        // 黑字 5.3:1 对白字 4.0:1，所以取深色。
+        // 旧断言期望白字，前提是被 U-01 推翻的那条"亮度 > 0.45 才用深字"——
+        // 黑/白等对比度的真正交点在 0.203，0.203~0.45 这一段原本全部判错。
         val appearance = WidgetAppearance(backgroundColor = 0xFFF3F5FA.toInt(), alphaPercent = 0)
-        assertEquals(0xFFFFFFFF.toInt(), appearance.titleColor())
+        assertEquals(0xFF14161C.toInt(), appearance.titleColor())
     }
 
     @Test
@@ -138,6 +141,67 @@ class WidgetAppearanceTest {
         val stamp = base.copy(textMode = WidgetAppearance.TEXT_DARK).viewIdStamp()
         val ids = listOf(0L, 31L, 62L, 4_711L).map { it + stamp }
         assertEquals("加偏移后行 id 仍要互不相同", ids.size, ids.toSet().size)
+    }
+}
+
+/**
+ * 4×2「今天」表头的高亮配色（审查 3.4）。
+ *
+ * 硬约束是**颜色必须由既有的取色管线推导**：用户可以把组件背景设成云白，
+ * 这时任何硬编码的白胶囊都会变成白字白底、表头整列看不见。
+ */
+class WidgetTodayHighlightTest {
+
+    private val darkBg = 0xFF16203A.toInt()
+    private val lightBg = 0xFFF3F5FA.toInt()
+    private val backgrounds = listOf(darkBg, lightBg)
+    private val textModes = listOf(
+        WidgetAppearance.TEXT_AUTO, WidgetAppearance.TEXT_LIGHT, WidgetAppearance.TEXT_DARK,
+    )
+
+    @Test
+    fun pillAndItsLabelAlwaysOnOppositeSides() {
+        textModes.forEach { mode ->
+            backgrounds.forEach { bg ->
+                val appearance = WidgetAppearance(backgroundColor = bg, alphaPercent = 100, textMode = mode)
+                assertNotEquals(
+                    "胶囊与它上面那几个字同色（模式 $mode / 背景 $bg）",
+                    appearance.todayHighlightFor(bg),
+                    appearance.onTodayHighlightFor(bg),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun pillRidesTheSameInkPipelineAsTheTitle() {
+        // 胶囊底色与标题墨色同源，才保证它一定浮在用户设的背景上
+        textModes.forEach { mode ->
+            backgrounds.forEach { bg ->
+                val appearance = WidgetAppearance(backgroundColor = bg, alphaPercent = 100, textMode = mode)
+                assertEquals(appearance.titleColorFor(bg), appearance.todayHighlightFor(bg))
+            }
+        }
+    }
+
+    @Test
+    fun pillFlipsBetweenLightAndDarkBackgrounds() {
+        val appearance = WidgetAppearance(alphaPercent = 100)
+        assertNotEquals(
+            "浅色背景下高亮必须自动翻面，否则白胶囊压白底",
+            appearance.todayHighlightFor(darkBg),
+            appearance.todayHighlightFor(lightBg),
+        )
+        assertEquals(0xFFFFFFFF.toInt(), appearance.todayHighlightFor(darkBg))
+        assertEquals(0xFF14161C.toInt(), appearance.todayHighlightFor(lightBg))
+    }
+
+    @Test
+    fun alphaStaysInRangeAndMatchesTheSharedConstant() {
+        val appearance = WidgetAppearance()
+        assertTrue(appearance.todayHighlightAlpha > 0f)
+        assertTrue(appearance.todayHighlightAlpha <= 1f)
+        assertEquals(WidgetAppearance.TODAY_HIGHLIGHT_ALPHA, appearance.todayHighlightAlpha, 0.001f)
     }
 }
 

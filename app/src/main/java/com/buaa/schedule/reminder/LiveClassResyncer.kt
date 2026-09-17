@@ -38,10 +38,17 @@ object LiveClassResyncer {
         runCatching {
             // 服务在跑就说明上课铃正常送达（或上一轮已补过），直接退出，避免每次进前台都查库
             if (CourseFluidService.isRunning) return
-            when (val action = decide(nextWindow(context), System.currentTimeMillis())) {
+            val window = nextWindow(context)
+            when (val action = decide(window, System.currentTimeMillis())) {
                 ResyncAction.ClearLeftovers -> {
-                    ClassProgressDnd.restore(context)
-                    ReminderNotifications.cancelClassOngoing(context)
+                    // "课还没开始"不等于遗留：正为数着这节课的课前倒计时就挂在岛上，
+                    // 判据与 rescheduleWindows 共用，口径不能两边各写一份
+                    val countingDown = window != null &&
+                        ReminderNotifications.isCountingDownTo(window.courseId, window.startMillis)
+                    if (!countingDown) {
+                        ClassProgressDnd.restore(context)
+                        ReminderNotifications.cancelClassOngoing(context)
+                    }
                 }
                 is ResyncAction.StartLive -> if (liveWorthPosting(context)) startLive(context, action.window)
             }

@@ -1,15 +1,25 @@
 package com.buaa.schedule.widget
 
 import android.appwidget.AppWidgetManager
-import android.appwidget.AppWidgetProvider
+import android.content.BroadcastReceiver
 import android.content.Context
 
-class TomorrowWidgetProvider : AppWidgetProvider() {
+class TomorrowWidgetProvider : ScheduleAppWidgetProvider() {
+
+    /** 宿主重绑后按「明日课程」口径重绘（见 [ScheduleAppWidgetProvider]） */
+    override fun rerenderAfterRebind(
+        context: Context,
+        appWidgetIds: IntArray,
+        pendingResult: BroadcastReceiver.PendingResult?,
+    ) {
+        WidgetCommon.goAsyncUpdate(context, appWidgetIds, pendingResult, ListWidgetMode.TOMORROW)
+    }
 
     override fun onEnabled(context: Context) {
         super.onEnabled(context)
-        BackgroundSync.scheduleWidgetMidnight(context)
-        WidgetFallbackWorker.ensure(context)
+        // 与 TodayWidgetProvider 同口径：onEnabled 在广播主线程上跑，而
+        // hasAnyWidget 的 binder 调用与 WorkManager.getInstance 都可能抛异常。
+        WidgetCommon.bootstrapBackgroundSync(context)
     }
 
     override fun onUpdate(

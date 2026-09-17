@@ -1,10 +1,10 @@
 package com.buaa.schedule.core.designsystem
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -18,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -46,11 +47,11 @@ fun GlassSegmentedControl(
     val haptics = LocalHapticFeedback.current
     val scheme = MaterialTheme.colorScheme
     val darkTheme = scheme.background.luminance() < 0.5f
-    val tier = GlassGovernance.effectiveTier(Personalization.glassTier)
     val backdrop = LocalSceneBackdrop.current
     val segmentShape = remember { RoundedCornerShape(DesignTokens.cornerPill) }
-    val material = remember(tier, darkTheme) {
-        val base = DesignTokens.glassMaterial(GlassVariant.COMPACT, tier)
+    // 不读档位：分段控件属于"关闭档也保留小面积玻璃"的那一类（②V-14 后材质本身也不随档位变）
+    val material = remember(darkTheme) {
+        val base = DesignTokens.glassMaterial(GlassVariant.COMPACT)
         if (darkTheme) base.copy(useVibrancy = false) else base
     }
     // 选中胶囊要一块自己的配额：它折射的是场景层，不是父玻璃
@@ -92,14 +93,24 @@ fun GlassSegmentedControl(
                 val selected = index == selectedIndex
                 Box(
                     modifier = Modifier
-                        .defaultMinSize(minWidth = minSegmentWidth)
+                        // 高度下限要在 clickable **之前**：写后面只会撑大内容区，点不到的还是点不到
+                        .defaultMinSize(
+                            minWidth = minSegmentWidth,
+                            minHeight = DesignTokens.minTouchTarget,
+                        )
                         .padding(horizontal = 2.dp)
                         .then(if (selected) segmentModifier else Modifier)
-                        .clickable {
-                            // 只有真正切换时才反馈，重复点当前项不该震动
-                            if (index != selectedIndex) haptics.performTick()
-                            onSelect(index)
-                        }
+                        .selectable(
+                            selected = selected,
+                            // 与底栏、顶栏「周课表/今日」同一套语义：分段切换回答的是
+                            // "我在哪一格"，而此前这里只有 clickable，念不出"已选中"
+                            role = Role.Tab,
+                            onClick = {
+                                // 只有真正切换时才反馈，重复点当前项不该震动
+                                if (index != selectedIndex) haptics.performTick()
+                                onSelect(index)
+                            },
+                        )
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     contentAlignment = Alignment.Center,
                 ) {

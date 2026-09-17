@@ -14,5 +14,6 @@ build/
 dist/
 # 代理/编辑器会话草稿，不属于工程
 .zcode/
+.tmp/
 # 本机 gradle 包装脚本：写死了 JAVA_HOME / SDK / 仓库绝对路径，换机器即失效
 build.cmd

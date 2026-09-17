@@ -4,6 +4,7 @@
   背景层与今日组件同构（纯白圆角 shape + setColorFilter）。
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
@@ -26,30 +27,67 @@
         android:paddingTop="10dp"
         android:paddingBottom="10dp">
 
+        <!-- 表头两侧的翻周热区，与 widget_week_grid.xml 同构：文字/颜色由 WidgetCommon 下发 -->
         <LinearLayout
-            android:id="@+id/widget_header"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical">
 
             <TextView
-                android:id="@+id/widget_title"
+                android:id="@+id/widget_week_prev"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:text=""
+                android:textColor="#C9D6EE"
+                android:textSize="11sp"
+                android:maxLines="1" />
+
+            <LinearLayout
+                android:id="@+id/widget_header"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="@string/widget_week_label"
-                android:textColor="#FFFFFF"
-                android:textSize="13sp"
-                android:textStyle="bold"
-                android:letterSpacing="0.02"
-                android:maxLines="1"
-                android:ellipsize="end" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/widget_title"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    tools:ignore="NestedWeights"
+                    android:text="@string/widget_week_label"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.02"
+                    android:maxLines="1"
+                    android:ellipsize="end" />
+
+                <TextView
+                    android:id="@+id/widget_subtitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:text=""
+                    android:textColor="#C9D6EE"
+                    android:textSize="11sp"
+                    android:maxLines="1" />
+            </LinearLayout>
 
             <TextView
-                android:id="@+id/widget_subtitle"
+                android:id="@+id/widget_week_next"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
                 android:text=""
                 android:textColor="#C9D6EE"
                 android:textSize="11sp"

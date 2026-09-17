@@ -39,6 +39,9 @@ object WidgetCommon {
     /** 头部点击的 requestCode 偏移：避免与列表模板共用同一个 appWidgetId 而互相覆盖 */
     private const val HEADER_REQUEST_CODE_OFFSET = 100_000
 
+    /** 翻周热区的 requestCode 基准：再按实例 + 方向错开，与上面两类互不覆盖 */
+    private const val WEEK_BROWSE_REQUEST_CODE_BASE = 200_000
+
     private const val BOOTSTRAP_INTERVAL_MS = 60_000L
     @Volatile private var lastBootstrapAt: Long = 0L
 
@@ -83,8 +86,10 @@ object WidgetCommon {
      * （最多 5 次 `getAppWidgetIds` 往返），不拦一道等于每广播 25 次 binder 调用。
      * 不能简化成"进程内只跑一次"：用户可能先开应用、过很久才放第一个组件，
      * 那次补注册正是唯一会注册零点闹钟的地方。
+     *
+     * [onEnabled] 也必须走这里而不是自己裸调：首启保护与逐步吞异常只有这一份实现。
      */
-    private fun bootstrapBackgroundSync(context: Context) {
+    internal fun bootstrapBackgroundSync(context: Context) {
         val now = SystemClock.elapsedRealtime()
         if (now - lastBootstrapAt < BOOTSTRAP_INTERVAL_MS) return
         lastBootstrapAt = now
@@ -166,27 +171,39 @@ object WidgetCommon {
     ) {
         // 走同步层快照（手动课程 + 当前学期/实例绑定学期），与主界面保持一致；
         // 实例绑定优先于当前学期，允许不同组件显示不同课表
-        val bindingCode = WidgetBindingStore.load(context, appWidgetId).semesterCode
-        val data = WidgetDataCache.get(context, bindingCode)
+        val binding = WidgetBindingStore.load(context, appWidgetId)
+        val data = WidgetDataCache.get(context, binding.semesterCode)
         val semester = data.semester
 
         val today = LocalDate.now()
+        // 本周模式可以翻周（审查 3.5）：标题/副标题/工厂取数都以「浏览周」为准。
+        // 工厂那边也自己从 store 读同一个偏移，两边必须用同一个纯函数才算得一致。
+        val displayWeek = if (mode == ListWidgetMode.WEEK) {
+            displayWeekOf(semester, today, binding)
+        } else {
+            null
+        }
         val title = when (mode) {
             ListWidgetMode.TODAY -> "今日课程"
             ListWidgetMode.TOMORROW -> "明日课程"
-            ListWidgetMode.WEEK -> weekTitle(semester)
+            ListWidgetMode.WEEK -> weekTitle(displayWeek)
         }
         // 副标题：周课表显示周次；今日/明日显示具体日期（与列表口径一致）
+        // + 「第 N 周」——周次此前在任何组件上都不显示，用户答不出"明天那天上不上这门课"
         val subtitle = when (mode) {
-            ListWidgetMode.WEEK -> currentWeekOrNull(semester, today)?.let { "第 $it 周" } ?: "假期中"
-            ListWidgetMode.TOMORROW -> dateLabel(today.plusDays(1))
-            ListWidgetMode.TODAY -> dateLabel(today)
+            ListWidgetMode.WEEK -> weekSubtitle(semester, displayWeek, today)
+            ListWidgetMode.TOMORROW -> dateLabel(today.plusDays(1)) + weekSuffix(semester, today.plusDays(1))
+            ListWidgetMode.TODAY -> dateLabel(today) + weekSuffix(semester, today)
         }
         // 空态文案必须在主视图里下发：RemoteViewsFactory 拿不到 setEmptyView 指向的那个视图，
         // 此前只能靠布局硬编码，导致「明日课程」空态显示的是「今天没有课」。
+        val realWeek = currentWeekOrNull(semester, today)
         val emptyText = when {
-            semester != null && currentWeekOrNull(semester, today) == null -> "假期中，暂无课表"
+            semester != null && realWeek == null -> "假期中，暂无课表"
             mode == ListWidgetMode.TOMORROW -> "明天没有课"
+            // 翻到别的周还写「本周没有课」就是在说谎
+            mode == ListWidgetMode.WEEK && displayWeek != null && displayWeek != realWeek ->
+                "这一周没有课"
             mode == ListWidgetMode.WEEK -> "本周没有课"
             else -> "今天没有课"
         }
@@ -199,6 +216,16 @@ object WidgetCommon {
         views.setTextViewText(R.id.widget_title, title)
         views.setTextViewText(R.id.widget_subtitle, subtitle)
         views.setTextViewText(R.id.widget_empty, emptyText)
+        if (mode == ListWidgetMode.WEEK) {
+            applyWeekBrowse(
+                context = context,
+                views = views,
+                appWidgetId = appWidgetId,
+                appearance = appearance,
+                providerClass = WeekWidgetProvider::class.java,
+                enabled = semester != null,
+            )
+        }
 
         // 列表数据：交给 RemoteViewsService（行内含课程色条/教室/节次/上课时间）
         val serviceIntent = Intent(context, CourseListWidgetService::class.java).apply {
@@ -296,7 +323,7 @@ object WidgetCommon {
     fun goAsyncUpdateNext(
         context: Context,
         appWidgetIds: IntArray,
-        pendingResult: BroadcastReceiver.PendingResult,
+        pendingResult: BroadcastReceiver.PendingResult?,
     ) {
         launchRefresh(pendingResult) {
             bootstrapBackgroundSync(context)
@@ -325,6 +352,7 @@ object WidgetCommon {
         }
         val layoutRes = R.layout.widget_next
         val views = RemoteViews(context.packageName, layoutRes)
+        val appearance = WidgetAppearanceStore.load(context, appWidgetId)
         if (window == null) {
             views.setTextViewText(R.id.widget_next_name, "暂无课程")
             views.setTextViewText(R.id.widget_next_meta, "导入课表后显示下一节课")
@@ -337,17 +365,24 @@ object WidgetCommon {
                 java.time.format.DateTimeFormatter.ofPattern("HH:mm", java.util.Locale.US)
             )
             views.setTextViewText(R.id.widget_next_name, window.courseName)
+            // 段落与顺序交给 rowFields（审查 3.2 + 3.7）：默认口径把教师排在节次之前，
+            // 因为"第5-6节"在 14:00 里已经隐含，而教师才回答"是不是我该去的那个班"。
+            val fields = appearance.effectiveRowFields(WidgetAppearance.DEFAULT_NEXT_ROW_FIELDS)
             views.setTextViewText(
                 R.id.widget_next_meta,
-                listOfNotNull(
-                    "$dayName $timeText",
-                    window.sectionText,
-                    window.location?.takeIf { it.isNotBlank() },
-                ).joinToString(" · "),
+                fields.mapNotNull { field ->
+                    when (field) {
+                        WidgetRowField.TIME -> "$dayName $timeText"
+                        WidgetRowField.TEACHER -> window.teacher?.takeIf { it.isNotBlank() }
+                        WidgetRowField.PERIODS -> window.sectionText.takeIf { it.isNotBlank() }
+                        WidgetRowField.LOCATION -> window.location?.takeIf { it.isNotBlank() }
+                        // 下一节课的周次由那个日期隐含，再写一遍只是占位
+                        WidgetRowField.WEEKS -> null
+                    }
+                }.joinToString(" · "),
             )
         }
 
-        val appearance = WidgetAppearanceStore.load(context, appWidgetId)
         applyAppearance(context, views, appearance, isListLayout = false)
         applyBlurredBackground(context, views, appearance)
         val bg = appearance.resolvedBackground(context)
@@ -420,13 +455,15 @@ object WidgetCommon {
         appWidgetManager: AppWidgetManager,
         appWidgetId: Int,
     ) {
-        val bindingCode = WidgetBindingStore.load(context, appWidgetId).semesterCode
-        val data = WidgetDataCache.get(context, bindingCode)
+        // 偏移的夹取不必在这里再做一遍：displayWeekOf 内部就把「基准周 + 偏移」夹在 [1, totalWeeks]，
+        // 历史脏值最坏也只是停在学期首/末周。
+        val binding = WidgetBindingStore.load(context, appWidgetId)
+        val data = WidgetDataCache.get(context, binding.semesterCode)
         val semester = data.semester
-        val title = "本周课表"
-        val subtitle = semester?.startLocalDate?.let {
-            WeekCalculator.currentWeekOrNull(it, semester.totalWeeks, LocalDate.now())
-        }?.let { "第 $it 周" } ?: "假期中"
+        val today = LocalDate.now()
+        val displayWeek = displayWeekOf(semester, today, binding)
+        val title = weekTitle(displayWeek)
+        val subtitle = weekSubtitle(semester, displayWeek, today)
 
         val views = RemoteViews(context.packageName, R.layout.widget_week_grid)
         val appearance = WidgetAppearanceStore.load(context, appWidgetId)
@@ -434,7 +471,22 @@ object WidgetCommon {
         applyBlurredBackground(context, views, appearance)
         views.setTextViewText(R.id.widget_title, title)
         views.setTextViewText(R.id.widget_subtitle, subtitle)
-        views.setTextViewText(R.id.widget_empty, "本周没有课")
+        views.setTextViewText(
+            R.id.widget_empty,
+            if (displayWeek != null && displayWeek != currentWeekOrNull(semester, today)) {
+                "这一周没有课"
+            } else {
+                "本周没有课"
+            },
+        )
+        applyWeekBrowse(
+            context = context,
+            views = views,
+            appWidgetId = appWidgetId,
+            appearance = appearance,
+            providerClass = WeekGridWidgetProvider::class.java,
+            enabled = semester != null,
+        )
 
         val serviceIntent = Intent(context, WeekGridWidgetService::class.java).apply {
             putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
@@ -442,7 +494,11 @@ object WidgetCommon {
         views.setRemoteAdapter(R.id.widget_grid, serviceIntent)
         views.setEmptyView(R.id.widget_grid, R.id.widget_empty)
 
-        val listTapIntent = Intent(context, MainActivity::class.java)
+        // 格子点击（审查 3.6）：模板只给缺省值，真正的星期序号由工厂每格 fillInIntent 覆盖。
+        // 缺省值必须留在这里——宿主合并 extras 前的第一次点击会直接吃模板。
+        val listTapIntent = Intent(context, MainActivity::class.java).apply {
+            putExtra(WidgetNavigation.EXTRA_DAY_OF_WEEK, 0)
+        }
         views.setPendingIntentTemplate(
             R.id.widget_grid,
             PendingIntent.getActivity(
@@ -473,6 +529,104 @@ object WidgetCommon {
         launchRefresh(null) {
             updateWeekGridWidget(appContext, AppWidgetManager.getInstance(appContext), appWidgetId)
         }
+    }
+
+    /**
+     * 表头的「上一周 / 下一周」热区（审查 3.5 + P2#11）。
+     *
+     * 用显式组件意图发给该 Provider 自己：manifest 里不需要为此加 intent-filter
+     * （显式意图不受 filter 匹配限制），组件侧也就无须改动应用级配置。
+     */
+    private fun applyWeekBrowse(
+        context: Context,
+        views: RemoteViews,
+        appWidgetId: Int,
+        appearance: WidgetAppearance,
+        providerClass: Class<out AppWidgetProvider>,
+        enabled: Boolean,
+    ) {
+        val ink = appearance.bodyColorFor(appearance.resolvedBackground(context))
+        listOf(R.id.widget_week_prev to -1, R.id.widget_week_next to 1).forEach { (viewId, delta) ->
+            views.setTextViewText(viewId, if (delta < 0) "上周" else "下周")
+            views.setTextColor(viewId, ink)
+            // 没有学期就没有可浏览的周次：留着两个点了没反应的方块比藏起来更糟
+            views.setViewVisibility(viewId, if (enabled) View.VISIBLE else View.GONE)
+            if (!enabled) return@forEach
+            val intent = Intent(context, providerClass).apply {
+                action = WidgetNavigation.ACTION_BROWSE_WEEK
+                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+                putExtra(WidgetNavigation.EXTRA_WEEK_DELTA, delta)
+            }
+            views.setOnClickPendingIntent(
+                viewId,
+                PendingIntent.getBroadcast(
+                    context,
+                    // requestCode 必须与标题/列表的点击区分开：PendingIntent 判等不看 extras
+                    WEEK_BROWSE_REQUEST_CODE_BASE + appWidgetId + (if (delta > 0) 1 else 0),
+                    intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+        }
+    }
+
+    /**
+     * 收到翻周广播：改偏移 → 落盘 → 重绘该实例。
+     *
+     * 由 [WeekWidgetProvider] / [WeekGridWidgetProvider] 的 `onReceive` 转发，
+     * 广播回调在主线程，所以照旧走 [launchRefresh] 的后台协程。
+     */
+    fun goAsyncBrowseWeek(
+        context: Context,
+        intent: Intent,
+        pendingResult: BroadcastReceiver.PendingResult?,
+        mode: ListWidgetMode?,
+    ) {
+        val appContext = context.applicationContext
+        launchRefresh(pendingResult) {
+            val appWidgetId = intent.getIntExtra(
+                AppWidgetManager.EXTRA_APPWIDGET_ID,
+                AppWidgetManager.INVALID_APPWIDGET_ID,
+            )
+            val delta = intent.getIntExtra(WidgetNavigation.EXTRA_WEEK_DELTA, 0)
+            if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID || delta == 0) return@launchRefresh
+            browseWeek(appContext, appWidgetId, delta, mode)
+        }
+    }
+
+    private suspend fun browseWeek(
+        context: Context,
+        appWidgetId: Int,
+        delta: Int,
+        mode: ListWidgetMode?,
+    ) {
+        val manager = AppWidgetManager.getInstance(context)
+        val binding = WidgetBindingStore.load(context, appWidgetId)
+        val semester = WidgetDataCache.get(context, binding.semesterCode).semester
+        val base = browseBaseWeek(semester, LocalDate.now())
+        if (semester == null || base == null) {
+            // 没有可翻的周：重绘一次把状态摆回去（可能刚被清掉学期）
+            runCatching {
+                if (mode == null) updateWeekGridWidget(context, manager, appWidgetId)
+                else updateListWidget(context, manager, appWidgetId, mode)
+            }.onFailure { Log.w(TAG, "组件翻周重绘失败", it) }
+            return
+        }
+        val offset = stepWeekOffset(
+            base,
+            semester.totalWeeks,
+            effectiveWeekOffset(binding, base),
+            delta,
+        )
+        WidgetBindingStore.save(
+            context,
+            appWidgetId,
+            binding.copy(weekOffset = offset, weekOffsetBase = base),
+        )
+        runCatching {
+            if (mode == null) updateWeekGridWidget(context, manager, appWidgetId)
+            else updateListWidget(context, manager, appWidgetId, mode)
+        }.onFailure { Log.w(TAG, "组件翻周重绘失败", it) }
     }
 
     /**
@@ -525,10 +679,24 @@ object WidgetCommon {
             java.time.format.DateTimeFormatter.ofPattern("M月d日 EEEE", java.util.Locale.CHINA),
         )
 
-    private fun weekTitle(semester: Semester?): String {
-        val week = currentWeekOrNull(semester, LocalDate.now())
-        return week?.let { "第 $it 周课表" } ?: "本周课表"
+    /** 周课表类组件的标题：把周次写进标题，翻到下周时它不会还自称"本周" */
+    private fun weekTitle(week: Int?): String = week?.let { "第 $it 周课表" } ?: "本周课表"
+
+    /**
+     * 周课表类组件的副标题。
+     *
+     * 「第 N 周」必须活在副标题里：标题行是用户可关的（`showTitle`），
+     * 关掉之后组件上就不该一点周次信息都不剩（审查 3.5）。
+     * 假期中浏览也照样给出周号 + 假期标记，而不是只留一句"假期中"。
+     */
+    private fun weekSubtitle(semester: Semester?, week: Int?, today: LocalDate): String {
+        if (week == null) return "假期中"
+        return if (currentWeekOrNull(semester, today) == null) "第 $week 周 · 假期中" else "第 $week 周"
     }
+
+    /** 今日/明日副标题后缀的周次：未设置学期或假期里没有可标的周就不加 */
+    private fun weekSuffix(semester: Semester?, date: LocalDate): String =
+        currentWeekOrNull(semester, date)?.let { " · 第 $it 周" } ?: ""
 
     private fun currentWeekOrNull(semester: Semester?, today: LocalDate): Int? {
         val start = semester?.startLocalDate ?: return null
