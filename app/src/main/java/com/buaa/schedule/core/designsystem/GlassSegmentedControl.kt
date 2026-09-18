@@ -6,10 +6,8 @@ import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -27,10 +25,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
@@ -143,8 +143,6 @@ fun GlassSegmentedControl(
         launch { width.animateTo(bounds[2], slideSpec) }
         launch { height.animateTo(bounds[3], slideSpec) }
     }
-    val pillWidth = width.value.roundToInt()
-    val pillHeight = height.value.roundToInt()
 
     GlassSurface(
         variant = GlassVariant.COMPACT,
@@ -155,67 +153,128 @@ fun GlassSegmentedControl(
         Box {
             Row {
                 options.forEachIndexed { index, label ->
-                    val selected = index == selectedIndex
-                    Box(
-                        modifier = Modifier
-                            // 高度下限要在 clickable **之前**：写后面只会撑大内容区，点不到的还是点不到
-                            .defaultMinSize(
-                                minWidth = minSegmentWidth,
-                                minHeight = DesignTokens.minTouchTarget,
-                            )
-                            .padding(horizontal = 2.dp)
-                            .onGloballyPositioned { node ->
-                                // 实测的是 Float 矩形，覆盖层用整数像素：按密度取整
-                                val r = node.boundsInParent()
-                                val rect = IntRect(
-                                    r.left.roundToInt(),
-                                    r.top.roundToInt(),
-                                    r.right.roundToInt(),
-                                    r.bottom.roundToInt(),
-                                )
-                                while (rects.size <= index) rects.add(rect)
-                                if (rects[index] != rect) {
-                                    rects[index] = rect
-                                    measured++
-                                }
+                    Segment(
+                        label = label,
+                        selected = index == selectedIndex,
+                        minSegmentWidth = minSegmentWidth,
+                        onMeasured = { rect ->
+                            while (rects.size <= index) rects.add(rect)
+                            if (rects[index] != rect) {
+                                rects[index] = rect
+                                measured++
                             }
-                            .selectable(
-                                selected = selected,
-                                // 与底栏、顶栏「周课表/今日」同一套语义：分段切换回答的是
-                                // "我在哪一格"，而此前这里只有 clickable，念不出"已选中"
-                                role = Role.Tab,
-                                onClick = {
-                                    // 只有真正切换时才反馈，重复点当前项不该震动
-                                    if (index != selectedIndex) haptics.performTick()
-                                    onSelect(index)
-                                },
-                            )
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                            color = animateColorAsState(
-                                targetValue = if (selected) scheme.onPrimary else scheme.onSurface,
-                                animationSpec = motionSpec(MotionTokens.DURATION_SNAP),
-                                label = "segmentInk",
-                            ).value,
-                            maxLines = 1,
-                        )
-                    }
+                        },
+                        onClick = {
+                            // 只有真正切换时才反馈，重复点当前项不该震动
+                            if (index != selectedIndex) haptics.performTick()
+                            onSelect(index)
+                        },
+                    )
                 }
             }
-            if (pillWidth > 0 && pillHeight > 0) {
+            if (seated) {
                 Box(
                     modifier = Modifier
                         .offset { IntOffset(left.value.roundToInt(), top.value.roundToInt()) }
-                        .width(pillWidth.dp)
-                        .height(pillHeight.dp)
+                        // 尺寸改在测量期读（见 pillSizeOf）：这里不再要组合期的
+                        // pillWidth/pillHeight，那两行就是"胶囊滑动 140ms = 整条控件
+                        // 重组 9 帧"的来源
+                        .pillSizeOf(widthOf = { width.value }, heightOf = { height.value })
                         .then(pillModifier),
                 )
             }
         }
     }
 }
+
+/**
+ * 一段。
+ *
+ * 单独成为一个 composable 是为了**收窄失效范围**：选中段的墨色是一条 140ms 的
+ * 颜色补间，而 `.value` 只能读在组合期——读在控件主体里，一次切换的动画就把
+ * 整条控件（每一段、每一个 Text、覆盖层、所有 remember 的键）重组九遍。
+ * 读在段内，动画期间重组的只有正在换色的那一段。
+ */
+@Composable
+private fun Segment(
+    label: String,
+    selected: Boolean,
+    minSegmentWidth: Dp,
+    onMeasured: (IntRect) -> Unit,
+    onClick: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val ink by animateColorAsState(
+        targetValue = if (selected) scheme.onPrimary else scheme.onSurface,
+        animationSpec = motionSpec(MotionTokens.DURATION_SNAP),
+        label = "segmentInk",
+    )
+    Box(
+        modifier = Modifier
+            // 高度下限要在 clickable **之前**：写后面只会撑大内容区，点不到的还是点不到
+            .defaultMinSize(
+                minWidth = minSegmentWidth,
+                minHeight = DesignTokens.minTouchTarget,
+            )
+            .padding(horizontal = 2.dp)
+            .onGloballyPositioned { node ->
+                // 实测的是 Float 矩形，覆盖层用整数像素：按密度取整
+                val r = node.boundsInParent()
+                onMeasured(
+                    IntRect(
+                        r.left.roundToInt(),
+                        r.top.roundToInt(),
+                        r.right.roundToInt(),
+                        r.bottom.roundToInt(),
+                    )
+                )
+            }
+            .selectable(
+                selected = selected,
+                // 与底栏、顶栏「周课表/今日」同一套语义：分段切换回答的是
+                // "我在哪一格"，而此前这里只有 clickable，念不出"已选中"
+                role = Role.Tab,
+                onClick = onClick,
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = ink,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * 覆盖层的尺寸：把对两根补间 Animatable 的读取从组合期挪到**测量期**。
+ *
+ * 约束算法逐行照抄 `Modifier.width(dp).height(dp)`（含"想要的尺寸超出父级上限就
+ * 夹住"那一步），整数像素也走同一次「当 Dp 再 roundToPx() 回像素」的换算，
+ * 所以测出来的尺寸与原来一个字都不差；
+ * 变的只是"读状态"这件事发生在 measure 块里——状态变化只会重测这一个空 Box，
+ * 不再把整条控件拖进重组。
+ */
+private fun Modifier.pillSizeOf(widthOf: () -> Float, heightOf: () -> Float): Modifier =
+    layout { measurable, constraints ->
+        val targetWidth = widthOf().roundToInt().dp.roundToPx()
+        val targetHeight = heightOf().roundToInt().dp.roundToPx()
+        val maxWidth =
+            if (constraints.hasBoundedWidth) targetWidth.coerceAtMost(constraints.maxWidth) else targetWidth
+        val maxHeight =
+            if (constraints.hasBoundedHeight) targetHeight.coerceAtMost(constraints.maxHeight) else targetHeight
+        if (maxWidth <= 0 || maxHeight <= 0) {
+            layout(0, 0) {}
+        } else {
+            val placeable = measurable.measure(
+                Constraints.fixed(
+                    maxWidth.coerceAtLeast(constraints.minWidth),
+                    maxHeight.coerceAtLeast(constraints.minHeight),
+                )
+            )
+            layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+        }
+    }
