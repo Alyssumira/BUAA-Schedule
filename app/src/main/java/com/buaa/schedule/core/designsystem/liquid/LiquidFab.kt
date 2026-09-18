@@ -19,7 +19,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
@@ -29,10 +28,11 @@ import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.ChromeSurfaceDark
 import com.buaa.schedule.core.designsystem.ChromeSurfaceLight
 import com.buaa.schedule.core.designsystem.DesignTokens
+import com.buaa.schedule.core.designsystem.LocalReduceMotion
 import com.buaa.schedule.core.designsystem.MotionTokens
 import com.buaa.schedule.core.designsystem.Personalization
 import com.buaa.schedule.core.designsystem.motionSpec
-import com.buaa.schedule.core.designsystem.motionSpring
+import com.buaa.schedule.core.designsystem.motionSpringFor
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.BackdropRenderOptions
 import com.kyant.backdrop.drawBackdrop
@@ -65,7 +65,14 @@ fun LiquidFab(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val pressScale = remember { Animatable(1f) }
-    val pressSpec: AnimationSpec<Float> = motionSpring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow)
+    // 规格本身也要 remember：motionSpring 每次重组都返回新实例，而它是下面
+    // LaunchedEffect 的 key——等于"重组一次 = 按压弹簧从当前值重跑一遍"。
+    // reduce-motion 的判定仍然只有一份（motionSpringFor 就是 motionSpring 的
+    // 非组合入口，开关在组合边界读出来传进去），没有新增动画、也没有绕过兜底。
+    val reduceMotion = LocalReduceMotion.current
+    val pressSpec: AnimationSpec<Float> = remember(reduceMotion) {
+        motionSpringFor<Float>(reduceMotion, dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow)
+    }
     LaunchedEffect(pressed, pressSpec) {
         pressScale.animateTo(
             targetValue = if (pressed) 1f + 3f / 42f else 1f,
@@ -146,7 +153,10 @@ fun LiquidFab(
             },
             modifier = Modifier
                 .size(iconSize)
-                .rotate(iconRotation),
+                // rotate(angle) 就是 graphicsLayer { rotationZ = angle }，换成块写法是为了
+                // 把 iconRotation 的读取挪到绘制期：图标转那 260/240ms 里，原来每一帧
+                // 都在重组整个 LiquidFab（修饰符链、remember 键、表面色全走一遍）
+                .graphicsLayer { rotationZ = iconRotation },
         )
     }
 }
