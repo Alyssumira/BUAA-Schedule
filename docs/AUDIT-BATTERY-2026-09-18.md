@@ -42,7 +42,7 @@ Manifest 动态注册零（`registerReceiver` 全仓库 0 命中），`SCREEN_ON
 
 | 级别 | 位置（文件:行号） | 症状 | 省电收益估计 | 改动风险 |
 | --- | --- | --- | --- | --- |
-| **P1** | `BUAAApplication.kt:36`、`:58-74`；放大点 `BackgroundSync.kt:112-126`、`:139-161`、`WidgetFallbackWorker.kt:71-73` | 每次冷启动进程无条件重跑整套后台链；而**每一个闹钟都把进程冷启动**（6 条闹钟 × 每日多次），于是"数据没变的唤醒"付两遍全量重排 + 全学期快照重写 + ≤15 次 Launcher binder 往返 | 单次冷唤醒的后台工作量：重复的那一半（约 7+2N 次查询、N 份快照写盘、≤10 趟 Launcher binder）**是可证明的净多余**；折算成功耗降幅 **推断，未取证**（需 §4.3/§4.4 前后对测）。待机总唤醒次数不变，降的是每次唤醒的 CPU 占空比与闪存活动 | 中：幂等补注册（ROM 吞广播的自愈路径）与"升级后重建"依赖这条链，收窄触发条件必须保留事件式兜底，不能简单删 |
+| **P1** | `BUAAApplication.kt:36`、`:58-74`；放大点 `BackgroundSync.kt:112-126`、`:139-161`、`WidgetFallbackWorker.kt:71-73` | 每次冷启动进程无条件重跑整套后台链；而**每一个闹钟都把进程冷启动**（6 条闹钟 × 每日多次），于是"数据没变的唤醒"付两遍全量重排 + 全学期快照重写 + ≤18 次 Launcher binder 往返 | 单次冷唤醒的后台工作量：重复的那一半（约 7+2N 次查询、N 份快照写盘、≤12 趟 Launcher binder）**是可证明的净多余**；折算成功耗降幅 **推断，未取证**（需 §4.3/§4.4 前后对测）。待机总唤醒次数不变，降的是每次唤醒的 CPU 占空比与闪存活动。**2026-09-19 进度**：组件探测那一份已由 ai/T10 收成一次探测（≤12 趟已省掉）；"整套重排重跑"仍待办 | 中：幂等补注册（ROM 吞广播的自愈路径）与"升级后重建"依赖这条链，收窄触发条件必须保留事件式兜底，不能简单删 |
 | **P1** | `ClassProgressScheduler.kt:274-285`（破坏性分支）＋ `ReminderNotifications.kt:181-198`（判据是进程内 `@Volatile`）＋ `BUAAApplication.kt:23`（`Dispatchers.IO`，真并行） | onCreate 那条链与广播自己那条链并发跑同一次 `rescheduleWindows`；前者的"这是下课铃被吞的遗留"判据读的是进程内状态，**可能在课前倒计时已下发之后**才跑到，于是把刚上岛的倒计时停掉 | 直接收益小（省一次通知重下），**但这是 2026-09-17 事故的同类残留路径**，修掉 P1-①（重复链）后本条随之消失 | 高：动的是曾经拆掉过课前倒计时的同一段代码；建议**只通过消除重复链来间接修**，不要给 `rescheduleWindows` 加新分支 |
 | **P2** | `BackgroundSync.kt:67` 与 `:70-78` | 同一轮重排里 `planNextReminder` 算了**两遍**：`rescheduleAll` 内部已算（`ReminderScheduler.kt:64`），外层为了拿 `willRemind` 这个 Boolean 又把 O(课程数×剩余周次×节次段) 的全量搜索重跑一次 | 每次唤醒省一次全量窗口搜索（学期中段约上千次窗口构造，见 §2.3 的量级推导） | 低：让 `rescheduleAll` 复用已算出的 plan 即可，公开签名可保持 |
 | **P2** | `WidgetDataSynchronizer.kt:36-63`（尤其 `:50`） | 快照 sync 是 N+1：`getTimeSlots()` 是循环不变量却写在 `keys.forEach` 里（每 key 查一次）；且重写**全部学期**的快照（`"current"` + 每个 termCode），而每个组件只读自己那一个 key | N = 学期数+1 → 一轮 sync 从 `3+2N` 次查询降到 `4+N`（把循环不变量提出去）；若进一步只写被组件引用的 key，JSON 编码与 upsert 从 N 份降到 1–2 份。**待机时被 §0-P1 那条链每次都触发** | 低-中：查询提出循环是纯搬家；只写被引用的 key 要先确认 `WidgetBindingStore` 里没有"组件引用了但本轮没写"的 key |
@@ -96,15 +96,26 @@ applicationScope.launch {
 | --- | --- | --- | --- |
 | `rescheduleReminders` | 4（`BackgroundSync.kt:62-66`） | 2 条闹钟（cancel+set）+ 1 次 prefs | `getDisplayCourses` 已走 SQL 过滤（第 1 轮 §1.4），不是全表 |
 | ↳ `planNextReminder` ×2 | 0 | 0 | **同一份入参算两遍**，见 §2.3 |
-| `refreshWidgets` | `3 + 2N`（`WidgetDataSynchronizer.kt:33-62`：`getAllSemesters` + `getCurrentSemester` + 每 key 两查 + `deleteKeysNotIn`） | ≤5（`hasAnyWidgetSafely`，`BackgroundSync.kt:117`） | N = 学期数+1；每 key 一次 JSON encode + upsert |
+| `refreshWidgets` | `3 + 2N`（`WidgetDataSynchronizer.kt:33-62`：`getAllSemesters` + `getCurrentSemester` + 每 key 两查 + `deleteKeysNotIn`） | ≤6（`hasAnyWidgetSafely`，`BackgroundSync.kt:117`） | N = 学期数+1；每 key 一次 JSON encode + upsert |
 | ↳ 6 个 Provider `updateAll` | 命中 `WidgetDataCache` 5s TTL（`WidgetDataCache.kt:28`）→ 0 | 6 次 `getAppWidgetIds` + 每实例重绘 | |
-| `scheduleWidgetMidnight` | 0 | ≤5（又一次 `hasAnyWidget`，`BackgroundSync.kt:142`）+ 1 条闹钟 | |
+| `scheduleWidgetMidnight` | 0 | ≤6（又一次 `hasAnyWidget`，`BackgroundSync.kt:142`）+ 1 条闹钟 | |
 | `scheduleTomorrowPreview` | 0 | 1 条闹钟 + 1 次 prefs | |
-| `WidgetFallbackWorker.ensure` | WorkManager 自有库（首次 `getInstance` 建库） | ≤5（**第三次** `hasAnyWidget`，`WidgetFallbackWorker.kt:73`） | |
+| `WidgetFallbackWorker.ensure` | WorkManager 自有库（首次 `getInstance` 建库） | ≤6（**第三次** `hasAnyWidget`，`WidgetFallbackWorker.kt:73`） | |
 
-合计一次冷唤醒：**约 `7 + 2N` 次 Room 查询、3 次互不共享结果的 `hasAnyWidget`（每次最多 5 趟
-`getAppWidgetIds`，共 ≤15 趟）、`N` 份全量课程列表 JSON 编码，外加广播自己那条链的同一套。**
-3 个学期导入的用户 N=4 → 约 15 次查询 + ≤15 趟 binder，而这**一次唤醒里课表一个字都没变**。
+合计一次冷唤醒：**约 `7 + 2N` 次 Room 查询、3 次互不共享结果的 `hasAnyWidget`（每次最多 6 趟
+`getAppWidgetIds`，共 ≤18 趟）、`N` 份全量课程列表 JSON 编码，外加广播自己那条链的同一套。**
+3 个学期导入的用户 N=4 → 约 15 次查询 + ≤18 趟 binder，而这**一次唤醒里课表一个字都没变**。
+（趟数订正于 2026-09-19：`hasAnyWidget` 逐个问的是**六**个 Provider——Today / Tomorrow / Week /
+WeekGrid / NextClass / TwoDay，`any { }` 短路时最少 1 趟、最坏 6 趟；本段初稿按 5 个算。）
+
+> **已落地（ai/T10，`cc2b72d` + `a541a31`）**：冷启动这条链现在开头探测**一次**，结论按参数传给
+> `refreshWidgets` / `scheduleWidgetMidnight` / `WidgetFallbackWorker.ensure` 三个下游（不是缓存，
+> 所以组件真被增删的 `onEnabled` / `onDisabled` 两条路仍各自当场探测）。同一笔账里漏算的一处：
+> WorkManager 拉起 `doWork` 的那次唤醒原本最多探测 **5** 次（`doWork` 开头 1 次 + 它调的
+> `onDataChanged → refreshWidgets` 1 次 + …），本轮一并收到 1 次。
+> **未收的两处**（各 2 次，不在本轮边界内）：`BootReceiver.kt:55-56`、`WidgetRefreshReceiver`
+> 的零点/改时间路径；另 `cancelWidgetMidnightIfNoWidgets` 那一次广播里 `hasAnyWidgetSafely`
+> 仍被问 2 遍（自己一遍 + `ensure` 默认参数一遍，改前也是 2 遍，不是本轮引入）。
 
 `hasAnyWidget` 这三次重复是可以直接对读证实的：`BackgroundSync.kt:117`（`refreshWidgets` 内）、
 `BackgroundSync.kt:142`（`scheduleWidgetMidnight` 内）、`WidgetFallbackWorker.kt:73`（`ensure` 内）。
