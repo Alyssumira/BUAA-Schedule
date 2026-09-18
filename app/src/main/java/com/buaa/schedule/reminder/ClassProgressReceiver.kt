@@ -55,6 +55,9 @@ class ClassProgressReceiver : BroadcastReceiver() {
                         // 上课铃这一刻正是"上一节课 → 这一节课"的转折点：
                         // 今日列表里的「进行中」标记和「下一节课」的倒计时都必须跟着翻面。
                         WidgetCommon.requestLiveRefresh(context)
+                        // 这条课的课前提醒到点作废：它只在下发时求值过一次，没人会再发第二遍。
+                        // 撤销的活儿归这一刻，因为这里本来就是它使命结束的地方。
+                        ReminderNotifications.cancelCourseReminder(context, window.courseId)
                     }
                     ACTION_END -> {
                         CourseFluidService.stop(context)

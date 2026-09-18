@@ -15,6 +15,7 @@ import androidx.core.content.ContextCompat
 import com.buaa.schedule.BUAAApplication
 import com.buaa.schedule.R
 import com.buaa.schedule.domain.schedule.minutesCeil
+import com.buaa.schedule.domain.schedule.snapshotRedeadlineMillis
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -334,10 +335,10 @@ private const val CHIP_TICK_EPSILON_MS = 150L
  * 去掉 chronometer 之后，岛上的小字（`shortCriticalText`）是**静态文本**，
  * 不重发就不会自己走，所以取两个事件里更早的那个：
  * - 进度条前进一格（一节课最多 100 次）；
- * - 小字减少一分钟。翻转时刻按 [ReminderNotifications.chipCountdownLabel] 的
- *   向上取整口径精确算成 `endMillis - (minutesLeft-1)*60_000`，
- *   而不是 SleepDown 那样对齐整分钟墙钟——后者相对 `endMillis` 有最多一分钟错位，
- *   小字会晚一分钟才翻。
+ * - 小字减少一分钟。翻转时刻取自 [snapshotRedeadlineMillis]（"这条文案最迟什么时候
+ *   必须再发一次"的判据，与 [com.buaa.schedule.domain.schedule.minutesCeil] 的向上取整
+ *   口径同一份实现），而不是 SleepDown 那样对齐整分钟墙钟——后者相对 `endMillis`
+ *   有最多一分钟错位，小字会晚一分钟才翻。
  *
  * 文件级纯函数（而不是成员方法）是为了能被 JVM 单测钉住：成员版要先构造 Service，
  * 而 `Handler(Looper.getMainLooper())` 在单测里直接抛异常。
@@ -350,12 +351,16 @@ internal fun nextCourseFluidTickMs(startMillis: Long, endMillis: Long, now: Long
     val progressTick = startMillis + nextStepElapsed - now
 
     val minutesLeft = minutesCeil(endMillis - now)
+    // 翻转时刻就是"这条文案最迟什么时候必须再发一次"的判据本身（见 snapshotRedeadlineMillis）。
+    // 这里此前手抄了一遍 `end - (minutesLeft-1)*60_000`，同一判据两份实现，
+    // 改一处就会让服务醒来时屏幕上那个数字还没翻 —— 晚一分钟才跳。
+    //
     // epsilon 只能加在真实时刻上：Long.MAX_VALUE 哨兵再 +150 会溢出成极小负数，
     // minOf 选中它、coerceAtLeast 再把间隔钉回 1 秒 —— 一旦外部条件哪天挡不住
     // minutesLeft<=0 这支，就是每秒重绘一次的忙轮询。
     val chipTick =
         if (minutesLeft <= 0L) Long.MAX_VALUE
-        else endMillis - (minutesLeft - 1L) * 60_000L - now + CHIP_TICK_EPSILON_MS
+        else snapshotRedeadlineMillis(minutesLeft, endMillis) - now + CHIP_TICK_EPSILON_MS
 
     return minOf(progressTick, chipTick).coerceAtLeast(MIN_TICK_DELAY_MS)
 }

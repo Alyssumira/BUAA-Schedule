@@ -117,8 +117,8 @@ object ReminderNotifications {
         val pendingIntent = launchActivityPendingIntent(context, REQUEST_TOMORROW_PREVIEW)
         val builder = NotificationCompat.Builder(context, CHANNEL_TOMORROW)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("明天的课程（${date.monthValue}月${date.dayOfMonth}日）")
-            .setContentText(text.lineSequence().firstOrNull() ?: "明天没有课")
+            .setContentTitle(tomorrowPreviewTitle(date))
+            .setContentText(text.lineSequence().firstOrNull() ?: previewDateLabel(date))
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
@@ -130,13 +130,28 @@ object ReminderNotifications {
         }
     }
 
+    /**
+     * 预告正文里那个日期标签（纯函数，可单测）。
+     *
+     * **只写绝对日期，不写"明天"**：这条通知 22:00 下发，第二天早上才是它最可能被看的时候，
+     * 而那一刻"明天"已经指错了对象。通知链上没有任何唤醒源会在零点把它重发一遍
+     * （00:00 那条闹钟只负责桌面组件），按 `snapshotRedeadlineMillis` 的判据，
+     * 没人叫醒的快照里不许出现相对时间。
+     */
+    internal fun previewDateLabel(date: LocalDate): String =
+        "${date.monthValue}月${date.dayOfMonth}日" +
+            (weekdayLabel(date.dayOfWeek.value)?.let { "（$it）" } ?: "")
+
+    /** 预告标题（纯函数，可单测）：与 [previewDateLabel] 同一份日期写法 */
+    internal fun tomorrowPreviewTitle(date: LocalDate): String = "${previewDateLabel(date)} 的课程"
+
     /** 预览正文（纯函数，可单测）：按节次排序，每行「08:00 高等数学 · SH3-101」 */
     fun buildTomorrowPreviewText(
         courses: List<Course>,
         date: LocalDate,
         timeSlots: List<TimeSlot>,
     ): String {
-        if (courses.isEmpty()) return "明天没有课"
+        if (courses.isEmpty()) return "${previewDateLabel(date)} 没有课"
         val slots = if (timeSlots.isNotEmpty()) timeSlots else com.buaa.schedule.domain.model.TimeSlotProfile.DEFAULT
         return courses
             .sortedBy { it.startPeriod }
@@ -250,8 +265,8 @@ object ReminderNotifications {
      *
      * 通知的标题/文本只在下发时写入一次，之后不会自己刷新，因此这里**不下发进度条**：
      * 之前用 `setProgress(now/总时长)` 只在开课瞬间求值一次，进度条会永久停在约 0%。
-     * 倒计时文案同样只在下发时求值，所以这条只是"服务起不来时的兜底常驻"，
-     * 真正每分钟刷新的是 [CourseFluidService]（它才是实况载体）。
+     * 倒计时文案同样只在下发时求值，所以这条兜底常驻写的是**绝对终点**（「10:35 下课」），
+     * 会走的「还有 N 分钟下课」只留给每分钟重发一次的 [CourseFluidService]（真正的实况载体）。
      * Android 16+ 通过 `setRequestPromotedOngoing` 请求提升为实况窗/流体云样式。
      *
      * **不用 `setUsesChronometer` / `setChronometerCountDown`**：SleepDown 源码里明确写着
@@ -268,10 +283,15 @@ object ReminderNotifications {
     ) {
         ensureChannels(context)
         val now = System.currentTimeMillis()
+        // 这条载体的生命周期特征是**只下发一次**：服务起来后同一通知 id 会在几十毫秒内被
+        // CourseFluidService 覆盖，之后每分钟重发一次；服务起不来（后台启动前台服务受限、
+        // ROM 省电拦截）时它就是用户看到的那一条，而且再也没有第二次下发。
+        // 所以这里不能放会走的倒计时——那正是"整节课挂着开课瞬间的『还有 45 分钟下课』"。
         val body = liveBody(
             window.sectionText, window.startMillis, window.endMillis, window.location, phase, now,
+            ticking = false,
         )
-        val chip = chipCountdownLabel(window.endMillis)
+        val chip = liveDeadlineChip(window.endMillis)
         val accent = window.colorArgb ?: Notification.COLOR_DEFAULT
 
         val builder = NotificationCompat.Builder(context, CHANNEL_CLASS_PROGRESS)
@@ -490,6 +510,23 @@ object ReminderNotifications {
         countdownClassStart = 0L
         NotificationManagerCompat.from(context).cancel(NOTIFY_ID_CLASS_PROGRESS)
     }
+
+    /**
+     * 撤销某门课的课前提醒横幅（上课铃响时调用）。
+     *
+     * 那条通知只在下发时求值一次：用户不点它，它就会在下拉栏里一直挂着
+     * "08:00 上课"（改绝对文案之前挂的是"还有 8 分钟上课"）直到下课之后。
+     * 上课铃正是它作废的那一刻，撤销的活儿本来就归这一刻管，不需要新闹钟。
+     *
+     * id 与 tag 都引用 [ReminderReceiver] 里那一份实现，不在这里重打一遍字面量
+     * （事故 A：同值不同名的两份常量，撤的从来不是发出去的那条）。
+     */
+    fun cancelCourseReminder(context: Context, courseId: Long) {
+        runCatching {
+            NotificationManagerCompat.from(context)
+                .cancel(ReminderReceiver.notificationTag(courseId), ReminderReceiver.NOTIFY_ID_COURSE)
+        }
+    }
 }
 
 /**
@@ -540,7 +577,33 @@ internal fun liveCountdownLine(phase: LivePhase, endMillis: Long, nowMillis: Lon
     return if (phase == LivePhase.BEFORE_CLASS) "马上上课" else "即将下课"
 }
 
-/** 实况正文两行：静态的课次信息 + 会走的倒计时 */
+/**
+ * 卡片第二行的**快照**版：把倒计时写成绝对终点。
+ *
+ * 判据只有一条：**相对时间只允许出现在本来就有人叫醒重发的载体上**。
+ * [liveCountdownLine] 的那一份由 [CourseFluidService] 每分钟重发一次（翻转时刻就是
+ * `snapshotRedeadlineMillis` 算出来的那一秒），所以它可以说"还有 N 分钟"；
+ * 广播侧那条兜底常驻只下发一次，同一条文案会从开课瞬间一路冻到下课铃。
+ */
+internal fun liveDeadlineLine(phase: LivePhase, endMillis: Long): String =
+    clockOf(endMillis)?.let { "$it ${if (phase == LivePhase.BEFORE_CLASS) "上课" else "下课"}" }
+        ?: if (phase == LivePhase.BEFORE_CLASS) "马上上课" else "即将下课"
+
+/**
+ * 岛/胶囊那一格的快照版：绝对时刻。
+ *
+ * 小字位置窄，`HH:mm` 五个字符放得下，且与 [chipCountdownLabel] 的「N分钟」一样是纯 ASCII。
+ * 终点缺失（旧闹钟 extras 没写、读出来是 0）时写「进行中」，
+ * 而不是像倒计时版那样报出一个恒为 0 的数字。
+ */
+internal fun liveDeadlineChip(endMillis: Long): String = clockOf(endMillis) ?: "进行中"
+
+/**
+ * 实况正文两行：静态的课次信息 + 第二行。
+ *
+ * [ticking] 表示这份文案后面**有没有人重发**：`true`（实况服务）才放会走的倒计时，
+ * `false`（一次性快照）放绝对终点。默认 `true` 是给服务那条链的。
+ */
 internal fun liveBody(
     sectionText: String,
     startMillis: Long,
@@ -548,8 +611,40 @@ internal fun liveBody(
     location: String?,
     phase: LivePhase,
     nowMillis: Long,
+    ticking: Boolean = true,
 ): String = liveMetaLine(sectionText, liveTimeRange(startMillis, endMillis), location) +
-    "\n" + liveCountdownLine(phase, endMillis, nowMillis)
+    "\n" + if (ticking) liveCountdownLine(phase, endMillis, nowMillis) else liveDeadlineLine(phase, endMillis)
+
+/**
+ * 课前提醒横幅的折叠行（纯函数，可单测）：**只有绝对信息**。
+ *
+ * 这里以前写的是 `liveCountdownLine(BEFORE_CLASS, …)` —— "还有 8 分钟上课"。
+ * 那是下发那一秒的快照，而这条通知（tag `course_<id>`）从下发到被点掉之间
+ * **没有任何唤醒源会把它重发一遍**：课前提醒闹钟下次响是这门课的下次上课，
+ * 上课铃过去也只撤实况那条（不同 id）。于是它能在下拉栏里挂着一整节课的
+ * "还有 8 分钟上课"，用户按它冲去教室已经迟到 40 分钟。
+ *
+ * 判据同 [liveDeadlineLine]：没人叫醒重发的载体只许写绝对时刻。
+ * 会走的倒计时归 [CourseFluidService]（它每分钟重发一次，翻转时刻精确到
+ * `snapshotRedeadlineMillis` 算出的那一秒）。
+ */
+internal fun courseReminderHeadline(window: ClassProgressScheduler.ClassWindow): String =
+    listOfNotNull(
+        clockOf(window.endMillis)?.let { "$it 上课" },
+        window.location?.takeIf { it.isNotBlank() },
+    ).joinToString(" · ").ifBlank {
+        window.sectionText.takeIf { it.isNotBlank() } ?: "${window.courseName} 要上课了"
+    }
+
+/** 展开正文（纯函数，可单测）：节次 / 上课时刻 / 地点 · 教师，一行一项，缺项整行跳过 */
+internal fun courseReminderDetail(window: ClassProgressScheduler.ClassWindow): String = listOfNotNull(
+    window.sectionText.takeIf { it.isNotBlank() },
+    clockOf(window.endMillis)?.let { "$it 上课" },
+    listOfNotNull(
+        window.location?.takeIf { it.isNotBlank() },
+        window.teacher?.takeIf { it.isNotBlank() },
+    ).joinToString(" · ").takeIf { it.isNotBlank() },
+).joinToString("\n")
 
 /** 起止时间区间（HH:mm–HH:mm）；任一端解析失败时返回 null，正文少一段而不是整个发不出去 */
 internal fun liveTimeRange(startMillis: Long, endMillis: Long): String? {

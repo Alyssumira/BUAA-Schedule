@@ -1,5 +1,6 @@
 package com.buaa.schedule.reminder
 
+import com.buaa.schedule.domain.schedule.snapshotRedeadlineMillis
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -52,5 +53,24 @@ class CourseFluidTickTest {
         // start==end 时 total 被兜成 1ms，不加下限这里会变成每毫秒重发一次
         assertEquals(1_000L, nextCourseFluidTickMs(1_000L, 1_000L, 1_000L))
         assertEquals(1_000L, nextCourseFluidTickMs(0L, minute, 2 * minute))
+    }
+
+    @Test
+    fun chipFlipWakeUpIsExactlyTheSnapshotRedeadline() {
+        // 小字翻转的判据只有 PeriodWindows.snapshotRedeadlineMillis 一份实现：
+        // 服务这边手抄一遍的话，改那一处就会让服务醒来时数字还没翻（或晚一分钟才翻）。
+        val start = 0L
+        val end = 60 * minute
+        val now = end - 5 * minute - 10_000L // 还剩 5 分 10 秒 → 屏上写着「6分钟」
+        assertEquals(6L, minutesLeft(end, now))
+
+        val tick = nextCourseFluidTickMs(start, end, now)
+        // 150 是 CHIP_TICK_EPSILON_MS 的余量（文件私有常量，测试里按值扣回来）
+        val wakeAt = now + tick - 150L
+        assertEquals(snapshotRedeadlineMillis(6L, end), wakeAt)
+        // 不早：醒来之前的最后一刻读到的还是 6
+        assertEquals(6L, minutesLeft(end, wakeAt - 1L))
+        // 不晚：醒来的这一秒正好翻成 5
+        assertEquals(5L, minutesLeft(end, wakeAt))
     }
 }

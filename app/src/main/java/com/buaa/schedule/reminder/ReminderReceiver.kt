@@ -81,32 +81,19 @@ class ReminderReceiver : BroadcastReceiver() {
     /**
      * 课前提醒的横幅通知。
      *
-     * 折叠那一行是用户在锁屏与状态栏上唯一必看的一句，所以只装"还剩多久 + 几点上课 + 在哪"；
-     * 节次、教师、下课时刻这些要用户自己展开才看得到的信息交给 BigText ——
-     * 默认折叠样式只渲染 contentText 的第一行，把两行正文写进 contentText 等于没写。
+     * 折叠那一行是用户在锁屏与状态栏上唯一必看的一句，所以只装"几点上课 + 在哪"，
+     * 节次与教师交给 BigText。**这里刻意不放"还有 N 分钟上课"**：
+     * 这条通知从下发到被点掉之间没有任何唤醒源会重发它（课前闹钟下次响是这门课下次上课，
+     * 上课铃过去也只撤实况那条不同 id 的通知），相对数字会把用户带去迟到的教室。
+     * 会走的倒计时归 [CourseFluidService]，文案本身在
+     * [courseReminderHeadline] / [courseReminderDetail]（纯函数，可单测）。
      */
     private fun notifyCourse(context: Context, window: ClassProgressScheduler.ClassWindow) {
         // 渠道统一由 ReminderNotifications 创建（分级：课程提醒 / 明日预告）
         ReminderNotifications.ensureChannels(context)
         val pendingIntent = ReminderNotifications.courseReminderLaunchPendingIntent(context)
-        val now = System.currentTimeMillis()
-        val startText = clockOf(window.endMillis)
-        val countdown = liveCountdownLine(LivePhase.BEFORE_CLASS, window.endMillis, now)
-        val location = window.location?.takeIf { it.isNotBlank() }
-        val teacher = window.teacher?.takeIf { it.isNotBlank() }
-
-        val headline = listOfNotNull(
-            countdown.takeIf { window.endMillis > now },
-            startText?.let { "$it 上课" },
-            location,
-        ).joinToString(" · ").ifBlank { sectionOrCourse(window) }
-
-        val detail = listOfNotNull(
-            window.sectionText.takeIf { it.isNotBlank() },
-            startText?.let { "$it 上课" },
-            listOfNotNull(location, teacher).joinToString(" · ").takeIf { it.isNotBlank() },
-            countdown.takeIf { window.endMillis > now },
-        ).joinToString("\n")
+        val headline = courseReminderHeadline(window)
+        val detail = courseReminderDetail(window)
 
         val builder = NotificationCompat.Builder(context, ReminderNotifications.CHANNEL_COURSE)
             .setSmallIcon(R.drawable.ic_notification)
@@ -125,6 +112,7 @@ class ReminderReceiver : BroadcastReceiver() {
         // 会走的倒计时已经归实况载体（每分钟重发一次，岛与胶囊都靠它），
         // 横幅再挂一个系统计时器只会在同屏出现两个各走各的倒计时，
         // 而 chronometer 恰恰是 SleepDown 取证里"顶掉岛上那一格"的形状。
+        // 折叠行因此写成绝对时刻（永不过期），而不是靠计时器去救一个快照数字。
 
         // 开关在这里读，而不是排程时烘进闹钟 extras：闹钟是几十分钟前就排好的，
         // 用户临上课前把这行关掉，烘死的标志仍会让这一节带着按钮。
@@ -143,16 +131,17 @@ class ReminderReceiver : BroadcastReceiver() {
         }
     }
 
-    /** 什么都没有时的落底文案 */
-    private fun sectionOrCourse(window: ClassProgressScheduler.ClassWindow): String =
-        window.sectionText.takeIf { it.isNotBlank() } ?: "${window.courseName} 要上课了"
-
     companion object {
         private const val TAG = "ReminderReceiver"
         const val CHANNEL_ID = "course_reminder"
 
-        /** 课程提醒的固定通知 id，课程维度由 tag 区分 */
-        private const val NOTIFY_ID_COURSE = 20_260_003
+        /**
+         * 课程提醒的固定通知 id，课程维度由 tag 区分。
+         *
+         * 公开是因为撤销方是上课铃那条链（[ReminderNotifications.cancelCourseReminder]）：
+         * 撤销与下发必须读同一个常量，同值再写一份就是事故 A 的形状。
+         */
+        const val NOTIFY_ID_COURSE = 20_260_003
 
         /** 「课前提醒带扫码签到按钮」开关（prefs 走 [ClassProgressReceiver.PREFS_NAME]） */
         const val PREF_SPOC_SIGN_HINT = "spoc_sign_hint"
