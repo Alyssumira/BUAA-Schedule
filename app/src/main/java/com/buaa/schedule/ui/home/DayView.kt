@@ -105,6 +105,9 @@ import java.time.LocalTime
  * 日视图：顶部 Hero 显示当前/下一节课，下方为时间轴课程列表。
  *
  * @param date 当前展示的日期
+ * @param today 真实"今天"：由 ViewModel 的跨午夜滴答给，不在这里 `LocalDate.now()` ——
+ *   组合期读时钟不是快照订阅，跨过零点没有任何东西会因此重组，
+ *   「回到今天」与日/周两视图的今日高亮会一起停在昨天。
  * @param onDateChange 用户翻页时回调
  */
 @Composable
@@ -113,19 +116,25 @@ fun DayView(
     semester: Semester?,
     timeSlots: List<TimeSlot>,
     date: LocalDate,
+    today: LocalDate,
     modifier: Modifier = Modifier,
     onDateChange: (LocalDate) -> Unit = {},
     onCourseClick: (Course) -> Unit = {},
 ) {
-    // Hero 与倒计时每分钟刷新；后台（低于 STARTED）自动停表，避免不可见时继续跑协程
+    // Hero 与倒计时每分钟刷新；后台（低于 STARTED）自动停表，避免不可见时继续跑协程。
+    // **醒来第一件事是发布、第二件事才是等下一次边界**：顺序反过来（旧写法先 delay
+    // 再赋值）时，从锁屏/后台回到前台的那一帧读到的还是 remember 那一次的旧时刻，
+    // 要等到下一个整分钟才翻面 —— 最多 60 秒里 Hero 高亮着上一节课。
     val nowTickState = remember { mutableStateOf(LocalTime.now()) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
+                // 一次读取同时用于发布与算延时：读两次的话，
+                // 两次之间正好跨过边界就会发布旧时刻、却按下一次边界算延时，翻面晚一分钟
                 val current = LocalTime.now()
-                delay((60_000L - (current.second * 1000L + current.nano / 1_000_000L)).coerceAtLeast(1_000L))
-                nowTickState.value = LocalTime.now()
+                nowTickState.value = current
+                delay(nextTickDelayMillis(current))
             }
         }
     }
@@ -134,7 +143,6 @@ fun DayView(
     val semesterStart = remember(semester?.startDate) {
         semester?.run { startLocalDate }
     }
-    val today = LocalDate.now()
     var timelineMode by rememberSaveable { mutableStateOf(false) }
 
     // ── 横滑翻日期 ──
@@ -258,6 +266,7 @@ fun DayView(
         ) { day ->
             DayScreen(
                 date = day,
+                today = today,
                 courses = courses,
                 semester = semester,
                 semesterStart = semesterStart,
@@ -329,6 +338,7 @@ private fun weekTextFor(semester: Semester?, semesterStart: LocalDate?, date: Lo
 @Composable
 private fun DayScreen(
     date: LocalDate,
+    today: LocalDate,
     courses: List<Course>,
     semester: Semester?,
     semesterStart: LocalDate?,
@@ -338,7 +348,6 @@ private fun DayScreen(
     onDateChange: (LocalDate) -> Unit,
     onCourseClick: (Course) -> Unit,
 ) {
-    val today = LocalDate.now()
     val isToday = date == today
     val week = semester?.let { s ->
         semesterStart?.let { start ->

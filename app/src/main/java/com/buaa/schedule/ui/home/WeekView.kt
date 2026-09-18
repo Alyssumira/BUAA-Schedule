@@ -181,6 +181,9 @@ private const val COMPACT_VISIBLE_DAYS = DesignTokens.weekCompactVisibleDays
  * 宽屏仍 7 列满宽。
  *
  * @param displayWeek 当前展示的教学周；null 表示没有周次信息（展示全部课程）
+ * @param today 真实"今天"：由 ViewModel 的跨午夜滴答给，不在这里 `LocalDate.now()` ——
+ *   组合期读时钟不是快照订阅，跨过零点没有任何东西会因此重组，
+ *   今日列高亮与紧凑视口的初始定位会一起停在昨天。
  * @param onBrowseWeekChange 用户翻周时回调，null 表示“回到本周”
  * @param conflictCourseIds 存在时间冲突的课程 id（红色边框 + 警示图标）
  */
@@ -191,6 +194,7 @@ fun WeekView(
     timeSlots: List<TimeSlot>,
     currentWeek: Int?,
     displayWeek: Int?,
+    today: LocalDate,
     modifier: Modifier = Modifier,
     onBrowseWeekChange: (Int?) -> Unit = {},
     onCourseClick: (Course) -> Unit = {},
@@ -211,17 +215,20 @@ fun WeekView(
     }
     // 兼容历史脏数据：总周数限幅，避免跳周列表物化超大列表
     val totalWeeks = (semester?.totalWeeks ?: 20).coerceIn(1, CourseConstraints.MAX_TOTAL_WEEKS)
-    val today = LocalDate.now()
     // 每分钟对齐的 tick：作为 State 传入，只有“当前课高亮/时间线”读取该状态，
     // 普通课程格不会随每分钟 tick 全量重组；后台（低于 STARTED）自动停表。
+    // 与日视图同一个算式，只差步长：醒来第一件事是发布、第二件事才是等下一个边界，
+    // 所以从锁屏/后台回到前台的那一帧就是当下的时刻，不用等到下一次 tick 才翻面。
     val nowTickState = remember { mutableStateOf(LocalTime.now()) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
-                // 15 秒一更，当前时间线更接近实时；只触发时间线/当前课区域重组
-                delay(15_000L)
-                nowTickState.value = LocalTime.now()
+                // 一次读取同时用于发布与算延时；15 秒一档只为红线有点实时感，
+                // 节次翻面靠的是整分钟边界（下课时间都落在整分钟上）
+                val current = LocalTime.now()
+                nowTickState.value = current
+                delay(nextTickDelayMillis(current, TIMELINE_TICK_MS))
             }
         }
     }

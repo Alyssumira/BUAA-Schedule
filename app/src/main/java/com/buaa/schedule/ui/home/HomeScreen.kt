@@ -138,8 +138,11 @@ fun HomeScreen(
     val currentTerm by viewModel.buaaTermCode.collectAsState()
     val refreshing by viewModel.buaaRefreshing.collectAsState()
     val specialDays by viewModel.specialDays.collectAsState()
-    val today = LocalDate.now()
-    val hasTodayCourses = remember(state.courses, state.semester) {
+    // "今天"来自 ViewModel 的跨午夜滴答，不在组合期读时钟：读时钟不是快照订阅，
+    // 课表挂着不动跨过零点时没有任何东西因此重组，顶栏日期、「今天有没有课」
+    // （它决定首帧落在周视图还是今日页）会一起停在昨天。
+    val today = state.today
+    val hasTodayCourses = remember(state.courses, state.semester, today) {
         val semester = state.semester
         val semesterStart = semester?.startLocalDate
         val week = semesterStart?.let {
@@ -529,6 +532,7 @@ fun HomeScreen(
                             timeSlots = state.timeSlots,
                             currentWeek = state.currentWeek,
                             displayWeek = browseWeek ?: state.currentWeek,
+                            today = today,
                             onBrowseWeekChange = { setBrowseWeek(it) },
                             onCourseClick = onCourseClick,
                             conflictCourseIds = conflictCourseIds,
@@ -543,7 +547,8 @@ fun HomeScreen(
                             courses = visibleCourses,
                             semester = state.semester,
                             timeSlots = state.timeSlots,
-                            date = browseDate ?: LocalDate.now(),
+                            date = browseDate ?: today,
+                            today = today,
                             onDateChange = { setBrowseDate(it) },
                             onCourseClick = onCourseClick,
                             modifier = Modifier.weight(2f),
@@ -565,6 +570,7 @@ fun HomeScreen(
                                 timeSlots = state.timeSlots,
                                 currentWeek = state.currentWeek,
                                 displayWeek = browseWeek ?: state.currentWeek,
+                                today = today,
                                 onBrowseWeekChange = { setBrowseWeek(it) },
                                 onCourseClick = onCourseClick,
                                 conflictCourseIds = conflictCourseIds,
@@ -578,7 +584,8 @@ fun HomeScreen(
                                 courses = visibleCourses,
                                 semester = state.semester,
                                 timeSlots = state.timeSlots,
-                                date = browseDate ?: LocalDate.now(),
+                                date = browseDate ?: today,
+                                today = today,
                                 onDateChange = { setBrowseDate(it) },
                                 onCourseClick = onCourseClick,
                             )

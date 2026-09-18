@@ -34,6 +34,7 @@ import com.buaa.schedule.domain.schedule.ConflictDetector
 import com.buaa.schedule.domain.schedule.CourseFilter
 import com.buaa.schedule.domain.schedule.ImportPlanner
 import com.buaa.schedule.domain.schedule.WeekCalculator
+import com.buaa.schedule.ui.home.nextDayTickDelayMillis
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -70,6 +71,15 @@ data class ScheduleUiState(
     val currentWeek: Int? = null,
     val conflicts: List<ConflictDetector.Conflict> = emptyList(),
     val loading: Boolean = true,
+    /**
+     * 真实"今天"，由 `ScheduleViewModel.dayTicker` 在跨午夜后推进。
+     *
+     * 必须进 state 而不能让页面各自 `LocalDate.now()`：一是组合期读时钟不是快照订阅，
+     * 跨过零点没有任何东西因此重组；二是滴答值一旦不进字段，
+     * combine 发射的新 state 与旧 state 相等，下游 `distinctUntilChanged()` 直接吞掉，
+     * 顶栏「第 N 周」照样停在上一周。
+     */
+    val today: LocalDate = LocalDate.now(),
 )
 
 /**
@@ -307,11 +317,16 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
      */
     private val dayTicker: kotlinx.coroutines.flow.Flow<java.time.LocalDate> = flow {
         while (true) {
-            emit(java.time.LocalDate.now())
-            val secondsTodayLeft = java.time.Duration.ofDays(1).seconds -
-                java.time.LocalDateTime.now().toLocalTime().toSecondOfDay()
-            // 越过零点 5 秒再醒，避开时钟回调边界的抖动
-            delay((secondsTodayLeft + 5).coerceAtLeast(60) * 1_000L)
+            // 一次读取同时给出"发射哪一天"和"下一次什么时候醒"。读两次（旧写法
+            // LocalDate.now() 与 LocalDateTime.now() 各读各的）时，两次之间正好跨过零点，
+            // 就会发射新的一天、却按上一天算出接近一整天的延时——第二天的顶栏周次
+            // 与今日高亮要等到后天才翻面。
+            val now = java.time.LocalDateTime.now()
+            emit(now.toLocalDate())
+            // 对齐到下一个零点再越过 5 秒，与日/周视图那圈分钟滴答同形（见 NowTick）：
+            // 等的是边界不是轮次，进程被 Doze 冻结时这次延时会迟到，
+            // 而醒来第一件事就是重新读时钟发射当天日期，所以迟到不影响显示对的东西。
+            delay(nextDayTickDelayMillis(now.toLocalTime()))
         }
     }
 
@@ -320,12 +335,15 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         repository.currentSemester,
         repository.timeSlots,
         dayTicker,
-    ) { courses, semester, timeSlots, _ ->
+    ) { courses, semester, timeSlots, today ->
         // 只展示手动课程 + 当前学期课程，避免多学期叠加；
         // 开学日期非法时按“无学期周次”降级，而不是崩溃
         val visibleCourses = CourseFilter.visibleIn(courses, semester)
+        // 周次按滴答出来的 today 算，不再让 WeekCalculator 自己读时钟：
+        // 否则"用哪一刻算周次"和"界面显示哪一天"是两次独立读取，
+        // 正好跨过零点时顶栏周次与今日页会各说一半。
         val currentWeek = semester?.startLocalDate?.let { start ->
-            WeekCalculator.currentWeekOrNull(start, semester.totalWeeks)
+            WeekCalculator.currentWeekOrNull(start, semester.totalWeeks, today)
         }
         ScheduleUiState(
             courses = visibleCourses,
@@ -334,6 +352,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             currentWeek = currentWeek,
             conflicts = ConflictDetector.findConflicts(visibleCourses),
             loading = false,
+            today = today,
         )
     }
         // 冲突检测是 O(n²)，且 combine 的三个源里 timeSlots / currentSemester 的
