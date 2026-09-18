@@ -52,6 +52,9 @@ object ReminderScheduler {
      *
      * @return 本轮排上的那一条课前提醒；null 表示本轮没有待触发的课前提醒
      *   （没配学期 / 课表为空 / 学期已结束 / 提醒全关）。
+     *   ⚠️ null **不等于**"课堂侧状态已经被收干净"：此刻正处在课堂窗口内时那道撤销会被跳过
+     *   （见 [shouldTakeDownClassProgress]），清理交给调用方的续排链
+     *   （[ClassProgressScheduler.rescheduleNextWindow]）。
      *
      * 把结论带出来是为了让调用方复用：[com.buaa.schedule.widget.BackgroundSync.rescheduleReminders]
      * 要的"还有没有待触发的提醒"与这里"排不排闹钟"是同一个问题的两面，
@@ -70,10 +73,16 @@ object ReminderScheduler {
         if (semesterStart == null || courses.isEmpty()) {
             cancelAll(context)
             // 只撤课前提醒还不够：上下课铃、常驻通知与勿扰都得收干净，
-            // 否则"上课中途清空课表"会留下永久勿扰 + 一条滑不掉的常驻通知（与下方 plan==null 同口径）
+            // 否则"上课中途清空课表"会留下永久勿扰 + 一条滑不掉的常驻通知。
+            // 这条分支不看任何判据、无条件收：它对应的是"真的没数据"（没配学期 / 课表已空），
+            // 与下面那条 plan==null 不同 —— 那种用户课还在上，见那里的说明（R5 F-11）
             ClassProgressScheduler.cancelAll(context)
             return null
         }
+        // 两个课堂开关：一次重排只读这一份（plan == null 那条分支的判据与下面排铃那段都要）
+        val prefs = context.getSharedPreferences(ClassProgressReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+        val classProgress = prefs.getBoolean(ClassProgressReceiver.PREF_CLASS_PROGRESS, true)
+        val dndEnabled = prefs.getBoolean(ClassProgressReceiver.PREF_DND, false)
         // 一次重排只读一次时钟：planNextReminder 拿 `now` 判"这一段还没开始"、
         // 拿 `nowMillis` 判"触发时刻过了没有"，两次各读各的就会在跨秒那一刻自相矛盾
         // （表现为提前量刚好用尽的那节课被跳过，链条跳到下周）。
@@ -81,10 +90,27 @@ object ReminderScheduler {
         val plan = planOnce(courses, semesterStart, timeSlots, reminders, now)
         cancelAll(context)
         if (plan == null) {
-            // 没有下一条提醒（课表被清空 / 学期已结束 / 全部提醒被关）：
-            // 必须把上/下课铃、常驻通知、勿扰状态一并收干净，
-            // 否则上课期间清空课表会留下"永不消失的常驻通知 + 永久勿扰"。
-            ClassProgressScheduler.cancelAll(context)
+            // 没有下一条提醒（提醒全关 / 学期已结束）**不等于**课堂侧状态也该当场收干净。
+            // 此前这里无条件 ClassProgressScheduler.cancelAll，实测（emulator-5554、ed70a1d）
+            // 「课前提醒全关」的用户每重排一次，正在上的那节课就被强制恢复勿扰
+            // （ZenModeController 20:06:05.450 →0）、约 5 秒后再被紧随其后的续排链补回来
+            // （20:06:10.610 →2）；更糟的是中间那道撤销把勿扰记录与看门狗闹钟一起抹掉，
+            // 而冷启动 selfCheck 判的是"有残留记录才动手" —— 那次重新进入一旦被 ROM 吞掉
+            // 就再也救不回来，这一节课的自动勿扰永久没进。
+            // 带判据的清理只此一份实现（ClassProgressScheduler.rescheduleWindows 里那个
+            // "课还没开始且不在数课前倒计时"的分支），这里只决定"现在就收"还是
+            // "交给续排链收"，不长出第二份判据。
+            val takenDown = takeDownClassProgressIfNeeded(
+                courses = courses,
+                semesterStart = semesterStart,
+                timeSlots = timeSlots,
+                classProgressEnabled = classProgress,
+                dndEnabled = dndEnabled,
+                // 与上面那次搜索同一只钟：选窗口与判"在不在上课"必须同源
+                now = now,
+                tearDown = { ClassProgressScheduler.cancelAll(context) },
+            )
+            if (!takenDown) Log.d(TAG, "正处在课堂窗口内：本轮不撤销课堂铃与勿扰，交给续排链")
             return null
         }
         // 上/下课铃与常驻通知的撤销/重排统一交给 scheduleClassProgress：
@@ -118,10 +144,7 @@ object ReminderScheduler {
         // 上/下课铃与常驻通知（"课程进行中"）和「上课自动勿扰」是两个独立开关，
         // 但共用同一对上课/下课闹钟：任一开启都必须排铃，接收器里再按开关决定做什么。
         // 此前任一开关关闭就直接不排铃，导致"只开勿扰、关掉常驻通知"的用户整条链路
-        // 都不跑 —— 表现为上课自动勿扰"好像没用"。
-        val prefs = context.getSharedPreferences(ClassProgressReceiver.PREFS_NAME, Context.MODE_PRIVATE)
-        val classProgress = prefs.getBoolean(ClassProgressReceiver.PREF_CLASS_PROGRESS, true)
-        val dndEnabled = prefs.getBoolean(ClassProgressReceiver.PREF_DND, false)
+        // 都不跑 —— 表现为上课自动勿扰"好像没用"。两个开关取函数开头读的那一份。
         if (classProgress || dndEnabled) {
             // 口径与下课铃广播共用 ClassProgressScheduler.rescheduleWindows
             ClassProgressScheduler.rescheduleWindows(context, courses, semesterStart, timeSlots)
@@ -131,6 +154,79 @@ object ReminderScheduler {
             ClassProgressScheduler.cancelAll(context)
         }
         return plan
+    }
+
+    /**
+     * 「本轮挑不出下一条课前提醒」那条分支的编排：课堂侧那一揽子状态（上/下课铃、常驻通知、
+     * 勿扰、勿扰看门狗）是现在就收，还是留给紧随其后的续排链去收。
+     *
+     * 形状抄 `BackgroundSync.runColdStartWidgetSteps` —— 本模块单测没有 Robolectric
+     * （[ClassProgressScheduler.cancelAll] 要 Context，android.jar 里全是抛 "not mocked" 的桩），
+     * 真跑一次撤销得设备，JVM 侧钉得住的只有"那个撤销动作被调了几遍"，
+     * 所以撤销本身收成一个注入的 lambda（生产接线传的就是 `cancelAll`）。
+     *
+     * @return true 表示当场收了；false 表示此刻正处在课堂窗口内、这道撤销被跳过
+     *   （调用方据此留一行取证日志，设备上看勿扰有没有又被抖一次）
+     */
+    internal fun takeDownClassProgressIfNeeded(
+        courses: List<Course>,
+        semesterStart: LocalDate,
+        timeSlots: List<TimeSlot>,
+        classProgressEnabled: Boolean,
+        dndEnabled: Boolean,
+        now: LocalDateTime,
+        tearDown: () -> Unit,
+    ): Boolean {
+        val due = shouldTakeDownClassProgress(
+            courses = courses,
+            semesterStart = semesterStart,
+            timeSlots = timeSlots,
+            classProgressEnabled = classProgressEnabled,
+            dndEnabled = dndEnabled,
+            now = now,
+        )
+        if (!due) return false
+        tearDown()
+        return true
+    }
+
+    /**
+     * 纯函数：本轮没有课前提醒可排时，课堂侧那一揽子撤销该不该当场执行。
+     *
+     * 只有**此刻正处在课堂窗口内**才放过，其余三种情况照旧当场收干净：
+     * - 两个课堂开关都关着：[ClassProgressScheduler.rescheduleNextWindow] 会因此早退，
+     *   续排链根本不会跑，不当场收就永远收不掉；
+     * - 挑不出课堂窗口（没有课 / 学期已结束）：此刻没有课在进行，收铃正是 R5 F-11 要的；
+     * - 窗口还没开始、或已经结束：遗留的常驻通知与勿扰该收，
+     *   用户把正在上的那门课删掉（重排后窗口对不上）也走这一条。
+     *
+     * 而"正在上课"时收干净的代价是**连自愈凭据一起抹掉**：勿扰记录与看门狗闹钟都在
+     * [ClassProgressDnd] 那一侧，撤销走的 restore 会把记录清掉，之后
+     * [ClassProgressDnd.selfCheck] 判的是"有残留记录才动手" —— 救不回来。
+     * 偏偏"正在上课"说明这两样都是当下正要用的东西。
+     *
+     * 两个判据都不在这里重写：窗口口径是 [ClassProgressScheduler.planNextClassWindow]
+     * （含正在上的这一节），"在不在上课"是 [ClassProgressScheduler.ClassWindow.ongoingAt]，
+     * 带判据的那份清理实现仍然只有 [ClassProgressScheduler.rescheduleWindows] 一处。
+     *
+     * [now] 一次判断只读一次时钟：选窗口与判"在不在上课"共用它（同 [planOnce] 的约束）。
+     */
+    internal fun shouldTakeDownClassProgress(
+        courses: List<Course>,
+        semesterStart: LocalDate,
+        timeSlots: List<TimeSlot>,
+        classProgressEnabled: Boolean,
+        dndEnabled: Boolean,
+        now: LocalDateTime,
+    ): Boolean {
+        if (!classProgressEnabled && !dndEnabled) return true
+        val window = ClassProgressScheduler.planNextClassWindow(
+            courses = courses,
+            semesterStart = semesterStart,
+            timeSlots = timeSlots,
+            now = now,
+        ) ?: return true
+        return !window.ongoingAt(now.toEpochMillis())
     }
 
     /**

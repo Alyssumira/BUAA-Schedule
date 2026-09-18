@@ -40,9 +40,11 @@ object BackgroundSync {
      * @return 本轮 [ReminderScheduler.rescheduleAll] 是否已经把「上/下课铃」一起接手。
      *   返回 false 时课堂窗口没人排，需要兜底链自己续排一次：
      *   ①「系统日历提醒」模式（应用内一个闹钟都不排）；
-     *   ② 没有下一条提醒（课表清空 / 学期已结束 / 提醒全关）—— 那条分支里
-     *     rescheduleAll 会把课堂铃一起 cancelAll（否则会留下永不消失的常驻通知 + 永久勿扰），
-     *     而 R5 F-12 要的「课程进行中 / 上课自动勿扰」还得独立续排回来。
+     *   ② 没有下一条提醒（课表清空 / 学期已结束 / 提醒全关）—— 那条分支里 rescheduleAll
+     *     只在"此刻没有课在进行"时才把课堂铃一起 cancelAll（否则会留下永不消失的常驻通知 +
+     *     永久勿扰）；正上着课就不收，免得把勿扰记录与看门狗闹钟一起抹掉（见
+     *     [com.buaa.schedule.reminder.ReminderScheduler.shouldTakeDownClassProgress]），
+     *     清理留给这条兜底链 —— R5 F-12 要的续排一步都不能少。
      *   读库失败也返回 true：那种情况下调用方不该再补一遍同样的查询。
      */
     suspend fun rescheduleReminders(context: Context): Boolean {
@@ -73,7 +75,8 @@ object BackgroundSync {
      * 由这里就地兑现，调用方不必（也没法）再各自记得补那一步。
      *
      * 为什么要有这个包装：`false` 的含义是"本轮课堂铃没人排"（① 系统日历提醒模式；
-     * ② 没有下一条提醒，rescheduleAll 在那条分支里连上/下课铃一起收掉了），
+     * ② 没有下一条提醒，那条分支的课堂铃清理按判据决定、剩下的归这里，
+     * 口径见 [rescheduleReminders] 的 @return），
      * 而 [rescheduleReminders] 是个返回 Boolean 的 suspend 函数，
      * 广播接收器 / ViewModel / Application 那几处调用点全都在 `launch { }` 里直接丢弃了返回值 ——
      * 丢弃的后果不是少一行日志，而是这两类用户此后再也不会有「课程进行中」实况与
