@@ -14,17 +14,21 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,9 +43,19 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -49,6 +63,7 @@ import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassTopBar
 import com.buaa.schedule.core.designsystem.GlassVariant
+import com.buaa.schedule.core.designsystem.LocalSemanticColors
 import com.buaa.schedule.core.designsystem.ModalTransition
 import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -142,6 +157,9 @@ fun SpocScanScreen(
     val view = LocalView.current
     val targetRotation = remember(view) { view.display?.rotation ?: Surface.ROTATION_0 }
     val busy = state is SignInState.Resolving || state is SignInState.Submitting
+    // 相机这条路径是否真的在跑：取景框只在它有效时出现，
+    // 退化到相册/手输时再压一层暗区就只是噪音
+    val cameraLive = scanner != null && scannerWorking && granted && cameraError == null
 
     LaunchedEffect(granted, provider, scannerWorking, analyzer) {
         val cameraProvider = provider ?: return@LaunchedEffect
@@ -181,9 +199,14 @@ fun SpocScanScreen(
         if (uri != null && scanner != null) {
             runCatching { InputImage.fromFilePath(context, uri) }
                 .onSuccess { image ->
-                    scanner.process(image).addOnSuccessListener { codes ->
-                        codes.firstOrNull()?.rawValue?.let { viewModel.signIn(it) }
-                    }
+                    // 解不出来必须说话：以前空结果什么都不发生，用户只会以为"按了没反应"，
+                    // 于是反复挑同一张图（H3）
+                    scanner.process(image)
+                        .addOnSuccessListener { codes ->
+                            val raw = codes.firstOrNull()?.rawValue
+                            if (raw == null) viewModel.reportNoQrCode() else viewModel.signIn(raw)
+                        }
+                        .addOnFailureListener { viewModel.reportNoQrCode() }
                 }
                 // 相册里那张图太大 / 读不出来时，别让整个页面跟着倒
                 .onFailure { cameraError = "读不出那张图：${it.message}" }
@@ -197,6 +220,14 @@ fun SpocScanScreen(
             factory = { previewView },
             modifier = Modifier.fillMaxSize(),
         )
+
+        // 相机画面不参与 SceneBackground 的对比度兜底：它自己就是全页最亮的一层，
+        // 白墙/窗户一进画面，居中的结果卡就糊在亮底上。框外压一层与全站同浓度的
+        // 遮罩救对比度，框内留透明——顺带回答了"二维码对准哪儿"（H4）。
+        // 结果卡出现时也要留着：那正是最需要对比度的一刻，卡片本身就落在框内。
+        if (cameraLive) {
+            ScanViewfinder(modifier = Modifier.fillMaxSize())
+        }
 
         GlassTopBar(
             title = "扫码签到",
@@ -215,7 +246,12 @@ fun SpocScanScreen(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth(),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
+            // 这是全屏页：栏体贴到屏幕最下沿，内容得自己让出系统导航栏，
+            // 否则三键导航机上两颗按钮被导航键压住（M6）
+            Column(
+                modifier = Modifier.navigationBarsPadding(),
+                verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
+            ) {
                 val hintText = when {
                     scanner == null || !scannerWorking -> "这台设备用不了相机扫码，请从相册选那张二维码，或直接输入签到码。"
                     !granted -> "没有相机权限，无法扫码。请在系统设置里放行，或改用下面两个入口。"
@@ -230,6 +266,10 @@ fun SpocScanScreen(
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
+                    // 栏内两颗动作一律 48dp 触控下限（M4）
+                    val barAction = Modifier
+                        .weight(1f)
+                        .defaultMinSize(minHeight = DesignTokens.minTouchTarget)
                     Button(
                         onClick = {
                             galleryLauncher.launch(
@@ -237,13 +277,23 @@ fun SpocScanScreen(
                             )
                         },
                         enabled = scanner != null && !busy,
-                        modifier = Modifier.weight(1f),
+                        modifier = barAction,
                     ) { Text("相册识别") }
-                    TextButton(
-                        onClick = { showManualInput = true },
-                        enabled = !busy,
-                        modifier = Modifier.weight(1f),
-                    ) { Text("手输签到码") }
+                    // 相机能用时手输是最后的兜底，压在最弱一档（TextButton）正合适；
+                    // 相机不可用时它和相册就是仅有的两条路，最弱档等于把它藏起来
+                    if (cameraLive) {
+                        TextButton(
+                            onClick = { showManualInput = true },
+                            enabled = !busy,
+                            modifier = barAction,
+                        ) { Text("手输签到码") }
+                    } else {
+                        OutlinedButton(
+                            onClick = { showManualInput = true },
+                            enabled = !busy,
+                            modifier = barAction,
+                        ) { Text("手输签到码") }
+                    }
                 }
             }
         }
@@ -258,11 +308,17 @@ fun SpocScanScreen(
         }
         if (resultText != null) {
             val failed = state is SignInState.Failed
-            // 失败结果卡升 ALERT + error 语义色（与登录页状态卡、冲突横幅同一档），
-            // 进行中/成功仍是中性 PANEL
+            val signed = state is SignInState.Signed
+            // 失败卡升 ALERT + error 语义色（与登录页状态卡、冲突横幅同一档）；
+            // 「签到完成」是这一页唯一做完的回执，染 success；
+            // 读取/提交进行中仍是无染 PANEL——恒染色等于把正常流程一直点红点绿
             GlassSurface(
                 variant = if (failed) GlassVariant.ALERT else GlassVariant.PANEL,
-                semanticTint = if (failed) MaterialTheme.colorScheme.error else null,
+                semanticTint = when {
+                    failed -> MaterialTheme.colorScheme.error
+                    signed -> LocalSemanticColors.current.success
+                    else -> null
+                },
                 contentPadding = DesignTokens.spaceL,
                 shape = RoundedCornerShape(DesignTokens.cornerPanel),
                 modifier = Modifier
@@ -275,24 +331,30 @@ fun SpocScanScreen(
                         text = resultText,
                         style = MaterialTheme.typography.bodyMedium,
                         color = when (state) {
-                            is SignInState.Signed -> MaterialTheme.colorScheme.primary
+                            // 与卡片 tint 同源：绿卡配蓝字会读成两件事
+                            is SignInState.Signed -> LocalSemanticColors.current.success
                             is SignInState.Failed -> MaterialTheme.colorScheme.error
                             else -> MaterialTheme.colorScheme.onSurfaceVariant
                         },
                     )
                     when (val s = state) {
                         is SignInState.Failed -> Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
+                            val cardAction = Modifier
+                                .weight(1f)
+                                .defaultMinSize(minHeight = DesignTokens.minTouchTarget)
                             if (s.relogin) {
-                                Button(onClick = onNeedLogin, modifier = Modifier.weight(1f)) { Text("去登录") }
+                                Button(onClick = onNeedLogin, modifier = cardAction) { Text("去登录") }
                             }
                             TextButton(
                                 onClick = { viewModel.reset() },
-                                modifier = Modifier.weight(1f),
+                                modifier = cardAction,
                             ) { Text("重新扫码") }
                         }
                         is SignInState.Signed -> Button(
                             onClick = { viewModel.reset() },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                         ) { Text("继续扫码") }
                         else -> Unit
                     }
@@ -329,11 +391,58 @@ fun SpocScanScreen(
                         viewModel.signIn(manualCode)
                         manualCode = ""
                     },
+                    // 空串提交等于白跑一次状态机，再被失败卡告知"这不是签到码"
+                    enabled = manualCode.isNotBlank(),
                 ) { Text("签到") }
             },
             dismissButton = {
                 TextButton(onClick = { showManualInput = false }) { Text("取消") }
             },
+        )
+    }
+}
+
+/** 取景框边长占短边的比例：再大就把结果卡顶出画面，再小对不准教室投影上的远距离二维码 */
+private const val ViewfinderSideRatio = 0.62f
+
+/** 取景框中心的纵向位置：略高于正中，给贴底动作条让出地方 */
+private const val ViewfinderCenterYFraction = 0.42f
+
+/** 框线宽度：比发丝粗、比卡片描边细，压在实拍画面上下不显脏（这一处的几何值，无对应令牌） */
+private val ViewfinderStrokeWidth = 2.dp
+
+/**
+ * 扫码取景框：框外压暗 [DesignTokens.SCRIM_ALPHA]（与引导页遮罩同浓度），框内透明，描一圈主色框线。
+ *
+ * "挖洞"用一条 EvenOdd 路径一次画成，而不是暗层上再叠一块透明矩形：
+ * 两层要在圆角边缘像素级对齐，差一点就在洞边漏出一圈亮边。
+ */
+@Composable
+private fun ScanViewfinder(modifier: Modifier = Modifier) {
+    val frameColor = MaterialTheme.colorScheme.primary
+    Canvas(modifier) {
+        val side = minOf(size.width, size.height) * ViewfinderSideRatio
+        val hole = Rect(
+            offset = Offset(
+                x = (size.width - side) / 2f,
+                y = size.height * ViewfinderCenterYFraction - side / 2f,
+            ),
+            size = Size(side, side),
+        )
+        val corners = CornerRadius(DesignTokens.cornerPanel.toPx())
+        val fullCanvas = Rect(offset = Offset.Zero, size = size)
+        val mask = Path().apply {
+            addRect(fullCanvas)
+            addRoundRect(RoundRect(hole, corners))
+            fillType = PathFillType.EvenOdd
+        }
+        drawPath(mask, Color.Black.copy(alpha = DesignTokens.SCRIM_ALPHA))
+        drawRoundRect(
+            color = frameColor.copy(alpha = 0.9f),
+            topLeft = hole.topLeft,
+            size = hole.size,
+            cornerRadius = corners,
+            style = Stroke(width = ViewfinderStrokeWidth.toPx()),
         )
     }
 }
@@ -374,6 +483,10 @@ private class QrCodeAnalyzer(
             return
         }
         try {
+            // close 只能挂到任务结束之后：InputImage 只持有 mediaImage 的引用，MLKit 是在
+            // 自己的工作线程上才去读 getPlanes() 的。放在 finally 里立即 close，那一帧就报
+            // IllegalStateException: Image is already closed，被下面的失败分支当成
+            // 「这台设备用不了相机扫码」而永久关掉整页的扫码能力。
             scanner.process(InputImage.fromMediaImage(mediaImage, image.imageInfo.rotationDegrees))
                 .addOnSuccessListener { codes ->
                     codes.firstOrNull()?.rawValue?.let {
@@ -388,12 +501,12 @@ private class QrCodeAnalyzer(
                     consumed = true
                     onFailure()
                 }
+                .addOnCompleteListener { image.close() }
         } catch (e: Throwable) {
             // UnsatisfiedLinkError 会从 process() 里抛出来：这台设备的 ABI 没带扫码库
+            image.close()
             consumed = true
             onFailure()
-        } finally {
-            image.close()
         }
     }
 }

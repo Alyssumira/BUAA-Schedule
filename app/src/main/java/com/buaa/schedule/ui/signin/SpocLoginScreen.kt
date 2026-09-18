@@ -19,11 +19,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -44,6 +47,7 @@ import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassTopBar
 import com.buaa.schedule.core.designsystem.GlassVariant
+import com.buaa.schedule.core.designsystem.LocalSemanticColors
 import com.buaa.schedule.data.import.SpocSession
 import com.buaa.schedule.data.import.SPOC_CAS_ENTRY
 import com.buaa.schedule.data.import.redactUrl
@@ -79,6 +83,8 @@ fun SpocLoginScreen(
     // 每次 onPageFinished 自增：作为收割协程的 key，让「页面又动了一次」重新触发探测
     var probeTick by remember { mutableIntStateOf(0) }
     var harvesting by remember { mutableStateOf(false) }
+    // 第几轮收割留成数值：只有文案在换的话，这 12 轮的窗口读起来就是"卡住了"（M5）
+    var harvestAttempt by remember { mutableIntStateOf(0) }
     var harvestFailed by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf(false) }
 
@@ -90,8 +96,10 @@ fun SpocLoginScreen(
         if (!web.url.orEmpty().contains(SPOC_H5_MARKER)) return@LaunchedEffect
         harvesting = true
         harvestFailed = false
+        harvestAttempt = 0
         // SPA 拿到接口响应才写 storage，与 onPageFinished 之间没有事件可挂，只能给时间窗
         for (attempt in 1..HARVEST_ATTEMPTS) {
+            harvestAttempt = attempt
             val credential = SpocSession.harvest(web)
             if (credential != null) {
                 SpocSession.save(context, credential)
@@ -110,8 +118,9 @@ fun SpocLoginScreen(
         saved -> "登录状态已保存，正在返回…"
         loadError != null -> "登录页加载失败：$loadError\n请检查网络（校园网/VPN）后重试。"
         timedOut -> "登录页加载超时（15 秒无响应）。\n请检查是否连接校园网或 VPN。"
-        harvestFailed -> "已进入智学北航，但没读到登录状态。\n可能是页面还在跳转，点「重新读取」再试一次。"
-        harvesting -> "正在读取登录状态…"
+        // 指引要对得上页面上真有的按钮：以前写的「重新读取」在这颗按钮上并不存在
+        harvestFailed -> "已进入智学北航，但没读到登录状态。\n可能是页面还在跳转，点「原地再读一次」，或重新加载页面。"
+        harvesting -> "正在读取登录状态（第 $harvestAttempt/$HARVEST_ATTEMPTS 次）…"
         !pageVisible -> "正在连接智学北航统一身份认证…"
         else -> null
     }
@@ -188,14 +197,23 @@ fun SpocLoginScreen(
         // 出错时升为 ALERT + error 语义色（与教务登录页状态卡同档），中性进度仍留 PANEL
         if (statusText != null) {
             val isErrorStatus = loadError != null || timedOut || harvestFailed
+            // 「登录状态已保存」是这一页唯一做完了的回执：success 进状态卡
+            val isDoneStatus = saved
+            val successInk = LocalSemanticColors.current.success
             GlassSurface(
                 variant = if (isErrorStatus) GlassVariant.ALERT else GlassVariant.PANEL,
-                semanticTint = if (isErrorStatus) MaterialTheme.colorScheme.error else null,
+                semanticTint = when {
+                    isErrorStatus -> MaterialTheme.colorScheme.error
+                    isDoneStatus -> successInk
+                    else -> null
+                },
                 contentPadding = DesignTokens.spaceL,
                 shape = RoundedCornerShape(DesignTokens.cornerPanel),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    // 全屏页：先让出系统导航栏再叠页面内缩（M6）
+                    .navigationBarsPadding()
                     .padding(
                         start = DesignTokens.spaceL,
                         end = DesignTokens.spaceL,
@@ -206,16 +224,29 @@ fun SpocLoginScreen(
                     Text(
                         text = statusText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (isErrorStatus) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
+                        color = when {
+                            isErrorStatus -> MaterialTheme.colorScheme.error
+                            isDoneStatus -> successInk
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
                         },
                     )
+                    // 收割轮次是确定的（HARVEST_ATTEMPTS），给出分母就画确定性进度（M5）
+                    if (harvesting) {
+                        LinearProgressIndicator(
+                            progress = {
+                                (harvestAttempt.toFloat() / HARVEST_ATTEMPTS).coerceIn(0f, 1f)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                     if (isErrorStatus) {
                         Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
-                            Button(onClick = { retryLoad() }, modifier = Modifier.weight(1f)) {
-                                Text(if (harvestFailed && loadError == null) "重新读取" else "重新加载")
+                            val cardAction = Modifier
+                                .weight(1f)
+                                .defaultMinSize(minHeight = DesignTokens.minTouchTarget)
+                            // 它做的是整页重刷，名字必须与旁边"只再探测一次"那颗区分开（M7）
+                            Button(onClick = { retryLoad() }, modifier = cardAction) {
+                                Text("重新加载页面")
                             }
                             // 重新读取只需要再探测一次，不必重刷页面：刷了反而可能掉登录态
                             if (harvestFailed && loadError == null && !timedOut) {
@@ -224,7 +255,7 @@ fun SpocLoginScreen(
                                         harvestFailed = false
                                         probeTick++
                                     },
-                                    modifier = Modifier.weight(1f),
+                                    modifier = cardAction,
                                 ) { Text("原地再读一次") }
                             }
                         }

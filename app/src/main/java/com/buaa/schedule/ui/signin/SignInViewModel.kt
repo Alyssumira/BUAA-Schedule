@@ -98,6 +98,20 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 相册那张图里没解出二维码 —— 走同一张失败卡。
+     *
+     * 这个入口存在的理由：相册是这台设备上唯一还能用的扫码路径（MLKit 的 so 只打进
+     * arm64，见本页 KDoc），它静默失败时用户没有任何信号，只能反复选同一张图。
+     */
+    fun reportNoQrCode() {
+        if (inFlight) return
+        _state.value = SignInState.Failed(
+            "那张图里没认出二维码。可以换一张更清晰的，或改用手输签到码。",
+            relogin = false,
+        )
+    }
+
+    /**
      * `qdid` → 详情 → `zjdm/czid`。
      *
      * ⚠️ 老师端二维码的字面内容没有取到证（生成逻辑在 APP 原生侧，H5 里找不到），
