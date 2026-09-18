@@ -82,32 +82,37 @@ fun StatsScreen(
             )
         },
     ) { padding ->
-        Column(
+        // 导入第一门课后这一页整版换血，硬切像重开了一遍；淡入淡出与日视图空态同源
+        Crossfade(
+            targetState = summary.courseCount == 0,
+            animationSpec = motionSpec<Float>(),
             modifier = modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState())
                 .padding(horizontal = DesignTokens.spaceL),
-            verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM),
-        ) {
-            // 导入第一门课后这一页整版换血，硬切像重开了一遍；淡入淡出与日视图空态同源
-            Crossfade(
-                targetState = summary.courseCount == 0,
-                animationSpec = motionSpec<Float>(),
-                modifier = Modifier.fillMaxWidth(),
-            ) { isEmpty ->
-                if (isEmpty) {
+        ) { isEmpty ->
+            if (isEmpty) {
+                // 空态居中（与管理页同一口径）：贴在页顶会让这一页看起来"还没加载完"
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
                     EmptyStatsCard()
-                } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM)) {
-                        CreditHeadline(summary)
-                        DayLoadCard(dayMinutes, busiestIndex, summary)
-                        CreditListCard(summary.perCourse, maxCredit)
-                        FreeSlotsCard(summary)
-                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM),
+                ) {
+                    CreditHeadline(summary)
+                    DayLoadCard(dayMinutes, busiestIndex, summary)
+                    CreditListCard(summary.perCourse, maxCredit)
+                    FreeSlotsCard(summary)
+                    Spacer(modifier = Modifier.height(DesignTokens.spaceXL))
                 }
             }
-            Spacer(modifier = Modifier.height(DesignTokens.spaceXL))
         }
     }
 }
@@ -195,6 +200,9 @@ private fun DayLoadCard(
     }
 }
 
+/** 课程色圆点：行内的颜色标记，不是图标——图标刻度最小档 [DesignTokens.iconSmall] 落在正文行里偏重 */
+private val CourseDotSize = 10.dp
+
 /** 每门课的学分：名字 + 一条占比条，占比条用课程自己的颜色，和课表上的色块对得上 */
 @Composable
 private fun CreditListCard(perCourse: List<SemesterStats.CourseCredit>, maxCredit: Double) {
@@ -209,7 +217,7 @@ private fun CreditListCard(perCourse: List<SemesterStats.CourseCredit>, maxCredi
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(10.dp)
+                            .size(CourseDotSize)
                             .clip(CircleShape)
                             .background(courseColor(item.course)),
                     )
@@ -254,7 +262,8 @@ private fun FreeSlotsCard(summary: SemesterStats.SemesterSummary) {
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     text = "${summary.freeSlotCount}",
-                    style = MaterialTheme.typography.headlineMedium,
+                    // 总学分是这一页唯一的大字号（见 CreditHeadline），空档数只到标题档
+                    style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary,
                 )

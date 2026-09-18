@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -217,17 +218,20 @@ fun ImportScreen(
                 GlassSurface(
                     variant = GlassVariant.PANEL,
                     contentPadding = DesignTokens.spaceL,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = DesignTokens.spaceL),
+                    modifier = Modifier.fillMaxWidth().then(ImportPageGutter),
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
                         Text("待确认导入", style = MaterialTheme.typography.titleMedium)
-                        Text("学期：${pending.semester.termName}")
+                        // 学期是上下文，不是结论：压到正文以下一档，统计数字才浮得出来（M15）
+                        Text(
+                            text = "学期：${pending.semester.termName}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceL)) {
-                            Text("新增 ${pending.addedCount}")
-                            Text("更新 ${pending.changedCount}")
-                            Text("已有 ${pending.existingCount}")
+                            ImportStat("新增 ${pending.addedCount}")
+                            ImportStat("更新 ${pending.changedCount}")
+                            ImportStat("已有 ${pending.existingCount}")
                         }
                         if (pending.conflicts.isEmpty()) {
                             Text("无时间冲突", style = MaterialTheme.typography.bodySmall)
@@ -271,10 +275,16 @@ fun ImportScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.weight(1f),
                             )
-                            TextButton(onClick = { viewModel.setAllPendingImportSelected(true) }) {
+                            TextButton(
+                                onClick = { viewModel.setAllPendingImportSelected(true) },
+                                modifier = Modifier.defaultMinSize(minHeight = DesignTokens.minTouchTarget),
+                            ) {
                                 Text("全选", style = MaterialTheme.typography.labelMedium)
                             }
-                            TextButton(onClick = { viewModel.setAllPendingImportSelected(false) }) {
+                            TextButton(
+                                onClick = { viewModel.setAllPendingImportSelected(false) },
+                                modifier = Modifier.defaultMinSize(minHeight = DesignTokens.minTouchTarget),
+                            ) {
                                 Text("全不选", style = MaterialTheme.typography.labelMedium)
                             }
                         }
@@ -315,12 +325,16 @@ fun ImportScreen(
                         }
                         Button(
                             onClick = viewModel::confirmPendingImport,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                             enabled = selectedCount > 0,
                         ) { Text("确认导入（$selectedCount 门）") }
                         OutlinedButton(
                             onClick = viewModel::cancelPendingImport,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                         ) { Text("取消") }
                     }
                 }
@@ -355,12 +369,16 @@ fun ImportScreen(
             importMessage?.let { message ->
                 GlassSurface(
                     variant = if (message.isError) GlassVariant.ALERT else GlassVariant.PANEL,
-                    semanticTint = if (message.isError) MaterialTheme.colorScheme.error else null,
+                    // 级别由发射点定死（§8），这里只读不猜。
+                    // 「正在抓取…」这类中性进度留无染 PANEL：恒染色会把正常流程一直点绿。
+                    semanticTint = when {
+                        message.isError -> MaterialTheme.colorScheme.error
+                        message.isSuccess -> LocalSemanticColors.current.success
+                        else -> null
+                    },
                     shape = RoundedCornerShape(DesignTokens.cornerPanel),
                     contentPadding = DesignTokens.spaceM,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = DesignTokens.spaceL),
+                    modifier = Modifier.fillMaxWidth().then(ImportPageGutter),
                 ) {
                     Text(
                         text = message.text,
@@ -388,7 +406,9 @@ fun ImportScreen(
                 item(key = "icsInput", visible = expandedSource == SOURCE_ICS) {
                     Button(
                         onClick = { icsLauncher.launch(arrayOf("text/calendar", "text/plain")) },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                     ) { Text("选择 ICS 文件") }
                 }
 
@@ -404,7 +424,9 @@ fun ImportScreen(
                 item(key = "textInput", visible = expandedSource == SOURCE_TEXT) {
                     Button(
                         onClick = { textLauncher.launch(arrayOf("text/plain")) },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                     ) { Text("选择文本文件") }
                 }
 
@@ -432,7 +454,9 @@ fun ImportScreen(
                                 viewModel.clearImportMessage()
                                 viewModel.importShareCode(shareCode)
                             },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                             enabled = shareCode.isNotBlank(),
                         ) { Text("口令导入") }
                         OutlinedButton(
@@ -454,7 +478,9 @@ fun ImportScreen(
                                     }
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                         ) { Text("分享本课表（口令）") }
                     }
                 }
@@ -498,9 +524,7 @@ private fun BuaaImportHero(
         variant = GlassVariant.PANEL,
         shape = RoundedCornerShape(DesignTokens.cornerPage),
         contentPadding = DesignTokens.spaceL,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = DesignTokens.spaceL),
+        modifier = Modifier.fillMaxWidth().then(ImportPageGutter),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -583,7 +607,12 @@ private fun BuaaImportHero(
 
             if (refreshing) {
                 // 19 周逐周请求在网络差时可能很久
-                OutlinedButton(onClick = onCancelRefresh, modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = onCancelRefresh,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
+                ) {
                     Icon(
                         imageVector = Icons.Filled.Refresh,
                         contentDescription = null,
@@ -595,7 +624,9 @@ private fun BuaaImportHero(
             } else {
                 OutlinedButton(
                     onClick = onRefresh,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                     enabled = hasSession,
                 ) {
                     Icon(
@@ -621,7 +652,10 @@ private fun BuaaImportHero(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
             ) {
-                TextButton(onClick = onLogout) {
+                TextButton(
+                    onClick = onLogout,
+                    modifier = Modifier.defaultMinSize(minHeight = DesignTokens.minTouchTarget),
+                ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Logout,
                         contentDescription = null,
@@ -636,6 +670,25 @@ private fun BuaaImportHero(
     }
 }
 
+/**
+ * 导入页版面内缩：三张整页卡（待确认、状态、Hero）与拼接组共用同一条左右 [DesignTokens.spaceL]。
+ * 各写一遍的话，改一处就会让卡片彼此错位。
+ *
+ * 它只收"同一页内不重复"这一半：页 gutter 与卡内 contentPadding 仍是两层，
+ * 要连 SettingsGroup 自带的 gutter 一起拆才算收口（R7 §五.10 判定为拆层重构，本轮不做）。
+ */
+private val ImportPageGutter = Modifier.padding(horizontal = DesignTokens.spaceL)
+
+/** 待确认卡的统计数字：这张卡的结论就是这几个数，所以给一档字重（M15） */
+@Composable
+private fun ImportStat(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = FontWeight.SemiBold,
+    )
+}
+
 /** Hero 上的主色小徽章（如"推荐"） */
 @Composable
 private fun HeroBadge(text: String) {
@@ -648,6 +701,6 @@ private fun HeroBadge(text: String) {
                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
                 shape = RoundedCornerShape(DesignTokens.cornerPill),
             )
-            .padding(horizontal = DesignTokens.spaceS, vertical = 2.dp),
+            .padding(horizontal = DesignTokens.spaceS, vertical = DesignTokens.spaceMicro),
     )
 }

@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -72,9 +73,11 @@ fun PinWidgetRow(
                 requested = true
                 if (!pinWidget(context, provider)) showGuidance = true
             },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
         ) {
-            Text(label, style = MaterialTheme.typography.labelMedium)
+            Text(label)
         }
         when {
             !pinSupported -> Text(

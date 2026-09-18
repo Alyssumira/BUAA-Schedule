@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -50,6 +51,7 @@ import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassTopBar
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalSceneBackdrop
+import com.buaa.schedule.core.designsystem.LocalSemanticColors
 import com.buaa.schedule.core.designsystem.Personalization
 import com.buaa.schedule.core.designsystem.SceneBackground
 import com.buaa.schedule.core.designsystem.SettingsSwitchRow
@@ -243,11 +245,15 @@ private fun WidgetConfigScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceM)) {
                     OutlinedButton(
                         onClick = onCancel,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                     ) { Text("取消") }
                     Button(
                         onClick = { onSave(appearance, binding) },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                     ) { Text("保存") }
                 }
             }
@@ -274,14 +280,16 @@ private fun WidgetConfigScreen(
                         text = "系统未授予「精确闹钟」权限（Android 14 起默认拒绝），" +
                             "桌面组件的日期跨天刷新可能不准。点击下方按钮前往授权。",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = LocalSemanticColors.current.warning,
                     )
                     OutlinedButton(
                         onClick = {
                             com.buaa.schedule.ui.settings.ReminderGuidance
                                 .openExactAlarmSettings(configContext)
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                     ) { Text("去授权精确闹钟") }
                 }
             }
@@ -327,7 +335,7 @@ private fun WidgetConfigScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
                     FilterChip(
                         selected = binding.semesterCode == null,
                         onClick = { binding = binding.copy(semesterCode = null) },
@@ -466,7 +474,9 @@ private fun WidgetConfigScreen(
                     if (appearance.rowFields != null) {
                         OutlinedButton(
                             onClick = { appearance = appearance.copy(rowFields = null) },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                         ) { Text("恢复该组件的默认字段") }
                     }
                 }
@@ -515,7 +525,9 @@ private fun WidgetConfigScreen(
 
             OutlinedButton(
                 onClick = { appearance = WidgetAppearance() },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                 enabled = !isDefault,
             ) { Text("恢复默认外观") }
 
@@ -523,6 +535,22 @@ private fun WidgetConfigScreen(
         }
     }
 }
+
+/**
+ * 预览卡几何：照抄 `res/layout/widget_*.xml` 里真组件的那一套（含 12dp 左右、10dp 上下内边距）。
+ *
+ * 故意不走 [DesignTokens]：这些值由 XML 那侧决定，换成间距刻度会让下一个人以为
+ * 可以随手调本页——改了这里不改布局，预览就成了假象。
+ */
+private val WidgetPreviewShellHeight = 120.dp
+private val WidgetPreviewCardWidth = 300.dp
+private val WidgetPreviewCardHeight = 96.dp
+private val WidgetPreviewCardPaddingHorizontal = 12.dp
+private val WidgetPreviewCardPaddingVertical = 10.dp
+private val WidgetPreviewBorderWidth = 1.dp
+
+/** 预览外壳的中灰：代表"组件贴在桌面壁纸上"，取的是壁纸常见的中间亮度，不是某个主题色 */
+private val WidgetPreviewWallpaperGray = Color(0xFF8A8F99)
 
 /** 所见即所得预览：与实际 RemoteViews 用同一套颜色/透明度/圆角数值 */
 @Composable
@@ -547,20 +575,23 @@ private fun WidgetPreview(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(120.dp)
+            .height(WidgetPreviewShellHeight)
             .background(
-                color = Color(0xFF8A8F99),
+                color = WidgetPreviewWallpaperGray,
                 shape = RoundedCornerShape(DesignTokens.cornerCourse),
             )
             .padding(DesignTokens.spaceM),
     ) {
         Row(
             modifier = Modifier
-                .width(300.dp)
-                .height(96.dp)
+                .width(WidgetPreviewCardWidth)
+                .height(WidgetPreviewCardHeight)
                 .background(color = bg, shape = RoundedCornerShape(radius))
-                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(radius))
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .border(WidgetPreviewBorderWidth, Color.White.copy(alpha = 0.10f), RoundedCornerShape(radius))
+                .padding(
+                    horizontal = WidgetPreviewCardPaddingHorizontal,
+                    vertical = WidgetPreviewCardPaddingVertical,
+                ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column {

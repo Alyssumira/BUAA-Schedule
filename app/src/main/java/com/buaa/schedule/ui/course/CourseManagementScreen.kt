@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -280,7 +281,7 @@ private fun CourseGroupCard(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(22.dp)
+                            .size(DesignTokens.iconLarge)
                             .background(color, CircleShape)
                             .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
                         contentAlignment = Alignment.Center,
@@ -321,6 +322,9 @@ private fun CourseGroupCard(
                 IconButton(onClick = onEdit) {
                     Icon(Icons.Default.Edit, contentDescription = "编辑")
                 }
+                // 两颗 48dp 的按钮紧贴着排，删除还是不可逆的那一颗：中间垫一档间距，
+                // 让"改"与"删"之间有一个不会误触的缝
+                Spacer(modifier = Modifier.width(DesignTokens.spaceS))
                 IconButton(onClick = onRequestDelete) {
                     Icon(
                         Icons.Default.Delete,

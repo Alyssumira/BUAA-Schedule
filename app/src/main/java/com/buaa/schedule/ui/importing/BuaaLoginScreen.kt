@@ -22,11 +22,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -53,6 +56,7 @@ import com.buaa.schedule.BuildConfig
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassTopBar
+import com.buaa.schedule.core.designsystem.LocalSemanticColors
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.data.import.BuaaInPageFetcher
 import com.buaa.schedule.data.import.redactUrl
@@ -91,6 +95,10 @@ fun BuaaLoginScreen(
     // 登录完成后在 WebView 页面内抓取课表（byxt 凭证无法外带，见 BuaaInPageFetcher）
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var fetchState by remember { mutableStateOf<String?>(null) }
+    // 抓取进度的分子分母单独留成数值：换文案只是眨眼，有分数才画得出确定性进度条。
+    // 19 周逐周请求在网络差时要跑几十秒，用户需要一个"还在走"的证据（M5）
+    var fetchWeek by remember { mutableIntStateOf(0) }
+    var fetchTotal by remember { mutableIntStateOf(0) }
     var fetchStarted by remember { mutableStateOf(false) }
     var fetchCancelled by remember { mutableStateOf(false) }
     // 抓取结果已交给导入预览、正等页面跳转：保留底部状态卡，
@@ -114,6 +122,9 @@ fun BuaaLoginScreen(
             return@LaunchedEffect
         }
         fetchState = "正在获取学年学期列表..."
+        // 新一轮从 0 开始：否则「重新获取」会先闪一下上一轮的 N/N 满格
+        fetchWeek = 0
+        fetchTotal = 0
         val terms = fetcher.fetchTermList(web)
         if (terms.isEmpty()) {
             fetchState = null
@@ -130,7 +141,11 @@ fun BuaaLoginScreen(
                 webView = web,
                 termCode = selectedTerm,
                 totalWeeks = totalWeeks,
-                onProgress = { week, total -> fetchState = "正在获取课表：第 $week/$total 周..." },
+                onProgress = { week, total ->
+                    fetchWeek = week
+                    fetchTotal = total
+                    fetchState = "正在获取课表：第 $week/$total 周..."
+                },
             )
             // 保留登录 WebView（byxt 页面上下文，供刷新课表复用）
             com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
@@ -321,14 +336,30 @@ fun BuaaLoginScreen(
         // 出错时升为 ALERT + error 语义色（与首页冲突横幅同一档），中性进度仍留 PANEL
         if (statusText != null) {
             val isErrorStatus = loadError != null || timedOut
+            // 「课程已获取完成」是这一页唯一做完了的回执：success 进状态卡
+            val isDoneStatus = importPrepared
+            // 正文与卡片 tint 同源：绿卡配灰字会读成两件不相干的事
+            val successInk = LocalSemanticColors.current.success
+            val fetchFraction = if (fetchTotal > 0 && fetchStateText != null) {
+                (fetchWeek.toFloat() / fetchTotal).coerceIn(0f, 1f)
+            } else {
+                null
+            }
             GlassSurface(
                 variant = if (isErrorStatus) GlassVariant.ALERT else GlassVariant.PANEL,
-                semanticTint = if (isErrorStatus) MaterialTheme.colorScheme.error else null,
+                semanticTint = when {
+                    isErrorStatus -> MaterialTheme.colorScheme.error
+                    isDoneStatus -> successInk
+                    else -> null
+                },
                 contentPadding = DesignTokens.spaceL,
                 shape = RoundedCornerShape(DesignTokens.cornerPanel),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    // 全屏页：先让出系统导航栏，再叠页面内缩，
+                    // 否则三键导航机上整张卡压在导航键上（M6）
+                    .navigationBarsPadding()
                     .padding(
                         start = DesignTokens.spaceL,
                         end = DesignTokens.spaceL,
@@ -339,17 +370,32 @@ fun BuaaLoginScreen(
                     Text(
                         text = statusText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (isErrorStatus) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = when {
+                            isErrorStatus -> MaterialTheme.colorScheme.error
+                            isDoneStatus -> successInk
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                     )
+                    // 19 周逐周请求在网络差时要跑几十秒。只有文案在换的话，
+                    // 这段等待读起来就是"卡住了"；有分母就画确定性进度（M5）
+                    if (fetchFraction != null) {
+                        LinearProgressIndicator(
+                            progress = { fetchFraction },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
+                        // 这一行全是"救场"入口，实测 40dp 比正文行还矮；统一抬到 48dp（M4）
+                        val cardAction = Modifier
+                            .weight(1f)
+                            .defaultMinSize(minHeight = DesignTokens.minTouchTarget)
                         if (loadError != null) {
-                            Button(onClick = { retryLoad() }, modifier = Modifier.weight(1f)) {
+                            Button(onClick = { retryLoad() }, modifier = cardAction) {
                                 Text("重新加载")
                             }
                         }
                         if (timedOut) {
-                            Button(onClick = { retryLoad() }, modifier = Modifier.weight(1f)) {
+                            Button(onClick = { retryLoad() }, modifier = cardAction) {
                                 Text("重试")
                             }
                         }
@@ -368,13 +414,13 @@ fun BuaaLoginScreen(
                                     }
                                     viewModel.showMessage("已取消导入，登录会话已保留")
                                 },
-                                modifier = Modifier.weight(1f),
+                                modifier = cardAction,
                             ) { Text("取消导入") }
                         }
                         if (importPrepared) {
                             Button(
                                 onClick = onImportPrepared,
-                                modifier = Modifier.weight(1f),
+                                modifier = cardAction,
                             ) { Text("查看导入预览") }
                         }
                         if (fetchCancelled) {
@@ -383,9 +429,9 @@ fun BuaaLoginScreen(
                                     fetchCancelled = false
                                     fetchStarted = true
                                 },
-                                modifier = Modifier.weight(1f),
+                                modifier = cardAction,
                             ) { Text("重新获取") }
-                            TextButton(onClick = { safeBack() }, modifier = Modifier.weight(1f)) {
+                            TextButton(onClick = { safeBack() }, modifier = cardAction) {
                                 Text("返回")
                             }
                         }

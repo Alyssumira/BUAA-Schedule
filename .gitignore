@@ -17,3 +17,5 @@ dist/
 .tmp/
 # 本机 gradle 包装脚本：写死了 JAVA_HOME / SDK / 仓库绝对路径，换机器即失效
 build.cmd
+# 子代理隔离工作区（git worktree add .worktrees/<id>），不是工程内容
+.worktrees/

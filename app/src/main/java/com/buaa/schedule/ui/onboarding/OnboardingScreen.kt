@@ -371,6 +371,12 @@ private fun OnboardingStepPage(
     }
 }
 
+/**
+ * 欢迎步插画边长：一整幅图，不归图标刻度管。
+ * 上限由首屏决定——再大一档，下面的标题与副标题就要滚出屏幕才看得见了。
+ */
+private val OnboardingHeroSize = 180.dp
+
 @Composable
 private fun WelcomeStep() {
     Column(
@@ -382,7 +388,7 @@ private fun WelcomeStep() {
             painter = painterResource(R.drawable.onboarding_hero),
             contentDescription = "北航课表吉祥物插画",
             modifier = Modifier
-                .size(180.dp)
+                .size(OnboardingHeroSize)
                 // 只裁四个角：画面边缘的字样与卫星发饰都在边的中段，不会被吃掉
                 .clip(RoundedCornerShape(DesignTokens.cornerPage)),
         )
@@ -469,13 +475,17 @@ private fun ReliabilityStep(
     Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM)) {
         if (checking && checks == null) {
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                CircularProgressIndicator(modifier = Modifier.size(DesignTokens.iconLarge))
             }
         } else {
             checks.orEmpty().forEach { item ->
                 CheckCard(item, enabled = !checking, onFix = { onFixCheck(item) })
             }
-            TextButton(onClick = onRetryChecks, enabled = !checking) {
+            TextButton(
+                onClick = onRetryChecks,
+                enabled = !checking,
+                modifier = Modifier.defaultMinSize(minHeight = DesignTokens.minTouchTarget),
+            ) {
                 Text(if (checking) "正在检测…" else "重新检测")
             }
         }
@@ -523,19 +533,23 @@ private fun CheckCard(item: CheckItem, enabled: Boolean, onFix: () -> Unit) {
 
 @Composable
 private fun StatusMark(status: CheckStatus, enabled: Boolean) {
-    if (!enabled) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(DesignTokens.iconMedium),
-            strokeWidth = 2.dp,
-        )
-        return
+    // 转圈与图标占同一个见方、间距只写一次：否则探针出结果的一刻，
+    // 右边的「去修复」整颗往左挪一档，六行同时抖（引导页最扎眼的一处跳动）
+    Box(
+        modifier = Modifier.size(DesignTokens.iconMedium),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (!enabled) {
+            CircularProgressIndicator(strokeWidth = 2.dp)
+        } else {
+            val (icon, tint) = when (status) {
+                CheckStatus.Passed -> Icons.Filled.Check to MaterialTheme.colorScheme.primary
+                CheckStatus.Failed -> Icons.Filled.Close to MaterialTheme.colorScheme.error
+                CheckStatus.Unknown -> Icons.AutoMirrored.Filled.HelpOutline to MaterialTheme.colorScheme.outline
+            }
+            Icon(imageVector = icon, contentDescription = null, tint = tint)
+        }
     }
-    val (icon, tint) = when (status) {
-        CheckStatus.Passed -> Icons.Filled.Check to MaterialTheme.colorScheme.primary
-        CheckStatus.Failed -> Icons.Filled.Close to MaterialTheme.colorScheme.error
-        CheckStatus.Unknown -> Icons.AutoMirrored.Filled.HelpOutline to MaterialTheme.colorScheme.outline
-    }
-    Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(DesignTokens.iconMedium))
     Spacer(Modifier.width(DesignTokens.spaceM))
 }
 
@@ -613,7 +627,7 @@ private fun SectionHeading(title: String, subtitle: String) {
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface,
         )
-        Spacer(Modifier.height(2.dp))
+        Spacer(Modifier.height(DesignTokens.spaceMicro))
         Text(
             text = subtitle,
             style = MaterialTheme.typography.bodySmall,

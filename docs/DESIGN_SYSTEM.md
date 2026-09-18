@@ -10,6 +10,7 @@
 | `cornerPanel` | 18dp | 面板 / 分组卡片 |
 | `cornerCourse` | 10dp | 课程卡、小色块容器 |
 | `cornerPill` | 50 | 胶囊（分段的段内形状） |
+| `spaceMicro` | 2dp | 行距级微间距：同一块内容里两行小字之间的缝、胶囊的上下内衬。**不是版面刻度**（版面用下面那一套），小于它就会咬住降部 |
 | `spaceXS/S/M/L/XL` | 4/8/12/16/24dp | 间距刻度，**不要自造 10dp/18dp** |
 | `minTouchTarget` | — | 可点击元素的最小触控尺寸 |
 | `GLASS_TIER_OFF/STANDARD` | 0/1 | 玻璃档位。**只有两级**：增强档连同 `glassIntensity()` 已删——设置页只暴露开/关，`load()` 又把档位夹回 0..1，没有任何入口能到达第三档 |
@@ -23,6 +24,7 @@
 | `bottomBarIndicatorHeight` / `navRailWidth` | 56/84dp | 底栏指示层高度与宽屏导航栏宽度 |
 | `dialogListMaxHeight` | 240dp | 弹窗/卡内滚动列表的高度上限（更新日志、跳周列表、待导入清单此前各写 240/260） |
 | `CHROME_SURFACE_ALPHA` / `SCRIM_ALPHA` | 0.20f / 0.55f | CHROME 栏底板与弹窗遮罩的浓度，原来在 MainActivity/HomeScreen 裸写，且扫码页的遮罩另写一套 |
+| `PLACEHOLDER_INK_ALPHA` | 0.55f | **占位值**的淡墨浓度（「教室未定」「未设置」这类没有真值的文案）。同一屏里真值全浓度、占位这一档，一眼分得开；此前日视图卡片与详情弹层各写一遍裸 0.55f |
 
 ## 2. 动效（`MotionTokens`）
 
@@ -30,11 +32,18 @@
 
 - 三级时长：`DURATION_SHORT 180`（按压/开关）、`MEDIUM 260`（页面进出场）、`LONG 380`（弹窗/大面板）。
 - 两条标准缓动：`EasingStandard`（位移/淡入淡出）、`EasingEmphasized`（需要"弹出感"的场合）。
+- **跟手的动作用 `DURATION_SNAP 140`**：日视图翻日期、分段控件的选中胶囊、开关把手这一类
+  "手指已经动了，动画只是补一句确认"的场合。它不是第四级版面刻度，判据是**是否跟着即时意图**
+  （见 §2.6）——点完还要看 200ms 的滑块会被读成"卡顿了一下"。
+- `Motion.kt` 里另有按场景命名的常量（`DURATION_MENU` / `DURATION_MENU_CLOSE` /
+  `DURATION_FADE_THROUGH_*` / `DURATION_DIALOG_ENTER` / `DURATION_DIALOG_EXIT`），
+  它们是把**已经调校过的成对时长**登记成名字，避免两处各抄一遍数字；新增动画优先落回三级 + SNAP。
 
 **与 Material 3 官方 token 的对照**（实测自 androidx `compose.material3.tokens.MotionTokens` v0_103）：
 
 | 本项目 | 值 | 最接近的 M3 档位 | M3 值 | 偏差 |
 | --- | --- | --- | --- | --- |
+| `DURATION_SNAP` | 140ms | `DurationShort3` | 150ms | −10ms |
 | `DURATION_SHORT` | 180ms | `DurationShort4` | 200ms | −20ms |
 | `DURATION_MEDIUM` | 260ms | `DurationMedium1` | 250ms | +10ms |
 | `DURATION_LONG` | 380ms | `DurationMedium4` | 400ms | −20ms |
@@ -117,6 +126,18 @@ Apple HIG 原文：
 
 反过来说：**高频交互不能没有反馈**。课程卡走自定义手势路径时连 `clickable` 都不加，
 按住的前 500ms 没有任何视觉变化 —— 这属于"反馈缺失"，不属于"避免动效"。
+
+- **手势跟手，但要有阻尼**：日视图横向翻日期跟着手指走的是 `dampedDragOffset()`
+  （`coerceIn(-threshold, threshold)` × `DayDragFollowRatio`），到边界继续拖只会顶住、不会把内容拽出屏。
+  真正翻出去那一下的转场取 `DURATION_SNAP`（`dayAxisTransition()`），不是区块级的 260 ——
+  见 §2.1 与 §2.4 的 shared axis。
+- **反馈会改容器高度时，交给 `animateContentSize(motionSpec<IntSize>())`**：首页顶栏的副行、
+  管理页的筛选行都是"内容变了 → 框子变高"，自己算高度或干脆硬切都会跳。
+  它只是补间尺寸，不新增信息、也不需要调用方知道目标高度是多少。
+- **能数得出来的长任务必须给确定性进度**：教务导入是逐周抓取（19 周），分母从一开始就知道，
+  所以画的是 `progress = { fetchFraction }` 而不是转圈。
+  顶栏那一条在 1–99 之间才传值、其余传 `null`（未开始与已收尾时没有"进度"可报，硬撑成 0 或 100 都是假话）。
+  **分母未知**的场合（网络重试轮次、SPOC 收割）才留不确定档，别为了"看起来有进度"编一条曲线。
 
 ### 2.7 一切动画都要尊重 reduce-motion
 
@@ -245,8 +266,12 @@ reduce-motion 由 `motionSpec()` 在那一处兜底。三条已经定过的口�
   编辑器底栏内的错误提示（底栏已是 CHROME，里面改用 `errorContainer` 平板底色，**不再套 ALERT**）。
   周视图 `DayHeader` 那层 `onSurface.copy(alpha=0.06f)` 着色片**不算玻璃表面**——它是网格行内的轻量着色，
   换 CHROME 会让每个表头实例占一个配额槽位，保留自绘。
-- **状态卡按级别换变体，不是恒 ALERT**：登录/扫码页的中性进度（"正在抓取…"）留在 PANEL，
-  出错才升 `ALERT + semanticTint = error`（与首页冲突横幅同档）。恒红会让正常流程一直挂着告警色。
+- **状态卡按级别换变体，不是恒 ALERT**：级别读 `AppMessage` 的三档（§8），**变体只有一档会跳**：
+  出错才升 `ALERT + semanticTint = error`（与首页冲突横幅同档）；中性进度（"正在抓取…"）与成功
+  **都留在 PANEL**，成功只是把 `semanticTint` 换成 `LocalSemanticColors.current.success`。
+  恒红会让正常流程一直挂着告警色，恒绿则让"还在进行中"读起来像已经完成。
+  `SemanticColors` **只有 `success` 一个成功槽位，没有 `onSuccess`/`successContainer`**——
+  这是有意的：成功态不做容器底，只做无染 PANEL 上的一点绿，因此不能拿它自建一套"成功卡"。
 
 ### 3.1 浮层分两层：玻璃层 = 导航与浏览，M3 层 = 模态与决策
 
@@ -284,6 +309,14 @@ M3 这一档**只加动效、不换组件**：确认框与弹层的进出场由 
   "名义 12sp、实际 11sp"那条断链。**新代码一律写 `labelMedium`**，`labelSmall` 只留作那道守卫。
 - 最大档 `displaySmall`（34sp SemiBold / 行高 42）已补进刻度，引导页 hero 用它。
   R7 普查口径：全库 `fontSize = N.sp` 曾只剩 1 处裸值（就是那个 hero），现已归零——别让它重新长出来。
+- **一页只有一个"大数字"**：统计页的总学分（`displaySmall` 34）是本页唯一的超大字号。
+  区块级的数字不得向它靠拢——实测教训是"节次空档数"曾用 `headlineMedium`（28），
+  与 34 只差 6sp，在玻璃上读起来是同一级，于是页面出现两个主角、真正的总量被稀释；
+  现已降到 `titleLarge`（22）。**判据**：同屏内比页级大字号小的那一档，至少要让出一整个身位。
+- **设置组内的小标题固定 `titleSmall`（14sp SemiBold）**：一张组片里塞多个子控件时（面板模糊、
+  卡片透明度、提醒方式、壁纸调参），那行标题只负责"这半片在说什么"，不是区块入口。
+  升到 `titleMedium` 以上就会和 `SectionHeader`（组外的分类名）打架，一屏出现三种"像是标题"的字号。
+  带解释性的小标题与 `SectionHeader` 同为淡墨 `onSurfaceVariant`，纯输入区的小标题保持正常字色。
 
 ## 5. 壁纸与玻璃的分层铁律
 
@@ -322,6 +355,15 @@ M3 这一档**只加动效、不换组件**：确认框与弹层的进出场由 
   （`items.isEmpty()` / 可见条目数为 0——这两种情况播动画只会露出一秒空框）。
 - 注意：`SettingsGroup` 的 scope 不是 composable 上下文，`remember`/`mutableStateOf`
   必须声明在 `SettingsGroup(...)` 调用之外（设置页 body 或上层），不能写在 `item {}` 之间。
+- **组壳只为"多条同类"存在**：一个 `SettingsGroup` 里只剩一条内容时，那一条会被组标题（甚至抽屉）
+  包成一间空屋，视觉上"这一类还有别的"，点进去却只有它自己。
+  实测改法：把这条挪进语义相邻的那一组（「明日课程预告」并入「课程提醒」），
+  `item(key = "tomorrowPreview")` 跟着改成组内唯一键即可——**key 只在组内生效**，
+  跨组重名不会崩，但同组内重名会，所以合并时一定顺手检查。
+- **内缩是两层，不是一层**：页级 gutter（卡片离屏边）与卡片 `contentPadding`（内容离卡片边）
+  各自负责一件事，不要为了"只留一层"把它们合并成一项。
+  `ImportScreen` 的 `ImportPageGutter` 只收掉"同一页三张卡各写一遍 16dp"这一半；
+  真要连 `SettingsGroup` 自带的 gutter 一起收口才算拆层，那是结构重构（R7 §五.10），不是抛光。
 
 ## 7. 桌面组件
 
@@ -373,15 +415,34 @@ M3 这一档**只加动效、不换组件**：确认框与弹层的进出场由 
 
 - **modifier 顺序法则**：`defaultMinSize` / `padding` 必须写在 `clickable` / `toggleable`
   **之前**。写后面的撑大的是内容区，点不到的还是点不到 —— 这是六处触控目标修完仍不生效的原因。
+- **M3 按钮的基准高是 40dp，不是 48dp**：`Button` / `OutlinedButton` / `TextButton` 都只给到 40
+  （`IconButton` 才是 48）。所以"全站触控过 48"**不会自动成立**，页内主按钮要自己写
+  `Modifier.defaultMinSize(minHeight = DesignTokens.minTouchTarget)`，且按上一条顺序法则放在其它 modifier 前面。
+  三点例外是登记过的：**对话框内**的 `TextButton` 由 M3 对话框的按钮行负责撑高；
+  `SettingsRow` 家族整行可点，尾部那颗小按钮不是唯一命中区；
+  链接式的小号 `TextButton`（引导与文案之间那种）故意保持 40 档，撑高会把一段说明顶成两屏。
+  R8 只收口了本轮动过的页面里的主按钮，其余未收口项按文件列了余量清单，不要当成"已经全站达标"。
 - **勾选行的双重触发口径**：整行 `clickable(role = Role.Checkbox, onClickLabel = …)`，
   尾部 `Checkbox(onCheckedChange = null)` 只做视觉（M3：`onCheckedChange` 传 null 即关闭自身点击）。
   开关行同理，见 §6 的 `SettingsSwitchRow`。
 - **破坏性确认按钮统一 `error` 字色**（删除课表行、移除日历授权、清空历史……确认 Text 都带
   `color = MaterialTheme.colorScheme.error`）；对话框按钮档位全站一致：动作 = TextButton、页内主动作 = Button、次 = OutlinedButton。
-- **反馈通道只有一个类型化入口**：`ScheduleViewModel.showMessage(text, isError)` 发 `AppMessage`，
-  级别由**发射点**显式标注——消费端（snackbar/ALERT 条）**禁止**用中文串关键字嗅探（`contains("失败")` 那一类），
+- **反馈通道只有一个类型化入口**：`ScheduleViewModel.showMessage(text, isError = false, isSuccess = false)`
+  发 `AppMessage`，级别由**发射点**显式标注——消费端（snackbar/ALERT 条）**禁止**用中文串关键字嗅探（`contains("失败")` 那一类），
   措辞一改级别就悄悄翻转（实测有两条含"完成"的错误因此从来没红过）。页内浮层用 `SnackbarHost`，
   **不要 Toast**（Android 12+ 被系统样式接管，与站内玻璃/主题完全脱节）。
+- **三档不收敛成两档**：消费端写 `when { isError -> error; isSuccess -> success; else -> primary }`，
+  **不许**用"非错误即成功"。同一个卡位还要承载"正在抓取…"这类中性进度，二分法会把它染成完成态。
+  发射点也要守住：只有**用户主动按下**的那条路径才标 `isSuccess`——权限被拒的回调、开关自身翻转
+  都已经各有各的反馈，再补一句"已开启"就是假话（`rescheduleReminders(report = …)` 的 `report`
+  因此是可选参数，只有那颗按钮会传）。
+- **`error` 只留给真错误与破坏性确认**：常态的"这条路有代价/可能被 ROM 拦/会重复通知"属于中间严重度，
+  用 `LocalSemanticColors.current.warning`。R8 把三处一直被染红的说明改成 `warning`
+  （设置页 Android 14 壁纸、日历同步「双重通知」，挂件配置页精确闹钟），
+  全站现有六处 `warning`。症状是：说明性文案长期挂红，用户真的出错时那一屏看起来和平时一样——
+  告警色一旦通胀就没有告警可读了。
+  `warning` 一族（`warning`/`onWarning`/`warningContainer`/`onWarningContainer`）是补进 `SemanticColors` 的正式槽位，
+  **不要**再借用 `tertiary` 或 `error.copy(alpha)` 凑。
 - 开关行的语义走 `toggleable(value=…, role=Role.Switch)`，尾部 `Switch` 的
   `onCheckedChange` 传 `null` 只做视觉；普通行 `clickable(role=Role.Button)`；
   分段/视图切换用 `selectable(role=Role.Tab)`；折叠分组头用 `Role.DropdownList`
@@ -415,6 +476,10 @@ M3 这一档**只加动效、不换组件**：确认框与弹层的进出场由 
   图标和出路都不同**）与统计页。要求：说清**为什么是空的**（假期中 vs 这天没课），
   并给一条**当下就能点的出路**（回到本周 / 查看明天 / 从教务导入）。
   叠在内容上的空态用 `matchParentSize()`，覆盖整屏的引导态才用 scrim。
+  **独占整页的空态必须垂直居中**：贴顶的空态卡片会被读成"内容加载完剩下的边角"，
+  而且页面下方一大片空白看起来像还没画完。统计页此前的病根就是这个——
+  修法是把 `Crossfade` 提到 Scaffold 的内容层，空态支路自己 `fillMaxSize()` + `Center`，
+  有数据的那一支照常 `verticalScroll`（不要为了居中把两条支路都塞进一个 `Column`）。
   空态 ↔ 内容的整块交换用 `Crossfade(targetState=…, animationSpec=motionSpec())`，
   不要用 `AnimatedVisibility` 二选一（§2.9 的撑破列高问题）。行内的一句守卫文案（如日视图「节次时间未配置」）
   **不是**空态，不必套组件。
@@ -424,8 +489,9 @@ M3 这一档**只加动效、不换组件**：确认框与弹层的进出场由 
 - **冲突要能分辨"和谁冲突"**：同一时段的课用 `conflictOverlapRanks()` 算出层级，
   卡片起始边按 `conflictStagger(rank)` 错开（8dp/级，最多 4 级）——只靠红色描边的话，两张卡重叠时描边互相盖住。
   拖拽进行中错开量置 0，否则落点视觉与吸附目标不一致。警告图标用 `iconSmall`（16dp）。
-- **地点为空时也要占一行**：日视图与时间轴统一显示「教室未定」（0.55 alpha 的淡墨，别用正常正文浓度，
-  否则会读成"真有一个叫未定的教室"），卡片因此等高，两视图口径也一致。
+- **地点为空时也要占一行**：日视图与时间轴统一显示「教室未定」，浓度取
+  `DesignTokens.PLACEHOLDER_INK_ALPHA`（0.55，全站占位共用这一个常量，别再各处手写 `0.55f`），
+  别用正常正文浓度，否则会读成"真有一个叫未定的教室"。卡片因此等高，两视图口径也一致。
 - **图形件（`ScheduleCharts.kt`）的四条规矩**：`WeekDensityStrip` / `SemesterProgressLine` /
   `TodayTimelineStrip` / `DayLoadBars` / `MiniBar` 全部是**既有那句文字的图形化**，
   同格、同色、不新增信息层级（进度线就钉在「第 3 周」那行字下面，密度条与它下方那份清单选的是

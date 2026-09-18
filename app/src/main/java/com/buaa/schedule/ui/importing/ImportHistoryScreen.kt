@@ -2,6 +2,7 @@ package com.buaa.schedule.ui.importing
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -10,8 +11,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -79,22 +80,32 @@ fun ImportHistoryScreen(
                     icon = Icons.Filled.History,
                     title = "还没有导入记录",
                     description = "导入一次课表后，这里会记录来源、学期与课程数。",
+                    // 空态不能只解释"为什么是空的"，还得给出下一步：
+                    // 这一页是从导入页翻进来的，回去导入就是唯一的出路（M14）
+                    actions = {
+                        Button(
+                            onClick = onBack,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
+                        ) { Text("去导入") }
+                    },
                 )
             } else {
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM),
                 ) {
                     items(history, key = { it.id }) { entry ->
+                        // 卡与卡之间只留间距：以前还叠一条 HorizontalDivider，
+                        // 加上 divider 自己的上下内衬就是三重分隔，读起来像表格线（M14）
                         ImportHistoryRow(entry)
-                        HorizontalDivider(
-                            modifier = Modifier.padding(vertical = DesignTokens.spaceS),
-                            color = MaterialTheme.colorScheme.outlineVariant,
-                        )
                     }
                     item {
                         TextButton(
                             onClick = { showClearConfirm = true },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                         ) {
                             Text(
                                 "清空全部历史记录",

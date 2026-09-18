@@ -150,6 +150,20 @@ enum class SettingsSection(
     }
 }
 
+/**
+ * 节次编辑表首列宽：固定值让 12 行的「第 N 节」右边缘对齐，而不是跟着数字位数抖。
+ * 它是"最长标签的测量宽度"，不是两块内容之间的距离，因此不在 [DesignTokens] 的间距刻度里。
+ */
+private val SlotNumberLabelWidth = 60.dp
+
+/**
+ * 隐私声明弹窗滚动区的可见高度：比对话框列表档 [DesignTokens.dialogListMaxHeight] 高一档。
+ *
+ * 那一档服务的是"几行可点条目"，这里是一整段声明文本——压到 240dp 会让用户
+ * 以为弹窗只有三行内容，读不完就直接点确认。
+ */
+private val PrivacyStatementMaxHeight = 320.dp
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -647,7 +661,7 @@ fun SettingsScreen(
                     Text(
                         text = "第 ${slot.number} 节",
                         style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.width(60.dp),
+                        modifier = Modifier.width(SlotNumberLabelWidth),
                     )
                     OutlinedTextField(
                         value = slot.startTime,
@@ -708,7 +722,12 @@ fun SettingsScreen(
                 Text(
                     text = it.text,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (it.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    // 级别由发射点标好（§8），这里只读三档，不把它压成"非错即主色"
+                    color = when {
+                        it.isError -> MaterialTheme.colorScheme.error
+                        it.isSuccess -> LocalSemanticColors.current.success
+                        else -> MaterialTheme.colorScheme.primary
+                    },
                 )
             }
             }
@@ -1050,7 +1069,7 @@ fun SettingsScreen(
             Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
                 Text(
                     text = "面板模糊：${panelBlurDraft.roundToInt()}dp",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.titleSmall,
                 )
                 Slider(
                     value = panelBlurDraft,
@@ -1097,7 +1116,7 @@ fun SettingsScreen(
             // 关闭档仍保留小面积玻璃，cardAlpha 就是那些玻璃的透明度，不该被藏起来
             Text(
                 text = "卡片透明度：${(cardAlpha * 100).toInt()}%",
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.titleSmall,
             )
             Slider(
                 value = cardAlpha,
@@ -1137,7 +1156,7 @@ fun SettingsScreen(
                             "此开关不会生效，背景将回退为渐变色。" +
                             "建议改用下方「选择壁纸图片」手动指定一张图。",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = LocalSemanticColors.current.warning,
                     )
                 }
             }
@@ -1170,7 +1189,7 @@ fun SettingsScreen(
                 // 壁纸调参：改动即生效（SceneBackground 消费这些状态并触发重组）
                 Text(
                     text = "壁纸调参（只影响可见背景，玻璃折射仍取原图）",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 WallpaperSlider(
@@ -1210,7 +1229,7 @@ fun SettingsScreen(
             item(key = "enable") {
             Button(
                 onClick = {
-                    viewModel.rescheduleReminders()
+                    viewModel.rescheduleReminders("课程提醒已开启或更新")
                     if (Build.VERSION.SDK_INT >= 33 &&
                         context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
                     ) {
@@ -1226,7 +1245,7 @@ fun SettingsScreen(
             Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
             Text(
                 text = "提醒方式",
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.titleSmall,
             )
             // 与「深色模式」同：互斥 OutlinedButton + 禁用选中项，收敛到分段控件
             GlassSegmentedControl(
@@ -1255,15 +1274,7 @@ fun SettingsScreen(
             }
             }
             }
-            }
-
-            SettingsGroup(
-                title = "明日课程预告",
-                visibleWhen = section == SettingsSection.NOTIFICATION,
-                collapsible = true,
-                initiallyExpanded = true,
-            ) {
-            item(key = "toggle") {
+            item(key = "tomorrowPreview") {
                 var previewEnabled by remember {
                     mutableStateOf(
                         prefs.getBoolean(TomorrowPreviewReceiver.PREF_ENABLED, true)
@@ -1669,10 +1680,10 @@ fun SettingsScreen(
                 Text(
                     text = it.text,
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (it.isError) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.primary
+                    color = when {
+                        it.isError -> MaterialTheme.colorScheme.error
+                        it.isSuccess -> LocalSemanticColors.current.success
+                        else -> MaterialTheme.colorScheme.primary
                     },
                 )
                 // 「不再询问」后系统申请框不会再弹：唯一出路是系统设置页
@@ -1825,7 +1836,7 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier
-                            .heightIn(max = 320.dp)
+                            .heightIn(max = PrivacyStatementMaxHeight)
                             .verticalScroll(rememberScrollState()),
                     )
                     Text(
@@ -1864,7 +1875,11 @@ fun SettingsScreen(
             onDismissRequest = { viewModel.dismissCalendarPicker() },
             title = { Text("选择目标日历") },
             text = {
-                Column {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = DesignTokens.dialogListMaxHeight)
+                        .verticalScroll(rememberScrollState()),
+                ) {
                     if (calendarSync.calendars.isEmpty()) {
                         // 常见原因：未授予读写权限，或设备上没有可见的日历账户。
                         // 具体的判定（权限/无账户）由 VM 给出，这里只补操作指引。
@@ -1920,7 +1935,7 @@ fun SettingsScreen(
                         Text(
                             text = "当前提醒方式为“应用内提醒”，同步后系统日历也可能提醒，可能出现双重通知。如需以日历为准，请先切换提醒方式。",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
+                            color = LocalSemanticColors.current.warning,
                         )
                     }
                 }
@@ -2056,6 +2071,9 @@ private fun WallpaperSlider(
     }
 }
 
+/** 关于页头像边长：比图标刻度最大档 [DesignTokens.iconHero] 再大一档，是页内唯一的图像位，不归图标刻度管 */
+private val AboutAvatarSize = 56.dp
+
 /**
  * 关于页头部：作者头像 + 应用名 + 版本号。
  *
@@ -2074,7 +2092,7 @@ private fun AboutHeader() {
             painter = painterResource(R.drawable.author_avatar),
             contentDescription = "作者头像",
             modifier = Modifier
-                .size(56.dp)
+                .size(AboutAvatarSize)
                 .clip(CircleShape),
         )
         Column(modifier = Modifier.padding(start = DesignTokens.spaceL)) {
@@ -2086,7 +2104,7 @@ private fun AboutHeader() {
                 text = "v${BuildConfig.VERSION_NAME} · Alyssumira",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp),
+                modifier = Modifier.padding(top = DesignTokens.spaceMicro),
             )
             Text(
                 text = "开源、本地优先的北航课表",

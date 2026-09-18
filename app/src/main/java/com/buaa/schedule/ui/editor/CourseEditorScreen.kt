@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -49,7 +50,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.ColorSwatch
 import com.buaa.schedule.core.designsystem.CourseColors
 import com.buaa.schedule.core.designsystem.DesignTokens
@@ -165,6 +165,8 @@ fun CourseEditorScreen(
         colorIndex, customColor, partialWeeks, applyToGroup,
     ) != baselineDraft
     var showDiscardDialog by remember { mutableStateOf(false) }
+    // 删除要过一道确认：管理页的删除是"确认 + 撤销"双保险，编辑器一点即删是同一库里的两种口径（H2）
+    var showDeleteDialog by remember { mutableStateOf(false) }
 
     val periods = remember(startSection, endSection, extraPeriods) {
         parsePeriods(startSection, endSection, extraPeriods)
@@ -192,6 +194,11 @@ fun CourseEditorScreen(
     val creditNumber = creditText.trim().toDoubleOrNull()
     val creditInvalid = creditText.isNotBlank() &&
         CourseConstraints.normalizeCredit(creditNumber) == null
+    // 提前分钟留空是合法的（保存时回退默认值），填了就必须是 0..MAX 的整数。
+    // 这一格是全站唯一一个"错了不标红"的字段：填 999 会静默变成 60（审查：表单一致性）
+    val advanceInvalid = advanceMinutes.isNotBlank() &&
+        (advanceMinutes.trim().toIntOrNull() == null ||
+            advanceMinutes.trim().toIntOrNull() !in 0..CourseConstraints.MAX_ADVANCE_MINUTES)
 
     // 键盘流转：与设置页共用同一套字段声明（审查⑦V-表单）。
     // 表单是一条竖向 Column，所以「下一个」直接用 FocusDirection.Down，
@@ -305,7 +312,11 @@ fun CourseEditorScreen(
                     }
                     Button(
                         onClick = { performSave() },
-                        modifier = Modifier.fillMaxWidth(),
+                        // 清单外同类补漏（M4 的同一口径）：页内主动作也是 M3 Button 的
+                        // 40dp 默认高，全站这一轮过 48dp 筛，底栏这颗是漏网的
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                         enabled = canSave,
                     ) {
                         Text(if (saving) "保存中..." else "保存")
@@ -483,7 +494,13 @@ fun CourseEditorScreen(
             }
 
             EditorSection(title = "课程外观") {
-                Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
+                // 9 颗 48dp 色板 + 8 档间距要 496dp：360dp 屏上最后一颗「自定义」
+                // 直接被裁到屏外点不到，而它是唯一能选自己颜色的入口（H1）。
+                // 换 FlowRow，与课程管理页的调色板同一套解法。
+                @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
+                ) {
                     CourseColors.forEachIndexed { index, swatch ->
                         ColorSwatch(
                             color = swatch,
@@ -518,42 +535,41 @@ fun CourseEditorScreen(
                         singleLine = true,
                         keyboardOptions = fieldImeOptions(numeric = true, last = true),
                         keyboardActions = doneActions,
+                        isError = advanceInvalid,
+                        supportingText = fieldError(
+                            advanceInvalid,
+                            "提前量取 0–${CourseConstraints.MAX_ADVANCE_MINUTES} 分钟，留空按默认",
+                        ),
                     )
                 }
             }
 
-            if (initialCourse != null && initialCourse.weeks.size > 1) {
+            val showPartialWeeks = initialCourse != null && initialCourse.weeks.size > 1
+            val showGroupSync = initialCourse != null && initialCourse.sourceGroupKey != null
+            if (showPartialWeeks || showGroupSync) {
+                // 以前这两个条件各配一个标题为「修改范围」的面板，同时成立时同屏出现
+                // 两个同名分组，第二个读起来像是重复渲染（M10）。合成一组两问。
                 EditorSection(title = "修改范围") {
-                    SettingsSwitchRow(
-                        title = "仅修改选中周次（原课程保留其余周次）",
-                        checked = partialWeeks,
-                        onCheckedChange = { partialWeeks = it },
-                    )
-                }
-            }
-            if (initialCourse != null && initialCourse.sourceGroupKey != null) {
-                EditorSection(title = "修改范围") {
-                    SettingsSwitchRow(
-                        title = "同步修改本课程其他片段（名称/地点/校区/颜色/学分）",
-                        checked = applyToGroup,
-                        onCheckedChange = { applyToGroup = it },
-                    )
+                    if (showPartialWeeks) {
+                        SettingsSwitchRow(
+                            title = "仅修改选中周次（原课程保留其余周次）",
+                            checked = partialWeeks,
+                            onCheckedChange = { partialWeeks = it },
+                        )
+                    }
+                    if (showGroupSync) {
+                        SettingsSwitchRow(
+                            title = "同步修改本课程其他片段（名称/地点/校区/颜色/学分）",
+                            checked = applyToGroup,
+                            onCheckedChange = { applyToGroup = it },
+                        )
+                    }
                 }
             }
 
             if (initialCourse != null) {
                 OutlinedButton(
-                    onClick = {
-                        scope.launch {
-                            saving = true
-                            if (onDelete(initialCourse)) {
-                                onBack()
-                            } else {
-                                saveError = "删除失败，请重试"
-                            }
-                            saving = false
-                        }
-                    },
+                    onClick = { showDeleteDialog = true },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !saving,
                 ) {
@@ -571,10 +587,47 @@ fun CourseEditorScreen(
             title = { Text("放弃修改？") },
             text = { Text("这门课的改动还没有保存，返回后这些输入就没了。") },
             confirmButton = {
-                TextButton(onClick = { showDiscardDialog = false; onBack() }) { Text("放弃修改") }
+                TextButton(onClick = { showDiscardDialog = false; onBack() }) {
+                    // 破坏性确认统一 error 字色（§8）：这一步同样是"丢掉东西"，
+                    // 以前它和「继续编辑」同色，两颗按钮分不出主次
+                    Text("放弃修改", color = MaterialTheme.colorScheme.error)
+                }
             },
             dismissButton = {
                 TextButton(onClick = { showDiscardDialog = false }) { Text("继续编辑") }
+            },
+        )
+    }
+
+    ModalTransition(open = showDeleteDialog) { modal ->
+        AlertDialog(
+            modifier = modal,
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("删除这门课？") },
+            text = {
+                Text(
+                    "「${initialCourse?.displayName.orEmpty()}」的排课与课前提醒会一起删掉。"
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteDialog = false
+                        val target = initialCourse ?: return@TextButton
+                        scope.launch {
+                            saving = true
+                            if (onDelete(target)) {
+                                onBack()
+                            } else {
+                                saveError = "删除失败，请重试"
+                            }
+                            saving = false
+                        }
+                    },
+                ) { Text("删除课程", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) { Text("取消") }
             },
         )
     }
@@ -702,7 +755,7 @@ private fun ColorPickerDialog(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .size(48.dp)
+                        .size(DesignTokens.minTouchTarget)
                         .background(Color(preview), shape = CircleShape),
                 )
                 Text("色相：${hue.toInt()}°", style = MaterialTheme.typography.bodySmall)
