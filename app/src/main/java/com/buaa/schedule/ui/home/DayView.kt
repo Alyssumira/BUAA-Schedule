@@ -620,99 +620,105 @@ private fun TodayHero(
     ) {
         val ongoing = plan.ongoing
         val next = plan.next
-        // GlassSurface 的内容容器是 Box：多行文本必须包一层 Column，
-        // 否则「正在上课 / 课程名 / 地点时段 / 还剩几分钟」会全部叠在左上角（倒计时卡文字重叠的根因）。
-        Column(
-            verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceMicro),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-        when {
-            ongoing != null -> {
-                Text(
-                    "正在上课",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    ongoing.course.displayName,
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    placeTimeLine(ongoing.course.location, ongoing.start, ongoing.end),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                plan.minutesRemaining?.let {
-                    Text(
-                        "还有 $it 分钟下课",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            }
-            next != null -> {
-                Text(
-                    "下一节",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    next.course.displayName,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    placeTimeLine(next.course.location, next.start, next.end),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                plan.minutesToNext?.let {
-                    Text(
-                        "$it 分钟后开始",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            }
-            else -> {
-                Text(
-                    "今天没有更多课了",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        }
-        // 全天疏密一眼看得到：文字只能逐条报时刻，形状才回答"下午是不是空的"。
-        // 时间取自 TodayPlanner 已经算好的 slot，不再读一次 LocalTime.now()——
-        // 两处时钟口径分叉的话，这条带子和卡片上"还有 25 分钟下课"会互相矛盾。
-        if (plan.slots.isNotEmpty()) {
-            TodayTimelineStrip(
-                segments = dayTimelineSegments(
-                    plan.slots.map {
-                        Triple(
-                            it.start.hour * 60 + it.start.minute,
-                            it.end.hour * 60 + it.end.minute,
-                            it.course.colorIndex,
+        // GlassSurface 的内容容器是 Box，而 Box 的每个子节点都从 top-start 摆起：
+        // 所以这个 lambda 里只能有**一个**顶层子节点，就是下面这个 Column——
+        // 多行文本包 Column 是同一条规则，疏密带子当初被落在了外面，
+        // 于是它压在首行「下一节」上（padding(top = spaceM) 只是往下推一格，推不开重叠）。
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceMicro),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                when {
+                    ongoing != null -> {
+                        Text(
+                            "正在上课",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold,
                         )
-                    },
-                ),
-                nowFraction = dayFractionOfMinute(
-                    now.hour * 60 + now.minute,
-                ),
-                modifier = Modifier.padding(top = DesignTokens.spaceM),
-            )
+                        Text(
+                            ongoing.course.displayName,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            placeTimeLine(ongoing.course.location, ongoing.start, ongoing.end),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        plan.minutesRemaining?.let {
+                            Text(
+                                "还有 $it 分钟下课",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                    next != null -> {
+                        Text(
+                            "下一节",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            next.course.displayName,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            placeTimeLine(next.course.location, next.start, next.end),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        plan.minutesToNext?.let {
+                            Text(
+                                "$it 分钟后开始",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                    else -> {
+                        Text(
+                            "今天没有更多课了",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            // 全天疏密一眼看得到：文字只能逐条报时刻，形状才回答"下午是不是空的"。
+            // 时间取自 TodayPlanner 已经算好的 slot，不再读一次 LocalTime.now()——
+            // 两处时钟口径分叉的话，这条带子和卡片上"还有 25 分钟下课"会互相矛盾。
+            // 段间距仍由带子自己的 padding(top = spaceM) 提供：外层 Column 不设 arrangement，
+            // 文本块与带子之间就正好是这一份 spaceM，不会和 spacedBy 叠成两倍。
+            if (plan.slots.isNotEmpty()) {
+                TodayTimelineStrip(
+                    segments = dayTimelineSegments(
+                        plan.slots.map {
+                            Triple(
+                                it.start.hour * 60 + it.start.minute,
+                                it.end.hour * 60 + it.end.minute,
+                                it.course.colorIndex,
+                            )
+                        },
+                    ),
+                    nowFraction = dayFractionOfMinute(
+                        now.hour * 60 + now.minute,
+                    ),
+                    modifier = Modifier.padding(top = DesignTokens.spaceM),
+                )
+            }
         }
     }
 }
