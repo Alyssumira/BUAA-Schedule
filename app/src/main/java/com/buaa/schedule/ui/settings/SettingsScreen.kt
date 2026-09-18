@@ -1287,7 +1287,9 @@ fun SettingsScreen(
                     onCheckedChange = {
                         previewEnabled = it
                         prefs.edit { putBoolean(TomorrowPreviewReceiver.PREF_ENABLED, it) }
-                        BackgroundSync.scheduleTomorrowPreview(context)
+                        // 入口改成 suspend 了（为什么必须挂起，举证在 BackgroundSync 的 KDoc）；
+                        // 这枚开关跑在主线程，用本页既有的 settingsScope 接一次，不在这就地查库
+                        settingsScope.launch { BackgroundSync.scheduleTomorrowPreview(context) }
                     },
                 )
             }

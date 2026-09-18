@@ -14,9 +14,7 @@ import com.buaa.schedule.reminder.ClassProgressScheduler
 import com.buaa.schedule.reminder.ReminderScheduler
 import com.buaa.schedule.reminder.TomorrowPreviewReceiver
 import com.buaa.schedule.reminder.TomorrowPreviewScheduler
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.ZoneId
@@ -161,12 +159,15 @@ object BackgroundSync {
      * 它给 null 就是"往后没有可推的内容"，这一次什么都不排：链条停下，
      * 等下一次事件重新对齐 —— 与广播里那条续排同一个取舍，没有闹钟在空转等着醒。
      *
-     * 读课表要在 IO 上，而这个入口有一个非挂起的调用点（设置页那枚开关的回调），
-     * 因此内部起一个 IO 协程；关掉开关那条路不查库，当场撤销。
-     * 协程晚几步不破坏正确性：排出去的时刻永远按执行那一刻重算（22:00 过了就顺延），
-     * 最坏是这一次没排上，等下一次事件。
+     * ⚠️ 必须挂起、就地跑完这三步（查库 → 判定 → 排闹钟），不许在这里自建协程：
+     * 开机与改时间那两条广播把这段活圈在部分唤醒锁里，而锁的
+     * [com.buaa.schedule.reminder.WakeLocks.withPartialWakeLock] 是 inline 的同步 block、
+     * `finally` 当场 release —— 一 `launch` 出去 block 就返回、锁随之松开，
+     * 剩下那两次查库和排闹钟就没有唤醒保证（故障面 `WakeLocks` 的类注释里写透了）。
+     * 关掉开关那条短路不查库，仍在锁内当场撤销；唯一非挂起的调用点（设置页那枚开关）
+     * 自己用 `rememberCoroutineScope()` 接。
      */
-    fun scheduleTomorrowPreview(context: Context) {
+    suspend fun scheduleTomorrowPreview(context: Context) {
         val enabled = context
             .getSharedPreferences("schedule_settings", Context.MODE_PRIVATE)
             .getBoolean(TomorrowPreviewReceiver.PREF_ENABLED, true)
@@ -174,22 +175,20 @@ object BackgroundSync {
             TomorrowPreviewScheduler.cancel(context)
             return
         }
-        CoroutineScope(Dispatchers.IO).launch {
-            runCatching {
-                val repository = context.scheduleRepository()
-                val semester = repository.getCurrentSemester()
-                val fireDay = TomorrowPreviewReceiver.nextScheduledPreviewDay(
-                    courses = repository.getDisplayCourses(semester),
-                    semester = semester,
-                    today = LocalDate.now(),
-                )
-                if (fireDay == null) {
-                    Log.d(TAG, "往后没有可推的明日预告，事件入口不排闹钟")
-                } else {
-                    TomorrowPreviewScheduler.schedule(context, fireDay)
-                }
-            }.onFailure { Log.w(TAG, "调度明日预告失败", it) }
-        }
+        runCatching {
+            val repository = context.scheduleRepository()
+            val semester = repository.getCurrentSemester()
+            val fireDay = TomorrowPreviewReceiver.nextScheduledPreviewDay(
+                courses = repository.getDisplayCourses(semester),
+                semester = semester,
+                today = LocalDate.now(),
+            )
+            if (fireDay == null) {
+                Log.d(TAG, "往后没有可推的明日预告，事件入口不排闹钟")
+            } else {
+                TomorrowPreviewScheduler.schedule(context, fireDay)
+            }
+        }.onFailure { Log.w(TAG, "调度明日预告失败", it) }
     }
 
     fun cancelWidgetMidnight(context: Context) {

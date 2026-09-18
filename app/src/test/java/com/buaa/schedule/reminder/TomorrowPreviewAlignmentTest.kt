@@ -21,7 +21,8 @@ import java.time.LocalDateTime
  *
  * 现在两边共用 [TomorrowPreviewReceiver.nextScheduledPreviewDay]：
  * 它给 null 就是"这一次没有值得醒的晚上"，什么都不排；给哪天就排哪天。
- * 事件入口确实用了它，由 [eventEntryGoesThroughTheSharedJudgement] 钉住
+ * 事件入口确实用了它、而且**必须挂起（不自建协程，免得这段活逃出调用方的唤醒锁）**，
+ * 由 [eventEntryGoesThroughTheSharedJudgement] 钉住
  * （`BackgroundSync.scheduleTomorrowPreview` 要 Context，JVM 侧只能核源码）。
  */
 class TomorrowPreviewAlignmentTest {
@@ -95,17 +96,27 @@ class TomorrowPreviewAlignmentTest {
     }
 
     /**
-     * 事件入口确实用的是上面那份判定，而且关掉开关时仍然撤销闹钟。
+     * 事件入口确实用的是上面那份判定，关掉开关时仍然撤销闹钟，**而且它必须挂起**。
      *
      * 这条守卫认的是源码形状：入口一旦改回"读个开关就排明天"，
      * `schedule(context)` 那个写死明天的重载就会回来。
+     *
+     * "必须挂起、不许自建作用域"这半条管的是另一件事，也更容易被顺手改回去 ——
+     * 入口一旦自己 `CoroutineScope(...).launch { }`，查库 + 判定 + 排闹钟就逃出了
+     * 调用方的部分唤醒锁：开机与改时间那两条广播用的
+     * `WakeLocks.withPartialWakeLock` 是 inline 的同步 block，`finally` 当场 release，
+     * 函数一 launch 就返回等于锁立刻松开，真正那两次查库改跑在随时会再入睡的 CPU 上
+     * （为什么这是故障面，`WakeLocks` 的类注释里写透了）。
      */
     @Test
     fun eventEntryGoesThroughTheSharedJudgement() {
-        val body = functionBody(
-            mainText(BACKGROUND_SYNC_FILE),
-            "fun scheduleTomorrowPreview(context: Context)",
+        val source = mainText(BACKGROUND_SYNC_FILE)
+        assertTrue(
+            "事件入口必须是 suspend：调用方（BootReceiver / WidgetRefreshReceiver）" +
+                "在部分唤醒锁的同步 block 里等它跑完，自己起协程等于把这段活放出锁外",
+            functionSignatureExists(source, "suspend fun scheduleTomorrowPreview(context: Context)"),
         )
+        val body = functionBody(source, "fun scheduleTomorrowPreview(context: Context)")
 
         assertTrue("事件入口要先问过课表", body.contains("nextScheduledPreviewDay("))
         assertTrue("关掉开关仍然必须撤销闹钟", body.contains("TomorrowPreviewScheduler.cancel(context)"))
@@ -113,9 +124,15 @@ class TomorrowPreviewAlignmentTest {
             "不许再走那个不看课表、写死「明天」的重载",
             !body.replace("nextScheduledPreviewDay(", "").contains("schedule(context)"),
         )
+        assertTrue("入口不许自建 CoroutineScope（会把这段活放出调用方的唤醒锁）", !body.contains("CoroutineScope("))
+        assertTrue("入口不许自己起协程", !body.contains("launch"))
     }
 
     // ---- 源码核对 ------------------------------------------------------------
+
+    /** 签名是否原样存在（注释里的同名文字不算） */
+    private fun functionSignatureExists(source: String, signature: String): Boolean =
+        withoutComments(source).contains(signature)
 
     /** 函数体：从签名处按花括号配平切出来，注释不参与判断 */
     private fun functionBody(source: String, signature: String): String {
