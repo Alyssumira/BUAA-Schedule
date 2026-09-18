@@ -163,8 +163,10 @@ object BackgroundSync {
     }
 
     fun cancelWidgetMidnight(context: Context) {
-        context.getSystemService(AlarmManager::class.java)
-            ?.cancel(midnightPendingIntent(context))
+        val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
+        // 取消这一头只查不造，理由见 ReminderScheduler.cancelAll 的注释；
+        // 查不到就是没排过，本来就是 no-op
+        existingMidnightPendingIntent(context)?.let { alarmManager.cancel(it) }
     }
 
     /** 所有 Widget 都被移除时调用：取消零点闹钟与旧版周期任务，并让兜底轮询重新判定自己是否还需要 */
@@ -217,15 +219,27 @@ object BackgroundSync {
             .getSharedPreferences("schedule_settings", Context.MODE_PRIVATE)
             .getString(ReminderMode.PREF_KEY, ReminderMode.APP) != ReminderMode.CALENDAR
 
-    private fun midnightPendingIntent(context: Context): PendingIntent {
-        val intent = Intent(context, WidgetRefreshReceiver::class.java).apply {
+    /** 排与取消共用的只是那个 Intent；flag 各用各的，见下面两个 builder */
+    private fun midnightBaseIntent(context: Context): Intent =
+        Intent(context, WidgetRefreshReceiver::class.java).apply {
             action = WidgetRefreshReceiver.ACTION_MIDNIGHT_REFRESH
         }
-        return PendingIntent.getBroadcast(
+
+    /** 排闹钟这一头必须是 FLAG_UPDATE_CURRENT：还没有 PI 时它负责把那个 PI 造出来 */
+    private fun midnightPendingIntent(context: Context): PendingIntent =
+        PendingIntent.getBroadcast(
             context,
             MIDNIGHT_REQUEST_CODE,
-            intent,
+            midnightBaseIntent(context),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-    }
+
+    /** 取消那一头只查不造（判等靠 Intent.filterEquals，不含 extras，因此不需要拼 extras） */
+    private fun existingMidnightPendingIntent(context: Context): PendingIntent? =
+        PendingIntent.getBroadcast(
+            context,
+            MIDNIGHT_REQUEST_CODE,
+            midnightBaseIntent(context),
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+        )
 }

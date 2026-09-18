@@ -196,7 +196,11 @@ object TomorrowPreviewScheduler {
     fun schedule(context: Context) = schedule(context, LocalDate.now().plusDays(1))
 
     fun cancel(context: Context) {
-        context.getSystemService(AlarmManager::class.java)?.cancel(pendingIntent(context))
+        val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
+        // 取消走"只查不造"：判 null 就够了 —— 连现成的 PI 都没有说明这条链没排上，
+        // 取消天然是 no-op。为什么不能就地复用下面那个 FLAG_UPDATE_CURRENT 的 builder，
+        // 口径见 ReminderScheduler.cancelAll 的注释（同一件事，那边已写透）。
+        existingPendingIntent(context)?.let { alarmManager.cancel(it) }
     }
 
     /**
@@ -220,15 +224,26 @@ object TomorrowPreviewScheduler {
     internal fun nextFireTime(now: LocalDateTime): Long =
         nextFireTime(now.toLocalDate(), now)
 
-    private fun pendingIntent(context: Context): PendingIntent {
-        val intent = Intent(context, TomorrowPreviewReceiver::class.java).apply {
+    private fun baseIntent(context: Context): Intent =
+        Intent(context, TomorrowPreviewReceiver::class.java).apply {
             action = TomorrowPreviewReceiver.ACTION_FIRE
         }
-        return PendingIntent.getBroadcast(
+
+    /** 排闹钟这一头必须是 FLAG_UPDATE_CURRENT：还没有 PI 时它负责把那个 PI 造出来 */
+    private fun pendingIntent(context: Context): PendingIntent =
+        PendingIntent.getBroadcast(
             context,
             REQUEST_CODE,
-            intent,
+            baseIntent(context),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-    }
+
+    /** 取消那一头只查不造（判等靠 Intent.filterEquals，不含 extras，因此不需要拼 extras） */
+    private fun existingPendingIntent(context: Context): PendingIntent? =
+        PendingIntent.getBroadcast(
+            context,
+            REQUEST_CODE,
+            baseIntent(context),
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+        )
 }
