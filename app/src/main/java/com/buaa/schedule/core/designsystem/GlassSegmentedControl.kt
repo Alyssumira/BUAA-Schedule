@@ -152,6 +152,27 @@ fun GlassSegmentedControl(
         contentPadding = 4.dp,
     ) {
         Box {
+            // 同一个 Box 里**先声明的先画**：胶囊排在 Row 之前，于是它在底、段文字在顶。
+            // 这条层序不是审美选择，是这段代码自己的设计意图——Segment 选中时把墨色
+            // 补到 onPrimary（见其 animateColorAsState），白色字只有压在深色胶囊**之上**
+            // 才读得出来；此前这块声明在 Row 之后，胶囊正好盖在选中段那几个字上，
+            // 420dpi 上读到的就是"一块没有字的蓝胶囊"。
+            // 命中不受影响：clickable/selectable 全挂在段上，这一层没有任何指针输入
+            // 修饰符（liquidGlass 两条路径都只有 clip/background/border/drawBackdrop），
+            // 根本进不了 hit path——层序前后都不吃触摸。
+            if (seated) {
+                Box(
+                    modifier = Modifier
+                        // 落位从来没错过：IntOffset 要的就是像素，left/top 存的也是父坐标像素，
+                        // 中间不存在可错的换算。出过错的只有旁边那一路尺寸
+                        .offset { IntOffset(left.value.roundToInt(), top.value.roundToInt()) }
+                        // 尺寸改在测量期读（见 pillSizeOf）：这里不再要组合期的
+                        // pillWidth/pillHeight，那两行就是"胶囊滑动 140ms = 整条控件
+                        // 重组 9 帧"的来源
+                        .pillSizeOf(widthOf = { width.value }, heightOf = { height.value })
+                        .then(pillModifier),
+                )
+            }
             Row {
                 options.forEachIndexed { index, label ->
                     Segment(
@@ -172,19 +193,6 @@ fun GlassSegmentedControl(
                         },
                     )
                 }
-            }
-            if (seated) {
-                Box(
-                    modifier = Modifier
-                        // 落位从来没错过：IntOffset 要的就是像素，left/top 存的也是父坐标像素，
-                        // 中间不存在可错的换算。出过错的只有旁边那一路尺寸
-                        .offset { IntOffset(left.value.roundToInt(), top.value.roundToInt()) }
-                        // 尺寸改在测量期读（见 pillSizeOf）：这里不再要组合期的
-                        // pillWidth/pillHeight，那两行就是"胶囊滑动 140ms = 整条控件
-                        // 重组 9 帧"的来源
-                        .pillSizeOf(widthOf = { width.value }, heightOf = { height.value })
-                        .then(pillModifier),
-                )
             }
         }
     }
