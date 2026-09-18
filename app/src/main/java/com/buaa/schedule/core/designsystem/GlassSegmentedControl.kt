@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.kyant.backdrop.isRenderEffectSupported
 import kotlinx.coroutines.launch
@@ -175,6 +176,8 @@ fun GlassSegmentedControl(
             if (seated) {
                 Box(
                     modifier = Modifier
+                        // 落位从来没错过：IntOffset 要的就是像素，left/top 存的也是父坐标像素，
+                        // 中间不存在可错的换算。出过错的只有旁边那一路尺寸
                         .offset { IntOffset(left.value.roundToInt(), top.value.roundToInt()) }
                         // 尺寸改在测量期读（见 pillSizeOf）：这里不再要组合期的
                         // pillWidth/pillHeight，那两行就是"胶囊滑动 140ms = 整条控件
@@ -218,7 +221,8 @@ private fun Segment(
             )
             .padding(horizontal = 2.dp)
             .onGloballyPositioned { node ->
-                // 实测的是 Float 矩形，覆盖层用整数像素：按密度取整
+                // boundsInParent() 给的是**像素**矩形（不是 dp）：这里只做 Float→Int 的取整，
+                // 不乘密度——覆盖层拿到的就是这个数本身
                 val r = node.boundsInParent()
                 onMeasured(
                     IntRect(
@@ -252,29 +256,47 @@ private fun Segment(
 /**
  * 覆盖层的尺寸：把对两根补间 Animatable 的读取从组合期挪到**测量期**。
  *
- * 约束算法逐行照抄 `Modifier.width(dp).height(dp)`（含"想要的尺寸超出父级上限就
- * 夹住"那一步），整数像素也走同一次「当 Dp 再 roundToPx() 回像素」的换算，
- * 所以测出来的尺寸与原来一个字都不差；
- * 变的只是"读状态"这件事发生在 measure 块里——状态变化只会重测这一个空 Box，
- * 不再把整条控件拖进重组。
+ * 单位口径是 **px 进、px 出，全程不经过 Dp**（见 [pillSizePx]）：
+ * 两端读的都是同一个 `boundsInParent()`，那本来就是父 Row 的像素坐标。
+ *
+ * 约束算法与 `Modifier.width(pixels)` / `height(pixels)` 逐步对应
+ * （含"想要的尺寸超出父级上限就夹住"那一步），只是夹的是 px 与 px——
+ * 同量纲，这一步才真的成立。
  */
 private fun Modifier.pillSizeOf(widthOf: () -> Float, heightOf: () -> Float): Modifier =
     layout { measurable, constraints ->
-        val targetWidth = widthOf().roundToInt().dp.roundToPx()
-        val targetHeight = heightOf().roundToInt().dp.roundToPx()
-        val maxWidth =
-            if (constraints.hasBoundedWidth) targetWidth.coerceAtMost(constraints.maxWidth) else targetWidth
-        val maxHeight =
-            if (constraints.hasBoundedHeight) targetHeight.coerceAtMost(constraints.maxHeight) else targetHeight
-        if (maxWidth <= 0 || maxHeight <= 0) {
+        val target = pillSizePx(widthOf(), heightOf(), constraints)
+        if (target.width <= 0 || target.height <= 0) {
             layout(0, 0) {}
         } else {
-            val placeable = measurable.measure(
-                Constraints.fixed(
-                    maxWidth.coerceAtLeast(constraints.minWidth),
-                    maxHeight.coerceAtLeast(constraints.minHeight),
-                )
-            )
+            val placeable = measurable.measure(Constraints.fixed(target.width, target.height))
             layout(placeable.width, placeable.height) { placeable.place(0, 0) }
         }
     }
+
+/**
+ * 覆盖层要占的整数像素尺寸：[widthPx]/[heightPx] 是补间出来的父坐标像素，
+ * 夹进 [constraints] 给的上限，再抬到它的下限。
+ * 任一维夹出非正数即返回 0×0（这一帧不画）。
+ *
+ * 拆成独立纯函数只为了**能被单测钉住**：`:app` 的 JVM 测试里没有 Robolectric，
+ * 也没有 `ui-test-junit4`（`testImplementation` 只有 junit），跑不起真实的
+ * measure pass——那么"分段实测 W px，胶囊就该量出 W px"这条口径就得有个
+ * 不用上设备也能断言的落点。
+ */
+internal fun pillSizePx(widthPx: Float, heightPx: Float, constraints: Constraints): IntSize {
+    val requestedWidth = widthPx.roundToInt()
+    val requestedHeight = heightPx.roundToInt()
+    val maxWidth =
+        if (constraints.hasBoundedWidth) requestedWidth.coerceAtMost(constraints.maxWidth) else requestedWidth
+    val maxHeight =
+        if (constraints.hasBoundedHeight) requestedHeight.coerceAtMost(constraints.maxHeight) else requestedHeight
+    return if (maxWidth <= 0 || maxHeight <= 0) {
+        IntSize.Zero
+    } else {
+        IntSize(
+            maxWidth.coerceAtLeast(constraints.minWidth),
+            maxHeight.coerceAtLeast(constraints.minHeight),
+        )
+    }
+}
