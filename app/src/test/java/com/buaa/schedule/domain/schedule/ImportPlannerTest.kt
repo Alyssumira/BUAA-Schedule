@@ -13,6 +13,7 @@ class ImportPlannerTest {
         name: String,
         weeks: List<Int> = (1..16).toList(),
         isManualOverride: Boolean = false,
+        credit: Double? = null,
     ) = Course(
         id = id,
         name = name,
@@ -24,6 +25,7 @@ class ImportPlannerTest {
         isManualOverride = isManualOverride,
         sourceGroupKey = "G",
         semesterCode = "T",
+        credit = credit,
     )
 
     @Test
@@ -112,6 +114,59 @@ class ImportPlannerTest {
         val plan = ImportPlanner.buildImportPlan(emptyList(), imported)
 
         assertEquals(2, plan.size)
+    }
+
+    @Test
+    fun creditlessReimportKeepsTheCreditAlreadyOnTheRow() {
+        // 落库前会先删掉整学期的行，所以 plan 里没带学分就是真丢了：
+        // 用 ICS/文本这类没有学分的来源重导同一门课，不该把教务采到的 3.5 抹成 null
+        val existing = listOf(course(id = 5, name = "数学", credit = 3.5))
+        val imported = listOf(course(id = 0, name = "数学", weeks = listOf(1)))
+
+        val plan = ImportPlanner.buildImportPlan(existing, imported)
+
+        assertEquals(3.5, plan.single().credit!!, 0.0)
+    }
+
+    @Test
+    fun importedCreditOverridesTheStoredOne() {
+        // 反向：教务把学分改了（3.5 → 3.0）时，新值必须落库，null 优先规则不能挡住更新
+        val existing = listOf(course(id = 5, name = "数学", credit = 3.5))
+        val imported = listOf(course(id = 0, name = "数学", credit = 3.0))
+
+        val plan = ImportPlanner.buildImportPlan(existing, imported)
+
+        assertEquals(3.0, plan.single().credit!!, 0.0)
+    }
+
+    @Test
+    fun sameBatchMergeKeepsWhicheverFragmentCarriesTheCredit() {
+        // 按周抓取是一轮一轮送进来的，同一门课可能只有某几轮带学分
+        val firstWithout = course(id = 0, name = "数学", weeks = listOf(1), credit = null)
+        val secondWith = course(id = 0, name = "数学", weeks = listOf(2), credit = 2.0)
+
+        val forward = ImportPlanner.buildImportPlan(emptyList(), listOf(firstWithout, secondWith))
+        val reversed = ImportPlanner.buildImportPlan(emptyList(), listOf(secondWith, firstWithout))
+
+        assertEquals(2.0, forward.single().credit!!, 0.0)
+        assertEquals("结果不该取决于片段到达的顺序", 2.0, reversed.single().credit!!, 0.0)
+        assertEquals(listOf(1, 2), forward.single().weeks)
+    }
+
+    @Test
+    fun creditIsNotPartOfTheCourseKey() {
+        // key 里混进学分的话，学分一变就对不上旧行 → id 变了 → 挂在旧 id 上的提醒全丢
+        val existing = listOf(course(id = 5, name = "数学", credit = 3.5))
+        val imported = listOf(course(id = 0, name = "数学", credit = 3.0))
+
+        val plan = ImportPlanner.buildImportPlan(existing, imported)
+
+        assertEquals(1, plan.size)
+        assertEquals(5L, plan.single().id)
+        assertEquals(
+            ImportPlanner.courseKey(existing.single()),
+            ImportPlanner.courseKey(imported.single()),
+        )
     }
 }
 

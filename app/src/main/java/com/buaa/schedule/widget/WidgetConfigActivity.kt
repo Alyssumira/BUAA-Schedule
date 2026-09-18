@@ -8,7 +8,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,23 +18,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -59,6 +52,7 @@ import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalSceneBackdrop
 import com.buaa.schedule.core.designsystem.Personalization
 import com.buaa.schedule.core.designsystem.SceneBackground
+import com.buaa.schedule.core.designsystem.SettingsSwitchRow
 import com.buaa.schedule.core.designsystem.contentOn
 import com.buaa.schedule.core.designsystem.rememberSceneBackdrop
 
@@ -436,7 +430,9 @@ private fun WidgetConfigScreen(
                 Panel(title = "显示内容") {
                     Text(
                         text = "选择每行副字段要显示哪些信息。拼接顺序就是你的点击顺序——" +
-                            "先点「教师」再点「地点」，出来就是「教师 · 地点」。",
+                            "先点「教师」再点「地点」，出来就是「教师 · 地点」。" +
+                            "没有值的那一项整段缺席，不会留下空的分隔符。" +
+                            "新勾的项排在末尾，一行放不下时会换到第二行，别在第一个字里找它。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -498,34 +494,23 @@ private fun WidgetConfigScreen(
             }
 
             Panel(title = "内容") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "玻璃感壁纸背景",
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Switch(
-                        checked = appearance.blurBackground,
-                        onCheckedChange = { appearance = appearance.copy(blurBackground = it) },
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "显示标题行",
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Switch(
-                        checked = appearance.showTitle,
-                        onCheckedChange = { appearance = appearance.copy(showTitle = it) },
-                    )
-                }
+                SettingsSwitchRow(
+                    title = "玻璃感壁纸背景",
+                    checked = appearance.blurBackground,
+                    onCheckedChange = { appearance = appearance.copy(blurBackground = it) },
+                )
+                Text(
+                    text = "把壁纸糊成组件的底图。图来自系统桌面壁纸；Android 14 起系统不再允许" +
+                        "第三方应用读取桌面壁纸，此时改用 App 内「外观 → 选择壁纸图片」自选的那张。" +
+                        "两者都没有就仍是纯色底——这个开关看起来没反应，是在等你先挑一张图。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                SettingsSwitchRow(
+                    title = "显示标题行",
+                    checked = appearance.showTitle,
+                    onCheckedChange = { appearance = appearance.copy(showTitle = it) },
+                )
             }
 
             OutlinedButton(
@@ -646,7 +631,7 @@ private fun ChipRow(
     }
 }
 
-/** 色块：48dp 触控区 + 30dp 色块 + 选中勾号（与课程编辑页保持一致） */
+/** 色块 + 下方小字：圆点本体用共享 [com.buaa.schedule.core.designsystem.ColorSwatch]，这里只补命名色的说明文字 */
 @Composable
 private fun ColorSwatch(
     argb: Int,
@@ -655,33 +640,11 @@ private fun ColorSwatch(
     onClick: () -> Unit,
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            modifier = Modifier
-                .size(DesignTokens.minTouchTarget)
-                .clickable(onClick = onClick),
-            contentAlignment = Alignment.Center,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(30.dp)
-                    .background(Color(argb.toLong()), shape = CircleShape)
-                    .border(
-                        width = if (selected) 3.dp else 1.dp,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        shape = CircleShape,
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (selected) {
-                    Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = "已选择",
-                        tint = contentOn(Color(argb.toLong())),
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-            }
-        }
+        com.buaa.schedule.core.designsystem.ColorSwatch(
+            color = Color(argb.toLong()),
+            selected = selected,
+            onClick = onClick,
+        )
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,

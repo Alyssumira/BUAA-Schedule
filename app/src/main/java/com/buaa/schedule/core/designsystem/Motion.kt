@@ -2,8 +2,15 @@ package com.buaa.schedule.core.designsystem
 
 import android.content.Context
 import android.provider.Settings
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Easing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.snap
@@ -59,6 +66,31 @@ object MotionTokens {
      */
     const val DURATION_FADE_THROUGH_EXIT = 90
     const val DURATION_FADE_THROUGH_ENTER = 180
+
+    /**
+     * 模态进出场：轻微放大 + 淡入（0.92 → 1）。
+     *
+     * 此前全站约 20 处 AlertDialog/Popup 都是硬切——页面转场和玻璃浮层都有动画，
+     * 唯独"要我拿主意"的那一层最生硬。560ms 是 Material 3 模态的标准档，
+     * 比 [DURATION_LONG] 长是有意的：弹窗出现后用户要读它，入场不该急着收尾。
+     * 收起比展开短（300 < 380），与菜单同一套不对称口径。
+     */
+    const val DURATION_DIALOG_ENTER = 560
+    const val DURATION_DIALOG_EXIT = 300
+
+    /** 弹窗进场用的"过冲"缓动：末尾轻微越过 1 再回落，才有"弹出来"的手感 */
+    val EasingEmphasizedEnter = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f)
+
+    /** 弹窗收场：先慢后快离开，不与进场争注意力 */
+    val EasingEmphasizedExit = CubicBezierEasing(0.3f, 0f, 0.8f, 0.15f)
+
+    /**
+     * 小面积强调型状态切换：分段控件的选中胶囊滑动、开关把手。
+     *
+     * 比 [DURATION_SHORT] 还短是因为它跟着手指的意图走——点完还要看 200ms 的滑块
+     * 会被读成"卡顿了一下"。面积规则：越小的东西越先停。
+     */
+    const val DURATION_SNAP = 140
 
     /** 标准缓动：起步快、收尾稳，用于位移与淡入淡出 */
     val EasingStandard = CubicBezierEasing(0.20f, 0.0f, 0.0f, 1.0f)
@@ -146,8 +178,28 @@ private fun animationScales(context: Context): List<Float> {
 fun <T> motionSpec(
     durationMillis: Int = MotionTokens.DURATION_MEDIUM,
     easing: Easing = MotionTokens.EasingStandard,
+): FiniteAnimationSpec<T> = motionSpecFor(LocalReduceMotion.current, durationMillis, easing)
+
+/**
+ * [motionSpec] 的非组合入口：**开关只读一次，策略仍然只有一份**。
+ *
+ * 有两类调用点拿不到组合：
+ * 1. 转场 lambda —— NavHost 的 enter/exit 在组合之外求值（`MainActivity.navEnter`）；
+ * 2. 自己持有 Animatable 的非组合对象 —— liquid 的 DampedDragAnimation /
+ *    InteractiveHighlight 在 `remember` 里 new 出来，构造器不是 `@Composable`。
+ * 两处的处理方式相同：**在组合边界把开关读出来当参数传进来**。
+ *
+ * `easing` 默认取 `FastOutSlowInEasing`（即 `tween` 自己的默认值）而**不是**
+ * [MotionTokens.EasingStandard]：这样原本写作 `tween(180)`、没给过缓动的调用点
+ * 换到这里以后曲线一个字都不变；[motionSpec] 那套默认值（项目令牌）由它显式传进来。
+ */
+internal fun <T> motionSpecFor(
+    reduceMotion: Boolean,
+    durationMillis: Int = MotionTokens.DURATION_MEDIUM,
+    easing: Easing = FastOutSlowInEasing,
+    delayMillis: Int = 0,
 ): FiniteAnimationSpec<T> =
-    if (LocalReduceMotion.current) snap() else tween(durationMillis, easing = easing)
+    if (reduceMotion) snap() else tween(durationMillis, delayMillis, easing)
 
 /** [motionSpec] 的弹簧版本：调用方给的是弹簧参数（阻尼/刚度），落点仍然是"要么弹、要么瞬到" */
 @Composable
@@ -156,7 +208,16 @@ fun <T> motionSpring(
     stiffness: Float = Spring.StiffnessMediumLow,
     visibilityThreshold: T? = null,
 ): FiniteAnimationSpec<T> =
-    if (LocalReduceMotion.current) snap() else spring(dampingRatio, stiffness, visibilityThreshold)
+    motionSpringFor(LocalReduceMotion.current, dampingRatio, stiffness, visibilityThreshold)
+
+/** [motionSpring] 的非组合入口：见 [motionSpecFor] 关于"开关在组合边界读出来传进来"的说明 */
+internal fun <T> motionSpringFor(
+    reduceMotion: Boolean,
+    dampingRatio: Float = 1f,
+    stiffness: Float = Spring.StiffnessMediumLow,
+    visibilityThreshold: T? = null,
+): FiniteAnimationSpec<T> =
+    if (reduceMotion) snap() else spring(dampingRatio, stiffness, visibilityThreshold)
 
 /** 轻反馈：翻页、切换、滑动这类“位置变化”用与系统文本拖柄一致的档位。 */
 fun HapticFeedback.performTick() {
@@ -167,3 +228,60 @@ fun HapticFeedback.performTick() {
 fun HapticFeedback.performThud() {
     performHapticFeedback(HapticFeedbackType.LongPress)
 }
+
+/**
+ * 模态进场的唯一来源：0.92 放大 + 淡入。
+ *
+ * 收口的原因和 T-02 一样——弹窗一旦有第二套"自己写的 fadeIn"，
+ * reduce-motion 就会在那里失效（转场 lambda 不在组合里求值，取不到 LocalReduceMotion，
+ * 所以必须从这里取，它已经读过那颗开关）。
+ */
+@Composable
+fun dialogEnter(durationMillis: Int = MotionTokens.DURATION_DIALOG_ENTER): EnterTransition =
+    fadeIn(
+        animationSpec = motionSpec(
+            durationMillis = durationMillis,
+            easing = MotionTokens.EasingEmphasizedEnter,
+        ),
+    ) + scaleIn(
+        initialScale = DIALOG_INITIAL_SCALE,
+        animationSpec = motionSpec(
+            durationMillis = durationMillis,
+            easing = MotionTokens.EasingEmphasizedEnter,
+        ),
+    )
+
+/** 模态收场：见 [MotionTokens] 里关于"收起比展开短"的说明 */
+@Composable
+fun dialogExit(durationMillis: Int = MotionTokens.DURATION_DIALOG_EXIT): ExitTransition =
+    fadeOut(
+        animationSpec = motionSpec(
+            durationMillis = durationMillis,
+            easing = MotionTokens.EasingEmphasizedExit,
+        ),
+    ) + scaleOut(
+        targetScale = DIALOG_INITIAL_SCALE,
+        animationSpec = motionSpec(
+            durationMillis = durationMillis,
+            easing = MotionTokens.EasingEmphasizedExit,
+        ),
+    )
+
+/** 0.92 而不是 0.8：弹窗是大面积内容，位移越可读，8% 是"抬起"而不是"飞进来" */
+private const val DIALOG_INITIAL_SCALE = 0.92f
+
+/**
+ * 底部弹层的收场：只淡出，不做 [dialogExit] 那圈缩放。
+ *
+ * ModalBottomSheet 自带下滑进场，再叠一层 0.92 缩放就是两股动画抢注意力；
+ * 而它从父组合被 `if` 掉时是一帧直接消失的（弹层和对话框一样开在自己的窗口里），
+ * 所以进场交给它自己、收场由这条补上，配套见 [ModalTransition]。
+ */
+@Composable
+fun sheetExit(durationMillis: Int = MotionTokens.DURATION_DIALOG_EXIT): ExitTransition =
+    fadeOut(
+        animationSpec = motionSpec(
+            durationMillis = durationMillis,
+            easing = MotionTokens.EasingEmphasizedExit,
+        ),
+    )

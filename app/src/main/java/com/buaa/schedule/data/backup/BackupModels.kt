@@ -6,9 +6,17 @@ import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.schedule.CourseConstraints
 import kotlinx.serialization.Serializable
 
+/**
+ * 备份文件的格式版本：写侧的默认值与读侧的「高于此版本即拒绝恢复」共用这一处（P2-3）。
+ *
+ * 此前两边各写了一份字面量 `2`，升版本时漏改一边就会产出自己读不回的备份。
+ * 新增可选字段**不要**动这个数——见 [BackupCourse.credit] 那段：涨了版本号只换来一条更窄的升级路。
+ */
+const val BACKUP_FORMAT_VERSION = 2
+
 @Serializable
 data class BackupData(
-    val version: Int = 2,
+    val version: Int = BACKUP_FORMAT_VERSION,
     val semester: BackupSemester? = null,
     val timeSlots: List<BackupTimeSlot> = emptyList(),
     val courses: List<BackupCourse> = emptyList(),
@@ -46,6 +54,14 @@ data class BackupCourse(
     val sourceGroupKey: String? = null,
     val semesterCode: String? = null,
     val isManualOverride: Boolean = false,
+    /**
+     * 学分。带默认值的可选字段 = 线上兼容：
+     * - 老备份（v1/v2）没有这个键 → 解析成 null，恢复照旧，不报「版本过高」；
+     * - `BackupData.version` 因此**不 +1**：它涨到 3 会让老应用
+     *   （`data.version > [BACKUP_FORMAT_VERSION]` 直接拒绝恢复）打不开新备份，
+     *   而字段本身两边都认得，涨版本只换来一条更窄的升级路。
+     */
+    val credit: Double? = null,
     /** v1 备份的旧字段（连续节次），仅在 periods 为空时用于兼容恢复 */
     val startSection: Int? = null,
     /** v1 备份的旧字段 */
@@ -104,6 +120,7 @@ fun Course.toBackup() = BackupCourse(
     sourceGroupKey = sourceGroupKey,
     semesterCode = semesterCode,
     isManualOverride = isManualOverride,
+    credit = credit,
 )
 
 fun BackupCourse.toDomain() = Course(
@@ -129,4 +146,7 @@ fun BackupCourse.toDomain() = Course(
     sourceGroupKey = sourceGroupKey,
     semesterCode = semesterCode,
     isManualOverride = isManualOverride,
+    // 与 customColorArgb 同口径：这里原样带回，越界学分统一由
+    // CourseConstraints.normalize → normalizeCredit 在写库前判成 null
+    credit = credit,
 )

@@ -11,6 +11,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.core.content.edit
 import com.buaa.schedule.data.local.BuaaCookieStore
+import com.buaa.schedule.domain.model.Course
+import com.buaa.schedule.domain.model.Semester
 import java.lang.ref.WeakReference
 
 /**
@@ -655,4 +657,19 @@ object BuaaWebSession {
             Log.w(TAG, "会话 WebView 重挂载失败，可能仍不在窗口内")
         }
     }
+}
+
+/** 整学期抓取结果：学期 + 课程 + 供导入预览展示的警告 */
+data class SemesterCourses(
+    val semester: Semester,
+    val courses: List<Course>,
+    val warnings: List<String> = emptyList(),
+    /**
+     * 抓取失败的周次。非空表示结果**不完整**：此时绝不能走"先清空该学期再写入"
+     * 的覆盖导入，否则没抓到的周次会被连带删掉（静默数据丢失）。
+     */
+    val failedWeeks: List<Int> = emptyList(),
+) {
+    /** 结果是否完整（可以安全覆盖既有课表） */
+    val isComplete: Boolean get() = failedWeeks.isEmpty()
 }

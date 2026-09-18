@@ -4,8 +4,9 @@ import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.TimeSlotProfile
-import com.buaa.schedule.domain.model.periodLabel
+import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.model.startLocalDate
+import com.buaa.schedule.domain.model.weekdayLabel
 import java.time.LocalDate
 
 /**
@@ -17,7 +18,10 @@ import java.time.LocalDate
 object ScheduleExporters {
 
     /** 导出 WakeUp 兼容 JSON。注意 WakeUp 的课程模型是 startNode+step 连续节次，
-     *  非连续节次（如 1-2+9-10）按起始节连续段截断导出。 */
+     *  非连续节次（如 1-2+9-10）按起始节连续段截断导出。
+     *
+     *  不带 credit：WakeUp 的 courses schema 里没有学分这一列，多写未知键能不能被容忍
+     *  取决于对方解析器（不受我们控制），而学分只有本应用的统计页用得上。 */
     fun toWakeUpJson(
         courses: List<Course>,
         semester: Semester?,
@@ -60,7 +64,12 @@ object ScheduleExporters {
             """"courses":[$courseArray]}"""
     }
 
-    /** 纯文本周课表（按天分组，空课日略过） */
+    /**
+     * 纯文本周课表（按天分组，空课日略过）。
+     *
+     * 不打学分：这段文本是给人看/往群里粘的，不是 `TextScheduleParser` 认的那个 6 列格式
+     * （不会被解析回来），每行多挂一个 "3.5学分" 只是把课表撑长 —— 学分归统计页说。
+     */
     fun toWeeklyText(
         courses: List<Course>,
         semester: Semester?,
@@ -71,7 +80,6 @@ object ScheduleExporters {
         val targetWeek: Int? = week ?: semester?.startLocalDate?.let { start ->
             WeekCalculator.currentWeekOrNull(start, semester.totalWeeks, LocalDate.now())
         }
-        val dayNames = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
         val header = buildString {
             append(semester?.termName?.let { "$it · " } ?: "")
             // 假期/学期外取不到当前周时列出的是全学期所有周次，标题必须如实说明，
@@ -93,12 +101,12 @@ object ScheduleExporters {
                 val startTime = slots.firstOrNull { it.number == course.startPeriod }?.startTime ?: ""
                 buildString {
                     if (startTime.isNotBlank()) append("$startTime ")
-                    append(course.name)
+                    append(course.displayName)
                     course.location?.takeIf { it.isNotBlank() }?.let { append(" · $it") }
-                    append(" · ").append(periodLabel(course.periods))
+                    append(" · ").append(periodLabelOf(course.periods, slots))
                 }
             }
-            "${dayNames[day - 1]}\n$lines"
+            "${weekdayLabel(day) ?: day}\n$lines"
         }
         return if (body.isEmpty()) {
             "$header\n${if (targetWeek != null) "本周" else "本学期"}没有课"

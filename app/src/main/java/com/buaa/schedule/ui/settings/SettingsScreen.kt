@@ -8,7 +8,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -23,8 +22,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.material3.Button
@@ -34,10 +31,10 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -51,13 +48,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -77,6 +70,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.EditCalendar
 import androidx.compose.material.icons.filled.EventNote
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Palette
@@ -86,21 +80,28 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Widgets
+import com.buaa.schedule.core.designsystem.ColorSwatch
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSegmentedControl
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalSemanticColors
+import com.buaa.schedule.core.designsystem.ModalTransition
 import com.buaa.schedule.core.designsystem.Personalization
 import com.buaa.schedule.core.designsystem.SettingsGroup
 import com.buaa.schedule.core.designsystem.SettingsRow
 import com.buaa.schedule.core.designsystem.SettingsSwitchRow
 import com.buaa.schedule.core.designsystem.fieldError
+import com.buaa.schedule.core.designsystem.fieldImeActions
+import com.buaa.schedule.core.designsystem.fieldImeOptions
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlotProfile
 import com.buaa.schedule.domain.schedule.CourseConstraints
 import com.buaa.schedule.domain.schedule.SmartPeriods
+import com.buaa.schedule.domain.schedule.isValidTimeSlot
+import com.buaa.schedule.data.import.SpocSession
 import com.buaa.schedule.reminder.ReminderNotifications
+import com.buaa.schedule.reminder.ReminderReceiver
 import com.buaa.schedule.reminder.IslandDiagnostics
 import com.buaa.schedule.reminder.TomorrowPreviewReceiver
 import com.buaa.schedule.ui.NO_WRITABLE_CALENDAR_MESSAGE
@@ -159,6 +160,10 @@ fun SettingsScreen(
     onOpenSection: (SettingsSection) -> Unit = {},
     /** 通往「课表管理」的通路（①A-02）：不改底栏，只在设置里补一条入口 */
     onOpenCourseManagement: () -> Unit = {},
+    /** 通往「学期统计」：学分总数/每周负载这类量以前只存在域层，从没露过面 */
+    onOpenStats: () -> Unit = {},
+    /** 通往智学北航的登录/扫码页：签到开关不开账户入口的话，用户看完说明只能回首页找加号 */
+    onOpenSpocSignIn: () -> Unit = {},
     /** 手机端悬浮玻璃底栏是否在本页显示：显示时滚动内容要在底部让位 */
     bottomBarVisible: Boolean = false,
     viewModel: ScheduleViewModel = viewModel(
@@ -177,6 +182,9 @@ fun SettingsScreen(
     // 这里只负责触发和显示进度文案，弹窗由 MainActivity 统一渲染。
     val updateState by UpdateCheck.state.collectAsState()
     val settingsScope = rememberCoroutineScope()
+    // 页内即时反馈统一走 Snackbar：Toast 在 Android 12+ 会被系统样式接管，
+    // 与站内玻璃/主题完全脱节（R7 ⑥）
+    val settingsSnackbar = remember { SnackbarHostState() }
     // 隐私同意的状态要在设置页看得见、也能撤回。存成 state 而不是每次直接读盘：
     // 撤回之后行内文案必须立刻变，否则用户只会觉得"点了没反应"。
     var privacyConsentAt by remember { mutableLongStateOf(FirstRun.privacyConsentAt(context)) }
@@ -261,6 +269,12 @@ fun SettingsScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // 登录态跟着上面那个 tick 重读：从 SPOC 登录页返回时本页不重组，只走一次 ON_RESUME。
+    // 是可变状态而不是快照，因为「退出登录」要在原地把它翻回未登录。
+    var spocSignedIn by remember(permissionResumeTick) {
+        mutableStateOf(SpocSession.hasSession())
+    }
+
     var darkModePref by remember { mutableStateOf(com.buaa.schedule.DarkModePreference.load(prefs)) }
     var glassTier by remember { mutableIntStateOf(Personalization.glassTier) }
     var cardAlpha by remember { mutableFloatStateOf(Personalization.cardAlpha) }
@@ -320,6 +334,7 @@ fun SettingsScreen(
 
     Scaffold(
         containerColor = androidx.compose.ui.graphics.Color.Transparent,
+        snackbarHost = { SnackbarHost(settingsSnackbar) },
         topBar = {
             com.buaa.schedule.core.designsystem.GlassTopBar(
                 title = section?.title ?: "设置",
@@ -506,6 +521,16 @@ fun SettingsScreen(
             )
             }
 
+            item(key = "stats") {
+            SettingsRow(
+                icon = Icons.Filled.Insights,
+                title = "学期统计",
+                summary = "总学分、每周负载与空档（当前 ${state.courses.size} 段排课）",
+                showChevron = true,
+                onClick = onOpenStats,
+            )
+            }
+
             }
             // 编辑期间只改本地草稿，点「保存」才落库；时间格式 HH:mm（零填充），
             // 因此字符串比较等价于时间先后
@@ -547,7 +572,7 @@ fun SettingsScreen(
                 keyboardOptions = fieldImeOptions(),
                 keyboardActions = fieldImeActions(),
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
                 OutlinedTextField(
                     value = smartPeriod,
                     onValueChange = { smartPeriod = it },
@@ -567,7 +592,7 @@ fun SettingsScreen(
                     keyboardActions = fieldImeActions(),
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
                 OutlinedTextField(
                     value = smartLunchAfter,
                     onValueChange = { smartLunchAfter = it },
@@ -617,7 +642,7 @@ fun SettingsScreen(
             slotDraft.forEachIndexed { index, slot ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
                 ) {
                     Text(
                         text = "第 ${slot.number} 节",
@@ -681,9 +706,9 @@ fun SettingsScreen(
 
             importMessage?.let {
                 Text(
-                    text = it,
+                    text = it.text,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (it.startsWith("失败")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    color = if (it.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                 )
             }
             }
@@ -814,27 +839,22 @@ fun SettingsScreen(
                     text = "深色模式",
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                ) {
-                    com.buaa.schedule.DarkModePreference.entries.forEach { pref ->
-                        val selected = darkModePref == pref
-                        OutlinedButton(
-                            onClick = {
-                                darkModePref = pref
-                                prefs.edit {
-                                    putString(com.buaa.schedule.DarkModePreference.PREF_KEY, pref.name)
-                                }
-                                onDarkThemeChange(pref)
-                            },
-                            modifier = Modifier.weight(1f),
-                            enabled = !selected,
-                        ) { Text(pref.label) }
-                    }
-                }
+                // 此前是三枚互斥 OutlinedButton、选中那枚禁用：同类"选一个"在别处
+                // 都是分段控件，且禁用选中项等于把选中态藏起来
+                GlassSegmentedControl(
+                    options = com.buaa.schedule.DarkModePreference.entries.map { it.label },
+                    selectedIndex = com.buaa.schedule.DarkModePreference.entries
+                        .indexOf(darkModePref),
+                    onSelect = { index ->
+                        val pref = com.buaa.schedule.DarkModePreference.entries[index]
+                        darkModePref = pref
+                        prefs.edit {
+                            putString(com.buaa.schedule.DarkModePreference.PREF_KEY, pref.name)
+                        }
+                        onDarkThemeChange(pref)
+                    },
+                    modifier = Modifier.padding(top = DesignTokens.spaceS),
+                )
             }
             }
             item(key = "dynamicColor") {
@@ -877,40 +897,29 @@ fun SettingsScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState())
-                        .padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        .padding(top = DesignTokens.spaceS),
+                    horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     seedOptions.forEach { (label, argb) ->
-                        val selected = Personalization.seedColorArgb == argb
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.clickable {
-                                Personalization.seedColorArgb = argb
-                                Personalization.save(context)
-                            },
+                            verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceXS),
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .background(
-                                        color = argb?.let { Color(it) } ?: Color.Transparent,
-                                        shape = CircleShape,
-                                    )
-                                    .border(
-                                        width = if (selected) 3.dp else 1.dp,
-                                        color = if (selected) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.outline
-                                        },
-                                        shape = CircleShape,
-                                    ),
+                            // 「默认」不画空心圈：共享色点在透明底上撑不住勾与描边，
+                            // 用一颗中性灰点占位，语义与"未指定种子色"一致
+                            ColorSwatch(
+                                color = argb?.let { Color(it) } ?: Color(0xFFBDBDBD),
+                                selected = Personalization.seedColorArgb == argb,
+                                onClick = {
+                                    Personalization.seedColorArgb = argb
+                                    Personalization.save(context)
+                                },
                             )
                             Text(
                                 text = label,
                                 style = MaterialTheme.typography.labelMedium,
-                                color = if (selected) {
+                                color = if (Personalization.seedColorArgb == argb) {
                                     MaterialTheme.colorScheme.primary
                                 } else {
                                     MaterialTheme.colorScheme.onSurfaceVariant
@@ -927,23 +936,14 @@ fun SettingsScreen(
                         text = "周课表高度",
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "视口均分行高",
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        Switch(
-                            checked = Personalization.weekFitViewport,
-                            onCheckedChange = {
-                                Personalization.weekFitViewport = it
-                                Personalization.save(context)
-                            },
-                        )
-                    }
+                    SettingsSwitchRow(
+                        title = "视口均分行高",
+                        checked = Personalization.weekFitViewport,
+                        onCheckedChange = {
+                            Personalization.weekFitViewport = it
+                            Personalization.save(context)
+                        },
+                    )
                     Slider(
                         value = weekRowScaleDraft,
                         onValueChange = { weekRowScaleDraft = it },
@@ -962,7 +962,7 @@ fun SettingsScreen(
                     Text(
                         text = "课程卡圆角",
                         style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(top = 8.dp),
+                        modifier = Modifier.padding(top = DesignTokens.spaceS),
                     )
                     Slider(
                         value = weekCornerDraft,
@@ -1022,29 +1022,20 @@ fun SettingsScreen(
             // 注意：SettingsGroup 的每条 item 会被包进 GlassSurface，而 GlassSurface 的
             // 内容容器是 Box —— 多个子控件不包 Column 就会全叠在左上角（文字重叠的根因）。
             Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
-            androidx.compose.foundation.layout.Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "液态玻璃",
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Switch(
-                    checked = glassTier >= com.buaa.schedule.core.designsystem.DesignTokens.GLASS_TIER_STANDARD,
-                    onCheckedChange = { on ->
-                        val tier = if (on) {
-                            com.buaa.schedule.core.designsystem.DesignTokens.GLASS_TIER_STANDARD
-                        } else {
-                            com.buaa.schedule.core.designsystem.DesignTokens.GLASS_TIER_OFF
-                        }
-                        glassTier = tier
-                        Personalization.glassTier = tier
-                        Personalization.save(context)
-                    },
-                )
-            }
+            SettingsSwitchRow(
+                title = "液态玻璃",
+                checked = glassTier >= DesignTokens.GLASS_TIER_STANDARD,
+                onCheckedChange = { on ->
+                    val tier = if (on) {
+                        DesignTokens.GLASS_TIER_STANDARD
+                    } else {
+                        DesignTokens.GLASS_TIER_OFF
+                    }
+                    glassTier = tier
+                    Personalization.glassTier = tier
+                    Personalization.save(context)
+                },
+            )
             Text(
                 // 关闭≠完全没有玻璃：小面积那几处（顶栏 / 底栏 / 页签切换）留着最好看，
                 // 大面板退化成实心卡片——整屏几十个 AGSL 表面既费电又不如小玻璃通透
@@ -1126,29 +1117,15 @@ fun SettingsScreen(
             // 而它的内容容器是 Box —— 这里的开关行和下方提示若互为兄弟节点，
             // 就会全部叠在左上角（表现为"提示文字和设置文字重叠"）。
             Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "使用桌面壁纸",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        Text(
-                            text = "未选自定义壁纸时，直接提取系统桌面壁纸做课表背景",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(
-                        checked = Personalization.useSystemWallpaper,
-                        onCheckedChange = {
-                            Personalization.useSystemWallpaper = it
-                            Personalization.save(context)
-                        },
-                    )
-                }
+                SettingsSwitchRow(
+                    title = "使用桌面壁纸",
+                    summary = "未选自定义壁纸时，直接提取系统桌面壁纸做课表背景",
+                    checked = Personalization.useSystemWallpaper,
+                    onCheckedChange = {
+                        Personalization.useSystemWallpaper = it
+                        Personalization.save(context)
+                    },
+                )
                 // 评审 P0-1：Android 14（API 34）起平台禁止第三方应用读取桌面壁纸，
                 // decodeSystemWallpaper 恒返回 null（见 SceneBackground），背景会静默回退
                 // 渐变色。不能让用户以为开关坏了 —— 在设置页显式说明并给出可操作出路。
@@ -1251,36 +1228,24 @@ fun SettingsScreen(
                 text = "提醒方式",
                 style = MaterialTheme.typography.bodySmall,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = {
-                        reminderMode = com.buaa.schedule.domain.model.ReminderMode.APP
-                        prefs.edit {
-                            putString(
-                                com.buaa.schedule.domain.model.ReminderMode.PREF_KEY,
-                                com.buaa.schedule.domain.model.ReminderMode.APP,
-                            )
-                        }
-                        viewModel.onReminderModeChanged()
-                    },
-                    modifier = Modifier.weight(1f),
-                    enabled = reminderMode != com.buaa.schedule.domain.model.ReminderMode.APP,
-                ) { Text("应用内提醒") }
-                OutlinedButton(
-                    onClick = {
-                        reminderMode = com.buaa.schedule.domain.model.ReminderMode.CALENDAR
-                        prefs.edit {
-                            putString(
-                                com.buaa.schedule.domain.model.ReminderMode.PREF_KEY,
-                                com.buaa.schedule.domain.model.ReminderMode.CALENDAR,
-                            )
-                        }
-                        viewModel.onReminderModeChanged()
-                    },
-                    modifier = Modifier.weight(1f),
-                    enabled = reminderMode != com.buaa.schedule.domain.model.ReminderMode.CALENDAR,
-                ) { Text("系统日历提醒") }
-            }
+            // 与「深色模式」同：互斥 OutlinedButton + 禁用选中项，收敛到分段控件
+            GlassSegmentedControl(
+                options = listOf("应用内提醒", "系统日历提醒"),
+                selectedIndex =
+                    if (reminderMode == com.buaa.schedule.domain.model.ReminderMode.CALENDAR) 1 else 0,
+                onSelect = { index ->
+                    val mode = if (index == 1) {
+                        com.buaa.schedule.domain.model.ReminderMode.CALENDAR
+                    } else {
+                        com.buaa.schedule.domain.model.ReminderMode.APP
+                    }
+                    reminderMode = mode
+                    prefs.edit {
+                        putString(com.buaa.schedule.domain.model.ReminderMode.PREF_KEY, mode)
+                    }
+                    viewModel.onReminderModeChanged()
+                },
+            )
             if (reminderMode == com.buaa.schedule.domain.model.ReminderMode.CALENDAR) {
                 Text(
                     text = "应用内不再发提醒，由系统日历的日程提醒负责。请先完成同步，并确认日历应用的通知已开启。",
@@ -1312,6 +1277,63 @@ fun SettingsScreen(
                         previewEnabled = it
                         prefs.edit { putBoolean(TomorrowPreviewReceiver.PREF_ENABLED, it) }
                         BackgroundSync.scheduleTomorrowPreview(context)
+                    },
+                )
+            }
+            }
+
+            SettingsGroup(
+                title = "智学北航签到",
+                visibleWhen = section == SettingsSection.NOTIFICATION,
+                collapsible = true,
+                initiallyExpanded = true,
+            ) {
+            item(key = "toggle") {
+                var signHintEnabled by remember {
+                    mutableStateOf(
+                        prefs.getBoolean(ReminderReceiver.PREF_SPOC_SIGN_HINT, false)
+                    )
+                }
+                SettingsSwitchRow(
+                    title = "课前提醒加「扫码签到」按钮",
+                    summary = "在课程提醒的通知上放一个按钮，点一下直接进扫码页，不用回首页找加号。" +
+                        "到点仍需对着课堂上的二维码扫，应用不会替你签。",
+                    checked = signHintEnabled,
+                    onCheckedChange = {
+                        signHintEnabled = it
+                        // 接收器是在弹通知的那一刻才读这个键的，所以改完不用重排闹钟，
+                        // 下一节课的提醒就按新状态来（反过来烘进 extras 就会晚一节课）
+                        prefs.edit { putBoolean(ReminderReceiver.PREF_SPOC_SIGN_HINT, it) }
+                    },
+                )
+            }
+            item(key = "account") {
+                SettingsRow(
+                    title = if (spocSignedIn) "已登录智学北航" else "未登录智学北航",
+                    summary = if (spocSignedIn) {
+                        "凭证只存在本机的加密存储里，不随备份迁移"
+                    } else {
+                        "签到要先有登录态。进登录页登一次，成功后直接落到扫码页"
+                    },
+                    showChevron = true,
+                    onClick = onOpenSpocSignIn,
+                    trailing = {
+                        Text(
+                            text = if (spocSignedIn) "正常" else "去登录",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (spocSignedIn) MaterialTheme.colorScheme.onSurfaceVariant
+                            else MaterialTheme.colorScheme.error,
+                        )
+                    },
+                )
+            }
+            item(key = "logout", visible = spocSignedIn) {
+                SettingsRow(
+                    title = "退出智学北航登录",
+                    summary = "只清签到用的凭证，教务系统的课表导入登录态不受影响",
+                    onClick = {
+                        SpocSession.clear()
+                        spocSignedIn = false
                     },
                 )
             }
@@ -1552,9 +1574,9 @@ fun SettingsScreen(
                     summary = "把当前课表导出为 WakeUp 课程表可导入的文件（${state.courses.size} 门课）",
                     onClick = {
                         if (state.courses.isEmpty()) {
-                            android.widget.Toast.makeText(
-                                exportContext, "当前没有可导出的课程", android.widget.Toast.LENGTH_SHORT,
-                            ).show()
+                            settingsScope.launch {
+                                settingsSnackbar.showSnackbar("当前没有可导出的课程")
+                            }
                         } else {
                             wakeUpExportLauncher.launch("buaa-schedule-wakeup.json")
                         }
@@ -1574,9 +1596,9 @@ fun SettingsScreen(
                         clipboard.setPrimaryClip(
                             android.content.ClipData.newPlainText("课表", text),
                         )
-                        android.widget.Toast.makeText(
-                            exportContext, "已复制", android.widget.Toast.LENGTH_SHORT,
-                        ).show()
+                        settingsScope.launch {
+                            settingsSnackbar.showSnackbar("已复制")
+                        }
                     },
                 )
             }
@@ -1645,12 +1667,9 @@ fun SettingsScreen(
             calendarSync.message?.let {
                 Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
                 Text(
-                    text = it,
+                    text = it.text,
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (it.startsWith("同步失败") || it.startsWith("移除失败") ||
-                        it.startsWith("日历权限") || it.startsWith("未授予") ||
-                        it.startsWith("没有检索到") || it.startsWith("读取日历")
-                    ) {
+                    color = if (it.isError) {
                         MaterialTheme.colorScheme.error
                     } else {
                         MaterialTheme.colorScheme.primary
@@ -1792,8 +1811,11 @@ fun SettingsScreen(
         }
     }
 
-    if (showPrivacyDialog) {
+    // payload 用同意时间而不是布尔：点「撤回同意」在关窗的同一刻把 privacyConsentAt 归零，
+    // 光靠 open = showPrivacyDialog 会让正在淡出的正文当场翻成「未同意」
+    ModalTransition(payload = if (showPrivacyDialog) privacyConsentAt else null) { consentAt, modal ->
         androidx.compose.material3.AlertDialog(
+            modifier = modal,
             onDismissRequest = { showPrivacyDialog = false },
             title = { Text("数据与隐私") },
             text = {
@@ -1807,8 +1829,8 @@ fun SettingsScreen(
                             .verticalScroll(rememberScrollState()),
                     )
                     Text(
-                        text = if (privacyConsentAt > 0L) {
-                            "当前：已同意（${formatLastCheck(privacyConsentAt)}）。" +
+                        text = if (consentAt > 0L) {
+                            "当前：已同意（${formatLastCheck(consentAt)}）。" +
                                 "撤回后从下次启动起重新进入首启引导。"
                         } else {
                             "当前：未同意 · 检查更新不会发起任何网络请求"
@@ -1820,8 +1842,8 @@ fun SettingsScreen(
             },
             confirmButton = {},
             dismissButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (privacyConsentAt > 0L) {
+                Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceXS)) {
+                    if (consentAt > 0L) {
                         TextButton(
                             onClick = {
                                 FirstRun.revokePrivacy(context)
@@ -1836,8 +1858,9 @@ fun SettingsScreen(
         )
     }
 
-    if (calendarSync.showPicker) {
+    ModalTransition(open = calendarSync.showPicker) { modal ->
         androidx.compose.material3.AlertDialog(
+            modifier = modal,
             onDismissRequest = { viewModel.dismissCalendarPicker() },
             title = { Text("选择目标日历") },
             text = {
@@ -1846,7 +1869,7 @@ fun SettingsScreen(
                         // 常见原因：未授予读写权限，或设备上没有可见的日历账户。
                         // 具体的判定（权限/无账户）由 VM 给出，这里只补操作指引。
                         Text(
-                            text = (calendarSync.message ?: NO_WRITABLE_CALENDAR_MESSAGE) +
+                            text = (calendarSync.message?.text ?: NO_WRITABLE_CALENDAR_MESSAGE) +
                                 "\n\n打开系统「日历」App 登录或添加一个账户" +
                                 "（本机离线账户也可以），再回来重试。",
                             style = MaterialTheme.typography.bodyMedium,
@@ -1857,10 +1880,11 @@ fun SettingsScreen(
                                 text = "${info.displayName}\n${info.accountName}",
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    // 内缩写在 clickable 之前：整行（含留白）都是命中区
+                                    .padding(vertical = DesignTokens.spaceS)
                                     .clickable {
                                         viewModel.selectCalendarTarget(info.id, info.displayName)
-                                    }
-                                    .padding(vertical = 10.dp),
+                                    },
                                 style = MaterialTheme.typography.bodyLarge,
                             )
                         }
@@ -1874,12 +1898,13 @@ fun SettingsScreen(
         )
     }
 
-    calendarSync.diff?.let { diff ->
+    ModalTransition(payload = calendarSync.diff) { diff, modal ->
         androidx.compose.material3.AlertDialog(
+            modifier = modal,
             onDismissRequest = { viewModel.dismissCalendarSyncDiff() },
             title = { Text("确认日历同步") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceXS)) {
                     Text("新增：${diff.toInsert.size} 个日程")
                     Text("更新：${diff.toUpdate.size} 个日程")
                     Text("删除：${diff.toDelete.size} 个日程")
@@ -1911,13 +1936,17 @@ fun SettingsScreen(
         )
     }
 
-    if (calendarSync.showRemoveConfirm) {
+    ModalTransition(open = calendarSync.showRemoveConfirm) { modal ->
         androidx.compose.material3.AlertDialog(
+            modifier = modal,
             onDismissRequest = { viewModel.dismissRemoveSyncedEvents() },
             title = { Text("移除已同步的日程") },
             text = { Text("将删除本应用创建的全部日历事件，不影响课表数据。确定继续？") },
             confirmButton = {
-                TextButton(onClick = { viewModel.removeSyncedEvents() }) { Text("移除") }
+                // 与「删除课程」「清空历史」同一口径：破坏性确认走 error 字色
+                TextButton(onClick = { viewModel.removeSyncedEvents() }) {
+                    Text("移除", color = MaterialTheme.colorScheme.error)
+                }
             },
             dismissButton = {
                 TextButton(onClick = { viewModel.dismissRemoveSyncedEvents() }) { Text("取消") }
@@ -1925,13 +1954,14 @@ fun SettingsScreen(
         )
     }
 
-    pendingBackup?.let { pending ->
+    ModalTransition(payload = pendingBackup) { pending, modal ->
         val preview = pending.preview
         androidx.compose.material3.AlertDialog(
+            modifier = modal,
             onDismissRequest = { viewModel.dismissPendingBackup() },
             title = { Text("恢复备份") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceXS)) {
                     if (preview.versionTooNew) {
                         Text(
                             text = "备份来自更新版本的应用，无法恢复。",
@@ -1974,8 +2004,9 @@ fun SettingsScreen(
     }
 
     // 备份里一条课程都没有：直接恢复等于清空课表，必须再确认一次
-    if (pendingEmptyRestore != null) {
+    ModalTransition(open = pendingEmptyRestore != null) { modal ->
         androidx.compose.material3.AlertDialog(
+            modifier = modal,
             onDismissRequest = { viewModel.dismissEmptyRestore() },
             title = { Text("该备份不含任何课程") },
             text = {
@@ -1999,44 +2030,6 @@ fun SettingsScreen(
         )
     }
 }
-
-/** HH:mm（零填充）。零填充保证字符串比较等价于时间先后。 */
-private val TIME_OF_DAY_PATTERN = Regex("^\\d{2}:\\d{2}$")
-
-/**
- * 设置页字段的键盘声明（审查 U-05：此前全仓 0 处 KeyboardOptions）。
- *
- * `numeric` 只给**纯整数**字段（总周数、每节分钟数）。
- * 日期（`2026-09-07`）与节次时间（`08:00`）**故意**留在字母键盘上：
- * 数字面板没有 `-` 和 `:`，换了键盘等于让人打不出这个值。
- */
-@Composable
-private fun fieldImeOptions(numeric: Boolean = false, last: Boolean = false): KeyboardOptions =
-    KeyboardOptions(
-        keyboardType = if (numeric) KeyboardType.Number else KeyboardType.Text,
-        imeAction = if (last) ImeAction.Done else ImeAction.Next,
-    )
-
-/** 与 [fieldImeOptions] 配对：「下一个」沿竖直表单向下移焦点，「完成」收起键盘。 */
-@Composable
-private fun fieldImeActions(last: Boolean = false): KeyboardActions {
-    val focusManager = LocalFocusManager.current
-    return if (last) {
-        KeyboardActions(onDone = { focusManager.clearFocus() })
-    } else {
-        KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) })
-    }
-}
-
-/**
- * 单条节次时间是否合法：格式必须为 HH:mm，且结束晚于开始。
- *
- * 抽成 internal 顶层函数便于单测 —— 节次时间写坏会让整个课表的时间轴错位。
- */
-internal fun isValidTimeSlot(slot: com.buaa.schedule.domain.model.TimeSlot): Boolean =
-    TIME_OF_DAY_PATTERN.matches(slot.startTime) &&
-        TIME_OF_DAY_PATTERN.matches(slot.endTime) &&
-        slot.startTime < slot.endTime
 
 /**
  * 壁纸调参滑块：拖动即时生效，拖完一次性落盘（避免每次 move 都写 prefs）。

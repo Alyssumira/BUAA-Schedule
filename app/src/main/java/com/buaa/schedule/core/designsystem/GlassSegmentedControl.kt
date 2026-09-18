@@ -1,28 +1,43 @@
 package com.buaa.schedule.core.designsystem
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
 import com.kyant.backdrop.isRenderEffectSupported
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /**
  * 玻璃分段控件（胶囊二选一/多选一）。
@@ -31,6 +46,12 @@ import com.kyant.backdrop.isRenderEffectSupported
  * 选中段也是一**真玻璃**（折射背景 + primary 色 tint），而不是一块贴死的
  * 不透明 primary：整条控件本来就浮在场景背景上，实心色块会让它看起来
  * 像"贴了张纸"，与其余玻璃语言割裂。
+ *
+ * 选中胶囊是**一个覆盖层在滑**，不是"每段各自带一块底板、切换时换一块"：
+ * 后者在切换那一瞬间有两块玻璃同时在场（旧的淡出、新的淡入），中间帧看得见
+ * 两条边。覆盖层走的是一条连续位移，"我在哪一格"才读得出来。
+ * 落点来自每段实测矩形（各段按内容宽度排布、互不相等，见下方 weight 警告），
+ * 所以将来加第三段、或段里换成图标，这里都不需要改。
  *
  * ⚠️ 分段**按内容宽度**排布（`defaultMinSize`，不是 `weight`）：
  * 用 `weight` 时控件会把父级给它的可用宽度全部吃掉，
@@ -54,14 +75,18 @@ fun GlassSegmentedControl(
         val base = DesignTokens.glassMaterial(GlassVariant.COMPACT)
         if (darkTheme) base.copy(useVibrancy = false) else base
     }
-    // 选中胶囊要一块自己的配额：它折射的是场景层，不是父玻璃
+    // 选中胶囊要一块自己的配额：它折射的是场景层，不是父玻璃。
+    // 但先问"画得出玻璃吗"再占格子（口径同 GlassSurface 的 `wantsGlass && acquire()`）：
+    // GlassRegistry 是全局稀缺资源，前提不成立时这块玻璃永远不会画出来，
+    // 占着配额就等于把真玻璃名额让给一个用不上的表面。
+    val canRenderGlass = backdrop != null && isRenderEffectSupported()
     var acquired by remember { mutableStateOf(false) }
-    DisposableEffect(Unit) {
-        val ok = GlassRegistry.acquire()
+    DisposableEffect(canRenderGlass) {
+        val ok = canRenderGlass && GlassRegistry.acquire()
         acquired = ok
         onDispose { if (ok) GlassRegistry.release() }
     }
-    val glassEnabled = acquired && backdrop != null && isRenderEffectSupported()
+    val glassEnabled = acquired
     // primary 做底板时，onPrimary 文字能不能读取决于透上来多少壁纸——按同一口径兜底
     val wallpaperStats = SceneLuma.wallpaper
     val segmentAlpha = remember(scheme.primary, scheme.onPrimary, darkTheme, material, wallpaperStats) {
@@ -69,9 +94,7 @@ fun GlassSegmentedControl(
             .coerceAtLeast(material.surfaceAlpha)
             .coerceAtMost(0.82f)
     }
-    val segmentModifier = remember(
-        backdrop, material, scheme.primary, segmentAlpha, glassEnabled, segmentShape,
-    ) {
+    val pillModifier = remember(backdrop, material, scheme.primary, segmentAlpha, glassEnabled, segmentShape) {
         Modifier.liquidGlass(
             backdrop = backdrop,
             shape = { segmentShape },
@@ -82,46 +105,116 @@ fun GlassSegmentedControl(
             effectKey = material,
         )
     }
+
+    // 每段的实测矩形，父 Row 的像素坐标——覆盖层共用同一套坐标，不做单位换算。
+    val rects = remember { mutableStateListOf<IntRect>() }
+    var measured by remember { mutableIntStateOf(0) }
+    val target = rects.getOrNull(selectedIndex)
+
+    // 覆盖层画在哪。四根 Float 各自补间，而不是 animateRectAsState：
+    // 后者只能读到已收敛的值，首帧会先在错误位置画一帧（"闪一下再滑过去"）。
+    val left = remember { Animatable(0f) }
+    val top = remember { Animatable(0f) }
+    val width = remember { Animatable(0f) }
+    val height = remember { Animatable(0f) }
+    var seated by remember { mutableStateOf(false) }
+    // 规格在组合期取好：motionSpec 是 @Composable，带不进 LaunchedEffect
+    val slideSpec: FiniteAnimationSpec<Float> = motionSpec(MotionTokens.DURATION_SNAP)
+    LaunchedEffect(target, measured) {
+        val to = target ?: return@LaunchedEffect
+        val bounds = floatArrayOf(
+            to.left.toFloat(),
+            to.top.toFloat(),
+            to.width.toFloat(),
+            to.height.toFloat(),
+        )
+        if (to.width <= 0 || to.height <= 0) return@LaunchedEffect
+        if (!seated) {
+            // 首帧直接落位：进场时胶囊该已经在正确位置，而不是从左上角飞进去
+            left.snapTo(bounds[0])
+            top.snapTo(bounds[1])
+            width.snapTo(bounds[2])
+            height.snapTo(bounds[3])
+            seated = true
+            return@LaunchedEffect
+        }
+        launch { left.animateTo(bounds[0], slideSpec) }
+        launch { top.animateTo(bounds[1], slideSpec) }
+        launch { width.animateTo(bounds[2], slideSpec) }
+        launch { height.animateTo(bounds[3], slideSpec) }
+    }
+    val pillWidth = width.value.roundToInt()
+    val pillHeight = height.value.roundToInt()
+
     GlassSurface(
         variant = GlassVariant.COMPACT,
         modifier = modifier,
         shape = segmentShape,
         contentPadding = 4.dp,
     ) {
-        Row {
-            options.forEachIndexed { index, label ->
-                val selected = index == selectedIndex
+        Box {
+            Row {
+                options.forEachIndexed { index, label ->
+                    val selected = index == selectedIndex
+                    Box(
+                        modifier = Modifier
+                            // 高度下限要在 clickable **之前**：写后面只会撑大内容区，点不到的还是点不到
+                            .defaultMinSize(
+                                minWidth = minSegmentWidth,
+                                minHeight = DesignTokens.minTouchTarget,
+                            )
+                            .padding(horizontal = 2.dp)
+                            .onGloballyPositioned { node ->
+                                // 实测的是 Float 矩形，覆盖层用整数像素：按密度取整
+                                val r = node.boundsInParent()
+                                val rect = IntRect(
+                                    r.left.roundToInt(),
+                                    r.top.roundToInt(),
+                                    r.right.roundToInt(),
+                                    r.bottom.roundToInt(),
+                                )
+                                while (rects.size <= index) rects.add(rect)
+                                if (rects[index] != rect) {
+                                    rects[index] = rect
+                                    measured++
+                                }
+                            }
+                            .selectable(
+                                selected = selected,
+                                // 与底栏、顶栏「周课表/今日」同一套语义：分段切换回答的是
+                                // "我在哪一格"，而此前这里只有 clickable，念不出"已选中"
+                                role = Role.Tab,
+                                onClick = {
+                                    // 只有真正切换时才反馈，重复点当前项不该震动
+                                    if (index != selectedIndex) haptics.performTick()
+                                    onSelect(index)
+                                },
+                            )
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = animateColorAsState(
+                                targetValue = if (selected) scheme.onPrimary else scheme.onSurface,
+                                animationSpec = motionSpec(MotionTokens.DURATION_SNAP),
+                                label = "segmentInk",
+                            ).value,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+            if (pillWidth > 0 && pillHeight > 0) {
                 Box(
                     modifier = Modifier
-                        // 高度下限要在 clickable **之前**：写后面只会撑大内容区，点不到的还是点不到
-                        .defaultMinSize(
-                            minWidth = minSegmentWidth,
-                            minHeight = DesignTokens.minTouchTarget,
-                        )
-                        .padding(horizontal = 2.dp)
-                        .then(if (selected) segmentModifier else Modifier)
-                        .selectable(
-                            selected = selected,
-                            // 与底栏、顶栏「周课表/今日」同一套语义：分段切换回答的是
-                            // "我在哪一格"，而此前这里只有 clickable，念不出"已选中"
-                            role = Role.Tab,
-                            onClick = {
-                                // 只有真正切换时才反馈，重复点当前项不该震动
-                                if (index != selectedIndex) haptics.performTick()
-                                onSelect(index)
-                            },
-                        )
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = label,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (selected) scheme.onPrimary else scheme.onSurface,
-                        maxLines = 1,
-                    )
-                }
+                        .offset { IntOffset(left.value.roundToInt(), top.value.roundToInt()) }
+                        .width(pillWidth.dp)
+                        .height(pillHeight.dp)
+                        .then(pillModifier),
+                )
             }
         }
     }

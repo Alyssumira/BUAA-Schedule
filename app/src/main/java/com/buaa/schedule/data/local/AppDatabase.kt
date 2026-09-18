@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CalendarSyncEntity::class,
         WidgetSnapshotEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -150,12 +150,37 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v8 -> v9：给 `courses` 追加学分列（统计页要用教务返回却一直被丢掉的 credit）。
+         *
+         * 为什么只要一条 `ADD COLUMN`：SQLite 的 ADD COLUMN 只往表尾追加、不重写任何行，
+         * 所以不像 v7→v8 那样需要重建表（那次是为了给已存在的列补 DEFAULT，SQLite 做不到）。
+         * 重建表才是真正危险的动线（丢外键、丢自增位点），这次不涉及。
+         *
+         * 为什么不写 `NOT NULL DEFAULT 0`：升级前库里的课都是"没采到学分"，
+         * 补成 0 等于替用户宣称这些课不计学分，总学会直接算少一门是一门。
+         * 列名/类型必须与 [CourseEntity] 的 `credit: Double?` 一致（Room 映射为 REAL、可空、
+         * 无默认值），否则迁移校验会报 expected vs found。
+         *
+         * DDL 单独提成常量：connected 测试要设备，而这条串是本次迁移唯一的风险点，
+         * 用纯 JVM 单测先钉死形状（见 MigrationChainTest）。
+         */
+        val MIGRATION_8_9_SQL = "ALTER TABLE `courses` ADD COLUMN `credit` REAL"
+
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(MIGRATION_8_9_SQL)
+            }
+        }
+
         // 最低支持 schema = v3：v1/v2 的基线 JSON 的 identityHash 是手写的假值（不是 KSP
         // 产物），以它们为起点的链没人验证过，本应用也没发布过 v1/v2 的包，因此对应的
         // 迁移已删除。这种库打开时 Room 会直接抛"no migration defined"，
         // 而不是悄悄走一条虚构的链（R5 F-03）。
-        private val ALL_MIGRATIONS = arrayOf(
+        // internal 而非 private：迁移链的连续性与版本记账由 JVM 单测把守（MigrationChainTest）。
+        internal val ALL_MIGRATIONS = arrayOf(
             MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
+            MIGRATION_8_9,
         )
 
         fun getInstance(context: Context): AppDatabase =

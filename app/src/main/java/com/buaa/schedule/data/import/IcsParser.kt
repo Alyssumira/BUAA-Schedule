@@ -13,6 +13,11 @@ import java.time.temporal.ChronoUnit
  *
  * 由于 App 使用“教学周”而不是绝对日期，需要传入学期开学日期（周一）来换算周次。
  * 时间到节次的映射用调用方传入的节次表（导出/导入同一份表才幂等），未传时退回默认 14 节。
+ *
+ * 学分不在这条链路上往返（导出侧 `IcsExporter` 同样不带）：RFC 5545 没有"学分"这个属性，
+ * 而 ICS 里唯一能塞事的 DESCRIPTION 是给人读、且与所有第三方日历共用的文本 blob。
+ * 更主要的是，走到这里的文件多半来自别家课表 App，本来就没有学分可带 —— 为它加一个
+ * `X-BUAA-CREDIT` 私有属性只会让"解析失败"多一种新写法，收益为零。
  */
 object IcsParser {
 
@@ -123,14 +128,18 @@ object IcsParser {
                     if (week > weekUpperBound && until == null && count == null) break
                 }
 
-                if (weeks.isNotEmpty()) {
+                // DTEND 早于 DTSTART 的畸形事件会让 endSection < startSection，
+                // 展开成空 periods 的行：管理页看得见、课表上永远看不见，还占课程名额。
+                val periods = if (endSection < startSection) emptyList()
+                else (startSection..endSection).toList()
+                if (weeks.isNotEmpty() && periods.isNotEmpty()) {
                     courses.add(
                         Course(
                             name = summary,
                             teacher = teacher,
                             location = location,
                             dayOfWeek = dow.value,
-                            periods = (startSection..endSection).toList(),
+                            periods = periods,
                             weeks = weeks.distinct().sorted(),
                             colorIndex = (startSection + dow.value) % 8,
                             sourceGroupKey = null,

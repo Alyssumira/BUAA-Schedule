@@ -7,42 +7,42 @@ class CoursePeriodsTest {
 
     @Test
     fun segmentsOfContiguousPeriods() {
-        assertEquals(listOf(1..3), listOf(1, 2, 3).toPeriodSegments())
+        assertEquals(listOf(1..3), listOf(1, 2, 3).toPeriodSegments(NO_PERIOD_GAP))
     }
 
     @Test
     fun segmentsOfNonContiguousPeriods() {
-        assertEquals(listOf(1..2, 9..10), listOf(1, 2, 9, 10).toPeriodSegments())
+        assertEquals(listOf(1..2, 9..10), listOf(1, 2, 9, 10).toPeriodSegments(NO_PERIOD_GAP))
     }
 
     @Test
     fun segmentsOfSinglePeriod() {
-        assertEquals(listOf(5..5), listOf(5).toPeriodSegments())
+        assertEquals(listOf(5..5), listOf(5).toPeriodSegments(NO_PERIOD_GAP))
     }
 
     @Test
     fun segmentsIgnoreDuplicatesAndOrder() {
-        assertEquals(listOf(1..2, 4..5), listOf(5, 2, 1, 4, 2).toPeriodSegments())
+        assertEquals(listOf(1..2, 4..5), listOf(5, 2, 1, 4, 2).toPeriodSegments(NO_PERIOD_GAP))
     }
 
     @Test
     fun segmentsOfEmptyList() {
-        assertEquals(emptyList<IntRange>(), emptyList<Int>().toPeriodSegments())
+        assertEquals(emptyList<IntRange>(), emptyList<Int>().toPeriodSegments(NO_PERIOD_GAP))
     }
 
     @Test
     fun labelOfContiguousPeriods() {
-        assertEquals("第1-2节", periodLabel(listOf(1, 2)))
+        assertEquals("第1-2节", periodLabel(listOf(1, 2), NO_PERIOD_GAP))
     }
 
     @Test
     fun labelOfNonContiguousPeriods() {
-        assertEquals("第1-2,9-10节", periodLabel(listOf(1, 2, 9, 10)))
+        assertEquals("第1-2,9-10节", periodLabel(listOf(1, 2, 9, 10), NO_PERIOD_GAP))
     }
 
     @Test
     fun labelOfSinglePeriod() {
-        assertEquals("第3节", periodLabel(listOf(3)))
+        assertEquals("第3节", periodLabel(listOf(3), NO_PERIOD_GAP))
     }
 
     @Test
@@ -97,5 +97,45 @@ class CoursePeriodsTest {
         // 节次表残缺时退回旧行为：只按节次号相邻切段
         val gap = periodGapMinutesOf(emptyMap())
         assertEquals(listOf(5..6), listOf(5, 6).toPeriodSegments(gap))
+    }
+
+    // —— P1-2 回归：文案口径必须与切段口径同源 ——————————————————————
+
+    @Test
+    fun labelSplitsAcrossLunchBreak() {
+        // 网格把 5、6 节画成两张卡，文案就不能再写「第5-6节」。
+        // 多段的拼法是"数字段用逗号连、前后缀只包一次"：第5,6节（同 第1-2,9-10节）
+        assertEquals("第5,6节", periodLabel(listOf(5, 6), defaultGap))
+        assertEquals("第5,6节", periodLabelOf(listOf(5, 6), TimeSlotProfile.DEFAULT))
+    }
+
+    @Test
+    fun labelKeepsLinkedPairsInOneSpan() {
+        assertEquals("第1-2节", periodLabel(listOf(1, 2), defaultGap))
+        assertEquals("第1-2节", periodLabelOf(listOf(1, 2), TimeSlotProfile.DEFAULT))
+    }
+
+    @Test
+    fun labelSegmentCountMatchesSplitSegmentCount() {
+        // 不变量：文案里的段数 == 切段结果的段数。两边读的是同一个 gapMinutes，
+        // 任何一侧偷偷换口径（P1-2 就是这么藏了两轮的）都会被这条抓住。
+        for (periods in listOf(
+            listOf(5, 6),
+            listOf(1, 2, 9, 10),
+            listOf(10, 11),
+            listOf(1, 2, 3, 7, 8),
+            listOf(3),
+        )) {
+            val segments = periods.toPeriodSegments(defaultGap)
+            val printed = periodLabel(periods, defaultGap)
+                .removePrefix("第")
+                .removeSuffix("节")
+                .split(",")
+            assertEquals(
+                "periods=$periods 的文案「$printed」与切段 $segments 段数不一致",
+                segments.size,
+                printed.size,
+            )
+        }
     }
 }

@@ -41,6 +41,8 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.DesignTokens
+import com.buaa.schedule.core.designsystem.ChromeSurfaceLight
+import com.buaa.schedule.core.designsystem.LocalReduceMotion
 import com.buaa.schedule.core.designsystem.Personalization
 import com.buaa.schedule.core.designsystem.legibilityAlphaFloor
 import com.buaa.schedule.core.designsystem.motionSpec
@@ -102,7 +104,7 @@ fun LiquidBottomTabs(
     // （色散只留给"选中指示器"那一片），整条底栏开色散会泛出彩虹边、显得脏
     chromaticAberrationEnabled: Boolean = false,
     isLightTheme: Boolean,
-    containerColor: Color = Color(0xFFFAFAFA),
+    containerColor: Color = ChromeSurfaceLight,
     tabContent: @Composable ColumnScope.(index: Int) -> Unit
 ) {
     val themeBlend by animateFloatAsState(
@@ -118,6 +120,13 @@ fun LiquidBottomTabs(
         stiffness = 300f,
         visibilityThreshold = 0.5f,
     )
+    // 底栏的两条"物理"动画（拖拽回弹 / 光斑跟手）在 DampedDragAnimation 与
+    // InteractiveHighlight 里构造规格，而它们不是 @Composable，读不到开关，
+    // 所以在这里把 LocalReduceMotion 读出来传下去（口径同 navEnter 的 reduceMotion）。
+    // 它同时是这两个 remember 的 key：这颗开关运行期会变（改完设置回来重读、玻璃治理降档），
+    // 不进 key 就等于把它冻结在首次组合那一刻——重建的代价只是指示器落回当前 tab，
+    // 而那正是无动画模式下该看到的样子。
+    val reduceMotion = LocalReduceMotion.current
     // 与 GlassSurface / FAB 口径一致：底栏表面 alpha 也跟随用户「卡片透明度」。
     // containerAlpha 只作为基准值，倍率口径统一在 DesignTokens.cardAlphaScale（②V-12）。
     val userAlphaScale = DesignTokens.cardAlphaScale(Personalization.cardAlpha)
@@ -125,13 +134,13 @@ fun LiquidBottomTabs(
     // 所以这条栏要多实只能看壁纸有多亮/多暗——原来按主题写死 0.06 / 0.34，
     // 浅色主题配一张暗壁纸时 6% 的底板等于没有，近黑的 tab 文字直接糊在壁纸上。
     val scheme = MaterialTheme.colorScheme
-    // 实际画出来的那层颜色：深色主题下栏体走 0xFF121212，不看调用方的 containerColor
-    val surfaceColor = if (isLightTheme) containerColor else Color(0xFF121212)
+    // 栏体只认调用方给的 containerColor —— 调用方已经按主题挑好色（Light/DarkGlassTint）。
+    // 旧实现在深色档另写死 0xFF121212，把 MainActivity 传入的深色 tint 静默吞掉：
+    // 同一条栏两处决定颜色，哪处都不作数（审查 V-组件层裸色）。
     val effectiveContainerAlpha = (containerAlpha * userAlphaScale)
         .coerceAtMost(0.60f)
-        .coerceAtLeast(legibilityAlphaFloor(surfaceColor, scheme.onSurfaceVariant, !isLightTheme))
-    val lightContainerSurface = containerColor.copy(alpha = effectiveContainerAlpha)
-    val darkContainerSurface = Color(0xFF121212).copy(alpha = effectiveContainerAlpha)
+        .coerceAtLeast(legibilityAlphaFloor(containerColor, scheme.onSurfaceVariant, !isLightTheme))
+    val containerSurface = containerColor.copy(alpha = effectiveContainerAlpha)
 
     BoxWithConstraints(
         modifier,
@@ -156,7 +165,7 @@ fun LiquidBottomTabs(
         var currentIndex by remember {
             mutableIntStateOf(selectedTabIndex().coerceIn(0, tabsCount - 1))
         }
-        val dampedDragAnimation = remember(animationScope) {
+        val dampedDragAnimation = remember(animationScope, reduceMotion) {
             DampedDragAnimation(
                 animationScope = animationScope,
                 initialValue = selectedTabIndex().toFloat(),
@@ -164,6 +173,7 @@ fun LiquidBottomTabs(
                 visibilityThreshold = 0.001f,
                 initialScale = 1f,
                 pressedScale = 48f.dp / 40f.dp,
+                reduceMotion = reduceMotion,
                 onDragStarted = {},
                 onDragStopped = {
                     val targetIndex = targetValue.fastRoundToInt().coerceIn(0, tabsCount - 1)
@@ -197,9 +207,10 @@ fun LiquidBottomTabs(
             }
         }
 
-        val interactiveHighlight = remember(animationScope) {
+        val interactiveHighlight = remember(animationScope, reduceMotion) {
             InteractiveHighlight(
                 animationScope = animationScope,
+                reduceMotion = reduceMotion,
                 position = { size, offset ->
                     Offset(
                         if (isLtr) (dampedDragAnimation.value + 0.5f) * tabWidth + panelOffset
@@ -256,8 +267,7 @@ fun LiquidBottomTabs(
                         scaleY = scale
                     },
                     onDrawSurface = {
-                        drawRect(darkContainerSurface, alpha = 1f - themeBlend)
-                        drawRect(lightContainerSurface, alpha = themeBlend)
+                        drawRect(containerSurface)
                     }
                 )
                 .then(interactiveHighlight.modifier)
@@ -312,8 +322,7 @@ fun LiquidBottomTabs(
                         shadow = { Shadow.Default },
                         renderOptions = pressRenderOptions,
                         onDrawSurface = {
-                            drawRect(darkContainerSurface, alpha = 1f - themeBlend)
-                            drawRect(lightContainerSurface, alpha = themeBlend)
+                            drawRect(containerSurface)
                         }
                     )
                     .then(interactiveHighlight.modifier)

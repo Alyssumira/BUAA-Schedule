@@ -31,7 +31,8 @@ object ConflictDetector {
                 val a = sorted[i]
                 val b = sorted[j]
                 if (a.id == b.id && a.id != 0L) continue
-                if (a.dayOfWeek != b.dayOfWeek) continue
+                // 已按星期升序排好：b 一旦跨到下一天，这个 i 后面再不会有同日的了
+                if (b.dayOfWeek > a.dayOfWeek) break
                 if (!periodsOverlap(a.periods, b.periods)) continue
                 val overlapWeeks = a.weeks.intersect(b.weeks.toSet()).sorted()
                 if (overlapWeeks.isNotEmpty()) {

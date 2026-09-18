@@ -96,10 +96,12 @@
                 android:maxLines="1" />
         </LinearLayout>
 
+        <!-- 0dp + weight：见 widget_today.xml 同处注释——match_parent 会把表头那几十 dp 也算进网格高度，最后一行就画到组件外 -->
         <GridView
             android:id="@+id/widget_grid"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:layout_marginTop="4dp"
             android:numColumns="7"
             android:horizontalSpacing="4dp"
@@ -110,7 +112,8 @@
         <TextView
             android:id="@+id/widget_empty"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:gravity="center"
             android:text="@string/widget_empty_week"
             android:textColor="#E8F0FE"

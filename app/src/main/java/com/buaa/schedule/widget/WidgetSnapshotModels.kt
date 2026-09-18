@@ -38,6 +38,12 @@ data class CourseDto(
     val sourceGroupKey: String? = null,
     val semesterCode: String? = null,
     val isManualOverride: Boolean = false,
+    /**
+     * 学分。这个 DTO 是 [Course] 的逐字段镜像，少一列就等于快照与主库不是同一门课
+     * （读快照的一侧永远看不到学分）。可空 + 有默认值：升级前写下的快照没有这个键，
+     * 解出来是 null，下一次 `WidgetDataSynchronizer` 覆盖快照时就补上了。
+     */
+    val credit: Double? = null,
 )
 
 @Serializable
@@ -78,6 +84,7 @@ private fun Course.toDto() = CourseDto(
     sourceGroupKey = sourceGroupKey,
     semesterCode = semesterCode,
     isManualOverride = isManualOverride,
+    credit = credit,
 )
 
 private fun CourseDto.toDomain() = Course(
@@ -96,6 +103,7 @@ private fun CourseDto.toDomain() = Course(
     sourceGroupKey = sourceGroupKey,
     semesterCode = semesterCode,
     isManualOverride = isManualOverride,
+    credit = credit,
 )
 
 private fun TimeSlot.toDto() = TimeSlotDto(number, startTime, endTime)

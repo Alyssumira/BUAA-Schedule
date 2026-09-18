@@ -1,10 +1,12 @@
 package com.buaa.schedule.core.designsystem
 
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.text.TextStyle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -21,6 +23,8 @@ import org.junit.Test
  *
  * 所以这里遍历槽位本身，而不是逐个手写断言：material3 升级新增槽位时，
  * 数量断言会失败并强制有人回头看一眼。
+ *
+ * 排版侧是同一个洞、同一套做法：见 [typographyDefinesEveryLevel]。
  */
 class ThemeSlotTest {
 
@@ -84,6 +88,34 @@ class ThemeSlotTest {
     }
 
     /**
+     * 排版槽位门禁（③P3-6），与 [assertNoBaselineLeak] 同一套做法。
+     *
+     * `Typography` 的 15 个参数每一个都有 Material 3 默认值，少写一级不会编译失败，
+     * 只会静默落到 baseline 的字号上 —— 项目里出过一次"名义 12sp、实际 11sp"，
+     * 这次是 headlineMedium：统计页的大数字一直在用 M3 的那 28sp/400 字重。
+     *
+     * 排版侧不需要颜色侧那份"与规范同值"白名单：baseline 的 TextStyle 自带
+     * `fontFamily=SansSerif`、`letterSpacing`、`platformStyle`，本项目的刻度只写
+     * 字重/字号/行高，所以**显式写过的档位永远不可能与 baseline 等值**，
+     * 相等只可能是"这一级根本没写、拿到的就是默认对象本身"。
+     */
+    @Test
+    fun typographyDefinesEveryLevel() {
+        val ours = typeSlots(ScheduleTypography)
+        val theirs = typeSlots(Typography())
+        assertEquals(
+            "Typography 槽位数量变了（${ours.size}），material3 升级后需要回头补全定义",
+            EXPECTED_TYPOGRAPHY_SLOT_COUNT,
+            ours.size,
+        )
+        val leaked = ours.entries.filter { (name, style) -> style == theirs[name] }
+        assertTrue(
+            "排版刻度里有 ${leaked.size} 级没写，正在静默使用 M3 baseline 的默认值：${leaked.map { it.key }}",
+            leaked.isEmpty(),
+        )
+    }
+
+    /**
      * 每个槽位都必须是我们显式定义的值。
      *
      * 允许与 baseline 相同的情况只有两种：
@@ -132,6 +164,19 @@ class ThemeSlotTest {
                 name to Color((method.invoke(scheme) as Long).toULong())
             }
 
+    private fun typeSlots(typo: Typography): Map<String, TextStyle> =
+        Typography::class.java.methods
+            .filter {
+                it.name.startsWith("get") &&
+                    it.parameterCount == 0 &&
+                    it.returnType == TextStyle::class.java
+            }
+            .associate { method ->
+                val name = method.name.removePrefix("get").substringBefore('-')
+                    .replaceFirstChar { it.lowercase() }
+                name to method.invoke(typo) as TextStyle
+            }
+
     private fun contrast(foreground: Color, background: Color): Float {
         val hi = maxOf(foreground.luminance(), background.luminance())
         val lo = minOf(foreground.luminance(), background.luminance())
@@ -141,6 +186,9 @@ class ThemeSlotTest {
     companion object {
         /** material3 1.3.1：ColorScheme 的 36 个颜色槽位 */
         private const val EXPECTED_SLOT_COUNT = 36
+
+        /** material3 1.3.1：Typography 的 15 级排版槽位 */
+        private const val EXPECTED_TYPOGRAPHY_SLOT_COUNT = 15
 
         /**
          * 「与 baseline 同值但不算漏写」的两块红：Material 3 规范给深色 error 族定的就是

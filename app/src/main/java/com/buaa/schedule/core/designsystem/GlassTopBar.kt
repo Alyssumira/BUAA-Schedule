@@ -1,12 +1,14 @@
 package com.buaa.schedule.core.designsystem
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -14,7 +16,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 
 /**
  * 统一玻璃顶栏：二级页面的标题栏。
@@ -27,12 +28,21 @@ import androidx.compose.ui.unit.dp
  * 返回按钮保持"文字按钮"而不是箭头图标：与站内其它入口（登录页顶栏）一致。
  *
  * @param title 标题，超长自动省略（避免挤压右侧 actions）
+ * @param subtitle 标题下的次级说明（日期区间、当前学期这类）。为空时栏体保持 48dp 基准高。
+ * @param progress 加载进度 0f..1f，渲染在栏体底部边缘；null 表示不显示。
+ *   登录/扫码这类 WebView 页此前各自手写一条内联 `LinearProgressIndicator`，
+ *   收敛到这里后顶栏高度、圆角、材质由同一处保证。
+ * @param statusBarInset 为 true 时玻璃仍铺到状态栏后面、内容整体下移一个状态栏高度。
+ *   给**非 Scaffold** 的全屏页（登录/扫码）用；Scaffold 的 topBar 槽自带 inset，别重复加。
  * @param onBack 为空时不渲染返回按钮（一级页面）
  */
 @Composable
 fun GlassTopBar(
     title: String,
     modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    progress: Float? = null,
+    statusBarInset: Boolean = false,
     onBack: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
@@ -45,36 +55,48 @@ fun GlassTopBar(
         ),
         modifier = modifier.fillMaxWidth(),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(GLASS_TOP_BAR_HEIGHT)
-                .padding(horizontal = DesignTokens.spaceS),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            modifier = if (statusBarInset) Modifier.statusBarsPadding() else Modifier,
         ) {
-            if (onBack != null) {
-                // M3 TextButton 默认最小高 40dp：在 48dp 的栏体里仍够不到触控下限（U-10）
-                TextButton(
-                    onClick = onBack,
-                    modifier = Modifier.defaultMinSize(minHeight = DesignTokens.minTouchTarget),
-                ) { Text("返回") }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = DesignTokens.topBarHeight)
+                    .padding(horizontal = DesignTokens.spaceS),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (onBack != null) {
+                    // M3 TextButton 默认最小高 40dp：在 48dp 的栏体里仍够不到触控下限（U-10）
+                    TextButton(
+                        onClick = onBack,
+                        modifier = Modifier.defaultMinSize(minHeight = DesignTokens.minTouchTarget),
+                    ) { Text("返回") }
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (!subtitle.isNullOrBlank()) {
+                        Text(
+                            text = subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                actions()
             }
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            actions()
+            if (progress != null) {
+                LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
     }
 }
-
-/**
- * 顶栏高度：各页保持一致，避免标题栏高低不一。
- *
- * 不能低于 48dp —— 这一行的高度就是内部 IconButton/TextButton 触控目标的上限，
- * 44dp 会把 Material 默认的 48dp 最小可点区域压掉一圈（R5 F-49）。
- */
-private val GLASS_TOP_BAR_HEIGHT = 48.dp

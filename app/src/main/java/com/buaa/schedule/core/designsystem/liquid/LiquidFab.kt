@@ -26,6 +26,8 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.buaa.schedule.core.designsystem.ChromeSurfaceDark
+import com.buaa.schedule.core.designsystem.ChromeSurfaceLight
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.MotionTokens
 import com.buaa.schedule.core.designsystem.Personalization
@@ -90,9 +92,9 @@ fun LiquidFab(
     val alphaScale = DesignTokens.cardAlphaScale(Personalization.cardAlpha)
     val surfaceAlpha = (0.30f * alphaScale).coerceIn(0.08f, 0.55f)
     val surface = if (darkTheme) {
-        Color(0xFF121212).copy(alpha = surfaceAlpha)
+        ChromeSurfaceDark.copy(alpha = surfaceAlpha)
     } else {
-        Color(0xFFFAFAFA).copy(alpha = surfaceAlpha)
+        ChromeSurfaceLight.copy(alpha = surfaceAlpha)
     }
 
     Box(

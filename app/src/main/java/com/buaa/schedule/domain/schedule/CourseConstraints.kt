@@ -26,6 +26,13 @@ object CourseConstraints {
     /** 自定义颜色合法上限（ARGB 32 位，0x00000000..0xFFFFFFFF） */
     const val MAX_CUSTOM_COLOR_ARGB = 0xFFFFFFFFL
 
+    /**
+     * 单门课程学分上限。北航一门课最多十几学分（毕业设计量级），100 足以拦住
+     * 脏数据又不会误伤任何真实课程 —— 统计页是按学分求和的，一条 `"1e308"`
+     * 就足以把整学期的总学分变成无穷大。
+     */
+    const val MAX_CREDIT = 100.0
+
     fun normalizeTotalWeeks(value: Int): Int = value.coerceIn(1, MAX_TOTAL_WEEKS)
 
     fun normalizeAdvanceMinutes(value: Int): Int = value.coerceIn(0, MAX_ADVANCE_MINUTES)
@@ -37,6 +44,15 @@ object CourseConstraints {
      */
     fun normalizeCustomColorArgb(value: Long?): Long? =
         value?.takeIf { it in 0L..MAX_CUSTOM_COLOR_ARGB }
+
+    /**
+     * 学分归一化：只接受 `0..MAX_CREDIT` 内的有限数值，其余一律判为「没有学分数据」。
+     *
+     * 坏值必须回退成 null 而不是 0：统计页里 0 的含义是"教务明说这门课不计学分"，
+     * 脏数值（负数、`1e308`、NaN）冒充 0 会把总学分算错、而且从界面上看不出来。
+     */
+    fun normalizeCredit(value: Double?): Double? =
+        value?.takeIf { it.isFinite() && it in 0.0..MAX_CREDIT }
 
     fun normalizeWeeks(weeks: List<Int>): List<Int> =
         weeks.filter { it in 1..MAX_WEEK }.distinct().sorted()
@@ -60,6 +76,7 @@ object CourseConstraints {
             weeks = weeks,
             colorIndex = course.colorIndex.coerceAtLeast(0),
             customColorArgb = normalizeCustomColorArgb(course.customColorArgb),
+            credit = normalizeCredit(course.credit),
         )
     }
 }

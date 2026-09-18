@@ -88,6 +88,26 @@ fun courseColor(course: com.buaa.schedule.domain.model.Course): Color =
         ?.let { Color(it) }
         ?: CourseColors[Math.floorMod(course.colorIndex, CourseColors.size)]
 
+/**
+ * 手写液态玻璃表面（底栏 / FAB）的栏体基色。
+ *
+ * 这些表面不在 ColorScheme 链上（Kyant 的 `drawBackdrop` 只给 `onDrawSurface` 回调），
+ * 只能自带"中性玻璃底板"色。此前 `0xFFFAFAFA`/`0xFF121212` 在两个组件文件里各写一份。
+ */
+val ChromeSurfaceLight = Color(0xFFFAFAFA)
+val ChromeSurfaceDark = Color(0xFF121212)
+
+/**
+ * 默认场景背景（无壁纸时）：北航蓝三段渐变 + 两团光斑。
+ * 玻璃折射采样的就是这几个颜色，改它们等于改所有玻璃的观感底色。
+ */
+val SceneDarkBase = listOf(Color(0xFF0D1526), Color(0xFF101A30), Color(0xFF131229))
+val SceneLightBase = listOf(Color(0xFFEAF1FD), Color(0xFFDCE9FB), Color(0xFFE6E3F6))
+val SceneDarkSpotA = Color(0xFF2E6BD6)
+val SceneDarkSpotB = Color(0xFF7A4FD0)
+val SceneLightSpotA = Color(0xFF9EC3F8)
+val SceneLightSpotB = Color(0xFFC9B8F0)
+
 /** 背景亮度（相对亮度，0..1），用于自动选择黑/白前景 */
 fun Color.readableLuminance(): Float {
     fun channel(v: Float): Float = if (v <= 0.03928f) v / 12.92f else Math.pow(((v + 0.055) / 1.055).toDouble(), 2.4).toFloat()

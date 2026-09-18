@@ -1,5 +1,6 @@
 package com.buaa.schedule.ui.course
 
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
@@ -23,10 +24,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -58,21 +60,24 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.buaa.schedule.core.designsystem.ColorSwatch
 import com.buaa.schedule.core.designsystem.CourseColors
 import com.buaa.schedule.core.designsystem.LocalAnimatedVisibilityScope
 import com.buaa.schedule.core.designsystem.LocalSharedTransitionScope
+import com.buaa.schedule.core.designsystem.ModalTransition
 import com.buaa.schedule.core.designsystem.DesignTokens
+import com.buaa.schedule.core.designsystem.EmptyState
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.contentOn
 import com.buaa.schedule.core.designsystem.motionSpec
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.CourseSaveOptions
-import com.buaa.schedule.domain.model.periodLabel
+import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.model.periodLabelOf
+import com.buaa.schedule.domain.model.weekdayLabel
 import com.buaa.schedule.ui.ScheduleViewModel
 import kotlinx.coroutines.launch
-
-private val DAY_NAMES = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
 /**
  * 课表管理总览页：按"同一门课"（sourceGroupKey）归并展示全部排课片段，
@@ -127,57 +132,80 @@ fun CourseManagementScreen(
                 keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
             )
 
-            if (groups.isEmpty()) {
-                GlassSurface(
-                    variant = GlassVariant.PANEL,
-                    contentPadding = DesignTokens.spaceL,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        text = if (state.courses.isEmpty()) "还没有课程，去首页新增或导入一份课表吧。"
-                        else "没有匹配「$query」的课程。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM)) {
-                    items(groups, key = { it.key }) { group ->
-                        CourseGroupCard(
-                            group = group,
-                            colorExpanded = colorTargetKey == group.key,
-                            onToggleColor = {
-                                colorTargetKey = if (colorTargetKey == group.key) null else group.key
-                            },
-                            onPickColor = { index ->
-                                val primary = group.fragments.first()
-                                scope.launch {
-                                    viewModel.updateCourse(
-                                        primary.copy(colorIndex = index, customColorArgb = null),
-                                        CourseSaveOptions(applyToGroup = true),
-                                    )
-                                }
-                            },
-                            onEdit = { onEditCourse(group.fragments.first()) },
-                            onRequestDelete = { pendingDelete = group },
-                            // 删课/换色分组时整列重排有过渡，不是瞬间抽走
-                            modifier = Modifier.animateItem(),
-                        )
+            // 空态 ↔ 列表不做硬切：搜索边打字边过滤，两种状态会高频互切，
+            // 用 Crossfade 收敛（与日视图空态同一件写法）
+            Crossfade(
+                targetState = groups.isEmpty(),
+                animationSpec = motionSpec<Float>(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            ) { isEmpty ->
+                if (isEmpty) {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        if (state.courses.isEmpty()) {
+                            EmptyState(
+                                icon = Icons.Filled.School,
+                                title = "还没有课程",
+                                description = "去首页新增一门课，或者导入一份教务课表。",
+                            )
+                        } else {
+                            EmptyState(
+                                icon = Icons.Filled.Search,
+                                title = "没有匹配「$query」的课程",
+                                description = "换个课程名或教师名试试，清空搜索框就能看到全部。",
+                            )
+                        }
                     }
-                    item { Spacer(modifier = Modifier.height(DesignTokens.spaceXL)) }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM),
+                    ) {
+                        items(groups, key = { it.key }) { group ->
+                            CourseGroupCard(
+                                group = group,
+                                timeSlots = state.timeSlots,
+                                colorExpanded = colorTargetKey == group.key,
+                                onToggleColor = {
+                                    colorTargetKey = if (colorTargetKey == group.key) null else group.key
+                                },
+                                onPickColor = { index ->
+                                    val primary = group.fragments.first()
+                                    scope.launch {
+                                        viewModel.updateCourse(
+                                            primary.copy(colorIndex = index, customColorArgb = null),
+                                            CourseSaveOptions(applyToGroup = true),
+                                        )
+                                    }
+                                },
+                                onEdit = { onEditCourse(group.fragments.first()) },
+                                onRequestDelete = { pendingDelete = group },
+                                // 删课/换色分组时整列重排有过渡，不是瞬间抽走
+                                modifier = Modifier.animateItem(),
+                            )
+                        }
+                        item { Spacer(modifier = Modifier.height(DesignTokens.spaceXL)) }
+                    }
                 }
             }
         }
     }
 
-    pendingDelete?.let { group ->
+    // 走 payload 版而不是 `pendingDelete?.let`：清空的那一刻整棵子树就没了，收场一帧都播不出来
+    ModalTransition(payload = pendingDelete) { group, modal ->
         AlertDialog(
+            modifier = modal,
             onDismissRequest = { pendingDelete = null },
             title = { Text("删除「${group.displayName}」？") },
             text = {
                 Text(
                     text = "将删除这门课的全部 ${group.fragments.size} 个片段" +
-                        "（${group.fragments.joinToString("、") { periodLabel(it.periods) }}）。" +
+                        "（${group.fragments.joinToString("、") { periodLabelOf(it.periods, state.timeSlots) }}）。" +
                         "删除后可在提示条里撤销。",
                 )
             },
@@ -208,6 +236,7 @@ fun CourseManagementScreen(
 @Composable
 private fun CourseGroupCard(
     group: CourseGroup,
+    timeSlots: List<TimeSlot>,
     colorExpanded: Boolean,
     onToggleColor: () -> Unit,
     onPickColor: (Int) -> Unit,
@@ -279,7 +308,7 @@ private fun CourseGroupCard(
                             group.teacher,
                             // 别名生效时才提一句原名：管理页得能看出这个别名挂在哪门课上
                             if (group.name != group.displayName) "原名 ${group.name}" else null,
-                            fragmentSummary(group.fragments),
+                            fragmentSummary(group.fragments, timeSlots),
                             "${group.fragments.size} 段",
                         )
                             // 空串也要滤：只判 null 的话，摘要为空就拼出「 · 5 段」这种悬空分隔符
@@ -313,35 +342,12 @@ private fun CourseGroupCard(
                     horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
                 ) {
                     CourseColors.forEachIndexed { index, swatch ->
-                        val selected = primary.customColorArgb == null &&
-                            Math.floorMod(primary.colorIndex, CourseColors.size) == index
-                        // 触达目标是 48dp 的透明外壳（Material 无障碍最低触达），
-                        // 视觉色块保持 30dp：48dp 的色球排在 8 色一行会溢出
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clickable(
-                                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                                    indication = null,
-                                    role = androidx.compose.ui.semantics.Role.Button,
-                                ) { onPickColor(index) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(30.dp)
-                                    .background(swatch, CircleShape),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                if (selected) {
-                                    Icon(
-                                        Icons.Default.Check,
-                                        contentDescription = "当前颜色",
-                                        tint = contentOn(swatch),
-                                    )
-                                }
-                            }
-                        }
+                        ColorSwatch(
+                            color = swatch,
+                            selected = primary.customColorArgb == null &&
+                                Math.floorMod(primary.colorIndex, CourseColors.size) == index,
+                            onClick = { onPickColor(index) },
+                        )
                     }
                 }
             }
@@ -358,11 +364,11 @@ private const val MaxSummaryFragments = 3
  * 原来是要素拼完再 `.take(60)` 按**字符**硬截：60 会砍在「周三 3-」这种半截上，
  * 读者既不知道被截了、也不知道还剩几段（审查①V-03）。限量单位改成"段"。
  */
-private fun fragmentSummary(fragments: List<Course>): String {
+private fun fragmentSummary(fragments: List<Course>, timeSlots: List<TimeSlot>): String {
     if (fragments.isEmpty()) return ""
     val shown = fragments.take(MaxSummaryFragments).joinToString(" ") { fragment ->
-        "${DAY_NAMES.getOrElse(fragment.dayOfWeek - 1) { "周?" }} ${
-            periodLabel(fragment.periods).removePrefix("第").removeSuffix("节").trim()
+        "${weekdayLabel(fragment.dayOfWeek) ?: "周?"} ${
+            periodLabelOf(fragment.periods, timeSlots).removePrefix("第").removeSuffix("节").trim()
         }"
     }
     return if (fragments.size > MaxSummaryFragments) "$shown …" else shown

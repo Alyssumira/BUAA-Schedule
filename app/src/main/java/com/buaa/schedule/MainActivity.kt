@@ -16,7 +16,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -83,6 +82,8 @@ import com.buaa.schedule.core.designsystem.LocalSharedTransitionScope
 import com.buaa.schedule.core.designsystem.MotionTokens
 import com.buaa.schedule.core.designsystem.Personalization
 import com.buaa.schedule.core.designsystem.SceneBackground
+import com.buaa.schedule.core.designsystem.motionSpecFor
+import com.buaa.schedule.core.designsystem.rememberReduceMotion
 import com.buaa.schedule.core.designsystem.BUAAScheduleTheme
 import com.buaa.schedule.ui.ScheduleViewModel
 import com.buaa.schedule.core.designsystem.liquid.LiquidBottomTab
@@ -95,6 +96,9 @@ import com.buaa.schedule.ui.importing.BuaaLoginScreen
 import com.buaa.schedule.ui.importing.ImportHistoryScreen
 import com.buaa.schedule.ui.importing.ImportScreen
 import com.buaa.schedule.ui.settings.SettingsScreen
+import com.buaa.schedule.ui.signin.SpocLoginScreen
+import com.buaa.schedule.ui.signin.SpocScanScreen
+import com.buaa.schedule.ui.stats.StatsScreen
 import com.buaa.schedule.widget.WidgetNavigation
 import com.buaa.schedule.core.openExternalUrl
 import com.buaa.schedule.update.RELEASES_PAGE_URL
@@ -114,6 +118,12 @@ class MainActivity : ComponentActivity() {
      * 之前这个 extra 只被写入、没有任何消费方，"点行跳到对应课程"实际上是空功能。
      */
     private val requestedCourseId = mutableStateOf<Long?>(null)
+
+    /**
+     * 通知按钮要求直接打开的页内路由（null = 无请求）。一次性：跳完立刻清空，
+     * 否则转屏或任何重组都会再跳一次，把用户从自己正在看的页面上踢走。
+     */
+    private val requestedRoute = mutableStateOf<String?>(null)
 
     /**
      * 4×2 网格组件的格子点击传入的星期序号（ISO：1=周一 … 7=周日，null = 无请求）。
@@ -138,6 +148,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         requestedCourseId.value = courseIdFrom(intent)
+        requestedRoute.value = routeFrom(intent)
         requestedDayOfWeek.value = dayOfWeekFrom(intent)
         // 老用户（引导已完成）没有自检步可走，通知权限仍在启动时补申请一次
         if (FirstRun.onboardingCompleted(this)) maybeRequestNotificationPermission()
@@ -146,28 +157,42 @@ class MainActivity : ComponentActivity() {
             var onboardingDone by remember {
                 mutableStateOf(FirstRun.onboardingCompleted(this))
             }
-            if (onboardingDone) {
-                BUAAScheduleApp(
-                    requestedCourseId = requestedCourseId.value,
-                    onCourseRequestConsumed = { requestedCourseId.value = null },
-                    requestedDayOfWeek = requestedDayOfWeek.value,
-                    onDayRequestConsumed = { requestedDayOfWeek.value = null },
-                    startRoute = pendingStartRoute.value,
-                )
-            } else {
-                BUAAScheduleTheme(
-                    darkTheme = androidx.compose.foundation.isSystemInDarkTheme(),
-                    dynamicColor = Personalization.useDynamicColor,
-                    seedColorArgb = Personalization.seedColorArgb,
-                ) {
-                    OnboardingScreen(
-                        onFinished = { startRoute ->
-                            onboardingDone = true
-                            pendingStartRoute.value = startRoute
-                            // 从欢迎页/隐私页就点跳过的人不会经过自检步，权限在这里补
-                            maybeRequestNotificationPermission()
-                        },
+            // 开关供在 if 之外，两棵子树都要拿到：引导页不是 NavHost 的一个 destination，
+            // 而是整棵子树在这里被换进换出，此前装在 BUAAScheduleApp 里时引导页那一支
+            // 永远读到默认值 false，那一支里读这颗开关的组件便都不受系统动画开关管束
+            // （④M-01 的口径：全站每一条动画都拿得到，才是规则而不是补丁）。
+            // 放在 setContent 这一层，LocalLifecycleOwner 仍是 Activity 本身，
+            // "改完设置回来重读"的 ON_RESUME 时机不变。
+            CompositionLocalProvider(
+                LocalReduceMotion provides rememberReduceMotion(),
+            ) {
+                if (onboardingDone) {
+                    BUAAScheduleApp(
+                        requestedCourseId = requestedCourseId.value,
+                        onCourseRequestConsumed = { requestedCourseId.value = null },
+                        requestedRoute = requestedRoute.value,
+                        onRouteRequestConsumed = { requestedRoute.value = null },
+                        requestedDayOfWeek = requestedDayOfWeek.value,
+                        onDayRequestConsumed = { requestedDayOfWeek.value = null },
+                        startRoute = pendingStartRoute.value,
                     )
+                } else {
+                    BUAAScheduleTheme(
+                        darkTheme = androidx.compose.foundation.isSystemInDarkTheme(),
+                        dynamicColor = Personalization.useDynamicColor,
+                        seedColorArgb = Personalization.seedColorArgb,
+                        // 主题在 LocalReduceMotion 的上游，取不到就得自己传
+                        reduceMotion = com.buaa.schedule.core.designsystem.rememberReduceMotion(),
+                    ) {
+                        OnboardingScreen(
+                            onFinished = { startRoute ->
+                                onboardingDone = true
+                                pendingStartRoute.value = startRoute
+                                // 从欢迎页/隐私页就点跳过的人不会经过自检步，权限在这里补
+                                maybeRequestNotificationPermission()
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -178,6 +203,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         courseIdFrom(intent)?.let { requestedCourseId.value = it }
+        routeFrom(intent)?.let { requestedRoute.value = it }
         dayOfWeekFrom(intent)?.let { requestedDayOfWeek.value = it }
     }
 
@@ -209,7 +235,10 @@ class MainActivity : ComponentActivity() {
         // Sleepy 式状态驱动兜底：进前台即校准「课程进行中」实况。
         // 上课铃被 ROM 省电策略吞掉时，用户课堂中打开 App 也能当场补起实况，
         // 而不是等到下一节课（详见 reminder.LiveClassResyncer）。
-        lifecycleScope.launch {
+        // ⚠️ 必须离开 Main：resync 里的 planNextClassWindow 是普通阻塞函数，
+        // 对每门课展开「剩余周次 × 节次段」（课程上限 2000），
+        // lifecycleScope 默认 Main.immediate 等于每次切回前台卡一次首帧。
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Default) {
             com.buaa.schedule.reminder.LiveClassResyncer.resync(applicationContext)
         }
     }
@@ -238,6 +267,15 @@ class MainActivity : ComponentActivity() {
     private fun dayOfWeekFrom(intent: Intent?): Int? =
         intent?.getIntExtra(WidgetNavigation.EXTRA_DAY_OF_WEEK, 0)?.takeIf { it in 1..7 }
 
+    /**
+     * 从启动 Intent 里取「要打开哪个页内路由」。
+     *
+     * MainActivity 是 launcher 页，外部应用可以直接带 extra 进来，所以这里过白名单：
+     * 只认通知链路真正会发的那几条。
+     */
+    private fun routeFrom(intent: Intent?): String? =
+        intent?.getStringExtra(EXTRA_ROUTE)?.takeIf { it in ROUTABLE_FROM_INTENT }
+
     /** Android 13+ 需要运行时申请通知权限；仅申请一次（后续由设置页引导） */
     private fun maybeRequestNotificationPermission() {
         if (Build.VERSION.SDK_INT < 33) return
@@ -254,6 +292,14 @@ class MainActivity : ComponentActivity() {
          * 组件行点击、课堂实况通知与超级岛点按都复用它。
          */
         internal const val EXTRA_COURSE_ID = "com.buaa.schedule.widget.EXTRA_COURSE_ID"
+
+        /**
+         * 「打开某个页内路由」的 deeplink 键：课前提醒的「扫码签到」按钮用它直达扫码页。
+         */
+        internal const val EXTRA_ROUTE = "com.buaa.schedule.EXTRA_ROUTE"
+
+        /** [EXTRA_ROUTE] 承认的路由：见 [routeFrom] */
+        private val ROUTABLE_FROM_INTENT = setOf("spoc_scan", "spoc_login")
     }
 }
 
@@ -333,6 +379,9 @@ enum class DarkModePreference(val label: String) {
 private fun BUAAScheduleApp(
     requestedCourseId: Long? = null,
     onCourseRequestConsumed: () -> Unit = {},
+    /** 通知按钮要求直接打开的页内路由（null = 无请求） */
+    requestedRoute: String? = null,
+    onRouteRequestConsumed: () -> Unit = {},
     /** 4×2 网格格子点击要打开的那一天（ISO 1..7，null = 无请求） */
     requestedDayOfWeek: Int? = null,
     onDayRequestConsumed: () -> Unit = {},
@@ -390,6 +439,13 @@ private fun BUAAScheduleApp(
         // 请求，不加这个参数编辑器就会叠在编辑器自己身上，返回键要按两下才出得去。
         navController.navigate("editor/$id") { launchSingleTop = true }
         onCourseRequestConsumed()
+    }
+    // 通知按钮 → 直接打开某个页面（课前提醒上的「扫码签到」）。
+    // 不像课程 id 那样等 uiState.loading：扫码页不读课表，等一下只会让跳转慢半拍。
+    LaunchedEffect(requestedRoute) {
+        val route = requestedRoute ?: return@LaunchedEffect
+        navController.navigate(route) { launchSingleTop = true }
+        onRouteRequestConsumed()
     }
     // 桌面组件 4×2 格子 → 那一天的日视图（T-26）。
     // 这里只负责把人带回首页：具体落哪个日期要等课表数据到位（周次决定日期），
@@ -458,14 +514,14 @@ private fun BUAAScheduleApp(
                 )
         ) {
             SceneBackground(darkTheme = darkTheme, backdrop = sceneBackdrop)
+            // LocalReduceMotion 不在这里供：它装在 setContent 的 if 之外（见 onCreate），
+            // 因为引导页那一支不是 NavHost 的 destination，供在这一层它就拿不到。
             androidx.compose.runtime.CompositionLocalProvider(
                 com.buaa.schedule.core.designsystem.LocalSceneBackdrop provides sceneBackdrop,
                 com.buaa.schedule.core.designsystem.LocalSharedCourseBackdrop provides sharedCourseBackdrop,
-                com.buaa.schedule.core.designsystem.LocalReduceMotion provides
-                    com.buaa.schedule.core.designsystem.rememberReduceMotion(),
             ) {
                 BoxWithConstraints {
-                if (maxWidth >= 600.dp) {
+                if (maxWidth >= DesignTokens.breakpointWide) {
                     // 宽屏：左侧玻璃导航栏 + 内容
                     Row(modifier = Modifier.fillMaxSize()) {
                         GlassNavRail(
@@ -559,28 +615,29 @@ private fun BUAAScheduleApp(
 private fun UpdateDialogHost(context: Context) {
     val updateState by UpdateCheck.state.collectAsState()
     LaunchedEffect(Unit) { UpdateCheck.check(context, force = false) }
-    if (updateState.visible) {
-        val info = when (val s = updateState) {
-            is UpdateUiState.Available -> s.info
-            is UpdateUiState.NeedsInstallPermission -> s.info
-            is UpdateUiState.InstallBlocked -> s.info
-            else -> null
-        }
-        UpdateDialog(
-            state = updateState,
-            currentVersion = BuildConfig.VERSION_NAME,
-            onDismiss = { UpdateCheck.dismiss() },
-            onDownload = { (updateState as? UpdateUiState.Available)?.info?.let { UpdateCheck.startDownload(context, it) } },
-            onCancelDownload = { UpdateCheck.cancelDownload() },
-            onIgnore = { info?.let { UpdateCheck.ignore(context, it) } },
-            onOpenReleasePage = {
-                openExternalUrl(context, info?.pageUrl ?: RELEASES_PAGE_URL)
-                UpdateCheck.dismiss()
-            },
-            onOpenInstallPermissionSettings = { UpdateCheck.openInstallPermissionSettings(context) },
-            onRetryInstall = { UpdateCheck.retryInstall(context) },
-        )
+    // 不再写 `if (updateState.visible)`：那个 if 在状态回到 Idle 的同一刻就把子树摘走，
+    // 弹窗的收场动画一帧都播不出来。可见性闸门在 UpdateDialog 内部（它用 ModalTransition
+    // 把「该不该画」和「还挂不挂」分开），这里保持无条件组合。
+    val info = when (val s = updateState) {
+        is UpdateUiState.Available -> s.info
+        is UpdateUiState.NeedsInstallPermission -> s.info
+        is UpdateUiState.InstallBlocked -> s.info
+        else -> null
     }
+    UpdateDialog(
+        state = updateState,
+        currentVersion = BuildConfig.VERSION_NAME,
+        onDismiss = { UpdateCheck.dismiss() },
+        onDownload = { (updateState as? UpdateUiState.Available)?.info?.let { UpdateCheck.startDownload(context, it) } },
+        onCancelDownload = { UpdateCheck.cancelDownload() },
+        onIgnore = { info?.let { UpdateCheck.ignore(context, it) } },
+        onOpenReleasePage = {
+            openExternalUrl(context, info?.pageUrl ?: RELEASES_PAGE_URL)
+            UpdateCheck.dismiss()
+        },
+        onOpenInstallPermissionSettings = { UpdateCheck.openInstallPermissionSettings(context) },
+        onRetryInstall = { UpdateCheck.retryInstall(context) },
+    )
 }
 
 @Composable
@@ -622,6 +679,13 @@ private fun AppNavHost(
             }
         }
     }
+    // 首页加号与设置页共用一条入口：没有 token 时扫码必然失败，先进登录页，
+    // 登录页成功后自己 popUpTo 换成扫码页。两处各写一份判断迟早会走岔。
+    val openSpocSignIn: () -> Unit = {
+        navController.navigate(
+            if (com.buaa.schedule.data.import.SpocSession.hasSession()) "spoc_scan" else "spoc_login",
+        )
+    }
     @OptIn(ExperimentalSharedTransitionApi::class)
     SharedTransitionLayout(modifier = Modifier.fillMaxSize()) {
         val sharedTransitionScope = this
@@ -655,6 +719,7 @@ private fun AppNavHost(
                     onAddCourse = { navController.navigate("editor/-1") },
                     onImportBuaa = { navController.navigate("buaa_login") },
                     onCourseManagement = { navController.navigate("course_management") },
+                    onSpocSignIn = openSpocSignIn,
                     onCourseClick = { course -> navController.navigate("editor/${course.id}") },
                     bottomBarVisible = bottomBarVisible,
                     highlightCourseId = pulseCourseId,
@@ -752,6 +817,28 @@ private fun AppNavHost(
                 )
             }
         }
+        composable("spoc_login") {
+            CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+                SpocLoginScreen(
+                    onBack = { navController.popBackStack() },
+                    // 登录成功 → 直接把登录页换成扫码页：再退回首页让用户点第二次没有意义，
+                    // 而留在栈里会让「返回」把用户又丢回一个已经用完的登录页
+                    onLoggedIn = {
+                        navController.navigate("spoc_scan") {
+                            popUpTo("spoc_login") { inclusive = true }
+                        }
+                    },
+                )
+            }
+        }
+        composable("spoc_scan") {
+            CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+                SpocScanScreen(
+                    onBack = { navController.popBackStack() },
+                    onNeedLogin = { navController.navigate("spoc_login") },
+                )
+            }
+        }
         composable("settings") {
             CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
                 SettingsScreen(
@@ -763,7 +850,16 @@ private fun AppNavHost(
                         navController.navigate("settings/${section.id}")
                     },
                     onOpenCourseManagement = { navController.navigate("course_management") },
+                    onOpenStats = { navController.navigate("stats") },
+                    onOpenSpocSignIn = openSpocSignIn,
                     bottomBarVisible = bottomBarVisible,
+                )
+            }
+        }
+        composable("stats") {
+            CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+                StatsScreen(
+                    onBack = { navController.popBackStack() },
                 )
             }
         }
@@ -776,6 +872,7 @@ private fun AppNavHost(
                     section = com.buaa.schedule.ui.settings.SettingsSection
                         .fromId(entry.arguments?.getString("section")),
                     onOpenCourseManagement = { navController.navigate("course_management") },
+                    onOpenSpocSignIn = openSpocSignIn,
                 )
             }
         }
@@ -824,6 +921,10 @@ private fun navMotionFor(
 /**
  * @param reduceMotion 由组合期捕获：转场 lambda 不在组合里求值，取不到 LocalReduceMotion
  * @param enterFromRight push 时新页从右侧推入，pop 时从左侧回来
+ *
+ * 规格一律走 [motionSpecFor]：这里此前把 `tween(MotionTokens.X)` 重写了 8 遍，
+ * 等于把"关了动画就瞬到"这条策略在第二个地方又表达了一次（此处靠 reduceMotion
+ * 参数兜住，但下一处新转场就会漏）。时长与缓动的配对逐条照搬，未作调整。
  */
 private fun navEnter(
     style: NavMotion,
@@ -834,21 +935,27 @@ private fun navEnter(
     return when (style) {
         // 旧页先退净，新页才进来，中间不留两张半透明的页叠在一起
         NavMotion.FADE_THROUGH -> fadeIn(
-            tween(
+            motionSpecFor(
+                reduceMotion,
                 MotionTokens.DURATION_FADE_THROUGH_ENTER,
                 delayMillis = MotionTokens.DURATION_FADE_THROUGH_EXIT,
             ),
         )
         // 让位不等于设 None：那样旧页会在动画收尾的一刻硬切消失
-        NavMotion.CONTAINER_YIELD -> fadeIn(tween(MotionTokens.DURATION_SHORT))
+        NavMotion.CONTAINER_YIELD ->
+            fadeIn(motionSpecFor(reduceMotion, MotionTokens.DURATION_SHORT))
         NavMotion.SLIDE -> slideInHorizontally(
-            animationSpec = tween(MotionTokens.DURATION_MEDIUM, easing = MotionTokens.EasingStandard),
+            animationSpec = motionSpecFor(
+                reduceMotion,
+                MotionTokens.DURATION_MEDIUM,
+                easing = MotionTokens.EasingStandard,
+            ),
             initialOffsetX = { if (enterFromRight) it / 6 else -it / 6 },
-        ) + fadeIn(tween(MotionTokens.DURATION_MEDIUM))
+        ) + fadeIn(motionSpecFor(reduceMotion, MotionTokens.DURATION_MEDIUM))
     }
 }
 
-/** @param exitToRight push 时旧页退向左侧，pop 时退向右侧 */
+/** @param exitToRight push 时旧页退向左侧，pop 时退向右侧；规格来源同 [navEnter] */
 private fun navExit(
     style: NavMotion,
     reduceMotion: Boolean,
@@ -856,12 +963,18 @@ private fun navExit(
 ): ExitTransition {
     if (reduceMotion) return ExitTransition.None
     return when (style) {
-        NavMotion.FADE_THROUGH -> fadeOut(tween(MotionTokens.DURATION_FADE_THROUGH_EXIT))
-        NavMotion.CONTAINER_YIELD -> fadeOut(tween(MotionTokens.DURATION_SHORT))
+        NavMotion.FADE_THROUGH ->
+            fadeOut(motionSpecFor(reduceMotion, MotionTokens.DURATION_FADE_THROUGH_EXIT))
+        NavMotion.CONTAINER_YIELD ->
+            fadeOut(motionSpecFor(reduceMotion, MotionTokens.DURATION_SHORT))
         NavMotion.SLIDE -> slideOutHorizontally(
-            animationSpec = tween(MotionTokens.DURATION_MEDIUM, easing = MotionTokens.EasingStandard),
+            animationSpec = motionSpecFor(
+                reduceMotion,
+                MotionTokens.DURATION_MEDIUM,
+                easing = MotionTokens.EasingStandard,
+            ),
             targetOffsetX = { if (exitToRight) it / 6 else -it / 6 },
-        ) + fadeOut(tween(MotionTokens.DURATION_MEDIUM))
+        ) + fadeOut(motionSpecFor(reduceMotion, MotionTokens.DURATION_MEDIUM))
     }
 }
 
@@ -919,11 +1032,11 @@ private fun FloatingGlassBottomBar(
         backdrop = backdrop,
         tabsCount = navItems.size,
         modifier = modifier,
-        containerHeight = 64.dp,
-        indicatorHeight = 56.dp,
+        containerHeight = DesignTokens.bottomBarHeight,
+        indicatorHeight = DesignTokens.bottomBarIndicatorHeight,
         isLightTheme = !darkTheme,
         // 底栏表面色：过高会像不透明色条，0.20 让背景能透出来
-        containerAlpha = 0.20f,
+        containerAlpha = DesignTokens.CHROME_SURFACE_ALPHA,
         containerColor = if (darkTheme) {
             com.buaa.schedule.core.designsystem.DarkGlassTint
         } else {
@@ -977,7 +1090,7 @@ private fun GlassNavRail(
         contentPadding = DesignTokens.spaceS,
         modifier = Modifier
             .fillMaxHeight()
-            .width(84.dp),
+            .width(DesignTokens.navRailWidth),
     ) {
         Column(
             modifier = Modifier.fillMaxSize().navigationBarsPadding(),

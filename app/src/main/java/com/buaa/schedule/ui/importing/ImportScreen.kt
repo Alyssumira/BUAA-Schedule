@@ -49,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -60,6 +61,7 @@ import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalSemanticColors
 import com.buaa.schedule.core.designsystem.SettingsGroup
 import com.buaa.schedule.core.designsystem.SettingsRow
+import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.schedule.ImportPlanner
 import com.buaa.schedule.ui.ScheduleViewModel
 import com.buaa.schedule.ui.MAX_IMPORT_BYTES
@@ -110,6 +112,8 @@ fun ImportScreen(
     val importMessage by viewModel.importMessage.collectAsState()
     val buaaRefreshing by viewModel.buaaRefreshing.collectAsState()
     val pendingImport by viewModel.pendingImport.collectAsState()
+    // 预览里的节次文案要按节次表切段，否则「第5-6节」这种隔着午饭的课会写得和导入后不一致
+    val importState by viewModel.uiState.collectAsState()
     val importHistory by viewModel.importHistory.collectAsState()
     // 会话状态只用于展示（Hero 上的"已连接/未登录"），不是可观察数据源，
     // 每次重组读一次即可（操作后必然伴随重组）
@@ -147,9 +151,9 @@ fun ImportScreen(
                     }.getOrNull()
                 }
                 if (content == null) {
-                    viewModel.showMessage("ICS 文件过大（上限 8MB）或无法读取")
+                    viewModel.showMessage("ICS 文件过大（上限 8MB）或无法读取", isError = true)
                 } else if (content.isBlank()) {
-                    viewModel.showMessage("无法读取 ICS 文件")
+                    viewModel.showMessage("无法读取 ICS 文件", isError = true)
                 } else {
                     viewModel.importIcs(termCode = termCode.trim(), content = content)
                 }
@@ -168,9 +172,9 @@ fun ImportScreen(
                     }.getOrNull()
                 }
                 if (content == null) {
-                    viewModel.showMessage("文本文件过大（上限 8MB）或无法读取")
+                    viewModel.showMessage("文本文件过大（上限 8MB）或无法读取", isError = true)
                 } else if (content.isBlank()) {
-                    viewModel.showMessage("无法读取文本文件")
+                    viewModel.showMessage("无法读取文本文件", isError = true)
                 } else {
                     viewModel.importText(termCode = termCode.trim(), content = content)
                 }
@@ -277,7 +281,7 @@ fun ImportScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(max = 260.dp)
+                                .heightIn(max = DesignTokens.dialogListMaxHeight)
                                 .verticalScroll(rememberScrollState()),
                         ) {
                             pending.courses.forEach { course ->
@@ -285,18 +289,22 @@ fun ImportScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clickable { viewModel.togglePendingImportCourse(course) },
+                                        // 整行是唯一的点击靶：Checkbox 挂 onCheckedChange=null
+                                        // 不再自吞点击，否则点勾选框会触发两次 toggle、净效果为零
+                                        .clickable(
+                                            role = Role.Checkbox,
+                                            onClickLabel = if (excluded) "选入导入" else "移出导入",
+                                        ) { viewModel.togglePendingImportCourse(course) },
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Checkbox(
                                         checked = !excluded,
-                                        onCheckedChange = {
-                                            viewModel.togglePendingImportCourse(course)
-                                        },
+                                        // M3：onCheckedChange 传 null 即关闭自身点击交互
+                                        onCheckedChange = null,
                                     )
                                     Text(
                                         text = "周${course.dayOfWeek} " +
-                                            "${com.buaa.schedule.domain.model.periodLabel(course.periods)} " +
+                                            "${periodLabelOf(course.periods, importState.timeSlots)} " +
                                             "${course.name} ${course.location ?: ""}",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = if (excluded) MaterialTheme.colorScheme.onSurfaceVariant
@@ -333,7 +341,7 @@ fun ImportScreen(
                     if (viewModel.refreshFromBuaa(termCode.trim())) {
                         viewModel.showMessage("正在刷新课表...")
                     } else {
-                        viewModel.showMessage("没有保留的登录会话，请先登录导入一次")
+                        viewModel.showMessage("没有保留的登录会话，请先登录导入一次", isError = true)
                     }
                 },
                 onCancelRefresh = { viewModel.cancelRefreshFromBuaa() },
@@ -345,11 +353,9 @@ fun ImportScreen(
 
             // ---- 状态提示（成功/失败消息统一在 Hero 下方一条）----
             importMessage?.let { message ->
-                val isError = message.contains("失败") || message.contains("未完成") ||
-                    message.contains("没有保留") || message.contains("无法")
                 GlassSurface(
-                    variant = if (isError) GlassVariant.ALERT else GlassVariant.PANEL,
-                    semanticTint = if (isError) MaterialTheme.colorScheme.error else null,
+                    variant = if (message.isError) GlassVariant.ALERT else GlassVariant.PANEL,
+                    semanticTint = if (message.isError) MaterialTheme.colorScheme.error else null,
                     shape = RoundedCornerShape(DesignTokens.cornerPanel),
                     contentPadding = DesignTokens.spaceM,
                     modifier = Modifier
@@ -357,9 +363,9 @@ fun ImportScreen(
                         .padding(horizontal = DesignTokens.spaceL),
                 ) {
                     Text(
-                        text = message,
+                        text = message.text,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = if (isError) {
+                        color = if (message.isError) {
                             MaterialTheme.colorScheme.onErrorContainer
                         } else {
                             MaterialTheme.colorScheme.onSurface
@@ -434,7 +440,7 @@ fun ImportScreen(
                                 scope.launch {
                                     val code = viewModel.buildShareCode()
                                     if (code == null) {
-                                        viewModel.showMessage("当前没有可分享的课表，请先导入课程")
+                                        viewModel.showMessage("当前没有可分享的课表，请先导入课程", isError = true)
                                     } else {
                                         val sendIntent = android.content.Intent(
                                             android.content.Intent.ACTION_SEND,
@@ -504,7 +510,7 @@ private fun BuaaImportHero(
                         .size(52.dp)
                         .background(
                             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-                            shape = RoundedCornerShape(16.dp),
+                            shape = RoundedCornerShape(DesignTokens.cornerPanel),
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -564,7 +570,7 @@ private fun BuaaImportHero(
                 onClick = onLogin,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(48.dp),
+                    .height(DesignTokens.minTouchTarget),
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Login,
@@ -620,7 +626,7 @@ private fun BuaaImportHero(
                         imageVector = Icons.AutoMirrored.Filled.Logout,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(DesignTokens.iconSmall),
                     )
                     Box(modifier = Modifier.width(DesignTokens.spaceXS))
                     Text("退出教务登录", color = MaterialTheme.colorScheme.error)

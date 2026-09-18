@@ -92,20 +92,25 @@ class WidgetRefreshReceiver : BroadcastReceiver() {
          */
         private const val ROLLOVER_SUPPRESS_MS = 120_000L
 
-        @Volatile
-        private var lastRolloverAt = 0L
+        private val lastRolloverAt = java.util.concurrent.atomic.AtomicLong(0L)
 
         /**
          * 领取这一次跨天刷新的"全量刷新"配额；已被领走则返回 false。
          *
          * 计时用 `elapsedRealtime`（单调）而不是墙上时钟：用户改时间本身就会
          * 以 `ACTION_TIME_CHANGED` 走到这个分支，拿被改的时钟判窗口等于判不出来。
+         *
+         * ⚠️ 必须 CAS：DATE_CHANGED 与自排零点闹钟恰恰都在 00:00±几十秒到达，
+         * 各自起的 IO 协程用 @Volatile 的"先读后写"会双双领到配额，全学期快照
+         * 与 6 个组件重绘跑两遍。
          */
         private fun claimRolloverRefresh(): Boolean {
             val now = android.os.SystemClock.elapsedRealtime()
-            if (now - lastRolloverAt < ROLLOVER_SUPPRESS_MS) return false
-            lastRolloverAt = now
-            return true
+            while (true) {
+                val prev = lastRolloverAt.get()
+                if (now - prev < ROLLOVER_SUPPRESS_MS) return false
+                if (lastRolloverAt.compareAndSet(prev, now)) return true
+            }
         }
     }
 }

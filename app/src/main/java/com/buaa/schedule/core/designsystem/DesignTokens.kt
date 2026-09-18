@@ -25,6 +25,15 @@ object DesignTokens {
     /** 课程格圆角 */
     val cornerCourse = 10.dp
 
+    /**
+     * 内联小胶囊圆角：顶栏「课次/时间」这类包着单行小字的块。
+     *
+     * 不复用 cornerCourse(10dp)：那档服务的是一整张课程卡（几十 dp 高），
+     * 同一个半径落在 24dp 高的胶囊上会读成"药丸"，而这里的意图是"一块标签"。
+     * 之前这里是裸 8.dp——V-13 立"圆角上刻度"规矩时漏掉的最后一处。
+     */
+    val cornerChip = 6.dp
+
     /** 胶囊控件圆角（50%） */
     val cornerPill = 50
 
@@ -89,6 +98,12 @@ object DesignTokens {
 
     /** 24 小时制下每小时的行高，同上受 weekRowScale 缩放 */
     val weekHourHeight = 56.dp
+
+    /** 课间空档的展开换算：每这么多分钟撑出一个单节行高（见 WeekGridGeometry.findIntervalGap） */
+    const val weekGapMinutesPerRow = 45f
+
+    /** 连续段卡片再矮也保留这么多高度，否则两行文字会被裁成一条线 */
+    val weekMinCardHeight = 18.dp
 
     /** 窄屏一屏放得下的天数：七天等宽挤到 48dp 以下时改成横向滚动，每屏露这么多天 */
     const val weekCompactVisibleDays = 5
@@ -232,6 +247,42 @@ object DesignTokens {
 
     /** CHROME 变体相对其它变体的折射/模糊强度倍率 */
     const val CHROME_BASE_INTENSITY = 1.3f
+
+    /**
+     * 底栏栏体的表面 alpha：过高会像不透明色条，0.20 让背景能透出来。
+     * 此前是 MainActivity 调用点的裸值（审查 V-顶栏/底栏方言）。
+     */
+    const val CHROME_SURFACE_ALPHA = 0.20f
+
+    /**
+     * 全屏模态遮罩的压暗浓度（首次引导的覆盖层）。
+     * 之前 HomeScreen 裸写 0.55f，而 SpocScan 的半透明遮罩另写一套——两层遮罩浓度不一。
+     */
+    const val SCRIM_ALPHA = 0.55f
+
+    /**
+     * 宽屏双栏断点。审查发现 600dp 以裸值出现 3 处（主导航分栏、首页周/日并排、
+     * 引导页限宽），口径恰与 M3 WindowSizeClass 的 Medium 起点一致 —— 收敛成一个值，
+     * 免得改断点时要满仓找数字。
+     */
+    val breakpointWide = 600.dp
+
+    /** 底栏选中指示胶囊的高度（栏体是 [bottomBarHeight]，两者之差即四周可见的缝隙） */
+    val bottomBarIndicatorHeight = 56.dp
+
+    /** 宽屏布局左侧玻璃导航栏的栏宽 */
+    val navRailWidth = 84.dp
+
+    /** 对话框内滚动区的最大可见高度（更新日志、临近课表此前各写 240/260） */
+    val dialogListMaxHeight = 240.dp
+
+    /**
+     * 顶栏行基准高：玻璃顶栏与引导页头部行共用。
+     * 不能低于 48dp —— 栏体高度就是内部 IconButton/TextButton 触控目标的上限，
+     * 更矮会把 Material 默认的最小可点区域压掉一圈（R5 F-49）。
+     * 引导页此前裸写固定 56dp，比其它页顶栏厚出一截。
+     */
+    val topBarHeight = 48.dp
 }
 
 /**

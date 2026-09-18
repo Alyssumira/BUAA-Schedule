@@ -1,6 +1,9 @@
 package com.buaa.schedule.core.designsystem
 
 import android.os.Build
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -131,9 +134,10 @@ fun BUAAScheduleTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = false,
     seedColorArgb: Int? = null,
+    reduceMotion: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = when {
+    val targetScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
@@ -142,6 +146,10 @@ fun BUAAScheduleTheme(
         darkTheme -> DarkColors
         else -> LightColors
     }
+    // 一帧换色是全站仅剩的几处硬切之一：内容都还在原地，底色却"啪"地跳过去。
+    // 逐槽位淡入而不是 Crossfade 整棵子树——后者会把 36 个槽位之外的状态
+    // （滚动位置、展开态、输入法）一起重建，代价和收益完全不成比例。
+    val colorScheme = animatedColorScheme(targetScheme, reduceMotion)
     MaterialTheme(
         colorScheme = colorScheme,
         typography = ScheduleTypography,
@@ -153,14 +161,98 @@ fun BUAAScheduleTheme(
         //
         // 语义扩展色按 darkTheme 取，不跟随动态取色：warning/success 是"中间严重度"
         // 的固定语义，跟着壁纸变色的话同一句警告今天琥珀明天青绿，等于没有语义。
+        // 它跟着走同一条淡入——否则主体在过渡、警告色已经换完，中间帧会出现
+        // "新语义色压旧背景"，正是 contentOnLuma 那套判据最读不出来的时刻。
+        val semanticTarget = if (darkTheme) DarkSemanticColors else LightSemanticColors
+        val animatedSemantic = semanticTarget.copy(
+            warning = animatedColor("semWarning", semanticTarget.warning, reduceMotion),
+            onWarning = animatedColor("semOnWarning", semanticTarget.onWarning, reduceMotion),
+            warningContainer = animatedColor(
+                "semWarningContainer", semanticTarget.warningContainer, reduceMotion,
+            ),
+            onWarningContainer = animatedColor(
+                "semOnWarningContainer", semanticTarget.onWarningContainer, reduceMotion,
+            ),
+            success = animatedColor("semSuccess", semanticTarget.success, reduceMotion),
+        )
         CompositionLocalProvider(
             LocalContentColor provides colorScheme.onSurface,
-            LocalSemanticColors provides if (darkTheme) DarkSemanticColors else LightSemanticColors,
+            LocalSemanticColors provides animatedSemantic,
         ) {
             content()
         }
     }
 }
+
+/**
+ * 单格色彩淡入。
+ *
+ * 不传"起始色"，也不走 [motionSpec]：主题位于 `LocalReduceMotion` provider 的**上游**
+ * （provider 在主题子树里才建立），组合里取不到那颗开关——所以 reduce-motion 由调用方
+ * 显式传进来。策略与 motionSpec 完全一致：要求减少动态效果就 snap()，否则同档 tween。
+ */
+@Composable
+private fun animatedColor(label: String, target: Color, reduceMotion: Boolean): Color =
+    animateColorAsState(
+        targetValue = target,
+        animationSpec = if (reduceMotion) snap() else tween(MotionTokens.DURATION_MEDIUM),
+        label = label,
+    ).value
+
+/**
+ * 把 [target] 的 36 个颜色槽位逐一淡入。
+ *
+ * 必须**全槽位覆盖**：漏写一个槽位不会报错，只会那一格仍然硬切——
+ * 而"深色模式切换"这种全局事件里，任何一格跟不上都会被读成画面撕裂。
+ * 槽位名取自编译期依赖的 material3 1.3.1（36 个 Color getter），
+ * 与 [ThemeSlotTest] 的"逐槽显式定义"门禁同一套口径。
+ */
+@Composable
+private fun animatedColorScheme(
+    target: androidx.compose.material3.ColorScheme,
+    reduceMotion: Boolean,
+): androidx.compose.material3.ColorScheme = target.copy(
+    primary = animatedColor("primary", target.primary, reduceMotion),
+    onPrimary = animatedColor("onPrimary", target.onPrimary, reduceMotion),
+    primaryContainer = animatedColor("primaryContainer", target.primaryContainer, reduceMotion),
+    onPrimaryContainer = animatedColor("onPrimaryContainer", target.onPrimaryContainer, reduceMotion),
+    inversePrimary = animatedColor("inversePrimary", target.inversePrimary, reduceMotion),
+    secondary = animatedColor("secondary", target.secondary, reduceMotion),
+    onSecondary = animatedColor("onSecondary", target.onSecondary, reduceMotion),
+    secondaryContainer = animatedColor("secondaryContainer", target.secondaryContainer, reduceMotion),
+    onSecondaryContainer = animatedColor("onSecondaryContainer", target.onSecondaryContainer, reduceMotion),
+    tertiary = animatedColor("tertiary", target.tertiary, reduceMotion),
+    onTertiary = animatedColor("onTertiary", target.onTertiary, reduceMotion),
+    tertiaryContainer = animatedColor("tertiaryContainer", target.tertiaryContainer, reduceMotion),
+    onTertiaryContainer = animatedColor("onTertiaryContainer", target.onTertiaryContainer, reduceMotion),
+    background = animatedColor("background", target.background, reduceMotion),
+    onBackground = animatedColor("onBackground", target.onBackground, reduceMotion),
+    surface = animatedColor("surface", target.surface, reduceMotion),
+    onSurface = animatedColor("onSurface", target.onSurface, reduceMotion),
+    surfaceVariant = animatedColor("surfaceVariant", target.surfaceVariant, reduceMotion),
+    onSurfaceVariant = animatedColor("onSurfaceVariant", target.onSurfaceVariant, reduceMotion),
+    surfaceTint = animatedColor("surfaceTint", target.surfaceTint, reduceMotion),
+    inverseSurface = animatedColor("inverseSurface", target.inverseSurface, reduceMotion),
+    inverseOnSurface = animatedColor("inverseOnSurface", target.inverseOnSurface, reduceMotion),
+    error = animatedColor("error", target.error, reduceMotion),
+    onError = animatedColor("onError", target.onError, reduceMotion),
+    errorContainer = animatedColor("errorContainer", target.errorContainer, reduceMotion),
+    onErrorContainer = animatedColor("onErrorContainer", target.onErrorContainer, reduceMotion),
+    outline = animatedColor("outline", target.outline, reduceMotion),
+    outlineVariant = animatedColor("outlineVariant", target.outlineVariant, reduceMotion),
+    scrim = animatedColor("scrim", target.scrim, reduceMotion),
+    surfaceBright = animatedColor("surfaceBright", target.surfaceBright, reduceMotion),
+    surfaceDim = animatedColor("surfaceDim", target.surfaceDim, reduceMotion),
+    surfaceContainer = animatedColor("surfaceContainer", target.surfaceContainer, reduceMotion),
+    surfaceContainerHigh = animatedColor("surfaceContainerHigh", target.surfaceContainerHigh, reduceMotion),
+    surfaceContainerHighest = animatedColor(
+        "surfaceContainerHighest", target.surfaceContainerHighest, reduceMotion,
+    ),
+    surfaceContainerLow = animatedColor("surfaceContainerLow", target.surfaceContainerLow, reduceMotion),
+    surfaceContainerLowest = animatedColor(
+        "surfaceContainerLowest", target.surfaceContainerLowest, reduceMotion,
+    ),
+)
 
 /**
  * M3 的 ColorScheme 没有 warning / success 槽位，而项目确实需要

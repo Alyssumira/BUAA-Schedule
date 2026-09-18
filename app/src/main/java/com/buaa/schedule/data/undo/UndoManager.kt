@@ -13,6 +13,10 @@ import com.buaa.schedule.domain.model.ReminderSetting
  * - Update：更新课程，撤销 = 恢复修改前快照。
  *
  * 只保留最近 [CAPACITY] 条；应用进程退出即清空——撤销是「刚操作错了马上恢复」的即时操作。
+ *
+ * 快照存的是**整个 [Course] 值对象**，不是逐字段拷贝：Course 新增字段（如 credit）
+ * 会自动跟着撤销往返，这里不需要同步改（对比 `WidgetSnapshotModels` / `BackupModels`
+ * 那两处逐字段镜像，它们才需要跟）。
  */
 object UndoManager {
 

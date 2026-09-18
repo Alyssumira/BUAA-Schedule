@@ -21,12 +21,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.LocalSemanticColors
+import com.buaa.schedule.core.designsystem.ModalTransition
 
 /**
  * 更新流程的唯一弹窗。挂在应用根节点上，因此自动检测和设置页手动检查共用一个出口。
  *
- * 只在"有东西可说"时被宿主渲染：自动检查的失败/无更新是静默的，
- * 手动检查才要求给出反馈 —— 判据在 [UpdateUiState.manual] 上，由宿主决定。
+ * 可见性判据在 [UpdateUiState.visible] 上，但**闸门在这个函数里面**而不是宿主：
+ * 宿主若写 `if (updateState.visible) { UpdateDialog(...) }`，状态一切回 Idle
+ * 整棵子树当场消失，收场一帧也播不出来（见 [ModalTransition]）。
  *
  * 容器沿用 Material3 [AlertDialog]：本应用所有对话框（冲突向导、取色器、设置页确认）
  * 都是它，玻璃容器反而会让更新弹窗成为全站唯一的一处不一致。
@@ -44,40 +46,50 @@ fun UpdateDialog(
     onOpenInstallPermissionSettings: () -> Unit,
     onRetryInstall: () -> Unit,
 ) {
-    when (state) {
-        is UpdateUiState.Available -> AvailableDialog(
-            state = state,
-            currentVersion = currentVersion,
-            onDismiss = onDismiss,
-            onDownload = onDownload,
-            onIgnore = onIgnore,
-            onOpenReleasePage = onOpenReleasePage,
-        )
-        is UpdateUiState.Downloading -> DownloadingDialog(state, onCancelDownload)
-        is UpdateUiState.NeedsInstallPermission -> NeedsInstallDialog(
-            onOpenSettings = onOpenInstallPermissionSettings,
-            onOpenReleasePage = onOpenReleasePage,
-            onRetryInstall = onRetryInstall,
-            onDismiss = onDismiss,
-        )
-        is UpdateUiState.InstallBlocked -> InstallBlockedDialog(
-            reason = state.reason,
-            onDismiss = onDismiss,
-            onOpenReleasePage = onOpenReleasePage,
-        )
-        is UpdateUiState.UpToDate -> SimpleDialog(
-            title = "已是最新版本",
-            body = "当前 v$currentVersion，Gitee 上没有更新的版本。",
-            onDismiss = onDismiss,
-            onOpenReleasePage = onOpenReleasePage,
-        )
-        is UpdateUiState.Failed -> SimpleDialog(
-            title = "检查更新失败",
-            body = state.message,
-            onDismiss = onDismiss,
-            onOpenReleasePage = onOpenReleasePage,
-        )
-        UpdateUiState.Idle, UpdateUiState.Checking -> Unit
+    // 下载中每个进度块都会换一个非空状态，锚住的负载跟着刷新；
+    // 取消/失败/关闭时状态回到 Idle，淡出的仍是最后那一屏内容。
+    ModalTransition(payload = state.takeIf { it.visible }) { shown, modal ->
+        when (shown) {
+            is UpdateUiState.Available -> AvailableDialog(
+                state = shown,
+                currentVersion = currentVersion,
+                modifier = modal,
+                onDismiss = onDismiss,
+                onDownload = onDownload,
+                onIgnore = onIgnore,
+                onOpenReleasePage = onOpenReleasePage,
+            )
+            is UpdateUiState.Downloading -> DownloadingDialog(shown, modal, onCancelDownload)
+            is UpdateUiState.NeedsInstallPermission -> NeedsInstallDialog(
+                modifier = modal,
+                onOpenSettings = onOpenInstallPermissionSettings,
+                onOpenReleasePage = onOpenReleasePage,
+                onRetryInstall = onRetryInstall,
+                onDismiss = onDismiss,
+            )
+            is UpdateUiState.InstallBlocked -> InstallBlockedDialog(
+                reason = shown.reason,
+                modifier = modal,
+                onDismiss = onDismiss,
+                onOpenReleasePage = onOpenReleasePage,
+            )
+            is UpdateUiState.UpToDate -> SimpleDialog(
+                title = "已是最新版本",
+                body = "当前 v$currentVersion，Gitee 上没有更新的版本。",
+                modifier = modal,
+                onDismiss = onDismiss,
+                onOpenReleasePage = onOpenReleasePage,
+            )
+            is UpdateUiState.Failed -> SimpleDialog(
+                title = "检查更新失败",
+                body = shown.message,
+                modifier = modal,
+                onDismiss = onDismiss,
+                onOpenReleasePage = onOpenReleasePage,
+            )
+            // Idle / Checking 的 visible 都是 false，进不到这里；分支留着是为了穷尽
+            UpdateUiState.Idle, UpdateUiState.Checking -> Unit
+        }
     }
 }
 
@@ -85,6 +97,7 @@ fun UpdateDialog(
 private fun AvailableDialog(
     state: UpdateUiState.Available,
     currentVersion: String,
+    modifier: Modifier = Modifier,
     onDismiss: () -> Unit,
     onDownload: () -> Unit,
     onIgnore: () -> Unit,
@@ -93,6 +106,7 @@ private fun AvailableDialog(
     val info = state.info
     val lines = changelogLines(info.notes)
     AlertDialog(
+        modifier = modifier,
         onDismissRequest = onDismiss,
         title = { Text("发现新版本 v${info.version}") },
         text = {
@@ -129,7 +143,7 @@ private fun AvailableDialog(
             }
         },
         dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceXS)) {
                 TextButton(onClick = onIgnore) { Text("忽略此版本") }
                 TextButton(onClick = onDismiss) { Text("稍后") }
             }
@@ -177,7 +191,7 @@ private fun ChangelogList(lines: List<ChangelogLine>) {
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(max = ChangelogMaxHeight),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceXS),
     ) {
         items(lines.size) { index -> ChangelogRow(lines[index]) }
     }
@@ -220,14 +234,19 @@ private fun ChangelogRow(line: ChangelogLine) {
 }
 
 @Composable
-private fun DownloadingDialog(state: UpdateUiState.Downloading, onCancel: () -> Unit) {
+private fun DownloadingDialog(
+    state: UpdateUiState.Downloading,
+    modifier: Modifier = Modifier,
+    onCancel: () -> Unit,
+) {
     AlertDialog(
+        modifier = modifier,
         onDismissRequest = onCancel,
         title = { Text("正在下载 v${state.info.version}") },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
             ) {
                 if (state.percent >= 0) {
                     LinearProgressIndicator(
@@ -269,12 +288,14 @@ private fun DownloadingDialog(state: UpdateUiState.Downloading, onCancel: () -> 
 
 @Composable
 private fun NeedsInstallDialog(
+    modifier: Modifier = Modifier,
     onOpenSettings: () -> Unit,
     onOpenReleasePage: () -> Unit,
     onRetryInstall: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
+        modifier = modifier,
         onDismissRequest = onDismiss,
         title = { Text("需要安装权限") },
         text = {
@@ -296,7 +317,7 @@ private fun NeedsInstallDialog(
         },
         confirmButton = { TextButton(onClick = onRetryInstall) { Text("重试安装") } },
         dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceXS)) {
                 TextButton(onClick = onOpenSettings) { Text("去开启") }
                 TextButton(onClick = onDismiss) { Text("稍后") }
             }
@@ -314,10 +335,12 @@ private fun NeedsInstallDialog(
 @Composable
 private fun InstallBlockedDialog(
     reason: String,
+    modifier: Modifier = Modifier,
     onDismiss: () -> Unit,
     onOpenReleasePage: () -> Unit,
 ) {
     AlertDialog(
+        modifier = modifier,
         onDismissRequest = onDismiss,
         title = { Text("这个包无法覆盖安装") },
         text = {
@@ -337,10 +360,12 @@ private fun InstallBlockedDialog(
 private fun SimpleDialog(
     title: String,
     body: String,
+    modifier: Modifier = Modifier,
     onDismiss: () -> Unit,
     onOpenReleasePage: () -> Unit,
 ) {
     AlertDialog(
+        modifier = modifier,
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
@@ -357,6 +382,6 @@ private fun SimpleDialog(
 }
 
 /** changelog 限高：再长也留出两个按钮的高度，同时让用户看得见"这里还能滚" */
-private val ChangelogMaxHeight = 240.dp
+private val ChangelogMaxHeight = DesignTokens.dialogListMaxHeight
 
 private const val MB = 1024L * 1024L

@@ -2,9 +2,11 @@ package com.buaa.schedule.ui.home
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -31,6 +33,7 @@ import androidx.compose.material.icons.filled.EventAvailable
 import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -79,7 +82,11 @@ import com.buaa.schedule.core.designsystem.GlassSegmentedControl
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalSceneBackdrop
+import com.buaa.schedule.core.designsystem.ModalTransition
 import com.buaa.schedule.core.designsystem.Personalization
+import com.buaa.schedule.core.designsystem.SemesterProgressLine
+import com.buaa.schedule.core.designsystem.WeekDensityStrip
+import com.buaa.schedule.core.designsystem.weekCourseCounts
 import com.buaa.schedule.core.designsystem.liquid.CampusPickerButton
 import com.buaa.schedule.core.designsystem.liquid.LiquidFab
 import com.buaa.schedule.core.designsystem.liquid.LiquidMenu
@@ -87,6 +94,7 @@ import com.buaa.schedule.core.designsystem.liquid.LiquidMenuItem
 import com.buaa.schedule.core.designsystem.liquid.TermPickerButton
 import com.buaa.schedule.core.designsystem.liquid.buaaCampusOptions
 import com.buaa.schedule.core.designsystem.motionSpec
+import com.buaa.schedule.core.designsystem.MotionTokens
 import com.buaa.schedule.data.import.BuaaInPageFetcher
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.startLocalDate
@@ -104,6 +112,8 @@ fun HomeScreen(
     onAddCourse: () -> Unit,
     onImportBuaa: () -> Unit,
     onCourseManagement: () -> Unit,
+    /** 菜单里的「扫码签到」：智学北航课堂二维码 */
+    onSpocSignIn: () -> Unit,
     onCourseClick: (Course) -> Unit,
     /** 手机端悬浮玻璃底栏是否显示：显示时 FAB / 菜单要在底部让位 */
     bottomBarVisible: Boolean = false,
@@ -334,7 +344,7 @@ fun HomeScreen(
     val importMessage by viewModel.importMessage.collectAsState()
     LaunchedEffect(importMessage) {
         val message = importMessage ?: return@LaunchedEffect
-        snackbarHostState.showSnackbar(message)
+        snackbarHostState.showSnackbar(message.text)
         viewModel.clearImportMessage()
     }
 
@@ -407,6 +417,10 @@ fun HomeScreen(
                 currentWeek = state.currentWeek,
                 totalWeeks = (state.semester?.totalWeeks ?: 20)
                     .coerceIn(1, com.buaa.schedule.domain.schedule.CourseConstraints.MAX_TOTAL_WEEKS),
+                // remember：这条映射每次翻周都会重建十几个 Set，而顶栏本身就在重组
+                courseWeeks = remember(visibleCourses) {
+                    visibleCourses.map { it.weeks.toSet() }
+                },
                 onBrowseWeekChange = { setBrowseWeek(it) },
                 termSlot = if (termOptions.isNotEmpty()) {
                     {
@@ -487,9 +501,10 @@ fun HomeScreen(
             }
 
             Box(modifier = Modifier.weight(1f)) {
-                // 宽屏（≥600dp）：周视图 | 日视图 双栏并排，平板不再来回切页签
+                // 宽屏（≥breakpointWide）：周视图 | 日视图 双栏并排，平板不再来回切页签
                 val isWideScreen =
-                    androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 600
+                    androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp >=
+                        DesignTokens.breakpointWide
                 if (!tabDecided) {
                     // 页签还没定下来：先什么都不画（背景仍在），避免闪一下周课表再跳今日
                 } else if (isWideScreen && selectedTab == 0) {
@@ -557,23 +572,32 @@ fun HomeScreen(
                     }
                 }
 
-                // 首启空状态：内容区叠一层引导卡，覆盖空白周/日视图
-                if (showFirstRunEmpty) {
+                // 首启空状态：内容区叠一层引导卡，覆盖空白周/日视图。
+                // 导入成功后这张卡是"淡走"的——裸 if 会在课表出现的同时把卡片瞬间抽掉。
+                // 写成全限定：Box 嵌在 Column 里，外层 ColumnScope 接收者已被遮蔽，
+                // 裸名会被解析成 ColumnScope.AnimatedVisibility 而报"隐式接收者"错
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showFirstRunEmpty,
+                    enter = fadeIn(motionSpec<Float>()),
+                    exit = fadeOut(motionSpec<Float>()),
+                    modifier = Modifier.matchParentSize(),
+                ) {
                     FirstRunEmptyState(
                         onAddCourse = onAddCourse,
                         onImportBuaa = onImportBuaa,
-                        modifier = Modifier.matchParentSize(),
+                        modifier = Modifier.fillMaxSize(),
                     )
                 }
             }
         }
 
-        // 菜单打开时点击空白处关闭（必须在 FAB 之下，否则挡住 FAB 的开合点击）
-        if (showConflictWizard) {
+        ModalTransition(open = showConflictWizard) { modal ->
             ConflictWizardDialog(
                 groups = com.buaa.schedule.domain.schedule.CourseConflictResolution
                     .groupConflicts(state.conflicts),
                 allCourses = state.courses,
+                timeSlots = state.timeSlots,
+                modifier = modal,
                 onApplyShift = { target, newPeriods ->
                     // 只改冲突周：partialWeeks 会拆出新行，其余周保持原排课。
                     // 作用域必须是 viewModelScope，不能用 rememberCoroutineScope()：
@@ -595,6 +619,7 @@ fun HomeScreen(
                 onDismiss = { showConflictWizard = false },
             )
         }
+        // 菜单打开时点击空白处关闭（必须在 FAB 之下，否则挡住 FAB 的开合点击）
         if (menuOpen) {
             Box(
                 modifier = Modifier
@@ -630,6 +655,7 @@ fun HomeScreen(
                     setBrowseDate(null)
                 },
                 LiquidMenuItem(Icons.AutoMirrored.Filled.ListAlt, "课表管理") { onCourseManagement() },
+                LiquidMenuItem(Icons.Default.QrCode2, "扫码签到") { onSpocSignIn() },
             ),
             visible = menuOpen,
             onDismiss = { menuOpen = false },
@@ -670,7 +696,7 @@ private fun FirstRunEmptyState(
 ) {
     Box(
         modifier = modifier
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = DesignTokens.SCRIM_ALPHA))
             // 遮罩必须吃掉手势：只画半透明底不消费点击的话，底下那张空网格
             // 仍然能被点中（长按/点击都会穿透引导卡）。不用 clickable 是因为
             // 那会在无障碍树里凭空多出一颗没有行为的按钮。
@@ -713,6 +739,7 @@ private fun ScheduleToolbarRow(
     displayWeek: Int?,
     currentWeek: Int?,
     totalWeeks: Int,
+    courseWeeks: List<Set<Int>>,
     onBrowseWeekChange: (Int?) -> Unit,
     termSlot: (@Composable () -> Unit)?,
     campusSlot: (@Composable () -> Unit)?,
@@ -720,6 +747,9 @@ private fun ScheduleToolbarRow(
     var showJumpDialog by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val timeMode = Personalization.weekGridMode == Personalization.WEEK_GRID_TIME_24H
+    val weeklyCounts = remember(courseWeeks, totalWeeks) {
+        weekCourseCounts(courseWeeks, totalWeeks)
+    }
 
     Row(
         modifier = Modifier
@@ -728,7 +758,18 @@ private fun ScheduleToolbarRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         termSlot?.invoke()
-        if (showWeekNav) {
+        // 切到日视图时这一整簇会消失。原本是 `if` 硬切——下方的内容区在淡入，
+        // 顶栏却整块闪现/消失，两个节奏不同步就被读成"卡了一下"。
+        // 横向展开收的是自己那一份宽度，所以收起时校区选择器会顺势滑回来，
+        // 这正是想要的：SpaceBetween 的分布变了，就得有人补位。
+        AnimatedVisibility(
+            visible = showWeekNav,
+            enter = expandHorizontally(motionSpec(MotionTokens.DURATION_MEDIUM)) +
+                fadeIn(motionSpec(MotionTokens.DURATION_MEDIUM)),
+            exit = shrinkHorizontally(motionSpec(MotionTokens.DURATION_MEDIUM)) +
+                fadeOut(motionSpec(MotionTokens.DURATION_MEDIUM)),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
             // 原来是一颗没有字面的时钟图标：点一下就把整张周课表换成 24 小时
             // 时间轴，用户看不出自己改了什么，只会觉得"默认就是时间轴"。
             // 现在把当前模式写在按钮上（课次 = 按节次分行，默认；时间 = 连续时间轴）。
@@ -739,7 +780,7 @@ private fun ScheduleToolbarRow(
             Box(
                 modifier = Modifier
                     .defaultMinSize(minHeight = DesignTokens.minTouchTarget)
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(DesignTokens.cornerChip))
                     .clickable(
                         role = Role.Switch,
                         onClickLabel = if (timeMode) "切换到课次行视图" else "切换到 24 小时时间轴",
@@ -759,7 +800,7 @@ private fun ScheduleToolbarRow(
             ) {
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(DesignTokens.cornerChip))
                         .background(
                             if (timeMode) MaterialTheme.colorScheme.primaryContainer
                             else MaterialTheme.colorScheme.surfaceVariant,
@@ -792,19 +833,30 @@ private fun ScheduleToolbarRow(
                     .clickable(role = Role.Button, onClickLabel = "跳转到周次") { showJumpDialog = true },
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = weekHeadline,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (displayWeek == currentWeek) {
-                        MaterialTheme.colorScheme.onSurface
-                    } else {
-                        MaterialTheme.colorScheme.primary
-                    },
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                androidx.compose.foundation.layout.Column(
+                    horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        text = weekHeadline,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (displayWeek == currentWeek) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    // 「第 3 周」只是一个数：学期过半还是还剩六周得自己算。
+                    // 这条线不新增信息层级——它是这行字的图形化，所以同格、同色。
+                    SemesterProgressLine(
+                        currentWeek = currentWeek,
+                        totalWeeks = totalWeeks,
+                        modifier = Modifier.padding(top = DesignTokens.spaceXS),
+                    )
+                }
             }
             IconButton(
                 onClick = { onBrowseWeekChange(((displayWeek ?: totalWeeks) + 1).coerceAtMost(totalWeeks)) },
@@ -812,36 +864,51 @@ private fun ScheduleToolbarRow(
             ) {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "下一周")
             }
-        } else {
-            // 顶上原周次文字的权重，保持「学期靠左、校区靠右」
-            Spacer(modifier = Modifier.weight(1f))
+            }
         }
         campusSlot?.invoke()
     }
 
-    if (showJumpDialog) {
+    ModalTransition(open = showJumpDialog) { modal ->
         AlertDialog(
+            modifier = modal,
             onDismissRequest = { showJumpDialog = false },
             title = { Text("跳转到周次") },
             text = {
-                LazyColumn(modifier = Modifier.height(320.dp)) {
-                    items((1..totalWeeks).toList()) { week ->
-                        Text(
-                            text = if (week == currentWeek) "第 $week 周（本周）" else "第 $week 周",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (week == currentWeek) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    onBrowseWeekChange(week)
-                                    showJumpDialog = false
-                                }
-                                .padding(vertical = 10.dp, horizontal = 8.dp),
-                        )
+                Column {
+                    // 清单只能回答"第 N 周"，回答不了"哪几周其实没课"。
+                    // 密度条放在清单上方：看图定位到那一周，再点清单确认——
+                    // 两者选的都是同一个 onBrowseWeekChange，不会出现两套语义。
+                    WeekDensityStrip(
+                        counts = weeklyCounts,
+                        currentWeek = currentWeek,
+                        displayWeek = displayWeek,
+                        onWeekSelected = { week ->
+                            onBrowseWeekChange(week)
+                            showJumpDialog = false
+                        },
+                    )
+                    Spacer(modifier = Modifier.height(DesignTokens.spaceS))
+                    LazyColumn(modifier = Modifier.height(DesignTokens.dialogListMaxHeight)) {
+                        items((1..totalWeeks).toList()) { week ->
+                            Text(
+                                text = if (week == currentWeek) "第 $week 周（本周）" else "第 $week 周",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (week == currentWeek) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    // 内缩写在 clickable 之前：整行（含留白）都是命中区
+                                    .padding(vertical = DesignTokens.spaceS, horizontal = DesignTokens.spaceS)
+                                    .clickable {
+                                        onBrowseWeekChange(week)
+                                        showJumpDialog = false
+                                    },
+                            )
+                        }
                     }
                 }
             },

@@ -7,7 +7,6 @@ import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.VisibilityThreshold
-import androidx.compose.animation.core.spring
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -23,6 +22,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.util.fastCoerceIn
+import com.buaa.schedule.core.designsystem.motionSpringFor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -33,13 +33,19 @@ class InteractiveHighlight(
     val acceptsGesture: (size: Size, offset: Offset) -> Boolean = { _, _ -> true },
     val ambientAlpha: Float = 0.08f,
     val spotAlpha: Float = 0.15f,
-    val fallbackAlpha: Float = 0.25f
+    val fallbackAlpha: Float = 0.25f,
+    /**
+     * 系统「关闭动画」开关，由调用方在组合边界读 `LocalReduceMotion` 传进来：
+     * 本类不是 @Composable，读不到 CompositionLocal。无默认值，理由同 DampedDragAnimation。
+     */
+    val reduceMotion: Boolean,
 ) {
 
+    // 光斑的淡入淡出与跟手位移都是弹簧，此前是裸 spring()——关掉系统动画也不停
     private val pressProgressAnimationSpec =
-        spring(0.5f, 300f, 0.001f)
+        motionSpringFor(reduceMotion, 0.5f, 300f, 0.001f)
     private val positionAnimationSpec =
-        spring(0.5f, 300f, Offset.VisibilityThreshold)
+        motionSpringFor(reduceMotion, 0.5f, 300f, Offset.VisibilityThreshold)
 
     private val pressProgressAnimation =
         Animatable(0f, 0.001f)

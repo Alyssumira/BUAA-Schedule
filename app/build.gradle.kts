@@ -204,6 +204,27 @@ android {
                 "DebugProbesKt.bin",
             )
         }
+        jniLibs {
+            // MLKit 扫码模型 libbarhopper_v3.so 四 ABI 合计 20.2MB，只保 arm64。
+            //
+            // 必须按**文件名**排除，不能用 `lib/x86/**` 这类目录通配，也不能改用
+            // defaultConfig.ndk.abiFilters —— 本工程唯一的 native 库
+            // libandroidx.graphics.path.so（来自 Compose ui-graphics 的传递依赖）
+            // 四 ABI 全带、合计 37KB，一旦被连带裁掉，那档设备就一个 .so 都不剩，
+            // 装包直接 INSTALL_FAILED_NO_MATCHING_ABIS：整个 App 装不上，
+            // 而不是只丢扫码功能（x86_64 模拟器同理）。
+            // 现在这个写法下，非 arm64 设备照常安装运行，只是扫码页 dlopen 失败，
+            // 由 SpocScanScreen 的可用性探测接住、降级到相册识别 / 手输签到码。
+            excludes += setOf(
+                "lib/armeabi-v7a/libbarhopper_v3.so",
+                "lib/x86/libbarhopper_v3.so",
+                "lib/x86_64/libbarhopper_v3.so",
+            )
+            // 默认 .so 不压缩入库（为了免解压直接 mmap）。这里换成分包体积：
+            // 实测该 .so 原始 4,946,720 字节、deflate -9 后 2,103,961 字节，
+            // APK 少 2.8MB，代价是安装时解压、机身占用回升、首启多一次加载。
+            useLegacyPackaging = true
+        }
     }
 }
 
@@ -255,6 +276,13 @@ dependencies {
     // okhttp 已移除：全部网络请求走 HttpURLConnection（BuaaApi）与页面内 fetch
     // （BuaaInPageFetcher），R8 早把它整个剥掉，留在包里只剩 41KB 的 publicsuffixes.gz。
     implementation(libs.androidx.work.runtime.ktx)
+    // SPOC 扫码签到：CameraX 出画面 + MLKit bundled 解二维码（模型在包内，不依赖 GMS）。
+    // 体积裁剪（只留 arm64 的 libbarhopper_v3.so）写在上面 packaging.jniLibs。
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.mlkit.barcode.scanning)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

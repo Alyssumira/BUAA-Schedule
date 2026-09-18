@@ -45,4 +45,12 @@ data class CourseEntity(
      */
     @ColumnInfo(name = "isManualOverride", defaultValue = "0")
     val isManualOverride: Boolean = false,
+    /**
+     * 学分（教务导入才有；手动/文本/ICS 课程为 null）。
+     *
+     * 可空且**故意不给 defaultValue**：v8 及更早的库里这些课是"没采到学分"，
+     * 补成 0 会被统计页当成"教务明说这门课 0 学分"（见 [com.buaa.schedule.domain.model.Course.credit]）。
+     * 由 MIGRATION_8_9 以 `ADD COLUMN credit REAL` 追加，列序与实体声明序一致。
+     */
+    val credit: Double? = null,
 )

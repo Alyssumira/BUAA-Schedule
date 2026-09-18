@@ -52,11 +52,17 @@ object BuaaScheduleParser {
             val start = item.beginSection ?: 1
             val end = item.endSection ?: start
             // 钳制上限必须在展开前：教务接口返回的 endSection 如果是脏数据
-            // （见过 2147483647 这类溢出值），`(start..end).toList()` 直接 OOM
+            // （见过 2147483647 这类溢出值），`(start..end).toList()` 直接 OOM。
+            // 反序（end < start）钳制后展开为空——空 periods 的行在课表上永远画不出来，
+            // 却占着管理页一行与课程名额，整条丢弃。
             val periods = (start.coerceIn(1, CourseConstraints.MAX_PERIOD)..
                 end.coerceIn(1, CourseConstraints.MAX_PERIOD)).toList()
+            if (periods.isEmpty()) return@forEachIndexed
             val campus = item.campusName ?: extractCampus(item)
             val location = item.placeName?.takeIf { it.isNotBlank() } ?: extractLocation(item)
+            // 学分在一条教务记录上是**课程级**的（每个 `教师[周次]` 片段共用同一个值），
+            // 所以这里解析一次、各片段共享；认不出来只丢学分，绝不丢这一行课。
+            val credit = parseCredit(item.credit)
             val groupKey = listOf(
                 termCode,
                 item.teachClassId ?: item.courseCode ?: courseName,
@@ -78,6 +84,7 @@ object BuaaScheduleParser {
                         colorIndex = index % 8,
                         sourceGroupKey = groupKey,
                         semesterCode = termCode,
+                        credit = credit,
                     )
                 )
             } else {
@@ -96,6 +103,7 @@ object BuaaScheduleParser {
                             colorIndex = index % 8,
                             sourceGroupKey = groupKey,
                             semesterCode = termCode,
+                            credit = credit,
                         )
                     )
                 }
@@ -103,8 +111,7 @@ object BuaaScheduleParser {
         }
         // 教务 type=week&week=N 按周返回：同一门课在它上的每个周都出现一次，19 轮汇总后
         // 直译会让预览每门课重复十几行、「新增 N 门」虚高、同源行两两判成假冲突
-        // （落库有 ImportPlanner 并键兜住，预览此前没有这一步；BuaaScheduleImporter.merge
-        // 的 KDoc 描述的就是这里该做的事，但它本身已无人调用）。
+        // （落库有 ImportPlanner 并键兜住，预览此前没有这一步，靠下面的 mergeSameSlotOccurrences 补）。
         val merged = mergeSameSlotOccurrences(result)
         return ParseOutcome(
             courses = merged,
@@ -126,9 +133,40 @@ object BuaaScheduleParser {
         }
         return byKey.values.map { group ->
             if (group.size == 1) group.first()
-            else group.first().copy(weeks = group.flatMap { it.weeks }.distinct().sorted())
+            else group.first().copy(
+                weeks = group.flatMap { it.weeks }.distinct().sorted(),
+                // 学分**取最大值**，不跟周次那样求并集/求和：教务在每一行上都写整门课的学分，
+                // 1-8 周与 9-16 周是同一门课的同一个 3.5 分写了两遍，按周抓取还会把同一门课
+                // 再重复十几轮 —— 求和等于把学分乘上片段数，统计页的总学分当场翻倍。
+                // 取最大值还顺带解决"其中一段没带 credit"：已知的那个数不会被空值抹掉，
+                // 且并一次与并两次结果相同（幂等，导入按周循环合并时靠这一点）。
+                credit = group.mapNotNull { it.credit }.maxOrNull(),
+            )
         }
     }
+
+    /** 开头的数值段：`^3.5` 之于 "3.5学分"、"3.5 (必修)" */
+    private val RE_LEADING_NUMBER = Regex("^\\d+(?:\\.\\d+)?")
+
+    /**
+     * 教务的 `credit` 是字符串（正常是 `"3.5"` / `"0.0"`，也见过空串、缺字段、
+     * 带单位的 `"3.5学分"` 与全角数字）。
+     *
+     * 认不出来只返回 null（=没有学分数据），**不抛、也不丢这一行课**：抓一学期要打
+     * 十几轮接口，一个学分脏值就让某一周导入失败，正是 R6 给响应加 `code` 校验想要
+     * 避免的那种静默缺周（少一周 = 覆盖导入时那一周的课被清空）。
+     */
+    private fun parseCredit(raw: String?): Double? {
+        val text = raw?.let { WeekParser.normalizeWidths(it).replace('．', '.') }?.trim()
+        if (text.isNullOrEmpty()) return null
+        // 先整体转数（"3.5"、"0.0"），不行再退到开头的数值段（"3.5学分"、"3.5 (必修)"）
+        val value = text.toDoubleOrNull() ?: RE_LEADING_NUMBER.find(text)?.value?.toDoubleOrNull()
+        return CourseConstraints.normalizeCredit(value)
+    }
+
+    /** 与活路径同族的两枚片段正则：提成常量（此前每条目每次调用都重新编译，这是解析热路径） */
+    private val RE_CELL_PAIR = Regex("([^\\[\\]]+)\\[([^\\]]+)\\]")
+    private val RE_TEACHER_WEEK = Regex("([^\\[\\]/]+?)\\[([\\d][\\d,\\-周单双（）()]*)\\]")
 
     /**
      * 从 cellDetail 或 weeksAndTeachers 中提取 `教师[周次]` 片段。
@@ -141,7 +179,7 @@ object BuaaScheduleParser {
             .orEmpty()
             .mapNotNull { it.text }
             .flatMap { text ->
-                Regex("([^\\[\\]]+)\\[([^\\]]+)\\]").findAll(text)
+                RE_CELL_PAIR.findAll(text)
                     .map { it.groupValues[1].trim() to it.groupValues[2].trim() }
                     .toList()
             }
@@ -151,7 +189,7 @@ object BuaaScheduleParser {
 
         return item.weeksAndTeachers
             ?.let { raw ->
-                Regex("([^\\[\\]/]+?)\\[([\\d][\\d,\\-周单双（）()]*)\\]").findAll(raw)
+                RE_TEACHER_WEEK.findAll(raw)
                     .map { it.groupValues[1].trim() to it.groupValues[2].trim() }
                     .toList()
             }
@@ -167,28 +205,6 @@ object BuaaScheduleParser {
     private fun extractLocation(item: BuaaCourseDto): String? {
         val locationLine = item.titleDetail.orEmpty().firstOrNull { it.startsWith("上课地点") } ?: return null
         return locationLine.substringAfter("：").trim().ifBlank { null }
-    }
-
-    /**
-     * 将研究生 GSMIS 的 jgList 转换为 Course 列表。
-     * 每行是一条“节次粒度”安排，这里先做基础转换；连续节次合并后续在导入流程中完成。
-     */
-    fun parseJgList(items: List<GsmisCourseDto>, termCode: String): List<Course> {
-        return items.mapIndexed { index, item ->
-            val weeks = WeekParser.parseBitmap(item.weekBitmap ?: "")
-            val startSection = item.startSection?.toIntOrNull() ?: 1
-            Course(
-                name = item.courseName ?: "未知课程",
-                teacher = item.teacherNames?.takeIf { it.isNotBlank() } ?: "未知教师",
-                location = item.placeName,
-                dayOfWeek = item.dayOfWeek?.toIntOrNull() ?: 1,
-                periods = listOf(startSection),
-                weeks = weeks,
-                colorIndex = index % 8,
-                sourceGroupKey = listOf(termCode, item.courseCode ?: "", item.dayOfWeek, item.startSection).joinToString("|"),
-                semesterCode = termCode,
-            )
-        }
     }
 
     /**

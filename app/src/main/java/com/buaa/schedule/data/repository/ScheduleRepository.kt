@@ -178,27 +178,42 @@ class ScheduleRepository(
             db.withTransaction {
                 val selected = normalized.weeks.toSet()
                 val remaining = original.weeks.filter { it !in selected }
-                if (remaining.isEmpty()) {
-                    courseDao.update(normalized.toEntity())
-                    return@withTransaction PartialWeeksEdit(normalized.id, emptyList(), emptyList())
-                }
-                courseDao.update(original.copy(weeks = remaining.sorted()).toEntity())
+
                 // 清掉与选中周次重叠的同类旧片段，避免重复展示。
                 // 用 sourceGroupKey 索引先收窄候选（同组通常只有几行），
                 // 不要再 `getAll()` 全表扫描：courseKey 的前两维就是
                 // semesterCode + sourceGroupKey，有分组键时全表扫描纯属浪费；
                 // 没有分组键（手动课程）才回退全表。
-                val groupKey = normalized.sourceGroupKey
-                val candidates = if (groupKey != null) {
-                    courseDao.getByGroupKey(groupKey).map { it.toDomain() }
-                } else {
-                    courseDao.getAll().map { it.toDomain() }
+                // 两个分支都要跑这段：原地覆盖那一支若不查 sibling，
+                // 「先拆出 5-10 周、再把回 1-20 改回」会让 5-10 那行原地留存 ——
+                // 同一门课两张卡，冲突检测还报一组假冲突（R7）。
+                suspend fun overlappingSiblings(exceptId: Long): List<Course> {
+                    val groupKey = normalized.sourceGroupKey
+                    val candidates = if (groupKey != null) {
+                        courseDao.getByGroupKey(groupKey).map { it.toDomain() }
+                    } else {
+                        courseDao.getAll().map { it.toDomain() }
+                    }
+                    return candidates.filter {
+                        it.id != exceptId &&
+                            ImportPlanner.courseKey(it) == ImportPlanner.courseKey(normalized) &&
+                            it.weeks.any { w -> w in selected }
+                    }
                 }
-                val removed = candidates.filter {
-                    it.id != original.id &&
-                        ImportPlanner.courseKey(it) == ImportPlanner.courseKey(normalized) &&
-                        it.weeks.any { w -> w in selected }
+
+                if (remaining.isEmpty()) {
+                    val removed = overlappingSiblings(exceptId = normalized.id)
+                    val removedReminders = if (removed.isEmpty()) {
+                        emptyList()
+                    } else {
+                        reminderDao.getByCourses(removed.map { it.id }).map { it.toDomain() }
+                    }
+                    removed.forEach { courseDao.delete(it.toEntity()) }
+                    courseDao.update(normalized.toEntity())
+                    return@withTransaction PartialWeeksEdit(normalized.id, removed, removedReminders)
                 }
+                courseDao.update(original.copy(weeks = remaining.sorted()).toEntity())
+                val removed = overlappingSiblings(exceptId = original.id)
                 val removedReminders = if (removed.isEmpty()) {
                     emptyList()
                 } else {
@@ -215,12 +230,17 @@ class ScheduleRepository(
     }
 
     /**
-     * 把名称/地点/校区/颜色同步到同组全部片段（不含时间、教师、周次——
+     * 把名称/地点/校区/颜色/学分同步到同组全部片段（不含时间、教师、周次——
      * 同组片段本就可能有不同的时间安排）。被改动的片段标记为手动修改，
      * 不再被下次导入覆盖。
      *
      * 这是唯一不经过 [CourseConstraints.normalize] 的写路径，因此外观字段
      * 在这里单独做归一化，避免非法自定义色被扩散到同组所有片段。
+     *
+     * 学分必须一起同步：[com.buaa.schedule.domain.schedule.SemesterStats] 按组取**组内最大值**
+     * （一门课拆成三段不能算三遍学分），不同步就等于"改小永远改不动"。但 `credit == null`
+     * 在这里表示"这次没填"而不是"填了 0 分"，直接覆盖会把兄弟片段上已有的学分抹掉，
+     * 所以只有非空才传播——想清空某一门课的学分就去单条编辑那一段。
      */
     suspend fun updateCourseGroupAppearance(course: Course) {
         val groupKey = course.sourceGroupKey ?: return
@@ -234,6 +254,7 @@ class ScheduleRepository(
                             name = course.name,
                             location = course.location,
                             campus = course.campus,
+                            credit = course.credit ?: domain.credit,
                             colorIndex = course.colorIndex.coerceAtLeast(0),
                             customColorArgb = customColor,
                             isManualOverride = true,
@@ -578,7 +599,7 @@ class ScheduleRepository(
                 totalWeeks = CourseConstraints.normalizeTotalWeeks(s.totalWeeks),
             )
         }
-        val safeSlots = timeSlots.filter { com.buaa.schedule.ui.settings.isValidTimeSlot(it) }
+        val safeSlots = timeSlots.filter { com.buaa.schedule.domain.schedule.isValidTimeSlot(it) }
 
         val mainCode = backupSemester?.termCode ?: normalized.firstNotNullOfOrNull { it.semesterCode }
         val manual = normalized.filter { it.semesterCode == null }

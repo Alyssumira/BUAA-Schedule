@@ -94,10 +94,16 @@
                 android:maxLines="1" />
         </LinearLayout>
 
+        <!--
+          0dp + weight：竖向 LinearLayout 里 match_parent 是"照父高量一次"，
+          表头（含两侧的翻周热区）占掉的那几十 dp 不会从列表高度里扣出去 ——
+          于是本周课表的最后一行永远画在组件外被裁掉。
+        -->
         <ListView
             android:id="@+id/widget_list"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:layout_marginTop="4dp"
             android:divider="@null"
             android:dividerHeight="0dp"
@@ -106,7 +112,8 @@
         <TextView
             android:id="@+id/widget_empty"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:gravity="center"
             android:text="@string/widget_empty_week"
             android:textColor="#E8F0FE"

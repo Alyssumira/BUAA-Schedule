@@ -40,16 +40,22 @@ class BootReceiver : BroadcastReceiver() {
                     // 远超一次单条提醒重排的开销，默认 5 秒会被提前收回
                     timeoutMs = 10_000L,
                 ) {
+                    // 逐步兜异常（同 BUAAApplication 的口径）：中间任何一步抛出，
+                    // 后面的步骤照旧要跑 —— 整条链一把兜时，探测组件一抛
+                    // 就等于这次开机既不建渠道也不排明日预告。
+                    suspend fun step(label: String, block: suspend () -> Unit) {
+                        runCatching { block() }.onFailure { Log.w(TAG, "开机重建失败：$label", it) }
+                    }
                     // 重启把闹钟全清了，遗留的勿扰记录再没有下课铃来恢复 —— 开机即无条件清一次
                     // （没进过勿扰时 restore 本身就是 no-op，不会动用户自己的勿扰设置）
-                    ClassProgressDnd.restore(context)
+                    step("dndRestore") { ClassProgressDnd.restore(context) }
                     // rescheduleReminders 的 Boolean 返回值代表「提醒链是否已接手课堂铃」，
                     // 开机时闹钟全清、返回值此前被直接丢弃 —— 用打包版补齐课堂铃重排
-                    BackgroundSync.rescheduleRemindersAndBells(context)
-                    BackgroundSync.refreshWidgets(context)
-                    BackgroundSync.scheduleWidgetMidnight(context)
-                    BackgroundSync.scheduleTomorrowPreview(context)
-                    ReminderNotifications.ensureChannels(context)
+                    step("rescheduleReminders") { BackgroundSync.rescheduleRemindersAndBells(context) }
+                    step("refreshWidgets") { BackgroundSync.refreshWidgets(context) }
+                    step("scheduleWidgetMidnight") { BackgroundSync.scheduleWidgetMidnight(context) }
+                    step("scheduleTomorrowPreview") { BackgroundSync.scheduleTomorrowPreview(context) }
+                    step("ensureChannels") { ReminderNotifications.ensureChannels(context) }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // 协程取消是控制流信号，必须继续向上传播，不能吞掉

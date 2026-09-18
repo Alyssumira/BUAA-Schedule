@@ -25,14 +25,20 @@ data class Occurrence(
     /** 内容摘要：字段变化时改变，用于判断日历事件是否需要更新 */
     val contentHash: String,
 ) {
-    /** 日程标题（ICS 与系统日历事件共用） */
-    val title: String get() = course.name
+    /** 日程标题（ICS 与系统日历事件共用）：与课表卡片、通知同一套别名口径 */
+    val title: String get() = course.displayName
 
-    /** 日程描述（未转义；ICS 导出时另行转义） */
+    /**
+     * 日程描述（未转义；ICS 导出时另行转义）。
+     *
+     * 节次只写**本段** [segment]，不写整门课的 `course.periods`：一个 VEVENT 只覆盖
+     * 一个节次段，写全量标签会让 `[5,6]` 这种隔着午饭拆成两段的课导出两条
+     * 「第5-6节」、而各自只有 45 分钟（P1-2）。
+     */
     val description: String
         get() = buildString {
             course.teacher?.let { append("教师: $it · ") }
-            append(periodLabel(course.periods))
+            append(periodLabel(segment))
             append(" · ${com.buaa.schedule.domain.schedule.WeekParser.toDisplayString(course.weeks)}")
             course.campus?.let { append(" · $it") }
         }
@@ -127,12 +133,18 @@ object ScheduleOccurrences {
      * 在日历同步里表现为两个课次共用一条映射、后写入的覆盖前者。
      * 这里保留可读前缀，再拼 8 位内容摘要 —— 既可读又不会因截断碰撞。
      */
-    fun stableIdFor(course: Course, week: Int, segment: IntRange): String {
+    fun stableIdFor(course: Course, week: Int, segment: IntRange): String =
+        "${courseStableId(course)}-w$week-p${segment.first}-${segment.last}$STABLE_ID_SUFFIX"
+
+    /** 课程粒度的稳定 ID：可读前缀 + 8 位内容摘要，日历同步的 courseStableId 列与课次 UID 共用这一份实现 */
+    fun courseStableId(course: Course): String {
         val identity = courseIdentityKey(course)
-        val readable = identity.replace(Regex("[^\\w\\u4e00-\\u9fa5-]"), "-").take(60)
+        val readable = identity.replace(ID_SANITIZE, "-").take(60)
         val digest = md5Hex(identity).take(8)
-        return "$readable-$digest-w$week-p${segment.first}-${segment.last}$STABLE_ID_SUFFIX"
+        return "$readable-$digest"
     }
+
+    private val ID_SANITIZE = Regex("[^\\w\\u4e00-\\u9fa5-]")
 
     /**
      * 课程身份键：学期 + 组键（教务课程；手动课程退化为课程名）+ 星期 + 节次。
@@ -166,6 +178,19 @@ object ScheduleOccurrences {
         return String(out)
     }
 
+    /**
+     * 内容摘要：决定一个课次要不要向系统日历重发 update。
+     *
+     * 摘要里放的必须是**真的上了日历**的东西：这里曾用 `course.name`，于是用户改别名
+     * 之后 [title] 变了而摘要不变，`CalendarSyncPlanner` 判定 unchanged，
+     * 系统日历上的旧标题永远刷不掉（P2-5）。改成 [Course.displayName] 后，
+     * 别名与原名一起受摘要覆盖。
+     *
+     * 刻意不含 [courseIdentityKey] 之外的身份字段，也刻意不动身份键本身：
+     * 摘要变了只会走 update，身份键变了才是删旧建新 —— 后者会让用户已同步的
+     * 日历事件全部重建一次（连带丢掉用户在日历 App 里加的备注）。
+     * 本次摘要口径变更后，已同步的事件会在下一次同步时各自 update 一遍。
+     */
     private fun contentHashFor(
         course: Course,
         week: Int,
@@ -175,7 +200,7 @@ object ScheduleOccurrences {
         end: LocalTime,
     ): String {
         val raw = listOf(
-            course.name,
+            course.displayName,
             course.teacher ?: "",
             course.location ?: "",
             course.campus ?: "",

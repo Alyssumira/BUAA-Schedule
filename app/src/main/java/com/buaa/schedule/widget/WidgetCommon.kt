@@ -32,6 +32,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 private val DAY_NAMES = WEEKDAY_LABELS
 
@@ -189,6 +190,8 @@ object WidgetCommon {
         val binding = WidgetBindingStore.load(context, appWidgetId)
         val data = WidgetDataCache.get(context, binding.semesterCode)
         val semester = data.semester
+        // 先于文案读取：副标题要不要替用户兜住「第 N 周」，取决于标题是否被关掉
+        val appearance = WidgetAppearanceStore.load(context, appWidgetId)
 
         val today = LocalDate.now()
         // 本周模式可以翻周（审查 3.5）：标题/副标题/工厂取数都以「浏览周」为准。
@@ -203,10 +206,11 @@ object WidgetCommon {
             ListWidgetMode.TOMORROW -> "明日课程"
             ListWidgetMode.WEEK -> weekTitle(displayWeek)
         }
-        // 副标题：周课表显示周次；今日/明日显示具体日期（与列表口径一致）
+        // 副标题：周课表给「这一周是哪几天」（周号已在标题里）；今日/明日给具体日期
         // + 「第 N 周」——周次此前在任何组件上都不显示，用户答不出"明天那天上不上这门课"
         val subtitle = when (mode) {
-            ListWidgetMode.WEEK -> weekSubtitle(semester, displayWeek, today)
+            ListWidgetMode.WEEK ->
+                weekRangeSubtitle(semester, displayWeek, today, showTitle = appearance.showTitle)
             ListWidgetMode.TOMORROW -> dateLabel(today.plusDays(1)) + weekSuffix(semester, today.plusDays(1))
             ListWidgetMode.TODAY -> dateLabel(today) + weekSuffix(semester, today)
         }
@@ -225,9 +229,7 @@ object WidgetCommon {
         val layoutRes = if (mode == ListWidgetMode.WEEK) R.layout.widget_week else R.layout.widget_today
 
         val views = RemoteViews(context.packageName, layoutRes)
-        val appearance = WidgetAppearanceStore.load(context, appWidgetId)
         applyAppearance(context, views, appearance, isListLayout = true)
-        applyBlurredBackground(context, views, appearance)
         views.setTextViewText(R.id.widget_title, title)
         views.setTextViewText(R.id.widget_subtitle, subtitle)
         // 空态只回答"没有课"是不够的，用户真正要问的是"那什么时候又有课"。
@@ -298,6 +300,12 @@ object WidgetCommon {
      * 背景层 id 用官方约定的 `@android:id/background`，
      * 这样「点组件启动应用」才有 Android 12+ 的平滑过渡动画。
      *
+     * 壁纸模糊走的是同一块 ImageView：位图已经把圆角、底色与透明度烘进去了
+     * （见 [WidgetBackgroundRenderer.render]），因此**位图成功时必须跳过**下面那三条
+     * 纯色指令 —— ImageView 的 colorFilter 会跟着新位图一起生效，把那张图糊成一块
+     * 实色板，于是"玻璃感壁纸背景"开了和不开一模一样（真机反馈的设置不生效）。
+     * 两件事收在同一个函数里，调用点也就没有把先后下反的机会。
+     *
      * @param isListLayout 「下一节课」布局没有标题/副标题/空态这几个控件，
      *   对这些 id 下发指令只会产生无效 action（浪费 IPC），因此按布局区分。
      */
@@ -309,9 +317,18 @@ object WidgetCommon {
     ) {
         val bgViewId = android.R.id.background
         val background = appearance.resolvedBackground(context)
-        views.setInt(bgViewId, "setImageResource", appearance.cornerDrawableRes)
-        views.setInt(bgViewId, "setColorFilter", background)
-        views.setFloat(bgViewId, "setAlpha", appearance.alphaFraction)
+        val bitmap = if (appearance.blurBackground) {
+            WidgetBackgroundRenderer.render(context, appearance)
+        } else {
+            null
+        }
+        if (bitmap != null) {
+            views.setImageViewBitmap(bgViewId, bitmap)
+        } else {
+            views.setInt(bgViewId, "setImageResource", appearance.cornerDrawableRes)
+            views.setInt(bgViewId, "setColorFilter", background)
+            views.setFloat(bgViewId, "setAlpha", appearance.alphaFraction)
+        }
         if (isListLayout) {
             views.setTextColor(R.id.widget_title, appearance.titleColorFor(background))
             views.setTextColor(R.id.widget_subtitle, appearance.bodyColorFor(background))
@@ -322,18 +339,6 @@ object WidgetCommon {
             )
         }
         views.setInt(R.id.widget_root, "setBackgroundColor", android.graphics.Color.TRANSPARENT)
-    }
-
-    /** 开启玻璃感背景时，用壁纸模糊位图替换纯色圆角底 */
-    private fun applyBlurredBackground(
-        context: Context,
-        views: RemoteViews,
-        appearance: WidgetAppearance,
-    ) {
-        if (!appearance.blurBackground) return
-        WidgetBackgroundRenderer.render(context, appearance)?.let { bitmap ->
-            views.setImageViewBitmap(android.R.id.background, bitmap)
-        }
     }
 
     suspend fun updateAllOfProviderNext(context: Context, providerClass: Class<*>) {
@@ -416,7 +421,6 @@ object WidgetCommon {
         }
 
         applyAppearance(context, views, appearance, isListLayout = false)
-        applyBlurredBackground(context, views, appearance)
         val bg = appearance.resolvedBackground(context)
         views.setTextColor(R.id.widget_next_name, appearance.titleColorFor(bg))
         views.setTextColor(R.id.widget_next_label, appearance.bodyColorFor(bg))
@@ -552,7 +556,6 @@ object WidgetCommon {
         val views = RemoteViews(context.packageName, layoutRes)
         val appearance = WidgetAppearanceStore.load(context, appWidgetId)
         applyAppearance(context, views, appearance, isListLayout = false)
-        applyBlurredBackground(context, views, appearance)
         val bg = appearance.resolvedBackground(context)
         val titleColor = appearance.titleColorFor(bg)
         val bodyColor = appearance.bodyColorFor(bg)
@@ -569,6 +572,12 @@ object WidgetCommon {
             if (appearance.showTitle) View.VISIBLE else View.GONE,
         )
 
+        // 行预算按**当前高度**算：4×2 只是名义尺寸，宿主给多少空间、用户把它拉多高，
+        // 都在 options 里。取 min 而不是 max：按最小高度画才不会多出一行被底边裁掉。
+        val heightDp = appWidgetManager.getAppWidgetOptions(appWidgetId)
+            .getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT)
+        val maxLines = twoDayMaxLines(heightDp, context.resources.configuration.fontScale)
+
         val columns = listOf(
             "今天" to today,
             "明天" to today.plusDays(1),
@@ -583,7 +592,7 @@ object WidgetCommon {
             views.setTextViewText(titleId, "$label ${WEEKDAY_LABELS[date.dayOfWeek.value - 1]}")
             views.setTextViewText(
                 bodyId,
-                twoDayBodyText(semester, data.courses, date, slotTimes, now),
+                twoDayBodyText(semester, data.courses, date, slotTimes, now, maxLines),
             )
         }
 
@@ -604,12 +613,13 @@ object WidgetCommon {
         date: LocalDate,
         slotTimes: Map<Int, Pair<LocalTime, LocalTime>>,
         now: LocalDateTime,
+        maxLines: Int = TWO_DAY_MAX_LINES,
     ): String {
         if (semester == null) return "导入课表后显示"
         val week = currentWeekOrNull(semester, date) ?: return "假期中"
         val dayCourses = courses.filter { it.dayOfWeek == date.dayOfWeek.value && it.weeks.contains(week) }
             .sortedBy { it.startPeriod }
-        return twoDayColumnLines(dayCourses, slotTimes, date, now).ifBlank { "没有课" }
+        return twoDayColumnLines(dayCourses, slotTimes, date, now, maxLines).ifBlank { "没有课" }
     }
 
     // ---- 4x2 紧凑周视图 ----
@@ -646,15 +656,14 @@ object WidgetCommon {
         val binding = WidgetBindingStore.load(context, appWidgetId)
         val data = WidgetDataCache.get(context, binding.semesterCode)
         val semester = data.semester
+        val appearance = WidgetAppearanceStore.load(context, appWidgetId)
         val today = LocalDate.now()
         val displayWeek = displayWeekOf(semester, today, binding)
         val title = weekTitle(displayWeek)
-        val subtitle = weekSubtitle(semester, displayWeek, today)
+        val subtitle = weekRangeSubtitle(semester, displayWeek, today, showTitle = appearance.showTitle)
 
         val views = RemoteViews(context.packageName, R.layout.widget_week_grid)
-        val appearance = WidgetAppearanceStore.load(context, appWidgetId)
         applyAppearance(context, views, appearance, isListLayout = true)
-        applyBlurredBackground(context, views, appearance)
         views.setTextViewText(R.id.widget_title, title)
         views.setTextViewText(R.id.widget_subtitle, subtitle)
         views.setTextViewText(
@@ -944,4 +953,54 @@ object WidgetCommon {
         val start = semester?.startLocalDate ?: return null
         return WeekCalculator.currentWeekOrNull(start, semester.totalWeeks, today)
     }
+}
+
+/** 教学周区间的日期写法：窄组件上「9/14」比「9月14日」多留出一个字的余地 */
+private val WEEK_RANGE_FORMAT = DateTimeFormatter.ofPattern("M/d")
+
+/**
+ * 某一教学周的周一与周日。
+ *
+ * 起点先过 [WeekCalculator.mondayOf]：全应用都按「自然周周一 = 第 N 周第一天」排课，
+ * 开学日期只要不是周一，直接 plusWeeks 会让每一周的区间整体错位一到六天。
+ */
+internal fun weekRange(semester: Semester?, week: Int?): Pair<LocalDate, LocalDate>? {
+    val start = semester?.startLocalDate ?: return null
+    val target = week ?: return null
+    val monday = WeekCalculator.mondayOf(start).plusWeeks((target - 1).toLong())
+    return monday to monday.plusDays(6)
+}
+
+/** 区间文案「9/14–9/20」；算不出来时返回空串，由调用方决定退回什么 */
+internal fun weekRangeLabel(semester: Semester?, week: Int?): String {
+    val (monday, sunday) = weekRange(semester, week) ?: return ""
+    return "${monday.format(WEEK_RANGE_FORMAT)}–${sunday.format(WEEK_RANGE_FORMAT)}"
+}
+
+/**
+ * 周课表类组件（本周课表 / 4×2 周网格）的副标题：**那一周是哪几天**。
+ *
+ * 这类组件的标题已经是「第 N 周课表」，副标题再把周号念一遍等于白占一行；
+ * 而翻周浏览时真正缺的恰恰是日期——它让用户不数格子就能确认自己看的是哪七天。
+ *
+ * 两个降级：[showTitle] 关掉后周号只能由副标题带着（审查 3.5 的约定）；
+ * 开学日期脏到算不出区间时也退回周号，而不是把副标题留空。
+ */
+internal fun weekRangeSubtitle(
+    semester: Semester?,
+    week: Int?,
+    today: LocalDate,
+    showTitle: Boolean,
+): String {
+    if (week == null) return "假期中"
+    val range = weekRangeLabel(semester, week)
+    // 「没有可解析的开学日期」和「在假期里」是两回事：前者不能补「假期中」，那是在说谎
+    val semesterStart = semester?.startLocalDate
+    val inHoliday = semesterStart != null &&
+        WeekCalculator.currentWeekOrNull(semesterStart, semester.totalWeeks, today) == null
+    return listOfNotNull(
+        if (showTitle && range.isNotEmpty()) null else "第 $week 周",
+        range.takeIf { it.isNotEmpty() },
+        "假期中".takeIf { inHoliday },
+    ).joinToString(" · ")
 }

@@ -57,8 +57,37 @@ class TwoDayWidgetProvider : ScheduleAppWidgetProvider() {
     }
 }
 
-/** 一栏最多画几行，与 `widget_two_day.xml` 的 `maxLines` 保持一致（两处不一致会显成"只有 4 节课"） */
+/**
+ * 宿主没给出有效高度时的兜底行档。
+ *
+ * 正常路径不走这里：行数由 [twoDayMaxLines] 按组件实际高度算出来。
+ */
 internal const val TWO_DAY_MAX_LINES = 4
+
+/** 行数上限，与 `widget_two_day.xml` 里正文的 `maxLines` 逐字一致 */
+internal const val TWO_DAY_MAX_LINES_CEILING = 8
+
+/** 上表头（标题 13sp + 栏头 11sp）加上下内边距与栏间距，合计约 52dp */
+private const val TWO_DAY_CHROME_DP = 52f
+
+/** 一行正文的行盒高度：11sp 文字约 13dp，再加 lineSpacingExtra 的 2dp */
+private const val TWO_DAY_LINE_DP = 13f
+private const val TWO_DAY_LINE_SPACING_DP = 2f
+
+/**
+ * 一栏画几行：由组件当前高度和系统字号决定。
+ *
+ * 写死 4 行是这次「显示有点问题」的另一半：4×2 只是名义尺寸，用户把它拉高、
+ * 或宿主给的就是 5 行的空间时，多出来的那一行永远画不出来；反过来在矮机器上，
+ * 4 行会顶到组件底边被裁成 3 行半。
+ * [fontScale] 是系统字号倍数——大字号下同样的行数会把正文挤出底边。
+ */
+internal fun twoDayMaxLines(heightDp: Int, fontScale: Float): Int {
+    if (heightDp <= 0) return TWO_DAY_MAX_LINES
+    val lineHeight = TWO_DAY_LINE_DP * fontScale.coerceIn(0.8f, 2.4f) + TWO_DAY_LINE_SPACING_DP
+    return ((heightDp - TWO_DAY_CHROME_DP) / lineHeight).toInt()
+        .coerceIn(1, TWO_DAY_MAX_LINES_CEILING)
+}
 
 /** 一栏的字数预算：4 格宽约 250dp，两栏各 110dp 出头，扣掉 5 位时刻还能放 4 个汉字 */
 internal const val TWO_DAY_NAME_CHARS = 4
@@ -70,14 +99,18 @@ internal const val TWO_DAY_NAME_CHARS = 4
  * 让调用方决定写「今天没有课」还是「假期中」——这一栏该说哪一句取决于有没有学期，
  * 而不是这里。
  *
- * 正在上的那一节行首加一个 ▸。没课的行前留一个空格而不是什么都不加：
- * 两栏是并排扫读的，时刻那一列对不齐就会一路歪下去。
+ * 正在上的那一节在**行尾**加一个 ▸，其余行什么都不加。
+ *
+ * 记号不放行首：▸ 与空格的宽度并不相等，放行首等于每节课的时刻各歪一点，
+ * 两栏并排扫读时时刻那一列就一路歪下去。行尾不存在这个问题——短名是定长截断的
+ * （[TWO_DAY_NAME_CHARS]），▸ 只会贴在名字后面，顶不掉任何内容。
  */
 internal fun twoDayColumnLines(
     courses: List<Course>,
     slotTimes: Map<Int, Pair<LocalTime, LocalTime>>,
     date: LocalDate,
     now: LocalDateTime,
+    maxLines: Int = TWO_DAY_MAX_LINES,
 ): String = foldDayLines(
     courses.map { course ->
         val clock = slotTimes[course.startPeriod]?.first?.let { TWO_DAY_CLOCK.format(it) }
@@ -85,11 +118,11 @@ internal fun twoDayColumnLines(
         val mark = if (widgetRowStatus(course.periods, date, slotTimes, now) == WidgetRowStatus.ONGOING) {
             "▸"
         } else {
-            " "
+            ""
         }
-        "$mark$clock ${weekGridShortName(course.displayName, TWO_DAY_NAME_CHARS)}"
+        "$clock ${weekGridShortName(course.displayName, TWO_DAY_NAME_CHARS)}$mark"
     },
-    TWO_DAY_MAX_LINES,
+    maxLines,
 )
 
 /** 数字必须是 ASCII：与 [com.buaa.schedule.reminder.clockOf] 同一条理由（部分 locale 会输出非 ASCII 数字） */

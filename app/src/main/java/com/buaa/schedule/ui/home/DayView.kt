@@ -59,9 +59,12 @@ import com.buaa.schedule.core.designsystem.EmptyState
 import com.buaa.schedule.core.designsystem.GlassSegmentedControl
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
+import com.buaa.schedule.core.designsystem.TodayTimelineStrip
 import com.buaa.schedule.core.designsystem.contentOn
 import com.buaa.schedule.core.designsystem.courseColor
 import com.buaa.schedule.core.designsystem.coursePlateSceneLuma
+import com.buaa.schedule.core.designsystem.dayFractionOfMinute
+import com.buaa.schedule.core.designsystem.dayTimelineSegments
 import com.buaa.schedule.core.designsystem.legibleTintPlate
 import com.buaa.schedule.core.designsystem.performTick
 import com.buaa.schedule.core.designsystem.motionSpec
@@ -70,8 +73,10 @@ import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.periodGapMinutesOf
 import com.buaa.schedule.domain.model.periodLabel
+import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.model.toPeriodSegments
+import com.buaa.schedule.domain.model.weekdayLabel
 import com.buaa.schedule.domain.schedule.SlotStatus
 import com.buaa.schedule.domain.schedule.TodayPlanner
 import com.buaa.schedule.domain.schedule.WeekCalculator
@@ -191,16 +196,18 @@ fun DayView(
                 modifier = Modifier.weight(1f),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
+                // 档位对齐 HomeScreen 紧凑顶栏第一行（titleMedium 标题 + labelMedium 副行）：
+                // 此前这里用 22sp 的 titleLarge，「今日课表」下面又压出一个更大的标题。
                 Text(
                     text = "${date.monthValue}月${date.dayOfMonth}日 · " +
                         weekdayName(date.dayOfWeek.value),
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = if (isToday) "今天 · $weekText" else weekText,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                 )
@@ -230,62 +237,74 @@ fun DayView(
         }
 
         if (isToday && plan != null) {
-            TodayHero(plan)
+            TodayHero(plan, nowTickState.value)
         }
 
-        if (dayCourses.isEmpty()) {
-            val onBreak = semesterStart != null && week == null
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                EmptyState(
-                    icon = Icons.Filled.EventBusy,
-                    title = if (onBreak) "假期里没有课程安排" else "这一天没有课",
-                    description = if (onBreak) {
-                        "学期尚未开始或已经结束，这段时间没有排课。"
-                    } else {
-                        "用页头两侧的箭头或者直接横滑就能换一天看。"
-                    },
-                    modifier = Modifier.padding(horizontal = DesignTokens.spaceL),
+        // 空态 ↔ 列表之间不做硬切：横滑换天时两层内容叠在同一格里淡入淡出。
+        // 这里用 Crossfade 而不是 AnimatedVisibility——外层是 Column，收起过程中
+        // 两层内容会一起把列高撑破；Crossfade 内部是 Box，只做叠加不占额外高度。
+        Crossfade(
+            targetState = dayCourses.isEmpty(),
+            animationSpec = motionSpec<Float>(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+        ) { isEmpty ->
+            if (isEmpty) {
+                val onBreak = semesterStart != null && week == null
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
                 ) {
-                    if (isToday) {
-                        Button(
-                            onClick = { onDateChange(date.plusDays(1)) },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("查看明天") }
+                    EmptyState(
+                        icon = Icons.Filled.EventBusy,
+                        title = if (onBreak) "假期里没有课程安排" else "这一天没有课",
+                        description = if (onBreak) {
+                            "学期尚未开始或已经结束，这段时间没有排课。"
+                        } else {
+                            "用页头两侧的箭头或者直接横滑就能换一天看。"
+                        },
+                        modifier = Modifier.padding(horizontal = DesignTokens.spaceL),
+                    ) {
+                        if (isToday) {
+                            Button(
+                                onClick = { onDateChange(date.plusDays(1)) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("查看明天") }
+                        }
                     }
                 }
-            }
-        } else {
-            // 列表 / 时间轴切换也做淡入淡出，保持与首页周/日切换一致的操作质感
-            Crossfade(
-                targetState = timelineMode,
-                // 与首页周/日切换同源：默认 1000ms 且不读 reduce-motion
-                animationSpec = motionSpec<Float>(),
-                modifier = Modifier.padding(top = DesignTokens.spaceM),
-            ) { timeline ->
-                if (timeline) {
-                    DayTimelineCourseList(
-                        rows = rows,
-                        periodTimes = periodTimes,
-                        onClick = onCourseClick,
-                    )
-                } else {
-                    LazyColumn(
-                        verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
-                    ) {
-                        items(rows, key = { "${it.course.id}-${it.segment.first}" }) { row ->
-                            CourseTimelineCard(
-                                course = row.course,
-                                status = row.status,
-                                startTime = row.startTime,
-                                endTime = row.endTime,
-                                onClick = { onCourseClick(row.course) },
-                                // 换日期/删课/挪课时整批行不会瞬间替换（items 有稳定 key 才能生效）
-                                modifier = Modifier.animateItem(),
-                            )
+            } else {
+                // 列表 / 时间轴切换也做淡入淡出，保持与首页周/日切换一致的操作质感
+                Crossfade(
+                    targetState = timelineMode,
+                    // 与首页周/日切换同源：默认 1000ms 且不读 reduce-motion
+                    animationSpec = motionSpec<Float>(),
+                    modifier = Modifier.fillMaxSize().padding(top = DesignTokens.spaceM),
+                ) { timeline ->
+                    if (timeline) {
+                        DayTimelineCourseList(
+                            rows = rows,
+                            periodTimes = periodTimes,
+                            onClick = onCourseClick,
+                        )
+                    } else {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
+                        ) {
+                            items(rows, key = { "${it.course.id}-${it.segment.first}" }) { row ->
+                                CourseTimelineCard(
+                                    course = row.course,
+                                    status = row.status,
+                                    startTime = row.startTime,
+                                    endTime = row.endTime,
+                                    timeSlots = timeSlots,
+                                    onClick = { onCourseClick(row.course) },
+                                    // 换日期/删课/挪课时整批行不会瞬间替换（items 有稳定 key 才能生效）
+                                    modifier = Modifier.animateItem(),
+                                )
+                            }
                         }
                     }
                 }
@@ -440,9 +459,17 @@ private fun DayTimelineCourseList(
     }
 }
 
-/** 当前/下一节课 Hero 摘要卡（仅今日显示） */
+/**
+ * 当前/下一节课 Hero 摘要卡（仅今日显示）。
+ *
+ * 卡片底部那条时间带是这张卡唯一的图形表达：文字只说"下一节 14:00"，
+ * 而"下午其实整段都空着""晚课后还有一节"这种全天的疏密，只能看形状。
+ */
 @Composable
-private fun TodayHero(plan: com.buaa.schedule.domain.schedule.TodayPlan) {
+private fun TodayHero(
+    plan: com.buaa.schedule.domain.schedule.TodayPlan,
+    now: java.time.LocalTime,
+) {
     GlassSurface(
         variant = GlassVariant.PANEL,
         shape = RoundedCornerShape(DesignTokens.cornerPanel),
@@ -525,6 +552,26 @@ private fun TodayHero(plan: com.buaa.schedule.domain.schedule.TodayPlan) {
             }
         }
         }
+        // 全天疏密一眼看得到：文字只能逐条报时刻，形状才回答"下午是不是空的"。
+        // 时间取自 TodayPlanner 已经算好的 slot，不再读一次 LocalTime.now()——
+        // 两处时钟口径分叉的话，这条带子和卡片上"还有 25 分钟下课"会互相矛盾。
+        if (plan.slots.isNotEmpty()) {
+            TodayTimelineStrip(
+                segments = dayTimelineSegments(
+                    plan.slots.map {
+                        Triple(
+                            it.start.hour * 60 + it.start.minute,
+                            it.end.hour * 60 + it.end.minute,
+                            it.course.colorIndex,
+                        )
+                    },
+                ),
+                nowFraction = dayFractionOfMinute(
+                    now.hour * 60 + now.minute,
+                ),
+                modifier = Modifier.padding(top = DesignTokens.spaceM),
+            )
+        }
     }
 }
 
@@ -535,6 +582,7 @@ private fun CourseTimelineCard(
     status: SlotStatus?,
     startTime: String?,
     endTime: String?,
+    timeSlots: List<TimeSlot>,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -559,7 +607,7 @@ private fun CourseTimelineCard(
             // 节次表缺失时整列不画，不留一条空槽。
             if (startTime != null && endTime != null) {
                 Column(
-                    modifier = Modifier.width(48.dp),
+                    modifier = Modifier.width(DesignTokens.weekTimeColumnWidth),
                     horizontalAlignment = Alignment.End,
                 ) {
                     Text(
@@ -613,7 +661,7 @@ private fun CourseTimelineCard(
                                     if (status == SlotStatus.ONGOING) accent else MaterialTheme.colorScheme.surfaceVariant,
                                     shape = RoundedCornerShape(50),
                                 )
-                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                                .padding(horizontal = DesignTokens.spaceS, vertical = 2.dp),
                         ) {
                             Text(
                                 text = statusLabel,
@@ -648,7 +696,7 @@ private fun CourseTimelineCard(
                 }
                 Text(
                     text = buildString {
-                        append(periodLabel(course.periods))
+                        append(periodLabelOf(course.periods, timeSlots))
                         course.teacher?.let { append(" · $it") }
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -690,13 +738,4 @@ private fun placeTimeLine(location: String?, start: LocalTime, end: LocalTime): 
         "${hhmm(start)}–${hhmm(end)}",
     ).joinToString(" · ")
 
-private fun weekdayName(day: Int): String = when (day) {
-    1 -> "周一"
-    2 -> "周二"
-    3 -> "周三"
-    4 -> "周四"
-    5 -> "周五"
-    6 -> "周六"
-    7 -> "周日"
-    else -> ""
-}
+private fun weekdayName(day: Int): String = weekdayLabel(day) ?: ""

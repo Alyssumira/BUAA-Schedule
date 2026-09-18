@@ -329,20 +329,16 @@ private fun DrawScope.drawSceneBitmap(
  * 光斑让液态玻璃的折射 / blur 在无壁纸时也有层次可感知。
  */
 private fun DrawScope.drawSceneGradient(dark: Boolean) {
-    val base = if (dark) {
-        listOf(Color(0xFF0D1526), Color(0xFF101A30), Color(0xFF131229))
-    } else {
-        listOf(Color(0xFFEAF1FD), Color(0xFFDCE9FB), Color(0xFFE6E3F6))
-    }
+    val base = if (dark) SceneDarkBase else SceneLightBase
     drawRect(Brush.verticalGradient(base))
     val spotA: Color
     val spotB: Color
     val aAlpha: Float
     val bAlpha: Float
     if (dark) {
-        spotA = Color(0xFF2E6BD6); spotB = Color(0xFF7A4FD0); aAlpha = 0.30f; bAlpha = 0.24f
+        spotA = SceneDarkSpotA; spotB = SceneDarkSpotB; aAlpha = 0.30f; bAlpha = 0.24f
     } else {
-        spotA = Color(0xFF9EC3F8); spotB = Color(0xFFC9B8F0); aAlpha = 0.50f; bAlpha = 0.40f
+        spotA = SceneLightSpotA; spotB = SceneLightSpotB; aAlpha = 0.50f; bAlpha = 0.40f
     }
     drawCircle(
         brush = Brush.radialGradient(listOf(spotA.copy(alpha = aAlpha), Color.Transparent)),

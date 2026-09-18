@@ -1,6 +1,7 @@
 package com.buaa.schedule.widget
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.buaa.schedule.data.local.AppDatabase
 import com.buaa.schedule.data.local.WidgetSnapshotEntity
 import com.buaa.schedule.data.repository.ScheduleRepository
@@ -37,24 +38,29 @@ object WidgetDataSynchronizer {
             semesters.forEach { add(it.termCode) }
         }
 
-        keys.forEach { key ->
-            val semester = if (key == "current") current else semesters.firstOrNull { it.termCode == key }
-            val data = WidgetData(
-                semester = semester,
-                courses = repository.getDisplayCourses(semester),
-                timeSlots = repository.getTimeSlots(),
-            )
-            dao.upsert(
-                WidgetSnapshotEntity(
-                    key = key,
-                    dataJson = json.encodeToString(data.toSnapshotDto()),
-                    updatedAt = System.currentTimeMillis(),
+        // 整批写进一个事务：逐 key 各自隐式事务时，中途进程被杀会留下
+        // "一半学期是今天、一半还是昨天"的混合快照，而组件按整行 JSON 读快照，
+        // 用户看到的就是两份数据并排（同 ScheduleRepository 批量写 withTransaction 的口径）。
+        db.withTransaction {
+            keys.forEach { key ->
+                val semester = if (key == "current") current else semesters.firstOrNull { it.termCode == key }
+                val data = WidgetData(
+                    semester = semester,
+                    courses = repository.getDisplayCourses(semester),
+                    timeSlots = repository.getTimeSlots(),
                 )
-            )
+                dao.upsert(
+                    WidgetSnapshotEntity(
+                        key = key,
+                        dataJson = json.encodeToString(data.toSnapshotDto()),
+                        updatedAt = System.currentTimeMillis(),
+                    )
+                )
+            }
+            // 已删除的学期（或历史遗留 key）对应的快照行一并清掉，
+            // 否则反复换学期会让 widget_snapshots 持续累积无用数据。
+            dao.deleteKeysNotIn(keys.toList())
         }
-        // 已删除的学期（或历史遗留 key）对应的快照行一并清掉，
-        // 否则反复换学期会让 widget_snapshots 持续累积无用数据。
-        runCatching { dao.deleteKeysNotIn(keys.toList()) }
     }
 
     /** 保存单个 key 的快照 */

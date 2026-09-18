@@ -115,23 +115,4 @@ class BuaaScheduleParserTest {
         assertEquals(1, outcome.fallbackWeekCourses)
         assertEquals(1, outcome.unknownTeacherCourses)
     }
-
-    @Test
-    fun parseJgListFromBitmap() {
-        val dto = GsmisCourseDto(
-            courseCode = "CS101",
-            courseName = "算法",
-            dayOfWeek = "2",
-            weekBitmap = "01010101000000000000",
-            placeName = "A101",
-            teacherNames = "张三,李四",
-            startSection = "6",
-        )
-
-        val courses = BuaaScheduleParser.parseJgList(listOf(dto), "20261")
-
-        assertEquals(1, courses.size)
-        assertEquals(listOf(2, 4, 6, 8), courses[0].weeks)
-        assertEquals("张三,李四", courses[0].teacher)
-    }
 }

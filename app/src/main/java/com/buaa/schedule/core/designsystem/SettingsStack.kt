@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -39,11 +41,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 
@@ -81,7 +87,6 @@ fun SettingsGroup(
     initiallyExpanded: Boolean = false,
     content: SettingsGroupScope.() -> Unit,
 ) {
-    if (!visibleWhen) return
     val scope = SettingsGroupScope().apply(content)
     if (scope.items.isEmpty()) return
     val visibleCount = scope.items.count { it.visible }
@@ -95,66 +100,73 @@ fun SettingsGroup(
         label = "settingsGroupChevron",
     )
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = DesignTokens.spaceL, vertical = DesignTokens.spaceS),
+    // 子界面切换分类时整组是"收进去"而不是"凭空蒸发"，与组内条目同一套弹簧
+    AnimatedVisibility(
+        visible = visibleWhen,
+        enter = expandVertically(settingsIntSizeSpring()) + fadeIn(settingsFloatSpring()),
+        exit = shrinkVertically(settingsIntSizeSpring()) + fadeOut(settingsFloatSpring()),
     ) {
-        if (!title.isNullOrBlank()) {
-            if (collapsible) {
-                SettingsGroupHeader(
-                    title = title,
-                    itemCount = visibleCount,
-                    collapsible = true,
-                    expanded = expanded,
-                    chevronRotation = chevronRotation,
-                    onToggle = { expanded = !expanded },
-                )
-            } else {
-                // 子界面里每组就是页面的主体，用普通小节标题即可
-                SectionHeader(title)
-            }
-        }
-        AnimatedVisibility(
-            visible = isOpen,
-            enter = expandVertically(settingsIntSizeSpring()) + fadeIn(settingsFloatSpring()),
-            exit = shrinkVertically(settingsIntSizeSpring()) + fadeOut(settingsFloatSpring()),
+        Column(
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(horizontal = DesignTokens.spaceL, vertical = DesignTokens.spaceS),
         ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                val firstIndex = scope.items.indexOfFirst { it.visible }
-                val lastIndex = scope.items.indexOfLast { it.visible }
-                scope.items.forEachIndexed { index, item ->
-                    key(item.key) {
-                        // 条目显隐走弹簧展开/收起（FolkPatch 同款体感）：
-                        // 隐藏一条时相邻两片的圆角会随之"接管"，不会突然空出一块
-                        AnimatedVisibility(
-                            visible = item.visible,
-                            enter = expandVertically(
-                                animationSpec = settingsIntSizeSpring(),
-                                expandFrom = Alignment.Top,
-                            ) + fadeIn(settingsFloatSpring()),
-                            exit = shrinkVertically(
-                                animationSpec = settingsIntSizeSpring(),
-                                shrinkTowards = Alignment.Top,
-                            ) + fadeOut(settingsFloatSpring()),
-                        ) {
-                            val isFirst = index == firstIndex
-                            val isLast = index == lastIndex
-                            val shape = RoundedCornerShape(
-                                topStart = if (isFirst) DesignTokens.cornerPanel else SETTINGS_CONNECTION_RADIUS,
-                                topEnd = if (isFirst) DesignTokens.cornerPanel else SETTINGS_CONNECTION_RADIUS,
-                                bottomStart = if (isLast) DesignTokens.cornerPanel else SETTINGS_CONNECTION_RADIUS,
-                                bottomEnd = if (isLast) DesignTokens.cornerPanel else SETTINGS_CONNECTION_RADIUS,
-                            )
-                            GlassSurface(
-                                variant = GlassVariant.PANEL,
-                                contentPadding = SETTINGS_ITEM_PADDING,
-                                shape = shape,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = if (isFirst) 0.dp else SETTINGS_ITEM_GAP),
+            if (!title.isNullOrBlank()) {
+                if (collapsible) {
+                    SettingsGroupHeader(
+                        title = title,
+                        itemCount = visibleCount,
+                        collapsible = true,
+                        expanded = expanded,
+                        chevronRotation = chevronRotation,
+                        onToggle = { expanded = !expanded },
+                    )
+                } else {
+                    // 子界面里每组就是页面的主体，用普通小节标题即可
+                    SectionHeader(title)
+                }
+            }
+            AnimatedVisibility(
+                visible = isOpen,
+                enter = expandVertically(settingsIntSizeSpring()) + fadeIn(settingsFloatSpring()),
+                exit = shrinkVertically(settingsIntSizeSpring()) + fadeOut(settingsFloatSpring()),
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    val firstIndex = scope.items.indexOfFirst { it.visible }
+                    val lastIndex = scope.items.indexOfLast { it.visible }
+                    scope.items.forEachIndexed { index, item ->
+                        key(item.key) {
+                            // 条目显隐走弹簧展开/收起（FolkPatch 同款体感）：
+                            // 隐藏一条时相邻两片的圆角会随之"接管"，不会突然空出一块
+                            AnimatedVisibility(
+                                visible = item.visible,
+                                enter = expandVertically(
+                                    animationSpec = settingsIntSizeSpring(),
+                                    expandFrom = Alignment.Top,
+                                ) + fadeIn(settingsFloatSpring()),
+                                exit = shrinkVertically(
+                                    animationSpec = settingsIntSizeSpring(),
+                                    shrinkTowards = Alignment.Top,
+                                ) + fadeOut(settingsFloatSpring()),
                             ) {
-                                item.content()
+                                val isFirst = index == firstIndex
+                                val isLast = index == lastIndex
+                                val shape = RoundedCornerShape(
+                                    topStart = if (isFirst) DesignTokens.cornerPanel else SETTINGS_CONNECTION_RADIUS,
+                                    topEnd = if (isFirst) DesignTokens.cornerPanel else SETTINGS_CONNECTION_RADIUS,
+                                    bottomStart = if (isLast) DesignTokens.cornerPanel else SETTINGS_CONNECTION_RADIUS,
+                                    bottomEnd = if (isLast) DesignTokens.cornerPanel else SETTINGS_CONNECTION_RADIUS,
+                                )
+                                GlassSurface(
+                                    variant = GlassVariant.PANEL,
+                                    contentPadding = SETTINGS_ITEM_PADDING,
+                                    shape = shape,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = if (isFirst) 0.dp else SETTINGS_ITEM_GAP),
+                                ) {
+                                    item.content()
+                                }
                             }
                         }
                     }
@@ -377,14 +389,14 @@ fun SettingsSwitchRow(
     )
 }
 
-/** 中间片的小圆角：与首尾 18dp 形成"叠起来"的层次感 */
-private val SETTINGS_CONNECTION_RADIUS = 6.dp
+/** 中间片的小圆角：与首尾 18dp 形成"叠起来"的层次感（与顶栏胶囊同档） */
+private val SETTINGS_CONNECTION_RADIUS = DesignTokens.cornerChip
 
 /** 中间片之间的间隙：露出页面背景，是"堆叠"观感的关键 */
 private val SETTINGS_ITEM_GAP = 2.dp
 
-/** 组内条目内容留白：比面板默认略紧，行高由内容决定 */
-private val SETTINGS_ITEM_PADDING = 14.dp
+/** 组内条目内容留白：与 GlassSurface 的默认口径（spaceM）一致，不再自造 14dp 一档 */
+private val SETTINGS_ITEM_PADDING = DesignTokens.spaceM
 
 /** 条目显隐的弹簧刚度（Spring.StiffnessMediumLow） */
 private const val SETTINGS_SPRING_STIFFNESS = 400f
@@ -424,4 +436,29 @@ fun fieldError(invalid: Boolean, message: String): (@Composable () -> Unit)? {
         )
     }
     return content
+}
+
+/**
+ * 表单字段的键盘声明（原 SettingsScreen 私有助手，审查 V-表单：编辑器同一套声明各写一份）。
+ *
+ * `numeric` 只给**纯整数**字段（总周数、每节分钟数）。
+ * 日期（`2026-09-07`）与节次时间（`08:00`）**故意**留在字母键盘上：
+ * 数字面板没有 `-` 和 `:`，换了键盘等于让人打不出这个值。
+ */
+@Composable
+fun fieldImeOptions(numeric: Boolean = false, last: Boolean = false): KeyboardOptions =
+    KeyboardOptions(
+        keyboardType = if (numeric) KeyboardType.Number else KeyboardType.Text,
+        imeAction = if (last) ImeAction.Done else ImeAction.Next,
+    )
+
+/** 与 [fieldImeOptions] 配对：「下一个」沿竖直表单向下移焦点，「完成」收起键盘。 */
+@Composable
+fun fieldImeActions(last: Boolean = false): KeyboardActions {
+    val focusManager = LocalFocusManager.current
+    return if (last) {
+        KeyboardActions(onDone = { focusManager.clearFocus() })
+    } else {
+        KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) })
+    }
 }

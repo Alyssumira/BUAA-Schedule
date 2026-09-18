@@ -24,12 +24,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,7 +44,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.activity.compose.BackHandler
@@ -56,6 +52,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import com.buaa.schedule.BuildConfig
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
+import com.buaa.schedule.core.designsystem.GlassTopBar
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.data.import.BuaaInPageFetcher
 import com.buaa.schedule.data.import.redactUrl
@@ -111,7 +108,7 @@ fun BuaaLoginScreen(
         // 注入脚本已钉死绝对 origin，这里只做提示，避免把「没登录」报成「网络差」。
         if (!web.url.orEmpty().startsWith(com.buaa.schedule.data.import.BuaaWebSession.BYXT_ORIGIN)) {
             fetchState = null
-            viewModel.showMessage("教务系统页面尚未就绪，请稍后重试")
+            viewModel.showMessage("教务系统页面尚未就绪，请稍后重试", isError = true)
             com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
             onBack()
             return@LaunchedEffect
@@ -120,7 +117,7 @@ fun BuaaLoginScreen(
         val terms = fetcher.fetchTermList(web)
         if (terms.isEmpty()) {
             fetchState = null
-            viewModel.showMessage("获取学期列表失败，请稍后重试")
+            viewModel.showMessage("获取学期列表失败，请稍后重试", isError = true)
             com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
             onBack()
         } else {
@@ -144,12 +141,13 @@ fun BuaaLoginScreen(
                 outcome.failedWeeks.isNotEmpty() -> {
                     viewModel.showMessage(
                         "抓取未完成：第 ${outcome.failedWeeks.joinToString("、")} 周失败，" +
-                            "已保留原课表未做改动，请稍后重试"
+                            "已保留原课表未做改动，请稍后重试",
+                        isError = true,
                     )
                     onBack()
                 }
                 outcome.courses.isEmpty() -> {
-                    viewModel.showMessage("教务系统未返回该学期课程（可能未选课）")
+                    viewModel.showMessage("教务系统未返回该学期课程（可能未选课）", isError = true)
                     onBack()
                 }
                 else -> {
@@ -246,45 +244,19 @@ fun BuaaLoginScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // 细顶栏：40dp 玻璃条（含加载进度），WebView 紧贴其下，不再有厚 AppBar 与割裂感
-            GlassSurface(
-                variant = GlassVariant.CHROME,
-                contentPadding = DesignTokens.spaceS,
-                shape = RoundedCornerShape(
-                    bottomStart = DesignTokens.cornerPanel,
-                    bottomEnd = DesignTokens.cornerPanel,
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .statusBarsPadding()
-                            .height(40.dp)
-                            .padding(horizontal = DesignTokens.spaceS),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        TextButton(onClick = { safeBack() }) { Text("返回") }
-                        Text(
-                            text = "统一身份认证登录",
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.titleSmall,
-                        )
-                        Text(
-                            text = termCode,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    if (loadProgress in 1..99 && loadStarted) {
-                        LinearProgressIndicator(
-                            progress = { loadProgress / 100f },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                }
-            }
+            GlassTopBar(
+                title = "统一身份认证登录",
+                progress = if (loadStarted && loadProgress in 1..99) loadProgress / 100f else null,
+                statusBarInset = true,
+                onBack = { safeBack() },
+                actions = {
+                    Text(
+                        text = termCode,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+            )
             // retryToken 变化时销毁重建 WebView，实现“重新加载”
             key(retryToken) {
                 val mainHandler = remember { Handler(Looper.getMainLooper()) }
@@ -345,10 +317,13 @@ fun BuaaLoginScreen(
             }
         }
 
-        // 浮动状态卡：贴底、不遮登录表单，也不挤压 WebView 高度
+        // 浮动状态卡：贴底、不遮登录表单，也不挤压 WebView 高度。
+        // 出错时升为 ALERT + error 语义色（与首页冲突横幅同一档），中性进度仍留 PANEL
         if (statusText != null) {
+            val isErrorStatus = loadError != null || timedOut
             GlassSurface(
-                variant = GlassVariant.PANEL,
+                variant = if (isErrorStatus) GlassVariant.ALERT else GlassVariant.PANEL,
+                semanticTint = if (isErrorStatus) MaterialTheme.colorScheme.error else null,
                 contentPadding = DesignTokens.spaceL,
                 shape = RoundedCornerShape(DesignTokens.cornerPanel),
                 modifier = Modifier
@@ -364,7 +339,7 @@ fun BuaaLoginScreen(
                     Text(
                         text = statusText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (loadError != null || timedOut) MaterialTheme.colorScheme.error
+                        color = if (isErrorStatus) MaterialTheme.colorScheme.error
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {

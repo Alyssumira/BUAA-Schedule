@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -53,6 +55,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -65,6 +68,9 @@ import com.buaa.schedule.core.FirstRun
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
+import com.buaa.schedule.core.designsystem.ModalTransition
+import com.buaa.schedule.core.designsystem.SettingsRow
+import com.buaa.schedule.core.designsystem.SettingsSwitchRow
 import com.buaa.schedule.reminder.ClassProgressReceiver
 import com.buaa.schedule.ui.settings.ReminderGuidance
 import kotlinx.coroutines.Dispatchers
@@ -269,8 +275,9 @@ fun OnboardingScreen(
         )
     }
 
-    if (showEnvironmentDialog) {
+    ModalTransition(open = showEnvironmentDialog) { modal ->
         EnvironmentUnmetDialog(
+            modifier = modal,
             onDismiss = { showEnvironmentDialog = false },
             onContinue = {
                 showEnvironmentDialog = false
@@ -289,7 +296,7 @@ private fun OnboardingHeader(currentPage: Int, onClose: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(56.dp)
+            .defaultMinSize(minHeight = DesignTokens.topBarHeight)
             .padding(horizontal = DesignTokens.spaceL),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -297,7 +304,6 @@ private fun OnboardingHeader(currentPage: Int, onClose: () -> Unit) {
             Text(
                 text = "BUAA 课表",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
         }
@@ -331,7 +337,7 @@ private fun OnboardingStepPage(
 ) {
     // 宽屏（平板 / 折叠屏展开）不把正文拉到整屏宽，一行 60 个汉字没法读
     val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-    val maxWidth = if (screenWidth >= 600.dp) screenWidth * 0.6f else 520.dp
+    val maxWidth = if (screenWidth >= DesignTokens.breakpointWide) screenWidth * 0.6f else 520.dp
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter,
@@ -383,8 +389,7 @@ private fun WelcomeStep() {
         Spacer(Modifier.height(DesignTokens.spaceL))
         Text(
             text = "BUAA 课表",
-            fontSize = 34.sp,
-            fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.displaySmall,
             color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(Modifier.height(DesignTokens.spaceM))
@@ -408,16 +413,25 @@ private fun PrivacyStep(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
         )
     }
     Spacer(Modifier.height(DesignTokens.spaceM))
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Checkbox(checked = checked, onCheckedChange = onCheckedChange)
-        Text(
-            text = "我已阅读并同意",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
+    // 与厂商放行那几行同壳同件：整行可点（Role.Checkbox），勾选框自身不再单独接收点击
+    GlassSurface(variant = GlassVariant.PANEL, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(
+                    role = Role.Checkbox,
+                    onClickLabel = if (checked) "取消同意" else "同意隐私说明",
+                    onClick = { onCheckedChange(!checked) },
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(checked = checked, onCheckedChange = null)
+            Text(
+                text = "我已阅读并同意",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
     }
 }
 
@@ -487,31 +501,23 @@ private fun ReliabilityStep(
 
 @Composable
 private fun CheckCard(item: CheckItem, enabled: Boolean, onFix: () -> Unit) {
+    // 卡片壳保留（引导页的条目本来就是独立的玻璃卡），行内容用设置页同一件 SettingsRow：
+    // 标题/摘要的字号与颜色、触控下限从此不用各写一份
     GlassSurface(variant = GlassVariant.PANEL, modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = item.title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = item.summary,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            StatusMark(item.status, enabled)
-            if (item.actionLabel != null) {
-                TextButton(onClick = onFix, enabled = enabled) {
-                    Text(item.actionLabel, color = MaterialTheme.colorScheme.primary)
+        SettingsRow(
+            title = item.title,
+            summary = item.summary,
+            trailing = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    StatusMark(item.status, enabled)
+                    if (item.actionLabel != null) {
+                        TextButton(onClick = onFix, enabled = enabled) {
+                            Text(item.actionLabel, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
                 }
-            }
-        }
+            },
+        )
     }
 }
 
@@ -519,7 +525,7 @@ private fun CheckCard(item: CheckItem, enabled: Boolean, onFix: () -> Unit) {
 private fun StatusMark(status: CheckStatus, enabled: Boolean) {
     if (!enabled) {
         CircularProgressIndicator(
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier.size(DesignTokens.iconMedium),
             strokeWidth = 2.dp,
         )
         return
@@ -529,7 +535,7 @@ private fun StatusMark(status: CheckStatus, enabled: Boolean) {
         CheckStatus.Failed -> Icons.Filled.Close to MaterialTheme.colorScheme.error
         CheckStatus.Unknown -> Icons.AutoMirrored.Filled.HelpOutline to MaterialTheme.colorScheme.outline
     }
-    Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+    Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(DesignTokens.iconMedium))
     Spacer(Modifier.width(DesignTokens.spaceM))
 }
 
@@ -569,16 +575,27 @@ private fun VendorGuidance(confirmed: Boolean, onConfirmedChange: (Boolean) -> U
             summary = "在安全中心的应用权限页「其他权限」里；此开关系统不提供读取接口，只能人工确认",
             onOpen = { ReminderGuidance.openVendorPermissionPage(it) },
         )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Checkbox(checked = confirmed, onCheckedChange = onConfirmedChange)
-            Text(
-                text = "我已在系统设置里确认（或不需要）",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
+        // 与上面三行同壳：确认行也住玻璃卡里，不再是一条裸行
+        GlassSurface(variant = GlassVariant.PANEL, modifier = Modifier.fillMaxWidth()) {
+            // 整行可点（Role.Checkbox），Checkbox 自身 onCheckedChange=null——
+            // 与导入页的勾选行同一件写法，避免一次点击触发两回
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(
+                        role = Role.Checkbox,
+                        onClickLabel = if (confirmed) "取消确认" else "标记为已确认",
+                        onClick = { onConfirmedChange(!confirmed) },
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(checked = confirmed, onCheckedChange = null)
+                Text(
+                    text = "我已在系统设置里确认（或不需要）",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
         }
     }
 }
@@ -608,24 +625,14 @@ private fun SectionHeading(title: String, subtitle: String) {
 @Composable
 private fun VendorRow(title: String, summary: String, onOpen: (android.content.Context) -> Unit) {
     val context = LocalContext.current
-    GlassSurface(
-        variant = GlassVariant.PANEL,
-        modifier = Modifier.fillMaxWidth(),
-        onClick = { onOpen(context) },
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = summary,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+    // 与设置页的"进入下级"行同件：标题/摘要 + 尾部 ">"，点击语义由 SettingsRow 负责
+    GlassSurface(variant = GlassVariant.PANEL, modifier = Modifier.fillMaxWidth()) {
+        SettingsRow(
+            title = title,
+            summary = summary,
+            showChevron = true,
+            onClick = { onOpen(context) },
+        )
     }
 }
 
@@ -660,30 +667,14 @@ private fun ImportStep(onImportBuaa: () -> Unit, onAddCourse: () -> Unit) {
 
 @Composable
 private fun ToggleRow(title: String, summary: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    GlassSurface(
-        variant = GlassVariant.PANEL,
-        modifier = Modifier.fillMaxWidth(),
-        onClick = { onCheckedChange(!checked) },
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = summary,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Checkbox(checked = checked, onCheckedChange = onCheckedChange)
-        }
+    // 壳 + 行：整行翻转由 SettingsSwitchRow 负责（Role.Switch），不再"卡一个点击、盒一个点击"
+    GlassSurface(variant = GlassVariant.PANEL, modifier = Modifier.fillMaxWidth()) {
+        SettingsSwitchRow(
+            title = title,
+            summary = summary,
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+        )
     }
 }
 
@@ -746,8 +737,14 @@ private fun OnboardingControls(
 }
 
 @Composable
-private fun EnvironmentUnmetDialog(onDismiss: () -> Unit, onContinue: () -> Unit, onRetry: () -> Unit) {
+private fun EnvironmentUnmetDialog(
+    modifier: Modifier = Modifier,
+    onDismiss: () -> Unit,
+    onContinue: () -> Unit,
+    onRetry: () -> Unit,
+) {
     androidx.compose.material3.AlertDialog(
+        modifier = modifier,
         onDismissRequest = onDismiss,
         title = { Text("有阻塞项未通过") },
         text = {
@@ -768,6 +765,7 @@ private fun EnvironmentUnmetDialog(onDismiss: () -> Unit, onContinue: () -> Unit
  */
 internal const val PRIVACY_STATEMENT =
     "课表、提醒、节次时间与个性化设置只写在本机应用私有目录，不上传服务器。\n\n" +
-        "两处会联网：① 你主动登录教务系统抓取课表时，账号与教务接口数据只在你手机与 " +
-        "buaa.edu.cn 之间往返；② 「检查更新」每天向 Gitee 问一次有没有新版本，" +
-        "只发送版本号，不发送任何个人数据。"
+        "三处会联网：① 你主动登录教务系统抓取课表时，账号与教务接口数据只在你手机与 " +
+        "buaa.edu.cn 之间往返；② 你主动扫码签到时，向智学北航发送这一次签到所需的" +
+        "班级标识与你的学号，相机画面只在本机解码、不上传；③ 「检查更新」每天向 Gitee " +
+        "问一次有没有新版本，只发送版本号，不发送任何个人数据。"

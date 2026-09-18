@@ -7,6 +7,7 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.buaa.schedule.R
+import com.buaa.schedule.data.import.SpocSession
 import com.buaa.schedule.data.local.AppDatabase
 import com.buaa.schedule.data.repository.ScheduleRepository
 import kotlinx.coroutines.CoroutineScope
@@ -30,27 +31,28 @@ class ReminderReceiver : BroadcastReceiver() {
         val livePhase = if (
             classProgressEnabled(context) && classStartAt > now
         ) LivePhase.BEFORE_CLASS else null
-        // 这两步跑在 goAsync() 之前、在接收器的主线程上：任何逃出的异常都会直接杀进程
-        // （与 ClassProgressReceiver 同口径，那边早已整体兜住）。这里失败只意味着这一节课
-        // 没有实况/通知，链式重排照旧要跑。
-        runCatching {
-            if (livePhase != null) {
-                ReminderNotifications.startLiveWindow(
-                    context = context,
-                    // 课前这一段进度条量的是"这段等待"，所以起点是此刻而不是上课时间
-                    window = scheduled.copy(startMillis = now),
-                    phase = livePhase,
-                )
-            }
-            notifyCourse(context, scheduled)
-        }.onFailure { android.util.Log.w(TAG, "课前提醒展示失败（实况/通知）", it) }
-
-        // 闹钟触发后链式调度下一次提醒；goAsync 保证广播进程存活到调度完成，
-        // 唤醒锁保证 Doze 下 CPU 不会在 DB 查询/重排中途再度入睡（进程活着 ≠ CPU 醒着）
+        // 实况启动与通知展示整体挪到 goAsync() 之后：notifyCourse 里的
+        // SpocSession.hasSession() 要过 AndroidKeyStore 解密 + SharedPreferences 读盘，
+        // 闹钟唤醒常是冷进程，这笔 binder + 解密全落在广播主线程上就是在吃 10 秒配额，
+        // 超配额系统直接掐广播 —— 用户看到的"这一节课没有提醒"就是这么来的。
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                WakeLocks.withPartialWakeLock(context, "reminder_reschedule") {
+                WakeLocks.withPartialWakeLock(context, "reminder_show_and_reschedule") {
+                    // 失败只意味着这一节课没有实况/通知，链式重排照旧要跑
+                    runCatching {
+                        if (livePhase != null) {
+                            ReminderNotifications.startLiveWindow(
+                                context = context,
+                                // 课前这一段进度条量的是"这段等待"，所以起点是此刻而不是上课时间
+                                window = scheduled.copy(startMillis = now),
+                                phase = livePhase,
+                            )
+                        }
+                        notifyCourse(context, scheduled)
+                    }.onFailure { android.util.Log.w(TAG, "课前提醒展示失败（实况/通知）", it) }
+                    // 闹钟触发后链式调度下一次提醒；goAsync 保证广播进程存活到调度完成，
+                    // 唤醒锁保证 Doze 下 CPU 不会在 DB 查询/重排中途再度入睡（进程活着 ≠ CPU 醒着）
                     runCatching {
                         val repository = ScheduleRepository(AppDatabase.getInstance(context))
                         val semester = repository.getCurrentSemester()
@@ -70,6 +72,11 @@ class ReminderReceiver : BroadcastReceiver() {
     private fun classProgressEnabled(context: Context): Boolean = context
         .getSharedPreferences(ClassProgressReceiver.PREFS_NAME, Context.MODE_PRIVATE)
         .getBoolean(ClassProgressReceiver.PREF_CLASS_PROGRESS, true)
+
+    /** 课前提醒是否带「扫码签到」按钮（与设置页同一键） */
+    private fun spocSignHintEnabled(context: Context): Boolean = context
+        .getSharedPreferences(ClassProgressReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+        .getBoolean(PREF_SPOC_SIGN_HINT, false)
 
     /**
      * 课前提醒的横幅通知。
@@ -119,6 +126,13 @@ class ReminderReceiver : BroadcastReceiver() {
         // 横幅再挂一个系统计时器只会在同屏出现两个各走各的倒计时，
         // 而 chronometer 恰恰是 SleepDown 取证里"顶掉岛上那一格"的形状。
 
+        // 开关在这里读，而不是排程时烘进闹钟 extras：闹钟是几十分钟前就排好的，
+        // 用户临上课前把这行关掉，烘死的标志仍会让这一节带着按钮。
+        // 没登录时不挂：点下去只会跳到扫码页再当场报「还没有登录」，比没有按钮更糟。
+        if (spocSignHintEnabled(context) && SpocSession.hasSession()) {
+            builder.addAction(0, "扫码签到", ReminderNotifications.spocScanPendingIntent(context))
+        }
+
         try {
             // 用 tag 携带课程 id，而不是 courseId.toInt()：
             // Long→Int 截断会让不同课程的通知共用同一个 id 而互相覆盖。
@@ -139,6 +153,9 @@ class ReminderReceiver : BroadcastReceiver() {
 
         /** 课程提醒的固定通知 id，课程维度由 tag 区分 */
         private const val NOTIFY_ID_COURSE = 20_260_003
+
+        /** 「课前提醒带扫码签到按钮」开关（prefs 走 [ClassProgressReceiver.PREFS_NAME]） */
+        const val PREF_SPOC_SIGN_HINT = "spoc_sign_hint"
 
         /** 通知 tag（纯函数，便于单测） */
         fun notificationTag(courseId: Long): String = "course_$courseId"

@@ -3,6 +3,7 @@ package com.buaa.schedule.core.designsystem.liquid
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -41,6 +42,10 @@ import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalSceneBackdrop
+import com.buaa.schedule.core.designsystem.ModalTransition
+import com.buaa.schedule.core.designsystem.MotionTokens
+import com.buaa.schedule.core.designsystem.dialogEnter
+import com.buaa.schedule.core.designsystem.dialogExit
 import com.buaa.schedule.core.designsystem.performTick
 import com.buaa.schedule.data.import.BuaaInPageFetcher
 
@@ -222,43 +227,61 @@ private fun GlassPickerItem(
  * 用 [Popup] 而不是 DropdownMenu：后者会带一层不透明的 Material surface 背景。
  * 这里浮层本体就是一块玻璃片（PANEL 档），列表内容超出时内部滚动。
  *
+ * 开合走 [ModalTransition]，和 [LiquidMenu] 同一套语义：**先播完收场，再卸载窗口**。
+ * 以前这里是 `if (!expanded) return`，收起等于当场把 Popup 拆掉，硬切；
+ * 而把 Popup 直接塞进 AnimatedVisibility 也只有延迟卸载的效果——Popup 在自己的窗口里，
+ * 父组合那层的 graphicsLayer 进不去，所以动画得挂在下面 GlassSurface 的 modifier 上。
+ * 时长取菜单档（[MotionTokens.DURATION_MENU] / [MotionTokens.DURATION_MENU_CLOSE]）
+ * 而不是弹窗档：这是一小块浮层，560ms 的入场会被读成"等一下"（U-13）。
+ *
+ * 需要 [BoxScope]：只有 `Modifier.matchParentSize()` 能让外壳保持触发按钮的尺寸，
+ * 否则 Popup 的定位锚（父 layout node）会缩成 0×0，TopEnd 就变成"往左挪一个自身宽度"。
+ *
  * @param alignment 相对父容器对齐（学期按钮靠左用 TopStart，校区按钮靠右用 TopEnd）
  */
 @Composable
-private fun GlassDropdownPopup(
+private fun BoxScope.GlassDropdownPopup(
     expanded: Boolean,
     onDismiss: () -> Unit,
     alignment: Alignment,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    if (!expanded) return
     val density = LocalDensity.current
-    Popup(
-        alignment = alignment,
-        // 往下挪一点，避免盖住触发它的那一行按钮
-        offset = with(density) { IntOffset(0, 44.dp.roundToPx()) },
-        onDismissRequest = onDismiss,
-        properties = PopupProperties(focusable = true),
-    ) {
-        // Popup 是**独立窗口**，采样不到主窗口的场景层：
-        // 沿用 LocalSceneBackdrop 的话，玻璃会按浮层自己的坐标去裁主窗口那张图，
-        // 于是折射内容整体错位（用户反馈的"取景位置好像不对"）。
-        // 浮层本来也不该去折射另一个窗口的内容——这里显式给 null，
-        // GlassSurface 就走不透明平板 + 描边，边界干净、列表文字也不再糊。
-        CompositionLocalProvider(LocalSceneBackdrop provides null) {
-            GlassSurface(
-                variant = GlassVariant.PANEL,
-                shape = RoundedCornerShape(DesignTokens.cornerPanel),
-                contentPadding = DesignTokens.spaceS,
-                modifier = Modifier.widthIn(min = 180.dp, max = 300.dp),
-            ) {
-                Column(
+    ModalTransition(
+        open = expanded,
+        modifier = Modifier.matchParentSize(),
+        enter = dialogEnter(MotionTokens.DURATION_MENU),
+        exit = dialogExit(MotionTokens.DURATION_MENU_CLOSE),
+    ) { modal ->
+        Popup(
+            alignment = alignment,
+            // 往下挪一点，避免盖住触发它的那一行按钮
+            offset = with(density) { IntOffset(0, 44.dp.roundToPx()) },
+            onDismissRequest = onDismiss,
+            properties = PopupProperties(focusable = true),
+        ) {
+            // Popup 是**独立窗口**，采样不到主窗口的场景层：
+            // 沿用 LocalSceneBackdrop 的话，玻璃会按浮层自己的坐标去裁主窗口那张图，
+            // 于是折射内容整体错位（用户反馈的"取景位置好像不对"）。
+            // 浮层本来也不该去折射另一个窗口的内容——这里显式给 null，
+            // GlassSurface 就走不透明平板 + 描边，边界干净、列表文字也不再糊。
+            CompositionLocalProvider(LocalSceneBackdrop provides null) {
+                GlassSurface(
+                    variant = GlassVariant.PANEL,
+                    shape = RoundedCornerShape(DesignTokens.cornerPanel),
+                    contentPadding = DesignTokens.spaceS,
                     modifier = Modifier
-                        .heightIn(max = 340.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                        .widthIn(min = 180.dp, max = 300.dp)
+                        .then(modal),
                 ) {
-                    content()
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 340.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        content()
+                    }
                 }
             }
         }

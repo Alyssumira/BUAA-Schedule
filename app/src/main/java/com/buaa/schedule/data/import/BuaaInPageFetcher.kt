@@ -133,6 +133,11 @@ object BuaaInPageFetcher {
         }
         if (raw == null) {
             Log.w(TAG, "页面内抓取超时：$method $path")
+            // 超时也必须清槽：requestId 单调递增、永不复用，页面里那条 fetch 稍后
+            // 仍会把整份响应写进 store[id]。而会话 WebView 是刻意保留的——每超时一次
+            // 就永久泄漏一份几十到几百 KB 的周课表 JSON 在 JS 堆里（:84 的注释
+            // 承诺了"连读带清"，此前只有正常读回那一支兑现了）。
+            webView.post { webView.evaluateJavascript(clearScript(requestId), null) }
             return null
         }
         if (raw.startsWith(ERROR_PREFIX)) {
@@ -220,7 +225,7 @@ object BuaaInPageFetcher {
                     runCatching { json.decodeFromString<BuaaScheduleResponse>(raw) }.getOrNull()
                         // 教务限流/会话半失效时会返回 HTTP 200 的 {"code":"-1","datas":null}：
                         // JSON 解得动但没有数据，若记成功会让 isComplete 通过覆盖导入闸门，
-                        // 把那些周的课程直接删没。判据与 BuaaApi.fetchSchedule 同口径。
+                        // 把那些周的课程直接删没。判据：只有 datas 非空（或 code 缺省/为 "0"）才算有数据。
                         ?.takeIf { it.datas != null || it.code == null || it.code == "0" }
                 }
             }
@@ -328,9 +333,17 @@ object BuaaInPageFetcher {
         })()
     """.trimIndent()
 
+    /** 超时后的清槽脚本：页面里那条 fetch 迟到写入时不再留下永久槽位 */
+    private fun clearScript(requestId: String): String = """
+        (function() {
+          var store = $RESULT_STORE;
+          if (store) delete store['$requestId'];
+        })()
+    """.trimIndent()
+
     /** evaluateJavascript 结果会被 JSON 再编码一次：去外层引号 + 反转义 */
     private fun decodeJsString(value: String?): String? {
-        if (value == null || value == "null") return null
+        if (value == null || value == "null" || value == "undefined") return null
         return runCatching {
             val arr = org.json.JSONArray("[$value]")
             if (arr.length() == 1) arr.getString(0) else value

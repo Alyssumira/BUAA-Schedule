@@ -349,8 +349,12 @@ internal fun nextCourseFluidTickMs(startMillis: Long, endMillis: Long, now: Long
     val progressTick = startMillis + nextStepElapsed - now
 
     val minutesLeft = (endMillis - now + 59_999L) / 60_000L
+    // epsilon 只能加在真实时刻上：Long.MAX_VALUE 哨兵再 +150 会溢出成极小负数，
+    // minOf 选中它、coerceAtLeast 再把间隔钉回 1 秒 —— 一旦外部条件哪天挡不住
+    // minutesLeft<=0 这支，就是每秒重绘一次的忙轮询。
     val chipTick =
-        if (minutesLeft <= 0L) Long.MAX_VALUE else endMillis - (minutesLeft - 1L) * 60_000L - now
+        if (minutesLeft <= 0L) Long.MAX_VALUE
+        else endMillis - (minutesLeft - 1L) * 60_000L - now + CHIP_TICK_EPSILON_MS
 
-    return minOf(progressTick, chipTick + CHIP_TICK_EPSILON_MS).coerceAtLeast(MIN_TICK_DELAY_MS)
+    return minOf(progressTick, chipTick).coerceAtLeast(MIN_TICK_DELAY_MS)
 }

@@ -4,8 +4,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,27 +14,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -51,24 +45,27 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.buaa.schedule.core.designsystem.ColorSwatch
 import com.buaa.schedule.core.designsystem.CourseColors
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalAnimatedVisibilityScope
 import com.buaa.schedule.core.designsystem.LocalSharedTransitionScope
-import com.buaa.schedule.core.designsystem.contentOn
+import com.buaa.schedule.core.designsystem.ModalTransition
+import com.buaa.schedule.core.designsystem.SettingsSwitchRow
 import com.buaa.schedule.core.designsystem.fieldError
+import com.buaa.schedule.core.designsystem.fieldImeActions
+import com.buaa.schedule.core.designsystem.fieldImeOptions
 import com.buaa.schedule.core.designsystem.motionSpec
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.CourseSaveOptions
+import com.buaa.schedule.domain.model.NO_PERIOD_GAP
 import com.buaa.schedule.domain.model.ReminderSetting
 import com.buaa.schedule.domain.model.toPeriodSegments
 import com.buaa.schedule.domain.schedule.CourseConstraints
@@ -100,7 +97,9 @@ fun CourseEditorScreen(
     // 展开成连续块——非连续节次被静默拉直（P0）。
     // 首段进「开始/结束节次」，其余段拼成 parsePeriods 认得的 "9-10" 文本进「额外节次」。
     val periodSegments = remember(initialCourse) {
-        initialCourse?.periods.orEmpty().toPeriodSegments()
+        // 这里是**编辑器**的分段，不是课次：改的是节次本身，按节次号相邻切才对。
+        // 若套上时间表把 [5,6] 拆成两段，用户只是改个老师名字就会把这门课存成两段。
+        initialCourse?.periods.orEmpty().toPeriodSegments(NO_PERIOD_GAP)
     }
     val initialStartSection = (periodSegments.firstOrNull()?.first ?: 1).toString()
     val initialEndSection = (periodSegments.firstOrNull()?.last ?: 2).toString()
@@ -118,6 +117,11 @@ fun CourseEditorScreen(
         )
     }
     var alias by rememberSaveable { mutableStateOf(initialCourse?.alias ?: "") }
+    // 学分留空 = 不知道，0 = 教务明说这门课 0 学分，两者在统计页是两个说法，
+    // 所以初值只在非 null 时才写成字符串（空串不能被 toDoubleOrNull 吃成 0.0）
+    var creditText by rememberSaveable {
+        mutableStateOf(initialCourse?.credit?.let { if (it % 1.0 == 0.0) it.toLong().toString() else it.toString() } ?: "")
+    }
     var colorIndex by rememberSaveable { mutableIntStateOf(initialCourse?.colorIndex ?: 0) }
     var customColor by rememberSaveable { mutableStateOf(initialCourse?.customColorArgb) }
     var reminderEnabled by rememberSaveable { mutableStateOf(initialReminder?.enabled ?: true) }
@@ -183,20 +187,20 @@ fun CourseEditorScreen(
             list.isEmpty() || list.any { it !in 1..CourseConstraints.MAX_PERIOD }
         }
     val weeksInvalid = weeks.isEmpty()
+    // 学分可选：留空 = 不知道（统计页会单列"未计入"），填了就必须是 0..MAX_CREDIT 的数值。
+    // 坏值判错而不是静默丢掉，否则用户填了 "3,5"（逗号）却以为存进去了。
+    val creditNumber = creditText.trim().toDoubleOrNull()
+    val creditInvalid = creditText.isNotBlank() &&
+        CourseConstraints.normalizeCredit(creditNumber) == null
 
-    // 键盘流转：表单是一条竖向 Column，所以「下一个」直接用 FocusDirection.Down，
+    // 键盘流转：与设置页共用同一套字段声明（审查⑦V-表单）。
+    // 表单是一条竖向 Column，所以「下一个」直接用 FocusDirection.Down，
     // 比给 11 个字段各挂一个 focusRequester 少一半代码，也不会漏配。
-    val focusManager = LocalFocusManager.current
-    val nextFieldOptions = KeyboardOptions(imeAction = ImeAction.Next)
-    val doneFieldOptions = KeyboardOptions(imeAction = ImeAction.Done)
-    val numberFieldOptions = KeyboardOptions(
-        keyboardType = KeyboardType.Number,
-        imeAction = ImeAction.Next,
-    )
-    val nextFieldActions = KeyboardActions(
-        onNext = { focusManager.moveFocus(FocusDirection.Down) },
-    )
-    val doneActions = KeyboardActions(onDone = { focusManager.clearFocus() })
+    val nextFieldOptions = fieldImeOptions()
+    val doneFieldOptions = fieldImeOptions(last = true)
+    val numberFieldOptions = fieldImeOptions(numeric = true)
+    val nextFieldActions = fieldImeActions()
+    val doneActions = fieldImeActions(last = true)
 
     fun performSave() {
         val course = Course(
@@ -206,6 +210,7 @@ fun CourseEditorScreen(
             teacher = teacher.trim().ifEmpty { null },
             location = location.trim().ifEmpty { null },
             campus = campus.trim().ifEmpty { null },
+            credit = CourseConstraints.normalizeCredit(creditNumber),
             dayOfWeek = day,
             periods = periods,
             weeks = weeks,
@@ -280,12 +285,23 @@ fun CourseEditorScreen(
             ) {
                 Column {
                     if (saveError != null) {
-                        Text(
-                            text = saveError ?: "",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(bottom = DesignTokens.spaceS),
-                        )
+                        // 这里不套 GlassSurface(ALERT)：底栏本身就是一层 CHROME 玻璃，
+                        // 玻璃叠玻璃既吃配额又糊（同首页冲突横幅的分层规则）。
+                        // 用 M3 errorContainer 平板拿到与 ALERT 同源的语义色。
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = DesignTokens.spaceS)
+                                .clip(RoundedCornerShape(DesignTokens.cornerChip))
+                                .background(MaterialTheme.colorScheme.errorContainer)
+                                .padding(horizontal = DesignTokens.spaceM, vertical = DesignTokens.spaceS),
+                        ) {
+                            Text(
+                                text = saveError ?: "",
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                     }
                     Button(
                         onClick = { performSave() },
@@ -309,12 +325,20 @@ fun CourseEditorScreen(
         ) {
             // 详细原因已经落到出错的字段旁边（isError + supportingText），
             // 顶部只留一条汇总——它负责"为什么保存按钮是灰的"，不负责指出是哪一格。
+            // 呈现与首页冲突横幅同档（ALERT + error 语义色），不再是一行裸文本。
             if (periods.isEmpty() || weeks.isEmpty()) {
-                Text(
-                    text = "还有字段未通过校验，请检查标红的输入框",
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                GlassSurface(
+                    variant = GlassVariant.ALERT,
+                    semanticTint = MaterialTheme.colorScheme.error,
+                    contentPadding = DesignTokens.spaceM,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = "还有字段未通过校验，请检查标红的输入框",
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
             }
 
             EditorSection(title = "基本信息") {
@@ -362,6 +386,26 @@ fun CourseEditorScreen(
                     singleLine = true,
                     keyboardOptions = nextFieldOptions,
                     keyboardActions = nextFieldActions,
+                )
+                // 教务导入会自动带上学分，手动课程以前没有录入口，
+                // 统计页就只能一直显示"N 门课没有学分数据，未计入"
+                OutlinedTextField(
+                    value = creditText,
+                    onValueChange = { creditText = it },
+                    label = { Text("学分（可选，如 3 或 3.5）") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    // Decimal 而不是 Number：小数点要打得出来，"3.5" 是北航最常见的学分
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Decimal,
+                        imeAction = ImeAction.Next,
+                    ),
+                    keyboardActions = nextFieldActions,
+                    isError = creditInvalid,
+                    supportingText = fieldError(
+                        creditInvalid,
+                        "学分要是 0–${CourseConstraints.MAX_CREDIT.toInt()} 之间的数字",
+                    ),
                 )
             }
 
@@ -440,9 +484,9 @@ fun CourseEditorScreen(
 
             EditorSection(title = "课程外观") {
                 Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
-                    repeat(8) { index ->
-                        ColorDot(
-                            color = CourseColors[index],
+                    CourseColors.forEachIndexed { index, swatch ->
+                        ColorSwatch(
+                            color = swatch,
                             selected = customColor == null && colorIndex == index,
                             onClick = {
                                 colorIndex = index
@@ -450,7 +494,7 @@ fun CourseEditorScreen(
                             },
                         )
                     }
-                    ColorDot(
+                    ColorSwatch(
                         color = customColor?.let { Color(it) } ?: Color(0xFF9E9E9E),
                         selected = customColor != null,
                         label = "自定义",
@@ -461,8 +505,8 @@ fun CourseEditorScreen(
 
             if (initialCourse != null) {
                 EditorSection(title = "提醒") {
-                    SwitchRow(
-                        label = "开启课前提醒",
+                    SettingsSwitchRow(
+                        title = "开启课前提醒",
                         checked = reminderEnabled,
                         onCheckedChange = { reminderEnabled = it },
                     )
@@ -472,10 +516,7 @@ fun CourseEditorScreen(
                         label = { Text("提前分钟（0-${CourseConstraints.MAX_ADVANCE_MINUTES}）") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number,
-                            imeAction = ImeAction.Done,
-                        ),
+                        keyboardOptions = fieldImeOptions(numeric = true, last = true),
                         keyboardActions = doneActions,
                     )
                 }
@@ -483,8 +524,8 @@ fun CourseEditorScreen(
 
             if (initialCourse != null && initialCourse.weeks.size > 1) {
                 EditorSection(title = "修改范围") {
-                    SwitchRow(
-                        label = "仅修改选中周次（原课程保留其余周次）",
+                    SettingsSwitchRow(
+                        title = "仅修改选中周次（原课程保留其余周次）",
                         checked = partialWeeks,
                         onCheckedChange = { partialWeeks = it },
                     )
@@ -492,8 +533,8 @@ fun CourseEditorScreen(
             }
             if (initialCourse != null && initialCourse.sourceGroupKey != null) {
                 EditorSection(title = "修改范围") {
-                    SwitchRow(
-                        label = "同步修改本课程其他片段（名称/地点/校区/颜色）",
+                    SettingsSwitchRow(
+                        title = "同步修改本课程其他片段（名称/地点/校区/颜色/学分）",
                         checked = applyToGroup,
                         onCheckedChange = { applyToGroup = it },
                     )
@@ -523,8 +564,9 @@ fun CourseEditorScreen(
         }
     }
 
-    if (showDiscardDialog) {
+    ModalTransition(open = showDiscardDialog) { modal ->
         AlertDialog(
+            modifier = modal,
             onDismissRequest = { showDiscardDialog = false },
             title = { Text("放弃修改？") },
             text = { Text("这门课的改动还没有保存，返回后这些输入就没了。") },
@@ -537,9 +579,10 @@ fun CourseEditorScreen(
         )
     }
 
-    if (showColorPicker) {
+    ModalTransition(open = showColorPicker) { modal ->
         ColorPickerDialog(
             initialColor = customColor,
+            modifier = modal,
             onConfirm = { argb ->
                 customColor = argb
                 showColorPicker = false
@@ -577,25 +620,6 @@ private fun EditorSection(
             )
             content()
         }
-    }
-}
-
-@Composable
-private fun SwitchRow(
-    label: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = label,
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
@@ -652,6 +676,7 @@ internal fun parsePeriods(startText: String, endText: String, extraText: String)
 @Composable
 private fun ColorPickerDialog(
     initialColor: Long?,
+    modifier: Modifier = Modifier,
     onConfirm: (Long) -> Unit,
     onClear: () -> Unit,
     onDismiss: () -> Unit,
@@ -669,6 +694,7 @@ private fun ColorPickerDialog(
     ).toLong() and 0xFFFFFFFFL
 
     AlertDialog(
+        modifier = modifier,
         onDismissRequest = onDismiss,
         title = { Text("自定义颜色") },
         text = {
@@ -755,46 +781,3 @@ private fun DayDropdown(
     }
 }
 
-/** 色块：48dp 触控区域 + 30dp 内部色块 + 选中勾号 */
-@Composable
-private fun ColorDot(
-    color: Color,
-    selected: Boolean,
-    onClick: () -> Unit,
-    label: String? = null,
-) {
-    Box(
-        modifier = Modifier
-            .size(DesignTokens.minTouchTarget)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(30.dp)
-                .background(color, shape = CircleShape)
-                .border(
-                    width = if (selected) 3.dp else 1.dp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    shape = CircleShape,
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (selected && label == null) {
-                Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = "已选择",
-                    tint = contentOn(color),
-                    modifier = Modifier.size(DesignTokens.iconMedium),
-                )
-            }
-            if (label != null) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = contentOn(color),
-                )
-            }
-        }
-    }
-}

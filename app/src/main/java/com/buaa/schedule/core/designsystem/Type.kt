@@ -8,11 +8,15 @@ import androidx.compose.ui.unit.sp
 /**
  * BUAA Schedule 排版刻度。
  *
- * 必须覆盖项目实际用到的全部 10 级，否则未定义的级别会静默回落到 Material 3 默认值，
- * 造成“名义 12sp、实际 11sp”这类排版断链（课程卡节次/地点文字曾因此渲染成 M3 默认 11sp）。
+ * 15 级必须**全部**显式定义，而不是"用到哪级写哪级"。
+ * Typography 的每个参数都带 Material 3 默认值，少写一级不会编译失败，只会静默回落到
+ * baseline 的字号 —— 曾因此出现"名义 12sp、实际 11sp"（课程卡节次/地点文字渲染成 M3 默认 11sp）。
+ * 光靠注释守不住，所以 [ThemeSlotTest] 里有一条遍历 `Typography` 全部槽位的排版门禁，
+ * 与颜色槽位门禁同一套做法。
  *
  * 字号 / 行高配对：
- * - 26/34 页面级标题、22/28 区块级标题（原来差 2sp，两级实际可互换 → 审查②V-08）；
+ * - 48/40/34 三档 display 与 32/28/26 三档 headline：全大字号，成 8sp 行高步进；
+ * - 22/28 用于区块级标题（跟 26/34 只差 2sp，两级实际可互换 → 审查②V-08）；
  * - 16/24 用于分组标题与正文强调；
  * - 14/20 用于次级标题与常规正文；
  * - 12/16 用于课程卡正文、胶囊与辅助说明。
@@ -23,6 +27,38 @@ import androidx.compose.ui.unit.sp
  * 12sp 这个钉值本身就是上一次"名义 12sp、实际 11sp"断链的修复，再降一档等于把它拆开。
  */
 val ScheduleTypography = Typography(
+    // 标题级页（引导页 hero）用的最大档。此前排版刻度最大只到 26sp，
+    // 引导页标题只能裸写 34.sp —— 补上这一档，让"再大一号"有处可取。
+    //
+    // display/headline 四档同样是必填而不是可选：Typography 的 15 个参数每一个
+    // 都有 Material 3 默认值，少写一档不会编译失败，只会静默落到 baseline 的
+    // 57/45/32/28sp（跟本项目的 34/26/22 刻度毫无关系）。
+    // 统计页的大数字用 headlineMedium，此前拿到的一直是 baseline 那一份。
+    displayLarge = TextStyle(
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 48.sp,
+        lineHeight = 56.sp,
+    ),
+    displayMedium = TextStyle(
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 40.sp,
+        lineHeight = 48.sp,
+    ),
+    displaySmall = TextStyle(
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 34.sp,
+        lineHeight = 42.sp,
+    ),
+    headlineLarge = TextStyle(
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 32.sp,
+        lineHeight = 40.sp,
+    ),
+    headlineMedium = TextStyle(
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 28.sp,
+        lineHeight = 36.sp,
+    ),
     headlineSmall = TextStyle(
         fontWeight = FontWeight.SemiBold,
         fontSize = 26.sp,

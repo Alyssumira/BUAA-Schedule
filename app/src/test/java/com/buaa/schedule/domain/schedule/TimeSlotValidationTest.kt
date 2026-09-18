@@ -1,4 +1,4 @@
-package com.buaa.schedule.ui.settings
+package com.buaa.schedule.domain.schedule
 
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.TimeSlotProfile
@@ -40,6 +40,17 @@ class TimeSlotValidationTest {
     fun rejectsStartNotBeforeEnd() {
         assertFalse("开始等于结束应视为非法", isValidTimeSlot(slot("08:00", "08:00")))
         assertFalse("结束早于开始应视为非法", isValidTimeSlot(slot("10:00", "09:00")))
+    }
+
+    @Test
+    fun rejectsInShapeButOutOfRange() {
+        // P1-1：旧实现是「两位冒号两位」正则 + 字符串比大小，
+        // 于是 99:99 这种根本不存在的时刻被判定合法，直到下游 LocalTime.parse 才炸
+        assertFalse("小时越界", isValidTimeSlot(slot("99:99", "99:99")))
+        assertFalse(isValidTimeSlot(slot("24:00", "25:00")))
+        assertFalse(isValidTimeSlot(slot("08:60", "09:00")))
+        assertFalse(isValidTimeSlot(slot("08:00", "24:00")))
+        assertFalse("越界的开始时间不能靠先后顺序蒙过去", isValidTimeSlot(slot("99:00", "99:30")))
     }
 
     @Test

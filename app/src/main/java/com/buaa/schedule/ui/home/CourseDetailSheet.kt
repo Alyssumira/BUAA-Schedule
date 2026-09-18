@@ -23,7 +23,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.domain.model.Course
-import com.buaa.schedule.domain.model.periodLabel
+import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.schedule.WeekParser
 
 /**
@@ -33,12 +34,17 @@ import com.buaa.schedule.domain.schedule.WeekParser
 @Composable
 internal fun CourseDetailSheet(
     course: Course,
+    /** 节次表：详情里的节次文案必须与网格切段同口径，否则出现「写着 5-6 节、格子上是两张卡」 */
+    timeSlots: List<TimeSlot>,
     onDismiss: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    /** [com.buaa.schedule.core.designsystem.ModalTransition] 的进出场修饰符，见其 KDoc 第 2 条 */
+    modifier: Modifier = Modifier,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
+        modifier = modifier,
         onDismissRequest = onDismiss,
         sheetState = sheetState,
     ) {
@@ -57,7 +63,7 @@ internal fun CourseDetailSheet(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = periodLabel(course.periods) +
+                text = periodLabelOf(course.periods, timeSlots) +
                     " · " + WeekParser.toDisplayString(course.weeks),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.buaa.schedule.BUAAApplication
+import com.buaa.schedule.data.backup.BACKUP_FORMAT_VERSION
 import com.buaa.schedule.data.backup.BackupData
 import com.buaa.schedule.data.backup.BackupReminder
 import com.buaa.schedule.data.backup.toBackup
@@ -16,7 +17,6 @@ import com.buaa.schedule.data.repository.PartialWeeksEdit
 import com.buaa.schedule.data.repository.RestoreResult
 import com.buaa.schedule.data.undo.UndoManager
 import android.webkit.CookieManager
-import com.buaa.schedule.data.import.BuaaSessionExpiredException
 import com.buaa.schedule.data.import.IcsParser
 import com.buaa.schedule.data.import.TextScheduleParser
 import com.buaa.schedule.data.share.ScheduleShareCodec
@@ -34,6 +34,7 @@ import com.buaa.schedule.domain.schedule.ConflictDetector
 import com.buaa.schedule.domain.schedule.CourseFilter
 import com.buaa.schedule.domain.schedule.ImportPlanner
 import com.buaa.schedule.domain.schedule.WeekCalculator
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -87,7 +88,7 @@ data class CalendarSyncUiState(
     val reminderMinutes: String = "10",
     val diff: com.buaa.schedule.data.calendar.CalendarSyncPlanner.Diff? = null,
     val skippedOccurrences: Int = 0,
-    val message: String? = null,
+    val message: AppMessage? = null,
     val showPicker: Boolean = false,
     val showRemoveConfirm: Boolean = false,
     val permissionPermanentlyDenied: Boolean = false,
@@ -96,6 +97,15 @@ data class CalendarSyncUiState(
 /** 检索不到可写日历时的排查提示：状态行与选择器对话框共用 */
 internal const val NO_WRITABLE_CALENDAR_MESSAGE =
     "没有检索到可写的日历。请确认已授予日历权限，且系统日历 App 里存在可见的日历账户（本机账户也算），然后重试"
+
+/**
+ * 一次性操作反馈（[ScheduleViewModel.importMessage] 与日历同步状态行共用）。
+ *
+ * 级别由**发出方**显式标注：界面此前靠嗅探文案里的「失败」「无法」来染色
+ * （R7 ⑥），改一句文案配色就悄悄变了，而且「刷新完成，但教务系统没有返回课程」
+ * 这类不含关键字的错误从来没红过。文案与样式解耦后，新增提示在发射点就把级别定死。
+ */
+data class AppMessage(val text: String, val isError: Boolean = false)
 
 data class PendingImport(
     val semester: Semester,
@@ -181,15 +191,30 @@ internal fun buildFallbackSemester(
     )
 }
 
-/** `today` 所在教学周的第一天（周一） */
+/** `today` 所在教学周的第一天（周一）。公式只在 [com.buaa.schedule.domain.model.mondayOfWeekAnchor] 有一份 */
 internal fun mostRecentMonday(today: LocalDate = LocalDate.now()): LocalDate =
-    today.minusDays((today.dayOfWeek.value - 1).toLong())
+    com.buaa.schedule.domain.model.mondayOfWeekAnchor(today)
 
 private val prettyJson = Json { prettyPrint = true }
 private val lenientJson = Json { ignoreUnknownKeys = true }
 
-/** 当前应用支持恢复的备份格式版本 */
-private const val CURRENT_BACKUP_VERSION = 2
+/**
+ * 挂起操作用版的 `runCatching`：[CancellationException] 原样抛出（P2-1）。
+ *
+ * 标准库那个版本连取消一起兜，于是 ViewModel 被清除（用户划掉最近任务）那一刻
+ * 正在写库的协程会弹出一条「保存课程失败：Job was cancelled」，
+ * 并且取消信号就此断掉——调用方拿到的是"失败"而不是"被取消"，
+ * 会继续走它不该走的分支（保留草稿、再排一次闹钟）。
+ * 取消是控制流，不是错误：这条区分是结构化并发的地基。
+ */
+private suspend inline fun <T> suspendCatching(crossinline block: suspend () -> T): Result<T> =
+    runCatching {
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        }
+    }
 
 class ScheduleViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -218,7 +243,8 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             val ok = repository.switchSemester(termCode)
             showMessage(
                 if (ok) "已切换到 $termCode"
-                else "本地没有「$termCode」的数据，请先导入该学期的课表"
+                else "本地没有「$termCode」的数据，请先导入该学期的课表",
+                isError = !ok,
             )
             if (ok) afterDataChangedInternal()
         }
@@ -317,8 +343,8 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
      * 写操作返回**最终落库行 id**，null 表示失败；
      * 编辑器据此决定是否退出（失败保留草稿重试），并把提醒写到正确的行。
      */
-    suspend fun saveCourse(course: Course): Long? = runCatching {
-        val savedId = repository.saveCourse(course) ?: return@runCatching null
+    suspend fun saveCourse(course: Course): Long? = suspendCatching {
+        val savedId = repository.saveCourse(course) ?: return@suspendCatching null
         // 只对“新增”记录撤销；编辑器里已存在的课程走 updateCourse
         if (course.id == 0L) {
             UndoManager.pushCreate(course.copy(id = savedId))
@@ -326,12 +352,12 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         afterDataChangedInternal()
         savedId
     }.getOrElse { e ->
-        _importMessage.value = "保存课程失败：${e.message}"
+        _importMessage.value = AppMessage("保存课程失败：${e.message}", isError = true)
         null
     }
 
     suspend fun updateCourse(course: Course, options: CourseSaveOptions = CourseSaveOptions()): Long? =
-        runCatching {
+        suspendCatching {
             val original = repository.getCourseById(course.id)
             val edit = if (options.partialWeeks && original != null && original.weeks != course.weeks) {
                 repository.updateCoursePartialWeeks(original, course)
@@ -341,7 +367,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 }
             }
             // 归一化失败（null）表示本次输入非法：不写库、也不上报成功，UI 保留草稿并提示
-            if (edit == null) return@runCatching null
+            if (edit == null) return@suspendCatching null
             if (original != null) {
                 // removed/reminders 也必须进快照：部分周次拆行会顺手清掉同组的兄弟片段，
                 // 只记 before/after 的话撤销之后它们永久消失（R5 F-35）
@@ -359,18 +385,18 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             afterDataChangedInternal()
             edit.savedId
         }.getOrElse { e ->
-            _importMessage.value = "更新课程失败：${e.message}"
+            _importMessage.value = AppMessage("更新课程失败：${e.message}", isError = true)
             null
         }
 
-    suspend fun deleteCourse(course: Course): Boolean = runCatching {
+    suspend fun deleteCourse(course: Course): Boolean = suspendCatching {
         // 先删库、成功才压栈：反过来会让"删除失败"留下一条悬空撤销记录，
         // 之后任意一次撤销都会按新 id 重插这门根本没删掉的课
         val removedReminders = repository.deleteCourse(course)
         UndoManager.pushDelete(course, removedReminders)
         afterDataChangedInternal()
     }.fold({ true }, { e ->
-        _importMessage.value = "删除课程失败：${e.message}"
+        _importMessage.value = AppMessage("删除课程失败：${e.message}", isError = true)
         false
     })
 
@@ -383,14 +409,14 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
      */
     suspend fun deleteCourseGroup(courses: List<Course>): Boolean {
         if (courses.isEmpty()) return false
-        return runCatching {
+        return suspendCatching {
             val snapshot = repository.deleteCourseGroup(courses)
-            if (snapshot.courses.isEmpty()) return@runCatching false
+            if (snapshot.courses.isEmpty()) return@suspendCatching false
             UndoManager.pushDeleteGroup(snapshot.courses, snapshot.reminders)
             afterDataChangedInternal()
             true
         }.fold({ it }, { e ->
-            _importMessage.value = "删除课程失败：${e.message}"
+            _importMessage.value = AppMessage("删除课程失败：${e.message}", isError = true)
             false
         })
     }
@@ -405,15 +431,15 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
      */
     fun undo() {
         val last = UndoManager.pop() ?: run {
-            _importMessage.value = "没有可撤销的操作"
+            _importMessage.value = AppMessage("没有可撤销的操作")
             return
         }
         viewModelScope.launch {
-            runCatching {
+            suspendCatching {
                 repository.applyUndo(last.action)
                 afterDataChangedInternal()
-                _importMessage.value = "已撤销：${last.label}"
-            }.onFailure { _importMessage.value = "撤销失败：${it.message}" }
+                _importMessage.value = AppMessage("已撤销：${last.label}")
+            }.onFailure { _importMessage.value = AppMessage("撤销失败：${it.message}", isError = true) }
         }
     }
 
@@ -427,7 +453,10 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 // 改代码 = 给当前课表重命名：课程必须跟着改挂，否则 CourseFilter
                 // 按新学期代码一过滤，用户看到的是一保存课表就"空了"
                 if (!repository.renameSemesterCourses(old.termCode, semester.termCode)) {
-                    _importMessage.value = "学期代码 ${semester.termCode} 下已有另一份课表，请先切换学期再改代码"
+                    _importMessage.value = AppMessage(
+                        "学期代码 ${semester.termCode} 下已有另一份课表，请先切换学期再改代码",
+                        isError = true,
+                    )
                     return@launch
                 }
             }
@@ -475,7 +504,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
      */
     private suspend fun <T> withImportLock(block: suspend () -> T): T? {
         if (!importMutex.tryLock()) {
-            _importMessage.value = "已有导入正在进行，请稍候"
+            _importMessage.value = AppMessage("已有导入正在进行，请稍候")
             return null
         }
         return try {
@@ -525,8 +554,8 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     }
 
 
-    private val _importMessage = MutableStateFlow<String?>(null)
-    val importMessage: StateFlow<String?> = _importMessage.asStateFlow()
+    private val _importMessage = MutableStateFlow<AppMessage?>(null)
+    val importMessage: StateFlow<AppMessage?> = _importMessage.asStateFlow()
 
     private val _pendingImport = MutableStateFlow<PendingImport?>(null)
     val pendingImport: StateFlow<PendingImport?> = _pendingImport.asStateFlow()
@@ -548,8 +577,8 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         _importMessage.value = null
     }
 
-    fun showMessage(message: String?) {
-        _importMessage.value = message
+    fun showMessage(message: String?, isError: Boolean = false) {
+        _importMessage.value = message?.let { AppMessage(it, isError) }
     }
 
     fun confirmPendingImport() {
@@ -563,7 +592,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     existing = existing,
                 )
                 if (selection.toWrite.isEmpty()) {
-                    _importMessage.value = "没有可导入的课程"
+                    _importMessage.value = AppMessage("没有可导入的课程")
                     return@withImportLock
                 }
                 // 课程替换与导入历史必须同事务落库，否则中途失败会出现
@@ -582,11 +611,11 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 // 导入可能复用/生成新 id，从数据库重读后再重排提醒
                 afterDataChangedInternal()
                 _pendingImport.value = null
-                _importMessage.value = buildString {
+                _importMessage.value = AppMessage(buildString {
                     append("导入完成：新增 ${selection.addedCount}、更新 ${selection.changedCount}")
                     if (selection.keptCount > 0) append("、保留 ${selection.keptCount}")
                     append("（含拆行片段）")
-                }
+                })
             }
         }
     }
@@ -696,7 +725,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
 
     fun cancelPendingImport() {
         _pendingImport.value = null
-        _importMessage.value = "已取消导入"
+        _importMessage.value = AppMessage("已取消导入")
     }
 
     /** 清空导入历史（导入历史独立页调用） */
@@ -724,46 +753,61 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             // 必须与导入/恢复共用同一把锁：此前 refreshFromBuaa 绕开了 withImportLock，
             // 用户点了"刷新"立刻又去导入页触发一次导入时，两个流程会并发读写同一学期，
             // 后者覆盖前者的结果（表现为"刚刷新完课表又变回去了"）。
-            withImportLock {
-                // 页面上下文 fetch（原生栈复刻不出凭证 → 401，必须走保留的 byxt WebView）
-                val result = com.buaa.schedule.data.import.BuaaWebSession.refreshSchedule(
-                    existingStartDate = repository.getCurrentSemester()?.startLocalDate,
-                    onProgress = { week, total -> _importMessage.value = "正在刷新课表：第 $week/$total 周..." },
-                )
-                when (result) {
-                    null -> _importMessage.value = "登录已失效，请重新从导入页登录教务系统"
-                    else -> result
-                        .onSuccess { fetched ->
-                            when {
-                                // 结果不完整（有周次抓取失败）：绝不能走覆盖导入，
-                                // 否则"先清空该学期再写入"会把没抓到的周次直接删掉。
-                                !fetched.isComplete -> {
-                                    _importMessage.value = buildString {
-                                        append("刷新未完成：")
-                                        append(fetched.warnings.firstOrNull() ?: "部分教学周抓取失败")
-                                        append("。已保留原课表未做改动，请稍后重试")
+            //
+            // 锁与「正在刷新」旗位一律在 finally 里放（P2-4）：抓取中途抛异常时，
+            // 顺序写下来的收尾跑不到，于是旗位永久为真、刷新再也进不来，
+            // 而 withImportLock 那把互斥锁没人归还——导入与恢复会一起卡在锁后面。
+            try {
+                withImportLock {
+                    // 页面上下文 fetch（原生栈复刻不出凭证 → 401，必须走保留的 byxt WebView）
+                    val result = com.buaa.schedule.data.import.BuaaWebSession.refreshSchedule(
+                        existingStartDate = repository.getCurrentSemester()?.startLocalDate,
+                        onProgress = { week, total -> _importMessage.value = AppMessage("正在刷新课表：第 $week/$total 周...") },
+                    )
+                    when (result) {
+                        null -> {
+                            // WebView 会话没了：把"去重新登录"的入口直接交给界面
+                            // （ImportScreen 收集 buaaReloginRequests 后跳登录页）。
+                            _buaaReloginRequests.tryEmit(Unit)
+                            _importMessage.value = AppMessage("登录已失效，请重新从导入页登录教务系统", isError = true)
+                        }
+                        else -> result
+                            .onSuccess { fetched ->
+                                when {
+                                    // 结果不完整（有周次抓取失败）：绝不能走覆盖导入，
+                                    // 否则"先清空该学期再写入"会把没抓到的周次直接删掉。
+                                    !fetched.isComplete -> {
+                                        _importMessage.value = AppMessage(
+                                            buildString {
+                                                append("刷新未完成：")
+                                                append(fetched.warnings.firstOrNull() ?: "部分教学周抓取失败")
+                                                append("。已保留原课表未做改动，请稍后重试")
+                                            },
+                                            isError = true,
+                                        )
+                                    }
+                                    fetched.courses.isEmpty() -> {
+                                        _importMessage.value = AppMessage("刷新完成，但教务系统没有返回课程", isError = true)
+                                    }
+                                    else -> {
+                                        repository.replaceSemesterCourses(fetched.semester, fetched.courses)
+                                        afterDataChangedInternal()
+                                        _importMessage.value = AppMessage("课表已刷新：${fetched.courses.size} 条课程（${fetched.semester.termName}）")
                                     }
                                 }
-                                fetched.courses.isEmpty() -> {
-                                    _importMessage.value = "刷新完成，但教务系统没有返回课程"
-                                }
-                                else -> {
-                                    repository.replaceSemesterCourses(fetched.semester, fetched.courses)
-                                    afterDataChangedInternal()
-                                    _importMessage.value = "课表已刷新：${fetched.courses.size} 条课程（${fetched.semester.termName}）"
-                                }
                             }
-                        }
-                        .onFailure { e ->
-                            // 不要在这里 clear() 会话：刷新失败多为网络抖动 / 教务端限流，
-                            // 此时登录会话往往仍然有效；一旦清掉，用户被迫重新登录
-                            // （且 CookieManager 里的 SSO TGT 会被一并删除）。
-                            // 会话确实失效时，界面上的"退出教务登录"可手动清理。
-                            _importMessage.value = "刷新失败：${e.message ?: "未知错误"}，可稍后重试"
-                        }
+                            .onFailure { e ->
+                                // 不要在这里 clear() 会话：刷新失败多为网络抖动 / 教务端限流，
+                                // 此时登录会话往往仍然有效；一旦清掉，用户被迫重新登录
+                                // （且 CookieManager 里的 SSO TGT 会被一并删除）。
+                                // 会话确实失效时，界面上的"退出教务登录"可手动清理。
+                                _importMessage.value = AppMessage("刷新失败：${e.message ?: "未知错误"}，可稍后重试", isError = true)
+                            }
+                    }
                 }
+            } finally {
+                _buaaRefreshing.value = false
             }
-            _buaaRefreshing.value = false
         }
         return true
     }
@@ -779,7 +823,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         buaaRefreshJob = null
         if (job.isActive) {
             job.cancel()
-            _importMessage.value = "已取消刷新"
+            _importMessage.value = AppMessage("已取消刷新")
         }
         _buaaRefreshing.value = false
     }
@@ -803,12 +847,14 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         withImportLock {
             _pendingImport.value = null
             if (courses.isEmpty()) {
-                _importMessage.value = "教务系统未返回该学期课程（可能未选课）"
+                _importMessage.value = AppMessage("教务系统未返回该学期课程（可能未选课）", isError = true)
                 return@withImportLock
             }
             val pending = showPendingImport(semester, courses, warnings)
-            _importMessage.value = "解析完成：新增 ${pending.addedCount}，更新 ${pending.changedCount}，" +
-                "冲突 ${pending.conflicts.size} 组，请确认导入。"
+            _importMessage.value = AppMessage(
+                "解析完成：新增 ${pending.addedCount}，更新 ${pending.changedCount}，" +
+                "冲突 ${pending.conflicts.size} 组，请确认导入。",
+            )
         }
     }
 
@@ -840,14 +886,6 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         return pending
     }
 
-    private fun importErrorMessage(e: Throwable): String =
-        if (e is BuaaSessionExpiredException) {
-            _buaaReloginRequests.tryEmit(Unit)
-            "登录已失效，请重新通过 WebView 登录后导入。"
-        } else {
-            "导入失败：${e.message}"
-        }
-
     /**
      * 解析 ICS 文本并进入导入预览确认。
      */
@@ -855,7 +893,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             withImportLock {
                 _pendingImport.value = null
-                _importMessage.value = "正在解析 ICS 文件..."
+                _importMessage.value = AppMessage("正在解析 ICS 文件...")
                 val currentSemester = repository.getCurrentSemester()
                 val semester = buildFallbackSemester(termCode, currentSemester)
                 val semesterStart = semester.startLocalDate ?: mostRecentMonday()
@@ -867,12 +905,14 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     timeSlots = repository.getTimeSlots(),
                 )
                 if (courses.isEmpty()) {
-                    _importMessage.value = "ICS 解析结果为空，请检查文件格式"
+                    _importMessage.value = AppMessage("ICS 解析结果为空，请检查文件格式", isError = true)
                     return@withImportLock
                 }
                 val pending = showPendingImport(semester, courses, source = "ics")
-                _importMessage.value = "ICS 解析完成：新增 ${pending.addedCount}，更新 ${pending.changedCount}，" +
-                    "冲突 ${pending.conflicts.size} 组，请确认导入。"
+                _importMessage.value = AppMessage(
+                    "ICS 解析完成：新增 ${pending.addedCount}，更新 ${pending.changedCount}，" +
+                    "冲突 ${pending.conflicts.size} 组，请确认导入。",
+                )
             }
         }
     }
@@ -884,17 +924,22 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             withImportLock {
                 _pendingImport.value = null
-                _importMessage.value = "正在解析文本课表..."
+                _importMessage.value = AppMessage("正在解析文本课表...")
                 val currentSemester = repository.getCurrentSemester()
                 val semester = buildFallbackSemester(termCode, currentSemester)
                 val courses = TextScheduleParser.parse(content, termCode)
                 if (courses.isEmpty()) {
-                    _importMessage.value = "文本解析结果为空，请检查格式：课程名,教师,地点,星期,开始节-结束节,周次"
+                    _importMessage.value = AppMessage(
+                        "文本解析结果为空，请检查格式：课程名,教师,地点,星期,开始节-结束节,周次",
+                        isError = true,
+                    )
                     return@withImportLock
                 }
                 val pending = showPendingImport(semester, courses, source = "text")
-                _importMessage.value = "文本解析完成：新增 ${pending.addedCount}，更新 ${pending.changedCount}，" +
-                    "冲突 ${pending.conflicts.size} 组，请确认导入。"
+                _importMessage.value = AppMessage(
+                    "文本解析完成：新增 ${pending.addedCount}，更新 ${pending.changedCount}，" +
+                    "冲突 ${pending.conflicts.size} 组，请确认导入。",
+                )
             }
         }
     }
@@ -951,7 +996,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 }.onSuccess { data ->
                     restoreFromData(data, "备份恢复", json, allowEmptyReplacement)
                 }.onFailure { e ->
-                    _importMessage.value = "备份恢复失败：${e.message}"
+                    _importMessage.value = AppMessage("备份恢复失败：${e.message}", isError = true)
                 }
             }
         }
@@ -999,7 +1044,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             val data = runCatching { lenientJson.decodeFromString<BackupData>(json) }.getOrNull()
                 ?: return@withContext null
             BackupPreview(
-                versionTooNew = data.version > CURRENT_BACKUP_VERSION,
+                versionTooNew = data.version > BACKUP_FORMAT_VERSION,
                 semesterName = data.semester?.termName,
                 startDate = data.semester?.startDate,
                 totalWeeks = data.semester?.totalWeeks,
@@ -1033,7 +1078,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             withImportLock {
                 when (val data = ScheduleShareCodec.decode(code)) {
-                    null -> _importMessage.value = "口令无法识别，请检查是否完整复制"
+                    null -> _importMessage.value = AppMessage("口令无法识别，请检查是否完整复制", isError = true)
                     else -> restoreFromData(data, "口令导入", raw = null)
                 }
             }
@@ -1050,17 +1095,22 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         raw: String?,
         allowEmptyReplacement: Boolean = false,
     ) {
-        if (data.version > CURRENT_BACKUP_VERSION) {
-            _importMessage.value =
-                "${sourceLabel}失败：备份来自更新版本的应用（v${data.version}），请先升级后再恢复"
+        if (data.version > BACKUP_FORMAT_VERSION) {
+            _importMessage.value = AppMessage(
+                "${sourceLabel}失败：备份来自更新版本的应用（v${data.version}），请先升级后再恢复",
+                isError = true,
+            )
             return
         }
         // 备份/口令都是用户可构造的输入：条数超限直接拒绝，
         // 否则一次恢复就能把课表页拖到不可用（每门课都要参与冲突检测与渲染）。
         if (data.courses.size > com.buaa.schedule.domain.schedule.CourseConstraints.MAX_COURSE_COUNT) {
-            _importMessage.value = "${sourceLabel}失败：课程数超过上限" +
+            _importMessage.value = AppMessage(
+                "${sourceLabel}失败：课程数超过上限" +
                 "（${com.buaa.schedule.domain.schedule.CourseConstraints.MAX_COURSE_COUNT} 条），" +
-                "请确认文件是否正确"
+                "请确认文件是否正确",
+                isError = true,
+            )
             return
         }
         val result = repository.restoreBackupData(
@@ -1076,18 +1126,18 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         when (result) {
             is RestoreResult.EmptyBackup -> {
                 if (raw == null) {
-                    _importMessage.value = "${sourceLabel}已取消：备份里没有课程，继续会清空当前课表"
+                    _importMessage.value = AppMessage("${sourceLabel}已取消：备份里没有课程，继续会清空当前课表")
                 } else {
                     // 交回用户判断：这确实是他想要的"清空"，还是拿错了文件
                     _pendingEmptyRestore.value = PendingEmptyRestore(raw)
-                    _importMessage.value = "该备份不含任何课程，请确认后再继续"
+                    _importMessage.value = AppMessage("该备份不含任何课程，请确认后再继续")
                 }
                 return
             }
             is RestoreResult.Applied -> {
                 // 恢复也是会改课表来源的操作：不记历史，用户翻「导入记录」时
                 // 完全无法解释"课表怎么变了"
-                runCatching {
+                suspendCatching {
                     repository.addImportHistory(
                         ImportHistory(
                             source = "backup",
@@ -1099,11 +1149,11 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     )
                 }
                 afterDataChangedInternal()
-                _importMessage.value = buildString {
+                _importMessage.value = AppMessage(buildString {
                     append("${sourceLabel}成功：${result.restoredCourses} 条课程")
                     if (result.insertedManual > 0) append("（新增手动课程 ${result.insertedManual} 条）")
                     if (result.skippedInvalid > 0) append("，跳过无效数据 ${result.skippedInvalid} 条")
-                }
+                })
             }
         }
     }
@@ -1144,7 +1194,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             val current = _calendarSync.value
             when {
                 current.calendars.isEmpty() -> _calendarSync.update {
-                    it.copy(syncing = false, message = NO_WRITABLE_CALENDAR_MESSAGE)
+                    it.copy(syncing = false, message = AppMessage(NO_WRITABLE_CALENDAR_MESSAGE, isError = true))
                 }
                 current.targetId == -1L -> _calendarSync.update { it.copy(syncing = false, showPicker = true) }
                 else -> {
@@ -1152,7 +1202,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     _calendarSync.update {
                         if (computed == null) it.copy(
                             syncing = false,
-                            message = "暂无可同步的课表，请先导入课程并设置学期",
+                            message = AppMessage("暂无可同步的课表，请先导入课程并设置学期", isError = true),
                         ) else it.copy(
                             syncing = false,
                             diff = computed.first,
@@ -1173,14 +1223,14 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         _calendarSync.update { it.copy(diff = null, reminderMinutes = minutes.toString()) }
         viewModelScope.launch {
             _calendarSync.update { it.copy(syncing = true) }
-            val result = runCatching { calendarSyncManager.apply(calendarId, pending, minutes) }.getOrNull()
+            val result = suspendCatching { calendarSyncManager.apply(calendarId, pending, minutes) }.getOrNull()
             _calendarSync.update {
                 it.copy(
                     syncing = false,
                     message = when {
-                        result == null -> "同步失败：日历写入异常，请重试或检查日历权限"
-                        result.succeeded -> "同步完成：新增 ${result.inserted}，更新 ${result.updated}，删除 ${result.deleted}"
-                        else -> "同步失败：${result.failed} 个日程未写入，请重试或检查日历权限"
+                        result == null -> AppMessage("同步失败：日历写入异常，请重试或检查日历权限", isError = true)
+                        result.succeeded -> AppMessage("同步完成：新增 ${result.inserted}，更新 ${result.updated}，删除 ${result.deleted}")
+                        else -> AppMessage("同步失败：${result.failed} 个日程未写入，请重试或检查日历权限", isError = true)
                     },
                 )
             }
@@ -1225,12 +1275,12 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         _calendarSync.update { it.copy(showRemoveConfirm = false) }
         viewModelScope.launch {
             _calendarSync.update { it.copy(syncing = true) }
-            val removed = runCatching { calendarSyncManager.removeAllSyncedEvents() }.getOrNull()
+            val removed = suspendCatching { calendarSyncManager.removeAllSyncedEvents() }.getOrNull()
             _calendarSync.update {
                 it.copy(
                     syncing = false,
-                    message = removed?.let { n -> "已移除 $n 个日程" }
-                        ?: "移除失败：日历写入异常，请检查权限后重试",
+                    message = removed?.let { n -> AppMessage("已移除 $n 个日程") }
+                        ?: AppMessage("移除失败：日历写入异常，请检查权限后重试", isError = true),
                 )
             }
         }
@@ -1241,11 +1291,11 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         _calendarSync.update {
             it.copy(
                 permissionPermanentlyDenied = !canAskAgain,
-                message = if (canAskAgain) {
-                    "未授予日历权限，无法同步"
-                } else {
-                    "日历权限已被永久拒绝，请到系统设置手动开启"
-                },
+                message = AppMessage(
+                    if (canAskAgain) "未授予日历权限，无法同步"
+                    else "日历权限已被永久拒绝，请到系统设置手动开启",
+                    isError = true,
+                ),
             )
         }
     }
@@ -1256,9 +1306,12 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
 
     private suspend fun ensureCalendarsLoaded() {
         if (_calendarSync.value.calendarsLoaded) return
-        val loaded = runCatching { calendarSyncManager.queryCalendars() }
+        val loaded = suspendCatching { calendarSyncManager.queryCalendars() }
             .getOrElse {
-                _calendarSync.update { it.copy(calendarsLoaded = true, message = "读取日历列表失败，请检查日历权限") }
+                _calendarSync.update { it.copy(
+                    calendarsLoaded = true,
+                    message = AppMessage("读取日历列表失败，请检查日历权限", isError = true),
+                ) }
                 return
             }
         val current = _calendarSync.value
@@ -1308,9 +1361,10 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     fun exportBackupTo(uriString: String) {
         viewModelScope.launch {
             val backup = exportBackup()
+            val written = withContext(Dispatchers.IO) { writeTextToUri(uriString, backup) }
             showMessage(
-                if (withContext(Dispatchers.IO) { writeTextToUri(uriString, backup) }) "备份已导出"
-                else "备份导出失败：无法写入所选位置",
+                if (written) "备份已导出" else "备份导出失败：无法写入所选位置",
+                isError = !written,
             )
         }
     }
@@ -1319,7 +1373,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val result = exportIcs()
             if (result == null) {
-                showMessage("暂无可导出的课表，请先导入课程并设置学期")
+                showMessage("暂无可导出的课表，请先导入课程并设置学期", isError = true)
                 return@launch
             }
             val written = withContext(Dispatchers.IO) { writeTextToUri(uriString, result.text) }
@@ -1333,7 +1387,8 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     }
                 } else {
                     "导出失败：无法写入所选位置"
-                }
+                },
+                isError = !written,
             )
         }
     }
@@ -1349,7 +1404,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             val semester = repository.getCurrentSemester()
             val courses = semester?.let { repository.getDisplayCourses(it) }.orEmpty()
             if (courses.isEmpty()) {
-                showMessage("当前没有可导出的课程")
+                showMessage("当前没有可导出的课程", isError = true)
                 return@launch
             }
             val json = withContext(Dispatchers.Default) {
@@ -1359,12 +1414,11 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     repository.getTimeSlots(),
                 )
             }
+            val written = withContext(Dispatchers.IO) { writeTextToUri(uriString, json) }
             showMessage(
-                if (withContext(Dispatchers.IO) { writeTextToUri(uriString, json) }) {
-                    "WakeUp JSON 已导出（${courses.size} 门课）"
-                } else {
-                    "导出失败：无法写入所选位置"
-                },
+                if (written) "WakeUp JSON 已导出（${courses.size} 门课）"
+                else "导出失败：无法写入所选位置",
+                isError = !written,
             )
         }
     }
@@ -1378,12 +1432,13 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 content == null -> showMessage(
                     "备份文件过大（上限 ${MAX_IMPORT_BYTES / (1024 * 1024)}MB）或无法读取，" +
                         "请确认选择的是本 App 导出的备份",
+                    isError = true,
                 )
-                content.isBlank() -> showMessage("无法读取备份文件")
+                content.isBlank() -> showMessage("无法读取备份文件", isError = true)
                 else -> {
                     val preview = parseBackupPreview(content)
                     if (preview == null) {
-                        showMessage("备份恢复失败：文件不是有效的备份 JSON")
+                        showMessage("备份恢复失败：文件不是有效的备份 JSON", isError = true)
                     } else {
                         _pendingBackup.value = PendingBackup(content, preview)
                     }
@@ -1397,7 +1452,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             runCatching { com.buaa.schedule.widget.BackgroundSync.refreshWidgets(getApplication()) }
                 .onSuccess { showMessage("桌面组件已刷新") }
-                .onFailure { showMessage("组件刷新失败：${it.message}") }
+                .onFailure { showMessage("组件刷新失败：${it.message}", isError = true) }
         }
     }
 

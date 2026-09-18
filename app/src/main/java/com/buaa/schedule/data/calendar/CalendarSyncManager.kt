@@ -367,9 +367,10 @@ class CalendarSyncManager(
         now: Long,
     ) = CalendarSyncEntity(
         occurrenceId = stableId,
-        courseStableId = com.buaa.schedule.domain.schedule.ScheduleOccurrences.courseIdentityKey(course)
-            .replace(Regex("[^\\w\\u4e00-\\u9fa5-]"), "-")
-            .take(80),
+        // 共用 ScheduleOccurrences.courseStableId（可读前缀 + 8 位摘要）：
+        // 这里此前自己 `take(80)` 截断，没有摘要后缀——前缀相同、差异落在
+        // 截断点之后的两门课会撞成同一个 ID（stableIdFor 加摘要正是防这个）。
+        courseStableId = com.buaa.schedule.domain.schedule.ScheduleOccurrences.courseStableId(course),
         occurrenceDate = date.toString(),
         calendarId = calendarId,
         calendarEventId = eventId,

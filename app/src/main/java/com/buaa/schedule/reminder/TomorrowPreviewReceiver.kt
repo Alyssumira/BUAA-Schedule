@@ -14,7 +14,6 @@ import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.schedule.WeekCalculator
-import com.buaa.schedule.domain.model.periodLabel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -37,9 +36,13 @@ class TomorrowPreviewReceiver : BroadcastReceiver() {
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                // 与 ReminderReceiver/WidgetRefreshReceiver 同口径：goAsync 只保证进程存活、
+                // 不保证 CPU 醒着，22:00 前后正处 Doze 窗口，中途睡回去这条预告就凭空消失。
+                WakeLocks.withPartialWakeLock(context, "tomorrow_preview") {
                 // 续排也在里面做：它需要"往后第一个上课日"这个答案，而这个答案只能
                 // 从已经读出的课表里来（见 postTomorrowPreviewIfAny）。
                 postTomorrowPreviewIfAny(context)
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // 协程取消是控制流信号，必须继续向上传播，不能吞掉
                 throw e

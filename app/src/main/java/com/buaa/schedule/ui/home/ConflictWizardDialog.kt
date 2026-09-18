@@ -22,12 +22,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.domain.model.Course
-import com.buaa.schedule.domain.model.periodLabel
+import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.model.periodLabelOf
+import com.buaa.schedule.domain.model.weekdayLabel
 import com.buaa.schedule.domain.schedule.CourseConflictResolution
 import kotlinx.coroutines.launch
-
-private val DAY_NAMES = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
 /**
  * LazyColumn 的稳定 key。
@@ -62,6 +63,10 @@ private fun Course.wizardKey(): String = if (id != 0L) id.toString() else "n:$na
 fun ConflictWizardDialog(
     groups: List<CourseConflictResolution.ConflictGroup>,
     allCourses: List<Course>,
+    /** 节次表：向导里的节次文案要按真实课间切段，与课表格子同一口径（P1-2） */
+    timeSlots: List<TimeSlot>,
+    /** 调用方 [com.buaa.schedule.core.designsystem.ModalTransition] 给的进出场修饰符 */
+    modifier: Modifier = Modifier,
     /** 平移落库：挂起直到写完，返回 true 表示确实写进了库。 */
     onApplyShift: suspend (Course, List<Int>) -> Boolean,
     onDismiss: () -> Unit,
@@ -76,6 +81,7 @@ fun ConflictWizardDialog(
     // 写入过程中该行因为课表变化而重建，按钮就又变回可点的了。
     var pendingCourses by remember { mutableStateOf(setOf<String>()) }
     AlertDialog(
+        modifier = modifier,
         onDismissRequest = onDismiss,
         title = { Text("课程冲突处理") },
         text = {
@@ -84,12 +90,13 @@ fun ConflictWizardDialog(
             } else {
                 LazyColumn(
                     modifier = Modifier.height(360.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceL),
                 ) {
                     items(groups, key = { it.stableKey() }) { group ->
                         ConflictGroupRow(
                             group = group,
                             allCourses = allCourses,
+                            timeSlots = timeSlots,
                             shiftedCourses = shiftedCourses,
                             pendingCourses = pendingCourses,
                             onShiftStart = { id -> pendingCourses = pendingCourses + id },
@@ -114,6 +121,7 @@ fun ConflictWizardDialog(
 private fun ConflictGroupRow(
     group: CourseConflictResolution.ConflictGroup,
     allCourses: List<Course>,
+    timeSlots: List<TimeSlot>,
     shiftedCourses: Set<String>,
     pendingCourses: Set<String>,
     onShiftStart: (String) -> Unit,
@@ -133,7 +141,7 @@ private fun ConflictGroupRow(
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = "${DAY_NAMES.getOrElse(group.dayOfWeek - 1) { "周?" }} · " +
+            text = "${weekdayLabel(group.dayOfWeek) ?: "周?"} · " +
                 "第 ${group.weeks.joinToString(",")} 周",
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
@@ -141,7 +149,7 @@ private fun ConflictGroupRow(
         group.courses.forEach { course ->
             val locationSuffix = if (course.location.isNullOrBlank()) "" else "，${course.location}"
             Text(
-                text = "• ${course.displayName}（${periodLabel(course.periods)}$locationSuffix）",
+                text = "• ${course.displayName}（${periodLabelOf(course.periods, timeSlots)}$locationSuffix）",
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 2.dp),
             )
@@ -150,12 +158,12 @@ private fun ConflictGroupRow(
         when {
             suggestion != null -> {
                 Text(
-                    text = "建议：${target.displayName} 移到 ${periodLabel(suggestion.periods)}" +
+                    text = "建议：${target.displayName} 移到 ${periodLabelOf(suggestion.periods, timeSlots)}" +
                         if (suggestion.shiftedBy == 0) "" else
                             "（${if (suggestion.shiftedBy > 0) "后" else "前"}挪 ${kotlin.math.abs(suggestion.shiftedBy)} 节）",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 4.dp),
+                    modifier = Modifier.padding(top = DesignTokens.spaceXS),
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -181,7 +189,7 @@ private fun ConflictGroupRow(
                     text = "已应用，冲突列表会随之更新。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
+                    modifier = Modifier.padding(top = DesignTokens.spaceXS),
                 )
             }
             else -> {
@@ -189,7 +197,7 @@ private fun ConflictGroupRow(
                     text = "同一天没有可用空位，请手动调整或删课。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
+                    modifier = Modifier.padding(top = DesignTokens.spaceXS),
                 )
             }
         }

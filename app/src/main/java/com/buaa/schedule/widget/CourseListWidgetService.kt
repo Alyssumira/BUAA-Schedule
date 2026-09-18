@@ -74,8 +74,17 @@ class CourseListFactory(
         val name: String,
         val teacher: String?,
         val location: String?,
-        val periods: List<Int>,
-        /** 周次摘要；**每周都上时为空**——每行都挂个「1-16周」是零信息量的噪音 */
+        /**
+         * 节次文案，取数时按节次表切段算好（P1-2）：同一行里的开始时间与"进行中"
+         * 状态本来就是按段判的，文案再走一遍"节次号相邻即连堂"就会出现
+         * 「5-6节 + 11:30 + 下午那节亮着」这种自相矛盾的一行。
+         */
+        val periodsText: String,
+        /**
+         * 周次摘要。这里**不做**「整学期就留空」的降噪：
+         * 周次是 [WidgetRowField.WEEKS] 显式勾选才拼进 meta 的字段，
+         * 在数据层偷偷置空会让「显示内容·周次」勾了没反应。
+         */
         val weeksText: String?,
         val startTime: String?,
         val color: Int,
@@ -128,7 +137,6 @@ class CourseListFactory(
         } else {
             calendarWeek
         }
-        val totalWeeks = semester?.totalWeeks ?: 0
 
         val dayCourses: List<Pair<Course, String?>> = when {
             semester != null && week == null -> emptyList() // 假期中
@@ -159,12 +167,8 @@ class CourseListFactory(
                 name = course.displayName,
                 teacher = course.teacher,
                 location = course.location,
-                periods = course.periods,
-                weeksText = if (totalWeeks > 0 && course.weeks.size >= totalWeeks) {
-                    null
-                } else {
-                    WeekParser.toDisplayString(course.weeks)
-                },
+                periodsText = widgetPeriodsText(course.periods, periodGapMinutesOf(slotTimes)),
+                weeksText = WeekParser.toDisplayString(course.weeks),
                 startTime = course.periods.minOrNull()?.let { timeByPeriod[it] },
                 color = courseColor(course).toArgb(),
                 dayTag = dayTag,
@@ -193,7 +197,12 @@ class CourseListFactory(
     override fun getCount(): Int = rows.size
 
     override fun getViewAt(position: Int): RemoteViews {
-        val row = rows[position]
+        // 越界防护：宿主给的 position 与异步 refetch 替换过的 rows 错位时（本工厂的
+        // onDataSetChanged 会另起协程重写 rows），抛 IndexOutOfBoundsException 死掉的是
+        // 整个应用进程——RemoteViewsFactory 跑在我们的进程里。同 WeekGridWidgetService 的 getOrNull 口径。
+        val row = rows.getOrNull(position) ?: return RemoteViews(
+            context.packageName, R.layout.widget_list_item,
+        )
         val views = RemoteViews(context.packageName, R.layout.widget_list_item)
         views.setTextViewText(R.id.widget_item_name, row.name)
         // 副字段由用户勾选（审查 3.7）：默认口径就是这行原本的「地点 · 节次」，
@@ -209,7 +218,7 @@ class CourseListFactory(
                         dayTag = row.dayTag,
                         teacher = row.teacher,
                         location = row.location,
-                        periodsText = widgetPeriodsText(row.periods),
+                        periodsText = row.periodsText,
                         weeksText = row.weeksText,
                     ),
                 ),
@@ -274,7 +283,7 @@ class CourseListFactory(
             row.weeksText ?: "",
             row.startTime ?: "",
             row.dayTag ?: "",
-            row.periods.joinToString(","),
+            row.periodsText,
             row.color,
             // 状态也是画出来的内容：不折进来的话，下课那一刻 id 不变，
             // 宿主把缓存里那份"还亮着进行中底色"的行直接贴回来。
@@ -339,8 +348,10 @@ internal fun widgetRowMeta(
     ).joinToString(" · ")
 
 /** 节次的短标签：第1-2节 → 1-2节（与改动前的 meta 口径逐字一致） */
-internal fun widgetPeriodsText(periods: List<Int>): String =
-    periodLabel(periods).removePrefix("第").removeSuffix("节").trim() + "节"
+internal fun widgetPeriodsText(
+    periods: List<Int>,
+    gapMinutes: (Int, Int) -> Long?,
+): String = periodLabel(periods, gapMinutes).removePrefix("第").removeSuffix("节").trim() + "节"
 
 /** 今日组件里一行的时间状态 */
 internal enum class WidgetRowStatus { UPCOMING, ONGOING, PAST }

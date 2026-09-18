@@ -62,31 +62,6 @@ data class CellDetailDto(
 )
 
 @Serializable
-data class GsmisScheduleResponse(
-    val code: Int? = null,
-    @SerialName("jgList")
-    val jgList: List<GsmisCourseDto>? = emptyList(),
-)
-
-@Serializable
-data class GsmisCourseDto(
-    @SerialName("KCDM")
-    val courseCode: String? = null,
-    @SerialName("KCMC")
-    val courseName: String? = null,
-    @SerialName("XQ")
-    val dayOfWeek: String? = null,
-    @SerialName("ZCBH")
-    val weekBitmap: String? = null,
-    @SerialName("JASMC")
-    val placeName: String? = null,
-    @SerialName("JGJSXM")
-    val teacherNames: String? = null,
-    @SerialName("KSJCDM")
-    val startSection: String? = null,
-)
-
-@Serializable
 data class BuaaTermWeeksResponse(
     val datas: List<BuaaTermWeekDto>? = emptyList(),
     val code: String? = null,

@@ -151,7 +151,26 @@ CI 用 `BUAA_KEYSTORE_BASE64` 等环境变量传同一组值（secrets 存不了
 
 因此应用侧的"这是不是一个能装的包"落成四道闸：`Content-Type` 不是 html/json、
 写到 `Content-Length` 声明的字节数、文件头是 zip 本地文件头 `50 4B 03 04`、体积不小于
-64 KB（release 包约 2.6 MB）。接口没有校验和可用，只能验到这一层，剩下的交给系统安装器。
+64 KB（当前 release 包的体积见下面「包体与 ABI」那一节）。接口没有校验和可用，只能验到这一层，剩下的交给系统安装器。
+
+## 包体与 ABI（2026-09-18）
+
+- 当前 release 包：**6,386,623 字节**。上一轮（学分列 + 学期统计页）的基线是 2,508,653，
+  所以**扫码签到这一轮涨 3,877,970 字节（+3.70MB）**，几乎全是
+  `com.google.mlkit:barcode-scanning`；更早记录的 2,453,873 地板见
+  `docs/PERFORMANCE_BATTERY_AUDIT.md`，逐项拆解见 `docs/BUAA_SPOC_SIGNIN_PLAN.md` §1.3。
+- **剪枝只按 `.so` 文件名做**：`packaging.jniLibs.excludes` 里逐条列出
+  `lib/<非arm64>/libbarhopper_v3.so`。**不要**改用 `ndk.abiFilters`，也**不要**写
+  `lib/x86/**` 这类目录通配 —— 两者都会连带裁掉 `libandroidx.graphics.path.so`，
+  那个 ABI 目录一旦全空，该档设备装包时命中 `INSTALL_FAILED_NO_MATCHING_ABIS`，
+  **整个 App 装不上**，而不只是扫码功能不可用。
+- **MLKit 的解码库只有 arm64-v8a**，这是换取体积的代价：armeabi-v7a 老机与 x86_64
+  模拟器一进扫码页就会 `UnsatisfiedLinkError`。扫码页在构造扫描器处有探测，失败即
+  整页降级为「相册识别 + 手输签到码」。因此**模拟器只能验降级路径**，扫码本身必须在
+  arm64 真机上验，装机自测时别把模拟器绿了当成验过。
+- 剩余可攻项（已量过、未实施）：包内 `assets/mlkit_barcode_models/` 的两个
+  `oned_*.tflite` 合计 **490,432 字节**服务于一维码，本功能只解 QR，理论上可用
+  assets exclude 省掉；未做是因为 assets 布局属 MLKit 内部实现、升级即变。
 
 ## 发完之后怎么验
 

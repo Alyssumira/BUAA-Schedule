@@ -18,6 +18,11 @@
 | `weekTimeColumnWidth` / `weekRowHeight` / `weekHourHeight` / `weekCompactVisibleDays` | — | 周视图几何：紧凑档一屏可见几天也在这里 |
 | `dayHeightPerMinute` / `dayBlockTintAlpha` | — | 日视图时间轴：每分钟占多高、时间块着色多浓 |
 | `fabLift` | — | FAB 弹出菜单的开合抬升量 |
+| `breakpointWide` | 600dp | 宽屏断点（此前 600 以裸值抄了四份：MainActivity/HomeScreen/OnboardingScreen×2）；与 M3 WindowSizeClass 的 Medium 起点一致 |
+| `topBarHeight` | 48dp | 顶栏高度下限。`GlassTopBar` 与引导页页头都用 `defaultMinSize(minHeight=…)`，**不要写死 height**（此前三个登录/扫码页的 `.height(40.dp)` 低于触控下限） |
+| `bottomBarIndicatorHeight` / `navRailWidth` | 56/84dp | 底栏指示层高度与宽屏导航栏宽度 |
+| `dialogListMaxHeight` | 240dp | 弹窗/卡内滚动列表的高度上限（更新日志、跳周列表、待导入清单此前各写 240/260） |
+| `CHROME_SURFACE_ALPHA` / `SCRIM_ALPHA` | 0.20f / 0.55f | CHROME 栏底板与弹窗遮罩的浓度，原来在 MainActivity/HomeScreen 裸写，且扫码页的遮罩另写一套 |
 
 ## 2. 动效（`MotionTokens`）
 
@@ -122,11 +127,64 @@ animateXAsState(..., animationSpec = motionSpec(), ...)
 
 - 一切动画都要包在 `if (LocalReduceMotion.current) … else …` 里（或直接用 `motionSpec()` 收口），
   尊重系统「移除动画」/ 过渡动画缩放（`rememberReduceMotion()`）。
+- **拿不到组合的地方（`NavHost` 的转场 lambda、`remember { }` 里 new 出来的动画持有者）不是借口**：
+  在组合边界把开关读出来当参数传下去，规格走 `motionSpecFor(reduceMotion, …)` /
+  `motionSpringFor(reduceMotion, …)`。判定仍然只有 Motion.kt 里那一份，只是两条入口。
 - **转场必须是 `EnterTransition.None` / `ExitTransition.None`，不能用透明度 0 兜底。**
 - 用 `snap()` 而不是 `durationMillis = 0` 的 `tween`：后者仍会走一帧调度，
   并在 `AnimatedVisibility` 的 enter/exit 组合里留下一个"空动画"帧。
 
-### 2.8 新动画开工自查
+### 2.8 模态与浮层：两段式，别指望 `AnimatedVisibility` 能动画一个 `Dialog`
+
+`AnimatedVisibility(open) { AlertDialog(…) }` 是**无效写法**，而且失败方式很难查：
+`Dialog` / `Popup` / `ModalBottomSheet` 各自开一个**独立窗口**，且在父组合里连一个 measurable 都不产生。
+外层那层只决定"子树何时存在"，父级组合传进去的 graphicsLayer 进不了那个窗口——
+得到的是"晚一点卸载、照样硬切"，比不写还更迷惑。
+
+所以拆成两段，各用各的机制（实现：`ModalTransition.kt`）：
+
+1. **外壳**：`AnimatedVisibility`，内建进出场**都是** `EnterTransition.None`，只当挂载闸门；
+2. **动画**：把 `Modifier.animateEnterExit(enter = dialogEnter(), exit = dialogExit())`
+   那一份 `Modifier` 交给调用方，**挂到弹窗容器自己的 `modifier` 参数上**（M3 `AlertDialog`
+   会把它带进窗口内的根 Box）——真正在看的动画只有这一条路进得去窗口。漏挂只得到延迟卸载，没有动画。
+
+调用点**不出现任何数字**：时长、缓动、缩放比全部只写在 `dialogEnter()` / `dialogExit()` 里，
+reduce-motion 由 `motionSpec()` 在那一处兜底。三条已经定过的口径，改之前先读代码注释：
+
+- 进场从 **0.92** 起而不是 0.8——弹窗是大面积内容，位移越可读，8% 是"抬起"不是"飞进来"；
+- **收场比进场短**（300ms vs 560ms），理由见 `MotionTokens`；
+- **卸载时机由动画自身的结束语义给出，不要用"再等一会儿"的定时兜底**：M3 `AlertDialog` 默认
+  `usePlatformDefaultWidth = false`，窗口满屏，收场后还挂着等于在界面上留一层吃点击的透明板子；
+  而 reduce-motion 下 `dialogExit` 是 `snap()`，定时那套会让弹窗凭空多占一帧到几百毫秒。
+
+两个必须知道的用法细节：
+
+- 弹窗内容由可空对象驱动时（`pendingDelete?.let { … }`）用 **`ModalTransition(payload = …)`**：
+  这类写法在对象变 `null` 那一刻就把子树摘走了，外壳连收场第一帧都活不到。payload 版把最后一次
+  非空值锚在外壳里，收场期间继续画**上一次**的内容。
+- `Popup` 类浮层必须给外壳传 **`Modifier.matchParentSize()`**：浮层的定位锚是它在父组合里的那个
+  layout node，而 `AnimatedVisibility` 的节点没有子 measurable，不补这一句锚点会缩成 0×0，
+  `Alignment.TopEnd` 就变成"往左挪一个自身宽度"。
+
+`ModalBottomSheet` 是另一档：它自带的下滑**就是**它的进场，再叠一圈缩放是两股动画抢注意力。
+所以进场显式给 `EnterTransition.None`，收场用 **`sheetExit()`**（只淡出、不缩放）。
+
+### 2.9 状态过渡：三处实测坑
+
+- **`Column` 里做"二选一显隐"要用 `Crossfade`，不要用 `AnimatedVisibility`**：
+  后者在收起过程中会让两层内容**同时存在**，一起把列高撑破（日视图空态 ↔ 列表就是这个症状）。
+  `Crossfade` 内部是 `Box`，只做叠加、不占额外高度。
+- **`Box` 嵌在 `Column` 里时，裸名 `AnimatedVisibility` 会解析成 `ColumnScope` 的重载**，
+  报一句读不出根因的"隐式接收者"错。这一处写全限定 `androidx.compose.animation.AnimatedVisibility`
+  并留注释——不是风格问题，是重载消解。
+- **换主题/换深色必须逐槽位补间**：`ColorScheme` 的 **36 个**颜色槽位全部
+  `animateColorAsState`（`Theme.kt` 的 `animatedColorScheme()`）。漏写一个槽位不会报错，
+  只会那一格仍然硬切，而全局事件里任何一格跟不上都会被读成画面撕裂。
+  ⚠️ 主题在 `LocalReduceMotion` provider 的**上游**（那颗开关是在主题子树里才建立的），
+  所以这里**取不到** `motionSpec()`——reduce-motion 由调用方显式传参，策略与 `motionSpec` 一致
+  （`snap()` / 同档 `tween(DURATION_MEDIUM)`）。同一约束也解释了 `motionSpecFor()` 为什么存在，见 §2.7。
+
+### 2.10 新动画开工自查
 
 - [ ] 时长是从 §2.2 的三档里挑的，不是随手写的数（`220` / `300` 这类值要归档）
 - [ ] 缓动是 `EasingStandard` 或 `EasingEmphasized`，没有自造曲线
@@ -135,8 +193,10 @@ animateXAsState(..., animationSpec = motionSpec(), ...)
 - [ ] 如果是高频交互：时长 ≤150ms 且不抢注意力
 - [ ] 如果用了 `sharedElement`：destination 的进出场已设为 `None`
 - [ ] 所有 `animateXAsState` 都带 `label =`，便于性能分析定位
+- [ ] 如果是**弹窗/浮层**：走 §2.8 的两段式，动画挂在弹窗自己那份 `modifier` 上，而不是包在外面
+- [ ] 如果是**容器显隐**：外层是 `Column` 就换 `Crossfade`（§2.9）
 
-### 2.9 延伸阅读
+### 2.11 延伸阅读
 
 - Material 3 动效规范：`m3.material.io/styles/motion`（转场模式、缓动与时长）
 - androidx 权威值：`compose/material3/tokens/MotionTokens.kt`（本节的对照表就是从它实测的）
@@ -176,6 +236,17 @@ animateXAsState(..., animationSpec = motionSpec(), ...)
 - **两套对比度兜底按需求选**：要先定前景色再算底板 → `legibleTintPlate`；
   前景色已定、只求底板最小 alpha → `legibilityAlphaFloor`。二者收敛到同一实现，分开只为堵"随手挑一个、长期分叉"。
   黑/白取色的交点在 **luma ≈ 0.203**，不是 0.45；拿 0.45 当阈值会让 0.203–0.45 这一整带白字压浅背景。
+- **二级页顶栏只有一个 `GlassTopBar`**（设置/导入/导入历史/统计/课程管理/编辑器 + 教务登录/SPOC 登录/扫码，共 9 页在用）：
+  副标题走 `subtitle`，进度条走 `progress`，**非 Scaffold 的全屏页**才传 `statusBarInset = true`
+  （Scaffold 的 topBar 槽自带 inset，重复加会把标题顶下去一截）。一级页（首页）自绘顶栏是**有意豁免**。
+  行内标题档位：页头主名用 `titleMedium`，不要 `titleLarge`（22sp 会压过真正的区块标题）。
+- **玻璃叠玻璃要有登记理由**：每个 `GlassSurface` 实例都占一份 backdrop 配额，嵌套等于白白多一层实时采样。
+  两条已核查的合法例外：设置页 `glassPreview`（CHROME-in-PANEL，它本身就是"材质样品"）、
+  编辑器底栏内的错误提示（底栏已是 CHROME，里面改用 `errorContainer` 平板底色，**不再套 ALERT**）。
+  周视图 `DayHeader` 那层 `onSurface.copy(alpha=0.06f)` 着色片**不算玻璃表面**——它是网格行内的轻量着色，
+  换 CHROME 会让每个表头实例占一个配额槽位，保留自绘。
+- **状态卡按级别换变体，不是恒 ALERT**：登录/扫码页的中性进度（"正在抓取…"）留在 PANEL，
+  出错才升 `ALERT + semanticTint = error`（与首页冲突横幅同档）。恒红会让正常流程一直挂着告警色。
 
 ### 3.1 浮层分两层：玻璃层 = 导航与浏览，M3 层 = 模态与决策
 
@@ -186,6 +257,9 @@ animateXAsState(..., animationSpec = motionSpec(), ...)
 |---|---|---|
 | **玻璃层** | 导航与浏览：顶栏、底栏、FAB、FAB 弹出菜单、课程卡长按菜单、分段控件、提示条、面板 | `LiquidMenu` / `LiquidFab` / `GlassSurface` / `GlassSegmentedControl` |
 | **M3 层** | 模态与决策：确认框、破坏性操作、表单弹层 | `AlertDialog` / `ModalBottomSheet` |
+
+M3 这一档**只加动效、不换组件**：确认框与弹层的进出场由 §2.8 的 `ModalTransition` 外壳提供，
+容器仍然是 `AlertDialog` / `ModalBottomSheet`——玻璃的透明度在决策场景里是负资产，这一点没有因为"加了动画"而松动。
 
 课程卡长按菜单原本是 `DropdownMenu`（M3 默认浮层）——用户最常调用的浮层反而掉在玻璃语言外面，
 现在统一走 `LiquidMenu`（`WeekView.kt` 的 `CourseMenuOverlay`）。
@@ -208,6 +282,8 @@ animateXAsState(..., animationSpec = motionSpec(), ...)
 - `labelSmall` 现在是 `labelMedium` 的**同值别名**（12sp）。两个名字钉在一起是有意的：
   M3 组件内部（如 `NavigationBar`）会读 `labelSmall`，放任它回落到默认 11sp 就会重现
   "名义 12sp、实际 11sp"那条断链。**新代码一律写 `labelMedium`**，`labelSmall` 只留作那道守卫。
+- 最大档 `displaySmall`（34sp SemiBold / 行高 42）已补进刻度，引导页 hero 用它。
+  R7 普查口径：全库 `fontSize = N.sp` 曾只剩 1 处裸值（就是那个 hero），现已归零——别让它重新长出来。
 
 ## 5. 壁纸与玻璃的分层铁律
 
@@ -231,6 +307,19 @@ animateXAsState(..., animationSpec = motionSpec(), ...)
   - **选择类/开关类区块**（多课表列表、外观开关、组件说明）→ `SettingsGroup` 堆叠；
   - **表单类区块**（学期设置的多个输入框、节次时间的 14 行编辑、日历同步差异）→ 保持单张玻璃卡，
     因为输入框之间用 2dp 间隙切开反而更碎。
+- **组内单选不再用「选中项禁用按钮」方言**：用 `GlassSegmentedControl(options, selectedIndex, onSelect)`
+  （深色模式、提醒方式两处已迁）。禁用选中项等于把选中态藏起来，读屏也报不出"已选中"。
+- **色块只有一个 `ColorSwatch`**（designsystem：48dp 触控壳 + 30dp 色球 + 3/1dp 选中描边）：
+  编辑器、课程管理、设置页种子色、挂件配置全部复用它，不要再养私有 `ColorDot`。
+  带文字中心的用 `label`（如编辑器"自定义"、种子色"默认"——**透明底撑不住勾与描边，用中性灰点占位**）；
+  圆形按钮/圆点用 `CircleShape`，不要拿 `cornerPill` 凑圆。
+- **表单 IME 走公共 `fieldImeOptions()/fieldImeActions()`**（`SettingsStack.kt`）：
+  日期与节次时间**故意**留在字母键盘上（数字面板没有 `-` 和 `:`），只有纯整数字段传 `numeric = true`。
+- 引导页的设置式行（权限卡 / 厂商跳转 / 开关行）同样属于 `SettingsRow` 家族，不是第四套自造行。
+- **整组的显隐也是动画，不是 `return`**：`visibleWhen` 为假时整组要 `expandVertically`/`shrinkVertically`
+  **收进去**，与组内条目同一套弹簧。以前写的是 `if (!visibleWhen) return`，症状是"在子界面切换分类时
+  整组条目凭空蒸发"。只有组里**确实没有可播内容**时才允许直接 `return`
+  （`items.isEmpty()` / 可见条目数为 0——这两种情况播动画只会露出一秒空框）。
 - 注意：`SettingsGroup` 的 scope 不是 composable 上下文，`remember`/`mutableStateOf`
   必须声明在 `SettingsGroup(...)` 调用之外（设置页 body 或上层），不能写在 `item {}` 之间。
 
@@ -284,6 +373,15 @@ animateXAsState(..., animationSpec = motionSpec(), ...)
 
 - **modifier 顺序法则**：`defaultMinSize` / `padding` 必须写在 `clickable` / `toggleable`
   **之前**。写后面的撑大的是内容区，点不到的还是点不到 —— 这是六处触控目标修完仍不生效的原因。
+- **勾选行的双重触发口径**：整行 `clickable(role = Role.Checkbox, onClickLabel = …)`，
+  尾部 `Checkbox(onCheckedChange = null)` 只做视觉（M3：`onCheckedChange` 传 null 即关闭自身点击）。
+  开关行同理，见 §6 的 `SettingsSwitchRow`。
+- **破坏性确认按钮统一 `error` 字色**（删除课表行、移除日历授权、清空历史……确认 Text 都带
+  `color = MaterialTheme.colorScheme.error`）；对话框按钮档位全站一致：动作 = TextButton、页内主动作 = Button、次 = OutlinedButton。
+- **反馈通道只有一个类型化入口**：`ScheduleViewModel.showMessage(text, isError)` 发 `AppMessage`，
+  级别由**发射点**显式标注——消费端（snackbar/ALERT 条）**禁止**用中文串关键字嗅探（`contains("失败")` 那一类），
+  措辞一改级别就悄悄翻转（实测有两条含"完成"的错误因此从来没红过）。页内浮层用 `SnackbarHost`，
+  **不要 Toast**（Android 12+ 被系统样式接管，与站内玻璃/主题完全脱节）。
 - 开关行的语义走 `toggleable(value=…, role=Role.Switch)`，尾部 `Switch` 的
   `onCheckedChange` 传 `null` 只做视觉；普通行 `clickable(role=Role.Button)`；
   分段/视图切换用 `selectable(role=Role.Tab)`；折叠分组头用 `Role.DropdownList`
@@ -313,9 +411,13 @@ animateXAsState(..., animationSpec = motionSpec(), ...)
   选中侧为空时**自动回落另一侧**，所以永远不会出现"教师没登记 → 副信息凭空少一行"。
   行数预算（按卡片高度分配 1/2/3 行标题）不受这个偏好影响，别为它加行。
 - **空状态用 `EmptyState(icon, title, description, actions)`**（`GlassSurface` PANEL 档），
-  首页首启 / 周视图本周无课 / 日视图三处共用。要求：说清**为什么是空的**（假期中 vs 这天没课），
+  首页首启 / 周视图本周无课 / 日视图三处共用，R7 又收编了导入历史、课程管理（**无课与无搜索结果是两个空态，
+  图标和出路都不同**）与统计页。要求：说清**为什么是空的**（假期中 vs 这天没课），
   并给一条**当下就能点的出路**（回到本周 / 查看明天 / 从教务导入）。
   叠在内容上的空态用 `matchParentSize()`，覆盖整屏的引导态才用 scrim。
+  空态 ↔ 内容的整块交换用 `Crossfade(targetState=…, animationSpec=motionSpec())`，
+  不要用 `AnimatedVisibility` 二选一（§2.9 的撑破列高问题）。行内的一句守卫文案（如日视图「节次时间未配置」）
+  **不是**空态，不必套组件。
 - **周次要看得见，分三层**：顶部异动条（本周与上周按课程 id **集合**比对，两段课只算一门；
   措辞是"与上周不同"，不是告警）、卡片右上角的极小三角（`weeks` 比学期短；画在文本预算之外，不吃内容空间，
   读屏补一句"不是每周都有"）、组件与长按菜单的周次文案（只有确实非全学期时才出现）。
@@ -324,3 +426,15 @@ animateXAsState(..., animationSpec = motionSpec(), ...)
   拖拽进行中错开量置 0，否则落点视觉与吸附目标不一致。警告图标用 `iconSmall`（16dp）。
 - **地点为空时也要占一行**：日视图与时间轴统一显示「教室未定」（0.55 alpha 的淡墨，别用正常正文浓度，
   否则会读成"真有一个叫未定的教室"），卡片因此等高，两视图口径也一致。
+- **图形件（`ScheduleCharts.kt`）的四条规矩**：`WeekDensityStrip` / `SemesterProgressLine` /
+  `TodayTimelineStrip` / `DayLoadBars` / `MiniBar` 全部是**既有那句文字的图形化**，
+  同格、同色、不新增信息层级（进度线就钉在「第 3 周」那行字下面，密度条与它下方那份清单选的是
+  同一个 `onBrowseWeekChange`）；**空值画一根极矮的素色柱，不留白**——完全留白会被读成"没画"；
+  时间一律取 `TodayPlanner` 等**已经算好的 slot**，不要在画图时再读一次 `LocalTime.now()`，
+  两处时钟口径分叉，图形就会和旁边的"还有 25 分钟下课"互相矛盾；
+  最后，只有当文字答不出那个问题（"哪几周其实没课""下午是不是空的"）时才画图，答得出就别画。
+- **学分：`null` 是"不知道"，`0.0` 是"教务明说这门课不计学分"**，两个值在统计页是两个说法，
+  不许塌成一个。统计按**课程组**归并（`sourceGroupKey`，没有则退到名称+学期），
+  组内取 **max 不求和**（一门课拆三段不能算三遍学分）；有 `credit` 的组内同步只传播非空值
+  （"这次没填"不能抹掉兄弟片段上已有的数据）。缺数据的门数必须**显式写在页面上**
+  （"N 门课没有学分数据，未计入"），否则总学分偏小会被用户读成"教务算错了"。

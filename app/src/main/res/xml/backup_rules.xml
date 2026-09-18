@@ -4,6 +4,7 @@
 
   排除对象是**鉴权材料**，不是课表数据（课表应当随备份迁移）：
   - buaa_cookie_store.xml：教务会话 Cookie 的 AndroidKeyStore 密文。
+  - spoc_token_store.xml：智学北航 JWT 的同一套密文。
     密钥在设备安全硬件里，密文迁到新设备也解不开，属纯冗余；
   - buaa_session.xml：会话保留标志（PREF_RETAINED）。若不排除，
     新设备冷启动会带着"应当恢复会话"的标记去加载 byxt，白跑一次恢复流程。
@@ -15,11 +16,13 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="buaa_cookie_store.xml" />
+        <exclude domain="sharedpref" path="spoc_token_store.xml" />
         <exclude domain="sharedpref" path="buaa_session.xml" />
         <exclude domain="root" path="app_webview" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="buaa_cookie_store.xml" />
+        <exclude domain="sharedpref" path="spoc_token_store.xml" />
         <exclude domain="sharedpref" path="buaa_session.xml" />
         <exclude domain="root" path="app_webview" />
     </device-transfer>

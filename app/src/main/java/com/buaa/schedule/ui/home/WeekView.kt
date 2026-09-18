@@ -5,7 +5,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -120,6 +119,7 @@ import com.buaa.schedule.core.designsystem.LocalReduceMotion
 import com.buaa.schedule.core.designsystem.LocalSceneBackdrop
 import com.buaa.schedule.core.designsystem.LocalSharedCourseBackdrop
 import com.buaa.schedule.core.designsystem.LocalSharedTransitionScope
+import com.buaa.schedule.core.designsystem.ModalTransition
 import com.buaa.schedule.core.designsystem.MotionTokens
 import com.buaa.schedule.core.designsystem.Personalization
 import com.buaa.schedule.core.designsystem.contentOn
@@ -138,10 +138,12 @@ import com.buaa.schedule.core.designsystem.motionSpec
 import com.buaa.schedule.core.designsystem.motionSpring
 import com.buaa.schedule.core.designsystem.outerShadow
 import com.buaa.schedule.core.designsystem.performTick
+import com.buaa.schedule.core.designsystem.sheetExit
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.TimeSlotProfile
+import com.buaa.schedule.domain.model.WEEKDAY_LABELS
 import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.model.toPeriodSegments
 import com.buaa.schedule.domain.schedule.CourseConstraints
@@ -156,7 +158,8 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.time.temporal.ChronoUnit
 
-private val dayNames = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+/** 星期名取自领域层唯一一份（R3-2：这里曾经是「周一…周日」的第三份副本） */
+private val dayNames = WEEKDAY_LABELS
 private val baseRowHeight = DesignTokens.weekRowHeight
 
 /**
@@ -165,88 +168,6 @@ private val baseRowHeight = DesignTokens.weekRowHeight
  */
 private val dayOfMonthFormatter =
     java.time.format.DateTimeFormatter.ofPattern("M/d", java.util.Locale.US)
-
-/** 节次行模式下按真实时间排布的单个节次布局 */
-private data class PeriodLayout(
-    val number: Int,
-    val startMin: Int,
-    val endMin: Int,
-    val top: Dp,
-    val height: Dp,
-)
-
-/** 连续段顶部：按真实时间布局定位 */
-private fun periodSegTop(layouts: List<PeriodLayout>, segment: IntRange, fallbackRowHeight: Dp): Dp =
-    layouts.firstOrNull { it.number == segment.first }?.top ?: (fallbackRowHeight * (segment.first - 1))
-
-/**
- * 课间空档造成的纵向偏移：空档插在 [gapAfterNumber] 之后，因此只有编号更大的行会下移。
- *
- * 这是 [buildPeriodLayouts] 之外的 placement 叠加量 —— 布局本身按「无空档」计算，
- * 动画值只在这里生效，避免每帧重建布局。
- */
-private fun gapShiftFor(periodNumber: Int, gapAfterNumber: Int?, gapHeight: Dp): Dp =
-    if (gapAfterNumber != null && periodNumber > gapAfterNumber) gapHeight else 0.dp
-
-/** 连续段高度：末端底部 - 首端顶部 */
-private fun periodSegHeight(layouts: List<PeriodLayout>, segment: IntRange, fallbackRowHeight: Dp): Dp {
-    val bottom = layouts.firstOrNull { it.number == segment.last }
-        ?.let { it.top + it.height }
-        ?: (fallbackRowHeight * segment.last)
-    val top = periodSegTop(layouts, segment, fallbackRowHeight)
-    return (bottom - top).coerceAtLeast(18.dp)
-}
-
-/** 按“节次行均高 + 可选课间空档”计算布局；默认保持原状（每节等高），只有当前时间落在空档时插入对应 gap */
-private fun buildPeriodLayouts(
-    slots: List<TimeSlot>,
-    rowHeight: Dp,
-    gapAfterNumber: Int? = null,
-    gapHeight: Dp = 0.dp,
-): List<PeriodLayout> {
-    val parsed = slots.mapNotNull { slot ->
-        runCatching {
-            Triple(slot.number, LocalTime.parse(slot.startTime), LocalTime.parse(slot.endTime))
-        }.getOrNull()
-    }
-    if (parsed.isEmpty()) return emptyList()
-
-    var cursor = 0.dp
-    return parsed.map { (number, start, end) ->
-        val startMin = start.hour * 60 + start.minute
-        val endMin = end.hour * 60 + end.minute
-        val layout = PeriodLayout(number, startMin, endMin, cursor, rowHeight)
-        cursor += rowHeight
-        if (gapAfterNumber == number) cursor += gapHeight
-        layout
-    }
-}
-/** 当前时间是否落在某两个节次之间的真实空档；若是，返回要展开 gap 的上一节次号和 gap 高度 */
-private fun findIntervalGap(
-    slots: List<TimeSlot>,
-    now: LocalTime,
-    rowHeight: Dp,
-): Pair<Int, Dp>? {
-    val parsed = slots.mapNotNull { slot ->
-        runCatching {
-            Triple(slot.number, LocalTime.parse(slot.startTime), LocalTime.parse(slot.endTime))
-        }.getOrNull()
-    }
-    if (parsed.size < 2) return null
-    val nowMin = now.hour * 60 + now.minute
-    for (i in 0 until parsed.size - 1) {
-        val prev = parsed[i]
-        val next = parsed[i + 1]
-        val prevEnd = prev.third.hour * 60 + prev.third.minute
-        val nextStart = next.second.hour * 60 + next.second.minute
-        if (nowMin >= prevEnd && nowMin < nextStart) {
-            val gapMinutes = (nextStart - prevEnd).coerceAtLeast(1)
-            val gapHeight = rowHeight * (gapMinutes / 45f)
-            return prev.first to gapHeight
-        }
-    }
-    return null
-}
 
 private val timeColumnWidth = DesignTokens.weekTimeColumnWidth
 /** 紧凑模式下可见的日期列数（5 日视口），取自 [DesignTokens.weekCompactVisibleDays] */
@@ -281,7 +202,13 @@ fun WeekView(
     onCourseResize: ((course: Course, newPeriods: List<Int>) -> Unit)? = null,
     onCourseDelete: ((course: Course) -> Unit)? = null,
 ) {
-    val slots = if (timeSlots.isNotEmpty()) timeSlots else TimeSlotProfile.DEFAULT
+    // 整块网格把「列表下标」当可视名次用：行序、时间线、拖拽取整、纵向度量都依赖
+    // 节次自上而下的顺序，而教务数据与用户自定义作息都不保证有序。在唯一入口处排好，
+    // 而不是每处各自兜底。必须包在 remember 里：sortedBy 每次重组都换新列表实例，
+    // 下游那串 remember(slots, …) 会整片失效。
+    val slots = remember(timeSlots) {
+        (if (timeSlots.isNotEmpty()) timeSlots else TimeSlotProfile.DEFAULT).sortedBy { it.number }
+    }
     // 兼容历史脏数据：总周数限幅，避免跳周列表物化超大列表
     val totalWeeks = (semester?.totalWeeks ?: 20).coerceIn(1, CourseConstraints.MAX_TOTAL_WEEKS)
     val today = LocalDate.now()
@@ -547,13 +474,25 @@ private fun WeekGrid(
             0 to 0
         }
     }
+    // 基准布局**不含动画值**：animatedGapHeight 每秒变化 60 次，
+    // 把它放进 remember key 会让 300ms 动画期间每帧重建整份 periodLayouts，
+    // 进而让下面每门课的 periodSegTop/periodSegHeight 全部重算 → 整片网格重组。
+    // 空档只影响「它下面那些行」的位置，所以这里留空、在 placement 阶段叠加偏移。
+    val periodLayouts = remember(slots, rowHeight, timeMode) {
+        if (!timeMode) {
+            buildPeriodLayouts(slots, rowHeight)
+        } else {
+            emptyList()
+        }
+    }
     // 课间空档只与"现在落在哪两节之间"有关，和 tick 的具体取值无关。
     // 直接在组合期读 nowTickState.value 会让整个网格每 15 秒全量重组一次
     // （8 次 filter + buildPeriodLayouts + 全部卡片的 modifier 重算）。
     // derivedStateOf 把读取关进派生状态：tick 变了但空档没变时不会触发重组。
-    val targetGap by remember(slots, rowHeight, timeMode) {
+    // 空档检测复用上面那份布局：以前它自己再把节次时间 parse 一遍。
+    val targetGap by remember(periodLayouts, rowHeight) {
         derivedStateOf {
-            if (timeMode) null else findIntervalGap(slots, nowTickState.value, rowHeight)
+            findIntervalGap(periodLayouts, nowTickState.value, rowHeight)
         }
     }
     var lastGapNumber by remember { mutableStateOf<Int?>(targetGap?.first) }
@@ -569,17 +508,6 @@ private fun WeekGrid(
         targetValue = targetGap?.second ?: 0.dp,
         animationSpec = motionSpec<Dp>(),
     )
-    // 基准布局**不含动画值**：animatedGapHeight 每秒变化 60 次，
-    // 把它放进 remember key 会让 300ms 动画期间每帧重建整份 periodLayouts，
-    // 进而让下面每门课的 periodSegTop/periodSegHeight 全部重算 → 整片网格重组。
-    // 空档只影响「它下面那些行」的位置，所以这里留空、在 placement 阶段叠加偏移。
-    val periodLayouts = remember(slots, rowHeight, timeMode) {
-        if (!timeMode) {
-            buildPeriodLayouts(slots, rowHeight)
-        } else {
-            emptyList()
-        }
-    }
     val gapAfterNumber = targetGap?.first ?: lastGapNumber
     val gridHeight = if (timeMode) {
         hourHeight * ((timeWindow.second - timeWindow.first) / 60)
@@ -614,7 +542,25 @@ private fun WeekGrid(
     } else {
         (daysAreaWidthPx / dayNames.size).coerceAtLeast(1)
     }
-    val rowHeightPx = with(density) { rowHeight.toPx() }.toInt()
+    // 纵向度量的唯一出口：卡片排布、拖拽取整、边缘自动滚动、落点高亮框、缩窄改节次
+    // 全部从这里换算「第几节 ↔ 多少像素」（P1-3）。以前这几处各拿各的节距——
+    // 24h 模式的卡片按小时高排布，拖拽却除以行高，手指停的位置和确认框里的节次对不上。
+    // 空档取**目标**高度而不是动画中间值，理由同上面算 gridHeight 的那处注释。
+    val gridMetric = remember(
+        slots, periodLayouts, rowHeight, hourHeight, timeMode, timeWindow, gapAfterNumber, targetGap?.second,
+    ) {
+        buildWeekGridMetric(
+            slots = slots,
+            layouts = periodLayouts,
+            rowHeight = rowHeight,
+            density = density,
+            timeMode = timeMode,
+            hourHeight = hourHeight,
+            windowStartMin = timeWindow.first * 60,
+            gapAfterNumber = gapAfterNumber,
+            gapHeight = targetGap?.second ?: 0.dp,
+        )
+    }
     // 网格自身的纵向滚动：菜单要贴在按压点上，得知道内容被卷走了多少
     val gridScrollState = rememberScrollState()
     var gridViewportPx by remember { mutableStateOf(IntSize.Zero) }
@@ -679,7 +625,7 @@ private fun WeekGrid(
                 continue
             }
             drag = drag?.advancedBy(
-                Offset(appliedX, appliedY), dayWidthPx, rowHeightPx, dayNames.size, slots.size,
+                Offset(appliedX, appliedY), dayWidthPx, dayNames.size, gridMetric,
             )
             withFrameMillis { }
         }
@@ -796,7 +742,11 @@ private fun WeekGrid(
                                     label = "dropHighlightDay",
                                 )
                                 val slidePeriods by animateFloatAsState(
-                                    targetValue = (lastDrop?.targetStartPeriod ?: 1).toFloat() - 1f,
+                                    // 名次而不是节次号：节次表被用户删过几节时，
+                                    // 「编号 - 1」和「可视第几行」根本不是一回事（P1-3）
+                                    targetValue = (lastDrop?.let {
+                                        gridMetric.rankOfPeriod(it.targetStartPeriod)
+                                    } ?: 0).toFloat(),
                                     animationSpec = motionSpring(
                                         dampingRatio = 1f,
                                         stiffness = Spring.StiffnessMedium,
@@ -817,13 +767,16 @@ private fun WeekGrid(
                                             .offset {
                                                 IntOffset(
                                                     (slideDays * dayWidthPx).roundToInt(),
-                                                    (slidePeriods * rowHeightPx).roundToInt(),
+                                                    // 小数名次插值：弹簧动画照旧平滑，
+                                                    // 但落点像素不再来自第二个节距（P1-3）
+                                                    gridMetric.topOfRank(slidePeriods).roundToInt(),
                                                 )
                                             }
                                             .size(
                                                 width = with(density) { dayWidthPx.toDp() },
-                                                height = rowHeight *
-                                                    (drop.segment.last - drop.segment.first + 1),
+                                                // 与手上那张卡等高：框和卡不同高会让人以为
+                                                // 落点比卡片多占（或少占）一节
+                                                height = with(density) { drop.heightPx.toDp() },
                                             )
                                             // alpha 读在绘制期：淡出这 260ms 不牵动组合
                                             .graphicsLayer { alpha = dropAlpha }
@@ -884,8 +837,7 @@ private fun WeekGrid(
                                                 } else null,
                                                 onDragDelta = if (onCourseMove != null) { amount ->
                                                     drag = drag?.advancedBy(
-                                                        amount, dayWidthPx, rowHeightPx,
-                                                        dayNames.size, slots.size,
+                                                        amount, dayWidthPx, dayNames.size, gridMetric,
                                                     )
                                                 } else null,
                                                 onDragEnd = if (onCourseMove != null) {
@@ -1013,8 +965,7 @@ private fun WeekGrid(
                                             } else null,
                                             onDragDelta = if (onCourseMove != null) { amount ->
                                                 drag = drag?.advancedBy(
-                                                    amount, dayWidthPx, rowHeightPx,
-                                                    dayNames.size, slots.size,
+                                                    amount, dayWidthPx, dayNames.size, gridMetric,
                                                 )
                                             } else null,
                                             onDragEnd = if (onCourseMove != null) {
@@ -1102,7 +1053,7 @@ private fun WeekGrid(
                                                     val r = resizeFor
                                                     resizeFor = null
                                                     if (r != null) {
-                                                        val newEnd = r.newEnd(rowHeightPx, slots.size)
+                                                        val newEnd = r.newEnd(gridMetric)
                                                         val merged = resizeCoursePeriods(r.course, r.segment, r.originalStart, newEnd)
                                                         if (merged != r.course.periods) {
                                                             onCourseResize?.invoke(r.course, merged)
@@ -1183,7 +1134,9 @@ private fun WeekGrid(
         lastMenu?.let { menu ->
             // DropdownMenu 免费给的「返回键关闭」要自己补上
             BackHandler(enabled = menuFor != null) { menuFor = null }
-            val items = remember(menu, onCourseMove, onCourseResize, onCourseDelete, weekForContent) {
+            val items = remember(
+                menu, onCourseMove, onCourseResize, onCourseDelete, weekForContent, timeMode,
+            ) {
                 buildList {
                     add(LiquidMenuItem(Icons.Default.Info, "详情 · 周次/教师") { detailFor = menu.course })
                     add(LiquidMenuItem(Icons.Default.Edit, "编辑") { onCourseClick(menu.course) })
@@ -1201,7 +1154,8 @@ private fun WeekGrid(
                             },
                         )
                     }
-                    if (onCourseResize != null) {
+                    // 24h 时间轴那张卡不接 resize 回调，挂出来就是个点不动的死项
+                    if (onCourseResize != null && !timeMode) {
                         add(
                             LiquidMenuItem(Icons.Default.Schedule, "调整时长") {
                                 resizeFor = ResizeState(
@@ -1237,12 +1191,16 @@ private fun WeekGrid(
 
         // U-08：不依赖拖拽的调课入口（长按菜单「移动到…」与读屏自定义动作都走这里）。
         // 选完目标时间交给下面那个确认弹窗，两条入口共用同一套 所有周 / 仅本周 语义。
-        movePickerFor?.let { request ->
+        // 走 payload 版而不是 `movePickerFor?.let`：后者在清空的那一刻就把子树摘走，收场播不出来。
+        ModalTransition(payload = movePickerFor) { request, modal ->
             val span = request.segment.last - request.segment.first + 1
             CourseMovePickerDialog(
                 request = request,
                 dayNames = dayNames,
-                maxStartPeriod = (slots.size - span + 1).coerceAtLeast(1),
+                // 上界向度量要，而不是拿 slots.size 当节次号用：
+                // 这条路与拖拽那条路必须收在同一个格子上（P1-3）
+                maxStartPeriod = gridMetric.periodAtRank(gridMetric.maxStartRank(span)),
+                modifier = modal,
                 onDismiss = { movePickerFor = null },
                 onConfirm = { dayIndex, startPeriod ->
                     movePickerFor = null
@@ -1260,8 +1218,9 @@ private fun WeekGrid(
         }
 
         // 拖拽落点确认弹窗：确认后才真正改课
-        pendingMove?.let { request ->
+        ModalTransition(payload = pendingMove) { request, modal ->
             AlertDialog(
+                modifier = modal,
                 onDismissRequest = { pendingMove = null },
                 title = { Text("确认移动课程？") },
                 text = {
@@ -1304,8 +1263,9 @@ private fun WeekGrid(
             )
         }
 
-        pendingDelete?.let { course ->
+        ModalTransition(payload = pendingDelete) { course, modal ->
             AlertDialog(
+                modifier = modal,
                 onDismissRequest = { pendingDelete = null },
                 title = { Text("删除课程？") },
                 text = {
@@ -1318,7 +1278,8 @@ private fun WeekGrid(
                             pendingDelete = null
                             onCourseDelete?.invoke(target)
                         },
-                    ) { Text("删除") }
+                        // 破坏性确认统一用 error 字色：与课表管理页的「删除」「清空」同一口径
+                    ) { Text("删除", color = MaterialTheme.colorScheme.error) }
                 },
                 dismissButton = {
                     TextButton(onClick = { pendingDelete = null }) { Text("取消") }
@@ -1326,9 +1287,17 @@ private fun WeekGrid(
             )
         }
 
-        detailFor?.let { course ->
+        // 弹层开在自己的窗口里，`detailFor?.let` 一撤整块瞬间消失；外壳只当挂载闸门。
+        // 进场给 None：ModalBottomSheet 自带的下滑就是它的进场，再叠一层缩放是两股动画。
+        ModalTransition(
+            payload = detailFor,
+            enter = androidx.compose.animation.EnterTransition.None,
+            exit = sheetExit(),
+        ) { course, modal ->
             CourseDetailSheet(
                 course = course,
+                timeSlots = slots,
+                modifier = modal,
                 onDismiss = { detailFor = null },
                 onEdit = {
                     detailFor = null
@@ -1355,6 +1324,7 @@ private fun CourseMovePickerDialog(
     request: CourseMovePickerRequest,
     dayNames: List<String>,
     maxStartPeriod: Int,
+    modifier: Modifier = Modifier,
     onDismiss: () -> Unit,
     onConfirm: (dayIndex: Int, startPeriod: Int) -> Unit,
 ) {
@@ -1364,6 +1334,9 @@ private fun CourseMovePickerDialog(
     }
     val span = request.segment.last - request.segment.first + 1
     AlertDialog(
+        // 调用方 ModalTransition 给的进出场修饰符要挂在 AlertDialog 自己身上：
+        // 弹窗是另一个窗口，父级 graphicsLayer 进不去。
+        modifier = modifier,
         onDismissRequest = onDismiss,
         title = { Text("移动课程") },
         text = {
@@ -1461,49 +1434,6 @@ private class TimeSlotIndex(slots: List<TimeSlot>) {
         val begin = starts[to] ?: return null
         return ChronoUnit.MINUTES.between(end, begin)
     }
-}
-
-/** 一次进行中的拖拽：被拿起的卡片、累计位移与取整后的目标格子 */
-private data class CourseDragState(
-    val course: Course,
-    val segment: IntRange,
-    val originDayIndex: Int,
-    val originStartPeriod: Int,
-    val totalOffset: Offset,
-    val targetDayIndex: Int,
-    val targetStartPeriod: Int,
-    /**
-     * 卡片**拿起那一刻**在网格内容坐标系里的顶部像素（不含 [totalOffset]）。
-     * 边缘自动滚动要靠它算出卡片此刻在视口的哪一条边上——只有累计位移的话，
-     * 网格一滚就再也对不上手指了（①I-01）。
-     */
-    val originTopPx: Float,
-    /** 卡片高度像素，同上的用途（下边缘判定要用卡片的底，不是卡片的顶） */
-    val heightPx: Float,
-)
-
-/**
- * 把一段位移叠进拖拽状态，并按格子取整出目标位置。
- *
- * 手指的 `dragAmount` 与边缘自动滚动滚掉的量都走这里（①I-01）：两处必须是同一份取整口径，
- * 否则"停在边缘滚过去"的那几节会在松手时和确认框里的目标节次不一致。
- */
-private fun CourseDragState.advancedBy(
-    amount: Offset,
-    dayWidthPx: Int,
-    rowHeightPx: Int,
-    dayCount: Int,
-    slotCount: Int,
-): CourseDragState {
-    val span = segment.last - segment.first + 1
-    val maxStart = (slotCount - span + 1).coerceAtLeast(1)
-    return copy(
-        totalOffset = totalOffset + amount,
-        targetDayIndex = (originDayIndex +
-            ((totalOffset.x + amount.x) / dayWidthPx).roundToInt()).coerceIn(0, dayCount - 1),
-        targetStartPeriod = (originStartPeriod +
-            ((totalOffset.y + amount.y) / rowHeightPx).roundToInt()).coerceIn(1, maxStart),
-    )
 }
 
 /** 拖拽时卡片伸进视口边缘多深就开始滚动（①I-01）：一截拇指宽度，够得着也不会误触 */
@@ -1677,33 +1607,6 @@ private fun CourseMenuOverlay(
     }
 }
 
-/** 缩放改节次中的临时状态：记录原始起止节与累计纵向位移 */
-private data class ResizeState(
-    val course: Course,
-    val segment: IntRange,
-    val originalStart: Int,
-    val originalEnd: Int,
-    val deltaY: Float = 0f,
-) {
-    /** 当前拖动对应的新结束节 */
-    fun newEnd(rowHeightPx: Int, maxSection: Int): Int {
-        val delta = (deltaY / rowHeightPx).roundToInt()
-        return (originalEnd + delta).coerceIn(originalStart, maxSection.coerceAtLeast(originalStart))
-    }
-
-    /** 松手时生成的新 periods（连续段） */
-    fun newPeriods(rowHeightPx: Int, maxSection: Int): List<Int> {
-        val end = newEnd(rowHeightPx, maxSection)
-        return (originalStart..end).toList()
-    }
-}
-
-/** 把某段连续节次替换为新范围，保留课程其它非连续片段并去重排序 */
-private fun resizeCoursePeriods(course: Course, segment: IntRange, newStart: Int, newEnd: Int): List<Int> =
-    (course.periods.filter { it !in segment } + (newStart..newEnd))
-        .distinct()
-        .sorted()
-
 /** 当前时间指示线：独立组合作用域，每分钟只重组这一条线 */
 @Composable
 private fun NowLine(
@@ -1823,7 +1726,7 @@ private fun DayHeader(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 4.dp)
+            .padding(horizontal = DesignTokens.spaceXS)
             // 参考稿：整行是一个浅色圆角容器，「节次」一格 + 7 天
             .clip(RoundedCornerShape(DesignTokens.cornerPanel))
             .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
@@ -2074,13 +1977,18 @@ private fun CourseCell(
     // ⚠️ pulse.value 只在下面的 graphicsLayer / drawWithContent lambda 里读：
     // 它是快照状态，在组合期读等于让这张卡每帧重组（网格里还有几十张兄弟卡）。
     val pulse = remember { Animatable(0f) }
-    // 缩放归零、只留描边闪：减少动效时位移线索要撤掉，"在哪儿"这件事仍然要说
-    val pulseScales = !LocalReduceMotion.current
-    LaunchedEffect(pulsing) {
-        if (pulsing) {
+    // 减少动效时整段脉冲不播：缩放线索此前已经撤掉，但两段 alpha 是裸 tween，
+    // 关了动画描边还会闪一下——"关了动画还有东西在动"不成立。
+    // 规格也换成 motionSpec：开关的判定只写在 Motion.kt 一份里，调用点只管不启动它。
+    val reduceMotion = LocalReduceMotion.current
+    val pulseScales = !reduceMotion
+    // 规格在组合期取好：LaunchedEffect 的挂起块不在组合里求值，读不到 LocalReduceMotion
+    val pulseSpec = motionSpec<Float>(MotionTokens.DURATION_SHORT)
+    LaunchedEffect(pulsing, reduceMotion) {
+        if (pulsing && !reduceMotion) {
             pulse.snapTo(0f)
-            pulse.animateTo(1f, tween(MotionTokens.DURATION_SHORT))
-            pulse.animateTo(0f, tween(MotionTokens.DURATION_SHORT))
+            pulse.animateTo(1f, pulseSpec)
+            pulse.animateTo(0f, pulseSpec)
         } else if (pulse.value != 0f) {
             pulse.snapTo(0f)
         }
@@ -2354,17 +2262,20 @@ private fun CourseCell(
             val metaLineHeight = with(density) {
                 metaStyle.lineHeight.takeIf { it.isSp }?.toDp() ?: 14.dp
             }
-            var remaining = (cardHeight - 5.dp * 2).coerceAtLeast(0.dp)
-            val titleLines = when {
-                remaining >= titleLineHeight * 3 -> 3
-                remaining >= titleLineHeight * 2 -> 2
-                else -> 1
-            }
-            remaining -= titleLineHeight * titleLines
-            val showSegmentLabel = segment.last > segment.first && remaining >= metaLineHeight
-            if (showSegmentLabel) remaining -= metaLineHeight
+            val available = (cardHeight - 5.dp * 2).coerceAtLeast(0.dp)
             val metaText = courseCardMeta(course)
-            val showMeta = metaText != null && remaining >= metaLineHeight
+            // —— 副信息行先占位，课名才用剩下的空间 ——
+            // 旧口径反过来：三行预算先给课名，默认行高下单节课卡只有 52dp 可用，
+            // 三行课名正好占满，于是**教室/教师那一行在任何卡上都出不来**——
+            // 而"这节课去哪上"恰恰是这张卡最该当场回答的即时信息。
+            // 该砍的是课名的第三行（下面还有省略号兜着），不是副信息。
+            val showMeta = metaText != null && available - titleLineHeight >= metaLineHeight
+            val afterMeta = if (showMeta) available - metaLineHeight else available
+            // 节次行排在副信息之后：卡片本身已经按节次跨了那么几行高，它是三者里最冗余的一行
+            val showSegmentLabel = segment.last > segment.first &&
+                afterMeta - titleLineHeight >= metaLineHeight
+            val titleBudget = afterMeta - if (showSegmentLabel) metaLineHeight else 0.dp
+            val titleLines = (titleBudget / titleLineHeight).toInt().coerceIn(1, 3)
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (inConflict) {

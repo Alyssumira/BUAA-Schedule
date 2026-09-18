@@ -13,7 +13,7 @@ import org.junit.runner.RunWith
 
 /**
  * Room 迁移测试（需要设备/模拟器）：每一步都用 `runMigrationsAndValidate` 把迁移后的
- * 表结构与**同一次 KSP 导出的** schema（3.json … 8.json）逐项比对（列 / 类型 /
+ * 表结构与**同一次 KSP 导出的** schema（3.json … 9.json）逐项比对（列 / 类型 /
  * NOT NULL / defaultValue / 索引），再断言数据没丢。
  *
  * 此前 v1/v2 的基线 JSON 的 identityHash 是手写的假值，以它们为起点的 1→2、2→3
@@ -155,9 +155,81 @@ class MigrationTest {
         }
     }
 
-    /** 全链 3→8：一路换表/加列/补索引之后，用户既有课表与提醒都还在。 */
+    /**
+     * 8→9 给 courses 追加 `credit`（学分）。这条迁移只做 `ALTER TABLE … ADD COLUMN`，
+     * 所以断言点全在「不许动老数据」上：
+     * - 列是 nullable REAL 且**没有 DEFAULT**：老行读出来必须是 NULL（=不知道学分），
+     *   而不是 0 —— 0 在统计页的含义是"教务明说这门课不计学分"，两者不能混；
+     * - 老行、提醒、索引都原样保留，id 不变；
+     * - 写入 3.5 能原样读回（REAL 而不是 TEXT，否则是建表语句写错了）。
+     */
     @Test
-    fun migrateFullChain3To8KeepsCoursesAndReminders() {
+    fun migrate8To9AddsNullableCreditColumnAndKeepsRows() {
+        helper.createDatabase(TEST_DB_V9, 8).use { db ->
+            db.execSQL(
+                "INSERT INTO courses (name, alias, dayOfWeek, periods, weeks, colorIndex, sourceGroupKey, " +
+                    "semesterCode, isManualOverride) " +
+                    "VALUES ('高等数学', 'GS', 1, '1,2', '1,2,3', 0, 'G1', '2026-2027-1', 1)"
+            )
+            db.execSQL("INSERT INTO reminders (courseId, enabled, advanceMinutes) VALUES (1, 1, 15)")
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB_V9, 9, true, AppDatabase.MIGRATION_8_9)
+
+        // 列的三要素要和 Room 导出的 9.json 一致：nullable、REAL、无默认值
+        db.query("PRAGMA table_info(courses)").use { c ->
+            val nameColumn = c.getColumnIndexOrThrow("name")
+            val typeColumn = c.getColumnIndexOrThrow("type")
+            val notNullColumn = c.getColumnIndexOrThrow("notnull")
+            val defaultColumn = c.getColumnIndexOrThrow("dflt_value")
+            var found = false
+            while (c.moveToNext()) {
+                if (c.getString(nameColumn) != "credit") continue
+                found = true
+                assertEquals("REAL", c.getString(typeColumn))
+                assertEquals("有 NOT NULL 就会逼着老行编一个学分出来", 0, c.getInt(notNullColumn))
+                assertTrue("有 DEFAULT 会让『未导入』读成 0", c.isNull(defaultColumn))
+            }
+            assertTrue("credit 列必须存在", found)
+        }
+
+        assertEquals(
+            "ADD COLUMN 不该动索引",
+            setOf("index_courses_semesterCode", "index_courses_sourceGroupKey"),
+            indexNames(db, "courses"),
+        )
+        db.query("SELECT id, name, periods, isManualOverride, credit FROM courses").use { c ->
+            assertTrue("老行必须还在", c.moveToFirst())
+            assertEquals(1L, c.getLong(0))
+            assertEquals("高等数学", c.getString(1))
+            assertEquals("1,2", c.getString(2))
+            assertEquals(1, c.getInt(3))
+            assertTrue("升级后老课读成 NULL，不是 0", c.isNull(4))
+        }
+        db.query("SELECT advanceMinutes FROM reminders WHERE courseId = 1").use { c ->
+            assertTrue("加列不能带走提醒", c.moveToFirst())
+            assertEquals(15, c.getInt(0))
+        }
+
+        // 学分是 REAL：3.5 这种半学分要原样回来
+        db.execSQL("UPDATE courses SET credit = 3.5 WHERE id = 1")
+        db.query("SELECT credit FROM courses WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(3.5, c.getDouble(0), 0.0)
+        }
+        // 不带这列的插入照常成功（无默认值 → NULL），这是 DAO 老语句的兼容底线
+        db.execSQL(
+            "INSERT INTO courses (name, dayOfWeek, periods, weeks, colorIndex) " +
+                "VALUES ('不带学分', 3, '5', '6', 0)"
+        )
+        db.query("SELECT credit FROM courses WHERE name = '不带学分'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertTrue(c.isNull(0))
+        }
+    }
+
+    /** 全链 3→9：一路换表/加列/补索引之后，用户既有课表与提醒都还在。 */
+    @Test
+    fun migrateFullChain3To9KeepsCoursesAndReminders() {
         helper.createDatabase(TEST_DB_FULL, 3).use { db ->
             db.execSQL(
                 "INSERT INTO courses (name, teacher, location, campus, dayOfWeek, periods, weeks, " +
@@ -168,20 +240,23 @@ class MigrationTest {
             db.execSQL("INSERT INTO reminders (courseId, enabled, advanceMinutes) VALUES (1, 1, 30)")
         }
         val db = helper.runMigrationsAndValidate(
-            TEST_DB_FULL, 8, true,
+            TEST_DB_FULL, 9, true,
             AppDatabase.MIGRATION_3_4,
             AppDatabase.MIGRATION_4_5,
             AppDatabase.MIGRATION_5_6,
             AppDatabase.MIGRATION_6_7,
             AppDatabase.MIGRATION_7_8,
+            AppDatabase.MIGRATION_8_9,
         )
-        db.query("SELECT name, periods, weeks, alias, isManualOverride FROM courses").use { c ->
+        db.query("SELECT name, periods, weeks, alias, isManualOverride, credit FROM courses").use { c ->
             assertTrue(c.moveToFirst())
             assertEquals("算法设计与分析", c.getString(0))
             assertEquals("1,2,3", c.getString(1))
             assertEquals("1,2,4", c.getString(2))
             assertTrue(c.isNull(3))
             assertEquals(1, c.getInt(4))
+            // 升级前没有这列，走完全链同样读成 NULL
+            assertTrue(c.isNull(5))
         }
         db.query("SELECT advanceMinutes FROM reminders WHERE courseId = 1").use { c ->
             assertTrue(c.moveToFirst())
@@ -217,6 +292,7 @@ class MigrationTest {
         private const val TEST_DB_V4 = "migration-test-v4.db"
         private const val TEST_DB_V6 = "migration-test-v6.db"
         private const val TEST_DB_V7 = "migration-test-v7.db"
+        private const val TEST_DB_V9 = "migration-test-v9.db"
         private const val TEST_DB_FULL = "migration-test-full.db"
     }
 }

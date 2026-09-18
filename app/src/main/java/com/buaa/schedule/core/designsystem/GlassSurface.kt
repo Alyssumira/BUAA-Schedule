@@ -42,7 +42,7 @@ fun GlassSurface(
     shape: Shape? = null,
     semanticTint: Color? = null,
     onClick: (() -> Unit)? = null,
-    contentPadding: Dp = 12.dp,
+    contentPadding: Dp = DesignTokens.spaceM,
     /** 预览用：显式覆盖用户透明度偏好，避免"为看效果而每帧写全局状态" */
     alphaOverride: Float? = null,
     content: @Composable () -> Unit,

@@ -47,12 +47,11 @@ class PeriodRangeBoundsTest {
     }
 
     @Test
-    fun textParserLeadingMinusIsTreatedAsInvertedAndStaysBounded() {
-        // "-3-2" split('-') 的首个空串被 mapNotNull 丢掉 → 按 3..2 解析 → 空区间。
+    fun textParserLeadingMinusIsTreatedAsInvertedAndDropped() {
+        // "-3-2" split('-') 的首个空串被 mapNotNull 丢掉 → 按 3..2 解析 → 空区间 → 整条丢弃。
         // 关键是「不 OOM、不抛异常」，而不是猜用户意图。
         val courses = TextScheduleParser.parse("高等数学,张三,J3-101,1,-3-2,1-16", "2026-2027-1")
-        assertEquals(1, courses.size)
-        assertTrue(courses[0].periods.isEmpty())
+        assertTrue(courses.isEmpty())
     }
 
     @Test
@@ -61,11 +60,10 @@ class PeriodRangeBoundsTest {
     }
 
     @Test
-    fun textParserInvertedSectionYieldsCourseWithEmptyPeriods() {
-        // 区间倒置不会 OOM（区间为空），课程仍被产出，由后续 normalize 决定去留
+    fun textParserInvertedSectionIsDropped() {
+        // 区间倒置不会 OOM（区间为空）；空 periods 的行在课表上画不出来，解析器整条丢弃
         val courses = TextScheduleParser.parse("高等数学,张三,J3-101,1,9-2,1-16", "2026-2027-1")
-        assertEquals(1, courses.size)
-        assertTrue(courses[0].periods.isEmpty())
+        assertTrue(courses.isEmpty())
     }
 
     // ---------- 教务导入 ----------
@@ -112,7 +110,10 @@ class PeriodRangeBoundsTest {
     }
 
     @Test
-    fun buaaParserInvertedSectionYieldsEmptyPeriods() {
-        assertTrue(parsePeriods(arranged(12, 3)).isEmpty())
+    fun buaaParserInvertedSectionIsDropped() {
+        // 反序钳制后展开为空 periods → 整条丢弃，与文本导入同一条规则
+        assertTrue(
+            BuaaScheduleParser.parseArrangedList(listOf(arranged(12, 3)), "2026-2027-1", 20).isEmpty()
+        )
     }
 }

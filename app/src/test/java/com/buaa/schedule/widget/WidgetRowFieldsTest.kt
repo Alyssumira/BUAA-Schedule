@@ -1,6 +1,10 @@
 package com.buaa.schedule.widget
 
+import com.buaa.schedule.domain.model.NO_PERIOD_GAP
+import com.buaa.schedule.domain.model.TimeSlotProfile
+import com.buaa.schedule.domain.model.periodGapMinutesOf
 import com.buaa.schedule.domain.model.periodLabel
+import com.buaa.schedule.domain.model.toStartEndTimes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
@@ -131,13 +135,23 @@ class WidgetRowFieldsTest {
 
     @Test
     fun `节次摘要与改动前逐字一致`() {
-        assertEquals("1-2节", widgetPeriodsText(listOf(1, 2)))
-        assertEquals("3节", widgetPeriodsText(listOf(3)))
-        assertEquals("1-2,9-10节", widgetPeriodsText(listOf(1, 2, 9, 10)))
+        // NO_PERIOD_GAP = 只按节次号相邻切段，正是组件改动前的实际口径
+        assertEquals("1-2节", widgetPeriodsText(listOf(1, 2), NO_PERIOD_GAP))
+        assertEquals("3节", widgetPeriodsText(listOf(3), NO_PERIOD_GAP))
+        assertEquals("1-2,9-10节", widgetPeriodsText(listOf(1, 2, 9, 10), NO_PERIOD_GAP))
         // 兜底：口径来自 periodLabel，只是去掉「第」这个在窄行里没有信息量的前缀
         assertEquals(
             "1-2,9-10节",
-            periodLabel(listOf(1, 2, 9, 10)).removePrefix("第").removeSuffix("节") + "节",
+            periodLabel(listOf(1, 2, 9, 10), NO_PERIOD_GAP).removePrefix("第").removeSuffix("节") + "节",
         )
+    }
+
+    @Test
+    fun `有节次表时按墙钟间隔切段`() {
+        // 真机取数走的是 periodGapMinutesOf(slotTimes)：第 5 节下课到第 6 节上课隔着 105 分钟午饭，
+        // 组件必须写「5,6节」，不能写那张根本不存在的连堂（P1-2）
+        val gap = periodGapMinutesOf(TimeSlotProfile.DEFAULT.toStartEndTimes())
+        assertEquals("5,6节", widgetPeriodsText(listOf(5, 6), gap))
+        assertEquals("1-2,9-10节", widgetPeriodsText(listOf(1, 2, 9, 10), gap))
     }
 }

@@ -7,22 +7,29 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buaa.schedule.core.designsystem.DesignTokens
+import com.buaa.schedule.core.designsystem.EmptyState
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
+import com.buaa.schedule.core.designsystem.ModalTransition
 import com.buaa.schedule.domain.model.ImportHistory
 import com.buaa.schedule.ui.ScheduleViewModel
 import java.time.ZoneId
@@ -48,6 +55,8 @@ fun ImportHistoryScreen(
     ),
 ) {
     val history by viewModel.importHistory.collectAsState(initial = emptyList())
+    // 清空是不可逆动作，按下不该直接执行（R7 ⑥：全仓唯一的裸删入口）
+    var showClearConfirm by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = androidx.compose.ui.graphics.Color.Transparent,
@@ -66,17 +75,11 @@ fun ImportHistoryScreen(
             verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM),
         ) {
             if (history.isEmpty()) {
-                GlassSurface(
-                    variant = GlassVariant.PANEL,
-                    contentPadding = DesignTokens.spaceL,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        text = "还没有导入记录。导入一次课表后，这里会记录来源、学期与课程数。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                EmptyState(
+                    icon = Icons.Filled.History,
+                    title = "还没有导入记录",
+                    description = "导入一次课表后，这里会记录来源、学期与课程数。",
+                )
             } else {
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM),
@@ -90,7 +93,7 @@ fun ImportHistoryScreen(
                     }
                     item {
                         TextButton(
-                            onClick = { viewModel.clearImportHistory() },
+                            onClick = { showClearConfirm = true },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(
@@ -102,6 +105,26 @@ fun ImportHistoryScreen(
                 }
             }
         }
+    }
+
+    ModalTransition(open = showClearConfirm) { modal ->
+        AlertDialog(
+            modifier = modal,
+            onDismissRequest = { showClearConfirm = false },
+            title = { Text("清空导入历史？") },
+            text = { Text("只删除这里的追溯记录，课表本身不受影响。清空后无法找回。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showClearConfirm = false
+                        viewModel.clearImportHistory()
+                    },
+                ) { Text("清空", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirm = false }) { Text("取消") }
+            },
+        )
     }
 }
 

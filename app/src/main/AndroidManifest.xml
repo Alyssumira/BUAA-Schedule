@@ -45,6 +45,17 @@
       用户点「一键添加」毫无反应；声明后应用内还能查到授权状态并引导放行。
     -->
     <uses-permission android:name="com.android.launcher.permission.INSTALL_SHORTCUT" />
+    <!--
+      SPOC 扫码签到：相机只在扫码页用到，授权由该页现取现用，不进开屏引导。
+      uses-feature 必须 required=false —— 声明 true 会让无相机设备在商店里直接
+      看不到本应用，而课表功能本身与相机无关。非 arm64 设备同理：
+      packaging.jniLibs 只保留 arm64 的 libbarhopper_v3.so，那档设备上
+      native 模型加载不了，扫码页靠「相册选图识别 / 手输签到码」继续可用。
+    -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
 
     <!--
       allowBackup 保持开启（课表数据跨设备迁移是刚需），

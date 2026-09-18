@@ -137,7 +137,9 @@ object BackgroundSync {
      * 没有 Widget 实例时不注册任何闹钟。
      */
     fun scheduleWidgetMidnight(context: Context) {
-        if (!hasAnyWidget(context)) {
+        // 安全版：探测跨 binder 问 Launcher，MIUI 上会抛 DeadObjectException。
+        // 探测失败按"有组件"处理 = 多注册一次幂等闹钟，无害。
+        if (!hasAnyWidgetSafely(context)) {
             cancelWidgetMidnight(context)
             return
         }
@@ -179,7 +181,10 @@ object BackgroundSync {
 
     /** 所有 Widget 都被移除时调用：取消零点闹钟与旧版周期任务，并让兜底轮询重新判定自己是否还需要 */
     fun cancelWidgetMidnightIfNoWidgets(context: Context) {
-        if (!hasAnyWidget(context)) {
+        // 六个 Provider 的 onDisabled 都直连这里，跑在广播主线程上：
+        // 可抛版 hasAnyWidget 会让"拖掉最后一个组件"变成一次进程崩溃。
+        // 探测失败按"有组件"处理 = 不取消零点闹钟，零点白刷一次，无害。
+        if (!hasAnyWidgetSafely(context)) {
             cancelWidgetMidnight(context)
             cancelLegacyPeriodicWork(context)
             // 兜底轮询交回 ensure() 判定：组件没了但提醒还走应用内闹钟时要留着

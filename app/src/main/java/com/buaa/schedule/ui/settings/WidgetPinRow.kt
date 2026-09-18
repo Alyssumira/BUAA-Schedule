@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.buaa.schedule.core.designsystem.DesignTokens
+import com.buaa.schedule.core.designsystem.ModalTransition
 
 /**
  * 「一键添加桌面组件」行：组件预览 + 添加按钮 + 添加结果的可见反馈。
@@ -102,8 +103,9 @@ fun PinWidgetRow(
         }
     }
 
-    if (showGuidance) {
+    ModalTransition(open = showGuidance) { modal ->
         AlertDialog(
+            modifier = modal,
             onDismissRequest = { showGuidance = false },
             title = { Text("桌面拒绝了添加请求") },
             text = {

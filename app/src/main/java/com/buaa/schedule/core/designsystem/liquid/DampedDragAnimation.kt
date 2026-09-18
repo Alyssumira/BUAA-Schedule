@@ -3,7 +3,6 @@
 package com.buaa.schedule.core.designsystem.liquid
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.MutatorMutex
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
@@ -11,6 +10,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.unit.IntSize
+import com.buaa.schedule.core.designsystem.motionSpringFor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.coroutineScope
@@ -29,18 +29,28 @@ class DampedDragAnimation(
     val onDragStarted: DampedDragAnimation.(position: Offset) -> Unit,
     val onDragStopped: DampedDragAnimation.() -> Unit,
     val onDrag: DampedDragAnimation.(size: IntSize, dragAmount: Offset) -> Unit,
+    /**
+     * 系统「关闭动画」开关，由调用方在组合边界读 `LocalReduceMotion` 传进来。
+     *
+     * 构造器不是 @Composable，读不到 CompositionLocal，所以这里收布尔而不是就地判。
+     * 无默认值是有意的：漏传一次，底栏的拖拽与按压就又成了一条不受开关管束的动画。
+     */
+    val reduceMotion: Boolean,
 ) {
 
+    // 五条弹簧此前是裸 spring()：底栏的拖拽回弹与按压缩放完全绕开了系统动画开关。
+    // 走 motionSpringFor 而不是在这里重新判一次开关——策略只写在 Motion.kt 一份，
+    // 阻尼/刚度/阈值这些调校过的性格值原样保留。
     private val valueAnimationSpec =
-        spring(1f, 1000f, visibilityThreshold)
+        motionSpringFor(reduceMotion, 1f, 1000f, visibilityThreshold)
     private val velocityAnimationSpec =
-        spring(0.5f, 300f, visibilityThreshold * 10f)
+        motionSpringFor(reduceMotion, 0.5f, 300f, visibilityThreshold * 10f)
     private val pressProgressAnimationSpec =
-        spring(1f, 1000f, 0.001f)
+        motionSpringFor(reduceMotion, 1f, 1000f, 0.001f)
     private val scaleXAnimationSpec =
-        spring(0.6f, 250f, 0.001f)
+        motionSpringFor(reduceMotion, 0.6f, 250f, 0.001f)
     private val scaleYAnimationSpec =
-        spring(0.7f, 250f, 0.001f)
+        motionSpringFor(reduceMotion, 0.7f, 250f, 0.001f)
 
     private val valueAnimation =
         Animatable(initialValue, visibilityThreshold)

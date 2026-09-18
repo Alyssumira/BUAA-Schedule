@@ -22,6 +22,7 @@ fun CourseEntity.toDomain() = Course(
     sourceGroupKey = sourceGroupKey,
     semesterCode = semesterCode,
     isManualOverride = isManualOverride,
+    credit = credit,
 )
 
 fun Course.toEntity() = CourseEntity(
@@ -40,6 +41,7 @@ fun Course.toEntity() = CourseEntity(
     sourceGroupKey = sourceGroupKey,
     semesterCode = semesterCode,
     isManualOverride = isManualOverride,
+    credit = credit,
 )
 
 fun SemesterEntity.toDomain() = Semester(
