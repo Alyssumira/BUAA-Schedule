@@ -153,5 +153,11 @@ fun LiquidFab(
 /**
  * FAB 的玻璃渲染选项：effect 的输入全是常量（vibrancy/blur/lens 参数固定），
  * 给出固定的 effectKey 让 kyant 长期命中缓存，避免每帧重建 RenderEffect。
+ *
+ * cacheDecorations 同理作用在装饰图层上：高光/外阴影/内阴影三块离屏图层
+ * 只在几何或装饰值变化时重录，胶囊停在原地时每帧省下 3 次 layer.record。
  */
-private val FabRenderOptions = BackdropRenderOptions(effectKey = { "liquid-fab" })
+private val FabRenderOptions = BackdropRenderOptions(
+    effectKey = { "liquid-fab" },
+    cacheDecorations = true,
+)

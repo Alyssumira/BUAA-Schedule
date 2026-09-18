@@ -226,17 +226,26 @@ fun LiquidBottomTabs(
         // （见 DrawBackdropModifier.updateEffects：key 为 null 直接短路掉缓存判断）。
         // 此前这三处都没传 renderOptions，于是切页 / 拖底栏 / 按下时每帧重建 3 组
         // blur+lens（底层还会分配 effect 对象），是底栏掉帧的主因。
+        // cacheDecorations 管的是另一半：高光/外阴影/内阴影各是一块离屏图层，
+        // 关掉时**每个重绘帧**都 layer.record 重录一遍（容器 2 块 + 索引层 2 块 + 指示器 3 块
+        // = 每帧 7 次离屏录制）。
+        // 打开后由 kyant 的 materialKey（size/density/fontScale/layoutDirection/outline/
+        // 装饰值/bounds）决定重录时机——按下进度会改 highlight 的 alpha，那时照样重录，
+        // 所以省掉的只有"录出来的内容和上一帧完全相同"的那几次。
         // 1) 容器胶囊的 effect 只由这几个参数决定，与按下进度无关 → 固定 key，长期命中。
         val containerEffectKey = remember(blurRadius, lensHeight, lensAmount, chromaticAberrationEnabled) {
             "${blurRadius.value}|${lensHeight.value}|${lensAmount.value}|$chromaticAberrationEnabled"
         }
         val containerRenderOptions = remember(containerEffectKey) {
-            BackdropRenderOptions(effectKey = { containerEffectKey })
+            BackdropRenderOptions(effectKey = { containerEffectKey }, cacheDecorations = true)
         }
         // 2) 索引层 / 指示器的折射强度乘了按下进度，必须把进度写进 key 才能在按下时正确变化；
         //    空闲时进度恒为 0，key 不变 → 不重建（这正是这里能省下开销的关键）。
         val pressRenderOptions = remember {
-            BackdropRenderOptions(effectKey = { dampedDragAnimation.pressProgress })
+            BackdropRenderOptions(
+                effectKey = { dampedDragAnimation.pressProgress },
+                cacheDecorations = true,
+            )
         }
 
         // 1) 容器胶囊 + 各 tab

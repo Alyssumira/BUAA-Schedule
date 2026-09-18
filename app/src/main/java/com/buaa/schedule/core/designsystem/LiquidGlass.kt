@@ -173,7 +173,16 @@ fun Modifier.liquidGlass(
             )
         }
     }
-    val renderOptions = BackdropRenderOptions(effectKey = { effectKey })
+    // cacheDecorations：高光 / 外阴影 / 内阴影各是一块离屏图层，默认（false）情况下
+    // **每一个被绘制的帧**都要 layer.record 重录一遍——滚动时壁纸在动、玻璃每帧重绘，
+    // 一块表面就是 3 次离屏录制，全屏几十块表面直接把帧预算花在重新描同一个边上。
+    // 打开后由 kyant 自己的 materialKey 决定重录时机（size / density / fontScale /
+    // layoutDirection / outline / 装饰值 / bounds），这几项任一变化照样重录，
+    // 所以画面一个像素都不变，省掉的只是"内容完全相同的那次录制"。
+    val renderOptions = BackdropRenderOptions(
+        effectKey = { effectKey },
+        cacheDecorations = true,
+    )
     return drawBackdrop(
         backdrop = backdrop,
         shape = shape,

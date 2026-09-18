@@ -248,5 +248,13 @@ private fun LiquidMenuRow(
     }
 }
 
-/** 菜单玻璃渲染选项：effect 输入为常量，固定 effectKey 避免每帧重建 RenderEffect */
-private val MenuRenderOptions = BackdropRenderOptions(effectKey = { "liquid-menu" })
+/**
+ * 菜单玻璃渲染选项：effect 输入为常量，固定 effectKey 避免每帧重建 RenderEffect。
+ *
+ * cacheDecorations 让高光/内外阴影三块离屏图层只在几何或装饰值变化时重录
+ * （kyant 按 size/outline/highlight/… 组 key）——菜单常驻期间不再每帧重描同一圈边。
+ */
+private val MenuRenderOptions = BackdropRenderOptions(
+    effectKey = { "liquid-menu" },
+    cacheDecorations = true,
+)
