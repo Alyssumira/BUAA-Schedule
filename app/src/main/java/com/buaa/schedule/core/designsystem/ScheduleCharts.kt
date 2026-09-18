@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
@@ -132,8 +133,10 @@ fun WeekDensityStrip(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            // 分数高度乘总缩放：一根条目的进场就是"从底部抽出"
-                            .fillMaxHeight(fraction = (fillRatio * scale).coerceIn(0f, 1f))
+                            // 分数高度乘总缩放：一根条目的进场就是"从底部抽出"。
+                            // 缩放读在测量期（见文件末尾 fillMaxHeightOf），否则进场那
+                            // 380ms 会把 19 根柱子连同各自的 semantics 字符串每帧重走一遍
+                            .fillMaxHeightOf { (fillRatio * scale).coerceIn(0f, 1f) }
                             .background(
                                 color = when {
                                     isCurrent -> scheme.primary
@@ -218,7 +221,9 @@ fun SemesterProgressLine(
         Box(
             modifier = Modifier
                 .fillMaxHeight()
-                .fillMaxWidth(fraction = shown)
+                // 宽度读在测量期：跨零点补间那 260ms 里不再每帧重组一次这条线、
+                // 每帧重算一次渐变
+                .fillMaxWidthOf { shown }
                 .background(
                     brush = Brush.horizontalGradient(
                         listOf(scheme.primary.copy(alpha = 0.45f), scheme.primary),
@@ -392,7 +397,9 @@ fun DayLoadBars(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .fillMaxHeight(fraction = (ratio * scale).coerceIn(0f, 1f))
+                            // 缩放读在测量期（见文件末尾 fillMaxHeightOf）：进场那 380ms
+                            // 不再把七根柱子连各自的 semantics 字符串每帧重走一遍
+                            .fillMaxHeightOf { (ratio * scale).coerceIn(0f, 1f) }
                             .background(
                                 color = when {
                                     minutes == 0L -> scheme.surfaceVariant
@@ -464,8 +471,43 @@ fun MiniBar(
         Box(
             modifier = Modifier
                 .fillMaxHeight()
-                .fillMaxWidth(fraction = shown)
+                // 同上：宽度读在测量期，260ms 的补间不再拖着这根条每帧重组
+                .fillMaxWidthOf { shown }
                 .background(brush = Brush.horizontalGradient(listOf(color.copy(alpha = 0.5f), color)), shape = track),
         )
     }
 }
+
+/**
+ * `Modifier.fillMaxWidth(fraction)` 的**测量期**版本：算法一字不改，只是 fraction
+ * 改在 measure 块里求值。
+ *
+ * 差别很实在：`fillMaxWidth(fraction = shown)` 里的 `shown` 是补间动画的当前值，
+ * 只能读在组合期——于是统计页 / 学期进度线每次长度补间，都在**每一帧**把整块图形
+ * （每根柱子、每段 semantics 文案、每次渐变 Brush）重走一遍组合。读在这里，状态
+ * 变化就只重测这一个盒子。
+ */
+private fun Modifier.fillMaxWidthOf(fraction: () -> Float): Modifier =
+    layout { measurable, constraints ->
+        val f = fraction()
+        val newWidth = if (constraints.hasBoundedWidth) {
+            (constraints.maxWidth * f).roundToInt()
+        } else {
+            (constraints.minWidth * f).roundToInt()
+        }
+        val placeable = measurable.measure(constraints.copy(minWidth = newWidth, maxWidth = newWidth))
+        layout(placeable.width, placeable.height) { placeable.placeRelative(0, 0) }
+    }
+
+/** [fillMaxWidthOf] 的竖向版本，对应 `Modifier.fillMaxHeight(fraction)` */
+private fun Modifier.fillMaxHeightOf(fraction: () -> Float): Modifier =
+    layout { measurable, constraints ->
+        val f = fraction()
+        val newHeight = if (constraints.hasBoundedHeight) {
+            (constraints.maxHeight * f).roundToInt()
+        } else {
+            (constraints.minHeight * f).roundToInt()
+        }
+        val placeable = measurable.measure(constraints.copy(minHeight = newHeight, maxHeight = newHeight))
+        layout(placeable.width, placeable.height) { placeable.placeRelative(0, 0) }
+    }
