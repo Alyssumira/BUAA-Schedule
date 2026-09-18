@@ -36,11 +36,11 @@ class BUAAApplication : Application() {
         applicationScope.launch {
             // 这个作用域是 SupervisorJob 且没有 CoroutineExceptionHandler：块内任何
             // 未捕获异常都会落到线程的默认处理器，直接杀进程。
-            // ⚠️ 逐步兜住而不是整块一个 runCatching：scheduleWidgetMidnight 内部的
-            // hasAnyWidget 要跨 binder 问 Launcher（MIUI 上抛 DeadObjectException），
-            // 整块兜时它一抛，后面的明日预告与 WidgetFallbackWorker 整轮不注册 ——
-            // 而 HyperOS 清掉第三方精确闹钟的机型，恰恰全靠那条兜底刷新活着。
-            // 每步自己吞异常 + 留痕（同 WidgetCommon 的口径）。
+            // ⚠️ 逐步兜住而不是整块一个 runCatching：探测桌面组件要跨 binder 问 Launcher
+            // （MIUI 上抛 DeadObjectException），整块兜时它一抛，后面的明日预告与
+            // WidgetFallbackWorker 整轮不注册 —— 而 HyperOS 清掉第三方精确闹钟的机型，
+            // 恰恰全靠那条兜底刷新活着。每步自己吞异常 + 留痕（同 WidgetCommon 的口径；
+            // 组件那四步的逐步兜住已经挪进 BackgroundSync.runColdStartWidgetSteps 里面）。
             suspend fun step(label: String, block: suspend () -> Unit) {
                 runCatching { block() }.onFailure {
                     android.util.Log.w("BUAAApplication", "后台链路初始化失败：$label", it)
@@ -58,16 +58,11 @@ class BUAAApplication : Application() {
             step("rescheduleReminders") {
                 BackgroundSync.rescheduleRemindersAndBells(this@BUAAApplication)
             }
-            step("refreshWidgets") { BackgroundSync.refreshWidgets(this@BUAAApplication) }
-            step("scheduleWidgetMidnight") {
-                BackgroundSync.scheduleWidgetMidnight(this@BUAAApplication)
-            }
-            step("scheduleTomorrowPreview") {
-                BackgroundSync.scheduleTomorrowPreview(this@BUAAApplication)
-            }
-            // Widget 兜底刷新：对抗澎湃 HyperOS 等系统清理第三方精确闹钟（无 Widget 时自动不干活）
-            step("widgetFallbackWorker") {
-                com.buaa.schedule.widget.WidgetFallbackWorker.ensure(this@BUAAApplication)
+            // 刷组件 + 零点闹钟 + 明日预告 + 兜底任务登记：这四步原先各自探测一次
+            // "桌面上有没有组件"（最多 6 趟 getAppWidgetIds × 3 次），改由被调方问一遍、
+            // 结论传给三个下游共用（审计 §2.1）。步骤顺序就是原来的顺序。
+            step("coldStartWidgetSteps") {
+                BackgroundSync.runColdStartWidgetSteps(this@BUAAApplication)
             }
         }
     }

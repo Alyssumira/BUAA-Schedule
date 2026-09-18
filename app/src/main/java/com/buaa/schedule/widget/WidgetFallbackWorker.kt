@@ -36,7 +36,9 @@ class WidgetFallbackWorker(
         // 多刷一次组件，远好于把组件留在昨天（这条链存在的意义就是补漏）。
         val hasWidget = BackgroundSync.hasAnyWidgetSafely(applicationContext)
         val bellsHandled = if (hasWidget) {
-            BackgroundSync.onDataChanged(applicationContext)
+            // 结论带下去：onDataChanged → refreshWidgets 里那次探测问的是同一个问题，
+            // 中间没有任何会改变组件数的写入（审计 §2.1 的同一笔账，这里是这条链的第二次）
+            BackgroundSync.onDataChanged(applicationContext, hasAnyWidget = hasWidget)
         } else {
             // 没有组件不等于没有提醒：用户可能只开了通知提醒而没放桌面组件。
             // 此时仍然要重排提醒，否则这条兜底链路对这类用户完全失效。
@@ -62,15 +64,21 @@ class WidgetFallbackWorker(
          * 只按"有 Widget"判断会把最需要兜底的用户排除在外：
          * 闹钟被 HyperOS 清掉、又没放桌面组件的人，提醒从此永久哑掉，
          * 而这正是 WorkManager 这条链要对抗的场景。
+         *
+         * [hasAnyWidget] 的默认值就是本函数此前的行为（自己探测），所以 `onEnabled` 与
+         * `onDisabled` 那两条调用点一个字都不用改；只有冷启动那条链会把已经问到的结论传进来
+         * （审计 §2.1：那次唤醒里这个问题原本被问三遍）。
+         * 一个口径变化：探测抛异常此前会让整块 `runCatching` 提前退出，也就是"这一轮既不注册也不注销"；
+         * 现在按"有组件"处理 = 走注册那一头。注册是幂等的（KEEP），漏注册才是这条链真正的代价。
          */
-        fun ensure(context: Context) {
+        fun ensure(context: Context, hasAnyWidget: Boolean = BackgroundSync.hasAnyWidgetSafely(context)) {
             // 两份调用方（onEnabled 与应用启动块）都指望这里不抛：
             // getInstance 在 WorkManager 尚未初始化的进程里会抛 IllegalStateException，
-            // hasAnyWidget 要跨 binder 问 Launcher。注册失败的代价只是"这一轮没有兜底"，
-            // 不值得用崩溃换。
+            // 探测组件要跨 binder 问 Launcher（默认参数里的 hasAnyWidgetSafely 自己已经把异常吞成"有组件"）。
+            // 注册失败的代价只是"这一轮没有兜底"，不值得用崩溃换。
             runCatching {
                 val manager = WorkManager.getInstance(context)
-                if (BackgroundSync.hasAnyWidget(context) || BackgroundSync.usesInAppReminders(context)) {
+                if (hasAnyWidget || BackgroundSync.usesInAppReminders(context)) {
                     manager.enqueueUniquePeriodicWork(
                         WORK_NAME,
                         ExistingPeriodicWorkPolicy.KEEP,

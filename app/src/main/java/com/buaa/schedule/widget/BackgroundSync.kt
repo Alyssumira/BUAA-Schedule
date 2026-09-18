@@ -96,38 +96,65 @@ object BackgroundSync {
      * [onDataChanged] 里写过。改课表走的是 `ScheduleViewModel.afterDataChangedInternal()`，
      * 那里只调本方法：缓存与快照都不会失效，组件会一直渲染上一次 sync 时的旧课表
      * （最长要等到 12 小时的兜底 Worker），重启应用也不自愈。
+     *
+     * [hasAnyWidget] 是"桌面有没有组件"这个结论的入口，默认值就是本函数此前的行为 ——
+     * 自己跨 binder 问一次 Launcher（`hasAnyWidgetSafely`），所以广播侧/Provider 侧的
+     * 调用点一个字都不用改。它存在只为服务冷启动那条链：审计 §2.1 数出来同一次唤醒里
+     * 这个问题被问了 3 遍（这里一遍、[scheduleWidgetMidnight] 一遍、
+     * [WidgetFallbackWorker.ensure] 一遍），三处之间没有任何会改变组件数的写入，
+     * 结论不可能不同。共享方式是把结论**当参数传下去**而不是缓存起来 ——
+     * 没有缓存就没有陈旧问题（组件刚被拖上/拆掉的 `onEnabled` / `onDisabled` 那两条路
+     * 拿到的仍然是自己当场探测的结果，见 [runColdStartWidgetSteps] 的注释）。
      */
-    suspend fun refreshWidgets(context: Context) {
+    suspend fun refreshWidgets(context: Context, hasAnyWidget: Boolean = hasAnyWidgetSafely(context)) {
         runCatching {
             WidgetDataCache.invalidate()
             // 一个组件都没放时，下面的全量快照 sync（逐个学期查库 + JSON + upsert）与
             // 6 次 getAppWidgetIds 都没有读者 —— 开机/改时间/12 小时兜底每次都白跑一遍。
-            if (!hasAnyWidgetSafely(context)) return
-            WidgetDataSynchronizer.sync(context)
-            TodayWidgetProvider.updateAll(context)
-            TomorrowWidgetProvider.updateAll(context)
-            WeekWidgetProvider.updateAll(context)
-            WeekGridWidgetProvider.updateAll(context)
-            NextClassWidgetProvider.updateAll(context)
-            TwoDayWidgetProvider.updateAll(context)
+            if (!hasAnyWidget) return
+            syncAndRedrawAllWidgets(context)
         }.onFailure { Log.w(TAG, "刷新 Widget 失败", it) }
     }
 
-    /** 数据/提醒/学期/外观变化后的统一收尾：重排提醒 + 刷新 Widget（返回值见 [rescheduleReminders]） */
-    suspend fun onDataChanged(context: Context): Boolean {
+    /**
+     * [refreshWidgets] 探测之后的那段重活：全学期快照重写 + 6 个 Provider 各自重绘。
+     *
+     * 单独成一个函数是为了让冷启动那条链在**问过一遍 Launcher** 之后整步跳过它
+     * （见 [runColdStartWidgetSteps]），而不是再各自探测一次。6 次 `updateAll` 的
+     * **顺序**仍然只有这一份实现（组件刷新时序是验证过的口径，别在这里挪）。
+     */
+    internal suspend fun syncAndRedrawAllWidgets(context: Context) {
+        WidgetDataSynchronizer.sync(context)
+        TodayWidgetProvider.updateAll(context)
+        TomorrowWidgetProvider.updateAll(context)
+        WeekWidgetProvider.updateAll(context)
+        WeekGridWidgetProvider.updateAll(context)
+        NextClassWidgetProvider.updateAll(context)
+        TwoDayWidgetProvider.updateAll(context)
+    }
+
+    /**
+     * 数据/提醒/学期/外观变化后的统一收尾：重排提醒 + 刷新 Widget（返回值见 [rescheduleReminders]）。
+     *
+     * [hasAnyWidget] 同 [refreshWidgets]：默认自己探测；[WidgetFallbackWorker.doWork] 开头已经
+     * 问过一遍，把结论带进来就省掉这条链里的第二次探测。
+     */
+    suspend fun onDataChanged(context: Context, hasAnyWidget: Boolean = hasAnyWidgetSafely(context)): Boolean {
         val bellsHandled = rescheduleReminders(context)
-        refreshWidgets(context)
+        refreshWidgets(context, hasAnyWidget)
         return bellsHandled
     }
 
     /**
      * 调度下一次零点刷新（“今天/明天”Widget 的日期滚动）。
      * 没有 Widget 实例时不注册任何闹钟。
+     *
+     * [hasAnyWidget] 同 [refreshWidgets]：默认自己探测，冷启动那条链传结论进来。
      */
-    fun scheduleWidgetMidnight(context: Context) {
+    fun scheduleWidgetMidnight(context: Context, hasAnyWidget: Boolean = hasAnyWidgetSafely(context)) {
         // 安全版：探测跨 binder 问 Launcher，MIUI 上会抛 DeadObjectException。
         // 探测失败按"有组件"处理 = 多注册一次幂等闹钟，无害。
-        if (!hasAnyWidgetSafely(context)) {
+        if (!hasAnyWidget) {
             cancelWidgetMidnight(context)
             return
         }
@@ -189,6 +216,98 @@ object BackgroundSync {
                 TomorrowPreviewScheduler.schedule(context, fireDay)
             }
         }.onFailure { Log.w(TAG, "调度明日预告失败", it) }
+    }
+
+    /**
+     * 冷启动（`Application.onCreate`）那条后台链里组件相关的四步：**一次唤醒只问一遍
+     * "桌面上有没有我们的组件"**，结论给三个下游步骤共用（审计 §2.1）。
+     *
+     * 改动前这四步各自探测：[refreshWidgets] 一次、[scheduleWidgetMidnight] 一次、
+     * [WidgetFallbackWorker.ensure] 一次。`hasAnyWidget` 是对 6 个 Provider 逐个
+     * `getAppWidgetIds`（`any { }` 短路，最坏 6 趟 binder），三次探测又落在同一协程、
+     * 同一时刻附近，中间没有任何会改变组件数的写入 —— 结论不可能不同，多出来的都是白付的 binder 往返。
+     *
+     * 口径（**不要**往下面几个方向顺手改）：
+     * - 结论是**当参数传下去**的，不是缓存。没有跨调用的缓存，就不存在陈旧问题：
+     *   用户刚拖上第一个组件走的 `onEnabled` → [WidgetCommon.bootstrapBackgroundSync]，
+     *   与刚拆掉最后一个组件走的 [cancelWidgetMidnightIfNoWidgets]，两条都仍然自己当场探测，
+     *   拿不到这里的结果（想让它们共用就得引入缓存，而那正是"漏一次 invalidate 就让新组件
+     *   永远不刷新"那类事故的形状 —— 上一轮 F-26 是同一族）。
+     * - 探测失败按"有组件"处理（口径同 [hasAnyWidgetSafely]）：宁可多刷一次，
+     *   不能因探测失败把组件留在昨天。
+     * - 每一步自己吞异常：这条链跑在 `SupervisorJob` 作用域里，块内未捕获的异常会落到线程的
+     *   默认处理器、直接杀进程（原先这个保护写在 `BUAAApplication` 的 `step()` 里，
+     *   四步收进来之后只有这里一份）。
+     * - 步骤顺序与改动前逐条一致，一步都没挪。
+     *
+     * @return 这一次探测的结论（给调用方留痕用）
+     */
+    suspend fun runColdStartWidgetSteps(context: Context): Boolean = runColdStartWidgetSteps(
+        probeHasWidgets = { hasAnyWidgetSafely(context) },
+        invalidateWidgetCache = { WidgetDataCache.invalidate() },
+        refreshWidgetData = { syncAndRedrawAllWidgets(context) },
+        scheduleMidnightAlarm = { scheduleWidgetMidnight(context, hasAnyWidget = true) },
+        cancelMidnightAlarm = { cancelWidgetMidnight(context) },
+        scheduleTomorrowPreview = { scheduleTomorrowPreview(context) },
+        ensureFallbackWorker = { hasWidgets -> WidgetFallbackWorker.ensure(context, hasAnyWidget = hasWidgets) },
+    )
+
+    /**
+     * [runColdStartWidgetSteps] 的编排本体：不接 Context，七个动作与失败留痕全是注入的 lambda。
+     *
+     * 形状抄 [WidgetDataSynchronizer.planSnapshotRows] —— 本模块单测没有 Robolectric
+     * （android.jar 里全是 "not mocked" 的桩），真跑一次这条链要设备，所以把"探测问了几遍"
+     * 与"没组件时重活有没有短路"这两件事收进一个能用假 lambda 数调用次数与顺序的函数里
+     * （见 `ColdStartWidgetStepsTest`）。
+     */
+    internal suspend fun runColdStartWidgetSteps(
+        probeHasWidgets: suspend () -> Boolean,
+        /** 探测之前先让进程内组件数据失效：改动前是 `refreshWidgets` 的第一件事，两条分支都要 */
+        invalidateWidgetCache: suspend () -> Unit,
+        /** 有组件才跑：全学期快照重写 + 6 个 Provider 重绘 */
+        refreshWidgetData: suspend () -> Unit,
+        /** 有组件才跑：排下一次零点闹钟 */
+        scheduleMidnightAlarm: suspend () -> Unit,
+        /** 没有组件才跑：撤掉可能残留的零点闹钟（组件被 ROM 连数据一起清掉、onDisabled 没来时唯一的自愈口） */
+        cancelMidnightAlarm: suspend () -> Unit,
+        /** 与组件数无关，照旧跑 */
+        scheduleTomorrowPreview: suspend () -> Unit,
+        /** 两条分支都要跑：没有组件不等于没有提醒（R5 F-16），登记还是注销由它自己按结论判断 */
+        ensureFallbackWorker: suspend (hasWidgets: Boolean) -> Unit,
+        /**
+         * 失败留痕口，默认就是原来那行 `Log.w`。
+         * 之所以也收成一个参数：本模块 JVM 单测里 `android.util.Log` 是抛 "not mocked" 的桩，
+         * 不把它隔开的代价是"某一步抛了后面的照跑"这条断言根本测不了
+         * （一测就被桩自己的异常带偏，红得看不出原因）。
+         */
+        reportStepFailure: (label: String, error: Throwable) -> Unit = { label, error ->
+            Log.w(TAG, "后台链路初始化失败：$label", error)
+        },
+    ): Boolean {
+        // 注入的探测若抛（生产接线给的是 hasAnyWidgetSafely，正常不会走到这里），
+        // 按"有组件"处理：方向只能是多刷一次，不能是少刷一次
+        val hasWidgets = runCatching { probeHasWidgets() }
+            .onFailure { reportStepFailure("probeHasWidgets", it) }
+            .getOrDefault(true)
+        runChainStep("invalidateWidgetCache", reportStepFailure) { invalidateWidgetCache() }
+        if (hasWidgets) {
+            runChainStep("refreshWidgets", reportStepFailure) { refreshWidgetData() }
+            runChainStep("scheduleWidgetMidnight", reportStepFailure) { scheduleMidnightAlarm() }
+        } else {
+            runChainStep("cancelWidgetMidnight", reportStepFailure) { cancelMidnightAlarm() }
+        }
+        runChainStep("scheduleTomorrowPreview", reportStepFailure) { scheduleTomorrowPreview() }
+        runChainStep("widgetFallbackWorker", reportStepFailure) { ensureFallbackWorker(hasWidgets) }
+        return hasWidgets
+    }
+
+    /** 逐步吞异常 + 留痕：一步抛了后面的照跑（日志文案与 `BUAAApplication` 里那条一致，便于老过滤条件继续用） */
+    private suspend fun runChainStep(
+        label: String,
+        report: (label: String, error: Throwable) -> Unit,
+        block: suspend () -> Unit,
+    ) {
+        runCatching { block() }.onFailure { report(label, it) }
     }
 
     fun cancelWidgetMidnight(context: Context) {

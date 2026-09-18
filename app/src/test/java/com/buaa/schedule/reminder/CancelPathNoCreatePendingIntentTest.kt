@@ -53,7 +53,9 @@ class CancelPathNoCreatePendingIntentTest {
         )
 
         val background = mainText(BACKGROUND_SYNC_FILE)
-        val midnightBody = bodyOf(background, "fun scheduleWidgetMidnight(context: Context)")
+        // 签名带上了"探测结论"这个默认参数（冷启动那条链一次唤醒只问一遍组件，审计 §2.1）：
+        // 这里按前缀切，函数体仍是那一个
+        val midnightBody = bodyOf(background, "fun scheduleWidgetMidnight(context: Context, hasAnyWidget: Boolean")
         assertTrue("零点刷新要用会创建 PI 的 builder", midnightBody.contains("midnightPendingIntent(context)"))
         assertTrue("而且它不能改成只查不造", !midnightBody.contains("existingMidnightPendingIntent("))
         assertTrue(
