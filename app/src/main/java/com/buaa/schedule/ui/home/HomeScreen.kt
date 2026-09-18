@@ -2,6 +2,7 @@ package com.buaa.schedule.ui.home
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -371,33 +372,46 @@ fun HomeScreen(
                     ),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        // 周侧两行、今日侧一行：不做尺寸过渡的话切换瞬间整行高度塌掉一半，
+                        // 右边的分段控件跟着跳位（M1）
+                        .animateContentSize(motionSpec<IntSize>()),
+                ) {
                     // 今日页签：日期/周次由 DayView 页头负责（那里带 ‹ › 日期导航），
                     // 这里再写一遍就会出现三个「第 N 周」+ 两个日期。
-                    if (selectedTab == 0) {
-                        Text(
-                            text = weekHeadline,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = todayLabel,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                        )
-                    } else {
-                        Text(
-                            text = "今日课表",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                    Crossfade(
+                        targetState = selectedTab == 0,
+                        animationSpec = motionSpec<Float>(),
+                    ) { isWeekTab ->
+                        if (isWeekTab) {
+                            Column {
+                                Text(
+                                    text = weekHeadline,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = todayLabel,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = "今日课表",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
                 GlassSegmentedControl(
@@ -805,7 +819,7 @@ private fun ScheduleToolbarRow(
                             if (timeMode) MaterialTheme.colorScheme.primaryContainer
                             else MaterialTheme.colorScheme.surfaceVariant,
                         )
-                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                        .padding(horizontal = DesignTokens.spaceS, vertical = DesignTokens.spaceXS),
                 ) {
                     Text(
                         text = if (timeMode) "时间" else "课次",
@@ -901,8 +915,10 @@ private fun ScheduleToolbarRow(
                                 },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    // 内缩写在 clickable 之前：整行（含留白）都是命中区
-                                    .padding(vertical = DesignTokens.spaceS, horizontal = DesignTokens.spaceS)
+                                    // 内缩写在 clickable 之前：整行（含留白）都是命中区。
+                                    // 垂直取 spaceM 而不是 spaceS：bodyLarge 行高约 32dp，
+                                    // 两侧各 8dp 只有 40dp，够不到 48dp 触控下限（M3）
+                                    .padding(vertical = DesignTokens.spaceM, horizontal = DesignTokens.spaceS)
                                     .clickable {
                                         onBrowseWeekChange(week)
                                         showJumpDialog = false

@@ -69,9 +69,9 @@ internal fun CourseDetailSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             HorizontalDivider(modifier = Modifier.padding(vertical = DesignTokens.spaceS))
-            DetailRow("教师", course.teacher ?: "未设置")
-            DetailRow("地点", course.location ?: "未设置")
-            DetailRow("校区", course.campus ?: "未设置")
+            DetailRow("教师", course.teacher)
+            DetailRow("地点", course.location)
+            DetailRow("校区", course.campus)
             if (!course.remark.isNullOrBlank()) DetailRow("备注", course.remark)
             Spacer(modifier = Modifier.height(DesignTokens.spaceM))
             Button(
@@ -89,7 +89,10 @@ internal fun CourseDetailSheet(
 }
 
 @Composable
-private fun DetailRow(label: String, value: String) {
+private fun DetailRow(label: String, value: String?) {
+    // 占位与真值必须一眼分得开：「未设置」以前走全浓度正文，读起来就像真有一个
+    // 叫"未设置"的教师。淡墨档位与课程卡上的「教室未定」同一条口径（0.55）。
+    val placeholder = value.isNullOrBlank()
     Row(modifier = Modifier.fillMaxWidth()) {
         Text(
             text = label,
@@ -98,9 +101,10 @@ private fun DetailRow(label: String, value: String) {
             modifier = Modifier.width(56.dp),
         )
         Text(
-            text = value,
+            text = value ?: "未设置",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = MaterialTheme.colorScheme.onSurface
+                .copy(alpha = if (placeholder) DesignTokens.PLACEHOLDER_INK_ALPHA else 1f),
             modifier = Modifier.weight(1f),
         )
     }

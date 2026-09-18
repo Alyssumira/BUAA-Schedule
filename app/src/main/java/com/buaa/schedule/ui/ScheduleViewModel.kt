@@ -104,8 +104,16 @@ internal const val NO_WRITABLE_CALENDAR_MESSAGE =
  * 级别由**发出方**显式标注：界面此前靠嗅探文案里的「失败」「无法」来染色
  * （R7 ⑥），改一句文案配色就悄悄变了，而且「刷新完成，但教务系统没有返回课程」
  * 这类不含关键字的错误从来没红过。文案与样式解耦后，新增提示在发射点就把级别定死。
+ *
+ * [isSuccess] 单独占一档，不复用"非错误即成功"：同一个卡位还承载「正在抓取…」这类
+ * 中性进度，把它们一并染成 success 就等于把 R7 §五.4 驳掉的"恒 ALERT"换个颜色重犯。
+ * 所以成功只在事情真的做完的发射点上标注。
  */
-data class AppMessage(val text: String, val isError: Boolean = false)
+data class AppMessage(
+    val text: String,
+    val isError: Boolean = false,
+    val isSuccess: Boolean = false,
+)
 
 data class PendingImport(
     val semester: Semester,
@@ -462,6 +470,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             }
             repository.saveSemester(semester)
             afterDataChangedInternal()
+            showMessage("学期设置已保存", isSuccess = true)
         }
     }
 
@@ -470,6 +479,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             repository.saveTimeSlots(slots)
             // 节次时间变化会影响「上课时刻」与组件时间轴，必须和课程变更走同一套收尾
             afterDataChangedInternal()
+            showMessage("节次时间已保存", isSuccess = true)
         }
     }
 
@@ -477,7 +487,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             repository.saveTimeSlots(TimeSlotProfile.DEFAULT)
             afterDataChangedInternal()
-            showMessage("已恢复北航默认节次时间")
+            showMessage("已恢复北航默认节次时间", isSuccess = true)
         }
     }
 
@@ -577,8 +587,8 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         _importMessage.value = null
     }
 
-    fun showMessage(message: String?, isError: Boolean = false) {
-        _importMessage.value = message?.let { AppMessage(it, isError) }
+    fun showMessage(message: String?, isError: Boolean = false, isSuccess: Boolean = false) {
+        _importMessage.value = message?.let { AppMessage(it, isError, isSuccess) }
     }
 
     fun confirmPendingImport() {
@@ -615,7 +625,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     append("导入完成：新增 ${selection.addedCount}、更新 ${selection.changedCount}")
                     if (selection.keptCount > 0) append("、保留 ${selection.keptCount}")
                     append("（含拆行片段）")
-                })
+                }, isSuccess = true)
             }
         }
     }
@@ -668,10 +678,15 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
 
     /**
      * 重新计算下一次课程提醒闹钟（从数据库读最新状态）。
+     *
+     * [report] 只有「开启/更新课程提醒」那颗按钮会传：另外两个调用方分别是权限回调
+     * （被拒绝时报"已开启"就是假话）和开关行（翻转本身就是反馈）。提示排在收尾之后，
+     * 说的是"闹钟真的重排过了"，不是"我点了"。
      */
-    fun rescheduleReminders() {
+    fun rescheduleReminders(report: String? = null) {
         viewModelScope.launch {
             afterDataChangedInternal()
+            if (report != null) showMessage(report, isSuccess = true)
         }
     }
 
@@ -792,7 +807,10 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                                     else -> {
                                         repository.replaceSemesterCourses(fetched.semester, fetched.courses)
                                         afterDataChangedInternal()
-                                        _importMessage.value = AppMessage("课表已刷新：${fetched.courses.size} 条课程（${fetched.semester.termName}）")
+                                        _importMessage.value = AppMessage(
+                                            "课表已刷新：${fetched.courses.size} 条课程（${fetched.semester.termName}）",
+                                            isSuccess = true,
+                                        )
                                     }
                                 }
                             }
@@ -1153,7 +1171,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     append("${sourceLabel}成功：${result.restoredCourses} 条课程")
                     if (result.insertedManual > 0) append("（新增手动课程 ${result.insertedManual} 条）")
                     if (result.skippedInvalid > 0) append("，跳过无效数据 ${result.skippedInvalid} 条")
-                })
+                }, isSuccess = true)
             }
         }
     }
@@ -1229,7 +1247,10 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     syncing = false,
                     message = when {
                         result == null -> AppMessage("同步失败：日历写入异常，请重试或检查日历权限", isError = true)
-                        result.succeeded -> AppMessage("同步完成：新增 ${result.inserted}，更新 ${result.updated}，删除 ${result.deleted}")
+                        result.succeeded -> AppMessage(
+                            "同步完成：新增 ${result.inserted}，更新 ${result.updated}，删除 ${result.deleted}",
+                            isSuccess = true,
+                        )
                         else -> AppMessage("同步失败：${result.failed} 个日程未写入，请重试或检查日历权限", isError = true)
                     },
                 )

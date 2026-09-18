@@ -1,7 +1,16 @@
 package com.buaa.schedule.ui.home
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -38,11 +47,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -52,6 +63,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.DesignTokens
@@ -66,8 +78,12 @@ import com.buaa.schedule.core.designsystem.coursePlateSceneLuma
 import com.buaa.schedule.core.designsystem.dayFractionOfMinute
 import com.buaa.schedule.core.designsystem.dayTimelineSegments
 import com.buaa.schedule.core.designsystem.legibleTintPlate
+import com.buaa.schedule.core.designsystem.LocalReduceMotion
+import com.buaa.schedule.core.designsystem.MotionTokens
 import com.buaa.schedule.core.designsystem.performTick
 import com.buaa.schedule.core.designsystem.motionSpec
+import com.buaa.schedule.core.designsystem.motionSpecFor
+import com.buaa.schedule.core.designsystem.motionSpringFor
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
@@ -81,6 +97,7 @@ import com.buaa.schedule.domain.schedule.SlotStatus
 import com.buaa.schedule.domain.schedule.TodayPlanner
 import com.buaa.schedule.domain.schedule.WeekCalculator
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalTime
 
@@ -100,27 +117,6 @@ fun DayView(
     onDateChange: (LocalDate) -> Unit = {},
     onCourseClick: (Course) -> Unit = {},
 ) {
-    val today = LocalDate.now()
-    val isToday = date == today
-    // startLocalDate 的 getter 每次访问都跑一次 LocalDate.parse；
-    // 组合期每帧都会走到这里，必须缓存（学期开学日期只在 semester 变化时才变）。
-    val semesterStart = remember(semester?.startDate) {
-        semester?.run { startLocalDate }
-    }
-    val week = semester?.let { s ->
-        semesterStart?.let { start ->
-            WeekCalculator.currentWeekOrNull(start, s.totalWeeks, date)
-        }
-    }
-    val dayCourses = when {
-        // 完全没设学期：按星期几降级展示，手动课程对新用户仍可见
-        semester == null -> courses.filter { it.dayOfWeek == date.dayOfWeek.value }
-        // 学期在、开学日期却解析失败（旧库脏数据）：TodayPlanner 此时返回 EMPTY，
-        // 列表不能再放行全部周次，否则"列表有课、Hero 与进度条全空"同屏打架
-        semesterStart == null || week == null -> emptyList()
-        else -> courses.filter { it.dayOfWeek == date.dayOfWeek.value && it.weeks.contains(week) }
-    }.sortedBy { it.startPeriod }
-
     // Hero 与倒计时每分钟刷新；后台（低于 STARTED）自动停表，避免不可见时继续跑协程
     val nowTickState = remember { mutableStateOf(LocalTime.now()) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -133,32 +129,28 @@ fun DayView(
             }
         }
     }
-    val plan = remember(date, courses, semester, timeSlots, nowTickState.value) {
-        if (isToday) TodayPlanner.plan(courses, semester, timeSlots, date, nowTickState.value) else null
+    // startLocalDate 的 getter 每次访问都跑一次 LocalDate.parse；
+    // 组合期每帧都会走到这里，必须缓存（学期开学日期只在 semester 变化时才变）。
+    val semesterStart = remember(semester?.startDate) {
+        semester?.run { startLocalDate }
     }
-    // 一行一段：一门跨午休的课（第1-2、9-10节）在列表与时间轴里是两块，
-    // 每块的时间、状态、色块高度都以**自己那一段**为准。
-    // 此前按 startPeriod..endPeriod 取区间，显示出来是 08:00–18:15 这种横跨整个白天的假区间；
-    // 而按课程 id 建的槽位索引会被后一段覆盖，上午正在上课的那张卡写着"未开始"。
-    val periodTimes = remember(timeSlots) { parsePeriodTimes(timeSlots) }
-    val gapMinutes = remember(timeSlots) { periodGapMinutesOf(periodTimes) }
-    val rows = remember(dayCourses, plan, periodTimes, gapMinutes) {
-        buildDayRows(dayCourses, plan, periodTimes, gapMinutes)
-    }
-
-    val weekText = when {
-        semester == null -> "未设置学期"
-        semesterStart == null -> "学期开学日期无效，请在设置中修正"
-        week == null -> if (date.isBefore(semesterStart)) "未开学" else "假期中"
-        else -> "第 $week 周"
-    }
+    val today = LocalDate.now()
     var timelineMode by rememberSaveable { mutableStateOf(false) }
 
-    // 左右滑动翻日期：此前只有 ‹ › 两个箭头可点，
-    // 而周视图早已支持横滑翻周——日视图没有对应手势会被当成 bug。
+    // ── 横滑翻日期 ──
+    // 此前只有 ‹ › 两个箭头可点，而周视图早已支持横滑翻周——日视图没有对应手势会被当成 bug。
+    // 补上手势以后又留下第二个断裂：dragAmount 只累到阈值做判定，72dp 以内画面纹丝不动、
+    // 松手整页硬切（H5），而翻周是 Pager 的跟手 + 惯性。这里补齐同一条因果链的两端：
+    // 手势期间正文跟手位移，换天以后新的一天从同一方向滑入（§2.4 shared axis）。
+    val reduceMotion = LocalReduceMotion.current
     val haptics = LocalHapticFeedback.current
-    var swipeDrag by remember { mutableFloatStateOf(0f) }
+    val dragScope = rememberCoroutineScope()
     val swipeThreshold = with(LocalDensity.current) { 72.dp.toPx() }
+    var swipeDrag by remember { mutableFloatStateOf(0f) }
+    val dragShift = remember { Animatable(0f) }
+    val settleDrag: () -> Unit = {
+        dragScope.launch { dragShift.animateTo(0f, motionSpringFor(reduceMotion)) }
+    }
 
     Column(
         modifier = modifier
@@ -178,10 +170,18 @@ fun DayView(
                             }
                         }
                         swipeDrag = 0f
+                        settleDrag()
                     },
-                    onDragCancel = { swipeDrag = 0f },
+                    onDragCancel = {
+                        swipeDrag = 0f
+                        settleDrag()
+                    },
                 ) { _, dragAmount ->
                     swipeDrag += dragAmount
+                    // reduce-motion 下正文不做位移，阈值判定照旧
+                    if (!reduceMotion) {
+                        dragScope.launch { dragShift.snapTo(dampedDragOffset(swipeDrag, swipeThreshold)) }
+                    }
                 }
             },
     ) {
@@ -193,24 +193,36 @@ fun DayView(
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "前一天")
             }
             Column(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .graphicsLayer { translationX = dragShift.value },
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                // 档位对齐 HomeScreen 紧凑顶栏第一行（titleMedium 标题 + labelMedium 副行）：
-                // 此前这里用 22sp 的 titleLarge，「今日课表」下面又压出一个更大的标题。
-                Text(
-                    text = "${date.monthValue}月${date.dayOfMonth}日 · " +
-                        weekdayName(date.dayOfWeek.value),
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = if (isToday) "今天 · $weekText" else weekText,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
+                // 页头只做淡入淡出、不跟着横移：这一格左右就是两个箭头，
+                // 旧日期还没退净时两行字会在 1/8 屏宽里叠在一起
+                Crossfade(
+                    targetState = date,
+                    animationSpec = motionSpec<Float>(),
+                ) { day ->
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        // 档位对齐 HomeScreen 紧凑顶栏第一行（titleMedium 标题 + labelMedium 副行）：
+                        // 此前这里用 22sp 的 titleLarge，「今日课表」下面又压出一个更大的标题。
+                        Text(
+                            text = "${day.monthValue}月${day.dayOfMonth}日 · " +
+                                weekdayName(day.dayOfWeek.value),
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = if (day == today) "今天 · ${weekTextFor(semester, semesterStart, day)}"
+                            else weekTextFor(semester, semesterStart, day),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
+                }
             }
             IconButton(onClick = { onDateChange(date.plusDays(1)) }) {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "后一天")
@@ -231,13 +243,134 @@ fun DayView(
             )
             Spacer(modifier = Modifier.weight(1f))
             // 「回到今天」是动作不是模式，不该混进分段里
-            if (!isToday) {
+            if (date != today) {
                 TextButton(onClick = { onDateChange(today) }) { Text("回到今天") }
             }
         }
 
-        if (isToday && plan != null) {
-            TodayHero(plan, nowTickState.value)
+        AnimatedContent(
+            targetState = date,
+            transitionSpec = { dayAxisTransition(reduceMotion, forward = targetState.isAfter(initialState)) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .graphicsLayer { translationX = dragShift.value },
+        ) { day ->
+            DayScreen(
+                date = day,
+                courses = courses,
+                semester = semester,
+                semesterStart = semesterStart,
+                timeSlots = timeSlots,
+                now = nowTickState.value,
+                timelineMode = timelineMode,
+                onDateChange = onDateChange,
+                onCourseClick = onCourseClick,
+            )
+        }
+    }
+}
+
+/** 跟手只映 0.35 倍：整幅跟随会让正文与两侧的箭头脱开，读成"箭头没跟着走" */
+private const val DayDragFollowRatio = 0.35f
+
+/**
+ * 手势累计位移 → 正文位移。超过阈值的部分不再增加：
+ * 继续拖已经不携带新信息，而松手回弹的距离一旦跟着变大，就成了新的干扰。
+ */
+private fun dampedDragOffset(totalDrag: Float, threshold: Float): Float =
+    totalDrag.coerceIn(-threshold, threshold) * DayDragFollowRatio
+
+/**
+ * 翻日期的共享轴：横向 1/8 屏宽 + 淡入淡出，进退方向相反（§2.4：两天之间有前后关系）。
+ *
+ * 时长取 [MotionTokens.DURATION_SNAP]（140ms）而不是区块级的 260：翻日期是本 App 最高频的
+ * 手势，§2.6 要求这种交互"即时、极短（≤150ms）、无需注意"。
+ * 转场 lambda 不在组合里求值，拿不到 `LocalReduceMotion`，所以开关由调用方读出来传进来（§2.7）。
+ */
+private fun dayAxisTransition(reduceMotion: Boolean, forward: Boolean): ContentTransform {
+    if (reduceMotion) {
+        return ContentTransform(
+            targetContentEnter = EnterTransition.None,
+            initialContentExit = ExitTransition.None,
+        )
+    }
+    // 往后翻：新的一天从右侧进场、旧的退向左侧；往前翻整体反向
+    val enterShift = if (forward) 1 else -1
+    val fadeSpec = motionSpecFor<Float>(reduceMotion, MotionTokens.DURATION_SNAP)
+    val slideSpec = motionSpecFor<IntOffset>(reduceMotion, MotionTokens.DURATION_SNAP)
+    return ContentTransform(
+        targetContentEnter = slideInHorizontally(slideSpec, initialOffsetX = { enterShift * it / 8 }) +
+            fadeIn(fadeSpec),
+        initialContentExit = slideOutHorizontally(slideSpec, targetOffsetX = { -enterShift * it / 8 }) +
+            fadeOut(fadeSpec),
+    )
+}
+
+/** 页头副行的周次口径：Crossfade 里的每一天都要自己算，不能沿用外层那一天的结果 */
+private fun weekTextFor(semester: Semester?, semesterStart: LocalDate?, date: LocalDate): String {
+    val week = semester?.let { s ->
+        semesterStart?.let { start -> WeekCalculator.currentWeekOrNull(start, s.totalWeeks, date) }
+    }
+    return when {
+        semester == null -> "未设置学期"
+        semesterStart == null -> "学期开学日期无效，请在设置中修正"
+        week == null -> if (date.isBefore(semesterStart)) "未开学" else "假期中"
+        else -> "第 $week 周"
+    }
+}
+
+/**
+ * 一天版面：Hero + 课程列表 / 时间轴。
+ *
+ * 单独成一个可组合函数是为了 [AnimatedContent] 能按"正在进入的那一天"重算内容——
+ * 换天过程中新旧两天同时存在，共用外层 `date` 会让滑出去的那一屏先变成新日期。
+ */
+@Composable
+private fun DayScreen(
+    date: LocalDate,
+    courses: List<Course>,
+    semester: Semester?,
+    semesterStart: LocalDate?,
+    timeSlots: List<TimeSlot>,
+    now: LocalTime,
+    timelineMode: Boolean,
+    onDateChange: (LocalDate) -> Unit,
+    onCourseClick: (Course) -> Unit,
+) {
+    val today = LocalDate.now()
+    val isToday = date == today
+    val week = semester?.let { s ->
+        semesterStart?.let { start ->
+            WeekCalculator.currentWeekOrNull(start, s.totalWeeks, date)
+        }
+    }
+    val dayCourses = when {
+        // 完全没设学期：按星期几降级展示，手动课程对新用户仍可见
+        semester == null -> courses.filter { it.dayOfWeek == date.dayOfWeek.value }
+        // 学期在、开学日期却解析失败（旧库脏数据）：TodayPlanner 此时返回 EMPTY，
+        // 列表不能再放行全部周次，否则"列表有课、Hero 与进度条全空"同屏打架
+        semesterStart == null || week == null -> emptyList()
+        else -> courses.filter { it.dayOfWeek == date.dayOfWeek.value && it.weeks.contains(week) }
+    }.sortedBy { it.startPeriod }
+    val plan = remember(date, courses, semester, timeSlots, now) {
+        if (isToday) TodayPlanner.plan(courses, semester, timeSlots, date, now) else null
+    }
+    // 一行一段：一门跨午休的课（第1-2、9-10节）在列表与时间轴里是两块，
+    // 每块的时间、状态、色块高度都以**自己那一段**为准。
+    // 此前按 startPeriod..endPeriod 取区间，显示出来是 08:00–18:15 这种横跨整个白天的假区间；
+    // 而按课程 id 建的槽位索引会被后一段覆盖，上午正在上课的那张卡写着"未开始"。
+    val periodTimes = remember(timeSlots) { parsePeriodTimes(timeSlots) }
+    val gapMinutes = remember(timeSlots) { periodGapMinutesOf(periodTimes) }
+    val rows = remember(dayCourses, plan, periodTimes, gapMinutes) {
+        buildDayRows(dayCourses, plan, periodTimes, gapMinutes)
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Hero 只回答"今天的课上到哪了"：这一天一门课都没有时它没有落点，
+        // 而下面那张空态卡说的就是同一件事——两张同屏是重复（M2）
+        if (isToday && plan != null && dayCourses.isNotEmpty()) {
+            TodayHero(plan, now)
         }
 
         // 空态 ↔ 列表之间不做硬切：横滑换天时两层内容叠在同一格里淡入淡出。
@@ -481,7 +614,7 @@ private fun TodayHero(
         // GlassSurface 的内容容器是 Box：多行文本必须包一层 Column，
         // 否则「正在上课 / 课程名 / 地点时段 / 还剩几分钟」会全部叠在左上角（倒计时卡文字重叠的根因）。
         Column(
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceMicro),
             modifier = Modifier.fillMaxWidth(),
         ) {
         when {
@@ -655,18 +788,26 @@ private fun CourseTimelineCard(
                     )
                     if (statusLabel != null) {
                         Spacer(modifier = Modifier.width(DesignTokens.spaceS))
+                        // 非进行中两态以前是 surfaceVariant 底 + onSurfaceVariant 字：
+                        // 深色档下那是一对相近的灰，压在玻璃卡上几乎看不见（普查：状态胶囊深色档近隐形）。
+                        // 换成 M3 的成对容器色，两个主题下对比度都由配色本身保证。
                         Box(
                             modifier = Modifier
                                 .background(
-                                    if (status == SlotStatus.ONGOING) accent else MaterialTheme.colorScheme.surfaceVariant,
-                                    shape = RoundedCornerShape(50),
+                                    if (status == SlotStatus.ONGOING) accent
+                                    else MaterialTheme.colorScheme.secondaryContainer,
+                                    shape = RoundedCornerShape(DesignTokens.cornerPill),
                                 )
-                                .padding(horizontal = DesignTokens.spaceS, vertical = 2.dp),
+                                .padding(
+                                    horizontal = DesignTokens.spaceS,
+                                    vertical = DesignTokens.spaceMicro,
+                                ),
                         ) {
                             Text(
                                 text = statusLabel,
                                 style = MaterialTheme.typography.labelMedium,
-                                color = if (status == SlotStatus.ONGOING) contentOn(accent) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = if (status == SlotStatus.ONGOING) contentOn(accent)
+                                else MaterialTheme.colorScheme.onSecondaryContainer,
                             )
                         }
                     }
@@ -679,7 +820,7 @@ private fun CourseTimelineCard(
                     text = locationText ?: "教室未定",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
-                        .copy(alpha = if (locationText != null) 1f else 0.55f),
+                        .copy(alpha = if (locationText != null) 1f else DesignTokens.PLACEHOLDER_INK_ALPHA),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -689,7 +830,10 @@ private fun CourseTimelineCard(
                     Text(
                         text = remark,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        // 备注与地点以前是同档（都是 onSurfaceVariant），"带实验报告"
+                        // 于是被压成了辅助信息。它俩的差别在要不要被读到，
+                        // 所以用浓度分：备注走正文墨色，地点留次级色。
+                        color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )

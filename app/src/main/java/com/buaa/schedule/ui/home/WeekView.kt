@@ -1907,6 +1907,13 @@ private const val COURSE_LIFT_SCALE = 1.06f
 /** 定位脉冲峰值：比「拿起」的 1.06 小，只够看出「就是这张」，不像被点住了 */
 private const val COURSE_PULSE_SCALE = 1.04f
 
+/**
+ * 课程卡内缩：卡在间距刻度 spaceXS(4dp) 与 spaceS(8dp) 之间，两个都不对——
+ * 一节高的矮卡里 8dp 会把第二行字挤出预算，4dp 又让文字贴住描边。
+ * 它算的是"这张卡里还剩多少地方给字"，不是两块内容之间的距离，故不进版面刻度。
+ */
+private val CourseCellContentPadding = 5.dp
+
 @Composable
 private fun CourseCell(
     course: Course,
@@ -2244,7 +2251,7 @@ private fun CourseCell(
             ),
     ) {
         Column(
-            modifier = Modifier.padding(5.dp),
+            modifier = Modifier.padding(CourseCellContentPadding),
             verticalArrangement = Arrangement.Center,
         ) {
             // —— 文本行数预算 ——
@@ -2262,7 +2269,9 @@ private fun CourseCell(
             val metaLineHeight = with(density) {
                 metaStyle.lineHeight.takeIf { it.isSp }?.toDp() ?: 14.dp
             }
-            val available = (cardHeight - 5.dp * 2).coerceAtLeast(0.dp)
+            // 必须与上面那个 Column 的 padding 同源：写死 5.dp 的话，
+            // 调内缩只调了一处，行高预算就会和真实可用高度分叉（文字再次被裁）。
+            val available = (cardHeight - CourseCellContentPadding * 2).coerceAtLeast(0.dp)
             val metaText = courseCardMeta(course)
             // —— 副信息行先占位，课名才用剩下的空间 ——
             // 旧口径反过来：三行预算先给课名，默认行高下单节课卡只有 52dp 可用，
