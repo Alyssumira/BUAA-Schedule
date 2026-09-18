@@ -2,6 +2,8 @@ package com.buaa.schedule.reminder
 
 import android.content.Context
 import android.os.PowerManager
+import android.os.SystemClock
+import android.util.Log
 
 /**
  * 短时 PARTIAL_WAKE_LOCK（SleepDown 同款做法，见 BUAA_ROM_ADAPTATION_2026-09-15）。
@@ -20,8 +22,16 @@ import android.os.PowerManager
  * CPU 睡回去」这个本文件要防的故障请回来，而且一声不响 ——
  * `docs/AUDIT-BATTERY-2026-09-18.md` §2.5 数的问题就是它。上限调大只在病态路径（block 卡死）
  * 上多付几秒，因此默认值取重的那一头，理由见 [withPartialWakeLock] 里 timeoutMs 的注释。
+ *
+ * 每一次持锁都会经 [logHold] 留一行 logcat（tag `WakeLocks`），带上实际耗时与
+ * 「退出时锁还在不在手上」——这类静默降级以前什么痕迹都不留，现在一行就够：
+ * `adb logcat -s WakeLocks` 直接读，不必像 §4.3 那样先起基线再比电量。
+ * 它也是下一轮回答「跑不完时那半套闹钟要不要管」的输入。
  */
 object WakeLocks {
+
+    /** 取证日志的 logcat tag（与唤醒锁名字里那个 tag 不是一回事：那个进 dumpsys，这个进 logcat） */
+    private const val LOG_TAG = "WakeLocks"
 
     inline fun <T> withPartialWakeLock(
         context: Context,
@@ -42,11 +52,49 @@ object WakeLocks {
             ?: return block()
         lock.setReferenceCounted(false)
         runCatching { lock.acquire(timeoutMs) }
+        // 掐表用 elapsedRealtime（开机以来的单调毫秒），不用 currentTimeMillis：后者是墙上时钟，
+        // 用户改系统时间 / 时区跳变（「改时间」正是本锁的触发场景之一）会把耗时算成负数或几十亿，
+        // 这条日志就从证据变成噪声。同一个仓库里 WidgetRefreshReceiver.kt:100 为同一件事站过台。
+        val acquiredAt = SystemClock.elapsedRealtime()
         return try {
             block()
         } finally {
+            // 先读 isHeld、再 release，这个顺序就是取证本身：本函数在 block 返回之前从不 release，
+            // 所以此刻 isHeld == false 只有一个解释 —— 超时到点、锁已被系统收回，这一轮没跑赢超时
+            // （acquire 自己失败也会落这一位，那时「不在手上」同样是真话）。
+            // 这是精确信号，不拿「耗时 ≥ 上限」去比大小：后者在 block 提前返回、系统还没处理完
+            // 超时的那格竞态里会说谎。
+            // 只读一次并存在局部量里：日志判的与下面决定要不要 release 的必须是同一个采样。
+            val stillHeld = lock.isHeld
+            logHold(tag, SystemClock.elapsedRealtime() - acquiredAt, timeoutMs, stillHeld)
             // 超时后系统已自动释放，此时 isHeld=false，不能再 release
-            runCatching { if (lock.isHeld) lock.release() }
+            runCatching { if (stillHeld) lock.release() }
         }
+    }
+
+    /**
+     * 一次持锁的结果写进 logcat：正常一行 `Log.d`，没跑赢超时一行 `Log.w`。
+     *
+     * 刻意**不是 inline**：inline 的函数体逐调用点展开，全仓库六个调用点各烘一份消息常量，
+     * 白付 dex 体积（release 包的字节数是有账的，见 `docs/RELEASE.md`「包体与 ABI」）；
+     * 而这函数只在 block 返回后跑一次，展开没有任何收益。又因为 public inline 函数碰不到
+     * private 成员（Kotlin 的 "Public-API inline function cannot access non-public-API"），
+     * 只能 `@PublishedApi internal` —— 对模块外仍然不可见。
+     *
+     * 消息里的 `tag=` / `elapsed=` / `timeout=` 是给 `adb logcat -s WakeLocks` 之后 grep 用的。
+     */
+    @PublishedApi
+    internal fun logHold(tag: String, elapsedMs: Long, timeoutMs: Long, stillHeld: Boolean) {
+        if (stillHeld) {
+            Log.d(LOG_TAG, "唤醒锁跑完 tag=$tag elapsed=${elapsedMs}ms timeout=${timeoutMs}ms held=true")
+            return
+        }
+        // 要抓的就是这一条：block 还在跑（或刚好跑完）时锁已经不在了，之后那几步查库/排闹钟
+        // 已经没有唤醒保证 —— §2.5 说的「静默降级」以前一条日志都不留，现在留了。
+        Log.w(
+            LOG_TAG,
+            "唤醒锁没跑赢超时 tag=$tag elapsed=${elapsedMs}ms timeout=${timeoutMs}ms held=false：" +
+                "block 期间锁已被系统收回，剩下的步骤不再有保障（要么加大这一处的超时，要么削减工作量）",
+        )
     }
 }
