@@ -75,7 +75,8 @@ fun GlassTopBar(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = title,
-                        style = MaterialTheme.typography.titleSmall,
+                        // 页头主名要压过页内 SectionHeader 的 titleSmall，否则标题与组标题同档（§3）
+                        style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )

@@ -37,6 +37,14 @@ object DesignTokens {
     /** 胶囊控件圆角（50%） */
     val cornerPill = 50
 
+    /**
+     * 行距级微间距：多行小字之间的缝、胶囊里的上下内衬。
+     *
+     * 它不在下面那套版面刻度里，因为管的不是"两块内容隔多远"，而是
+     * "同一块内容内部两行字会不会粘连"——再小下去降部就要互相咬住了。
+     */
+    val spaceMicro = 2.dp
+
     /** 间距刻度 */
     val spaceXS = 4.dp
     val spaceS = 8.dp
@@ -141,6 +149,15 @@ object DesignTokens {
 
     /** WCAG AA 正文对比度阈值 */
     const val WCAG_AA_RATIO = 4.5f
+
+    /**
+     * 占位值的淡墨浓度：「教室未定」「未设置」这类**没有真值**的文案走这一档，
+     * 真值用全浓度正文。两者同屏时必须一眼分得开，否则占位串会被读成真实数据。
+     *
+     * 收成一个常量的原因：同一件事在日视图卡片和详情弹层里各写了一遍 0.55f，
+     * 下一处占位会照着哪一个都说不清。
+     */
+    const val PLACEHOLDER_INK_ALPHA = 0.55f
 
     /** 玻璃底板 alpha 的绝对下限：再低就只剩高光/阴影在空气里，看不见"有一块板" */
     const val GLASS_HARD_MIN_ALPHA = 0.08f
