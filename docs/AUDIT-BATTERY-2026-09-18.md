@@ -439,29 +439,59 @@ adb shell dumpsys battery reset
 
 ### 4.1 闹钟面盘点：数的是"排队中的闹钟条数"，不是累计
 
-`dumpsys alarm` 分两段：上半 `Current alarm queue:` 是**此刻还挂着**的闹钟，
-下半按 `u0aNNN:` 分段是**投递历史**。P1 改动只应影响上半的条数与下半的增速。
+`dumpsys alarm` 分两段：排队中的闹钟 + 按 `u0aNNN:` 分段的投递/唤醒历史。
+P1 改动只应影响前者的条数与后者的增速。
+
+⚠️ **2026-09-19 在 API 36 模拟器上实测：本节原先的 A/B/C/D 四条全都读不出正确数**。
+根因是这段文档写的时候按旧版 `dumpsys` 的段名锚定，而 API 36 的 `dumpsys alarm`
+**顶层只有一个 `Current Alarm Manager state:`**，`Current alarm queue:` 与 `Total num`
+两个标记串都已不存在 → `awk '/Current alarm queue:/,/Total num/'` 的区间**一头都不匹配**，
+A 与 B 恒定为 0 / 空。**恒定为 0 比报错更坏**：改后拿它做"没改坏"守卫会无条件通过。
+D 那种不带区间的 `grep -c "ClassProgressReceiver"` 则是另一个方向的错——统计段里
+`u0a216:com.buaa.schedule … 1 wakeups:` 下面还有一批含同名类名的历史行，实测
+**3 条真实排队被数成 13 条**。下面这四条是逐条在 emulator-5554（API 36）上跑通过的口径。
 
 ```bash
-# A. 排队条数 —— 期望值 = §0.1 那张表的 ≤6。数的是"含本包类名的行"的条数
-adb shell dumpsys alarm | awk '/Current alarm queue:/,/Total num/' \
-  | grep -c "com.buaa.schedule"
+UID_TAG=u0a216   # §0.1 取的 UID；换设备/重装后要重取
+
+# A. 排队条数 —— 期望值 = §0.1 那张表的 ≤6。
+#    框架自己把答案写在一行里，不用解析闹钟块（实测本机 = 3，与手写块数一致）
+adb shell dumpsys alarm | grep -oE "$UID_TAG:[0-9]+" | tail -1     # → "u0a216:3"
+
+# A'. 第二条独立口径（用来交叉验证 A，两者必须相等）：
+#     排队块里的 tag 行是"缩进 + tag=…开头"，历史块里的同名行前面还挂着 "type=…"，
+#     所以行首锚定就够了（实测同为 3；朴素 grep -c 会得 13，见上）
+adb shell dumpsys alarm | grep -cE "^ +tag=\*walarm\*:com\.buaa\.schedule"
 
 # B. 逐条看档位与下次触发时刻（RTC_WAKEUP / setAlarmClock 会显式标注；
-#    重点核对有没有 setInexactRepeating 或多条同 receiver 的排队条目）
-adb shell dumpsys alarm | awk '/Current alarm queue:/,/Total num/' \
-  | grep -B1 -A6 "com.buaa.schedule"
+#    重点核对有没有 setInexactRepeating 或多条同 receiver 的排队条目）。
+#    注意 tag 行在 `RTC_WAKEUP #N: Alarm{…}` 的**下一行**，所以 -A1 挂在类名上
+adb shell dumpsys alarm | grep -E "^ +tag=\*walarm\*:com\.buaa\.schedule" -B1 -A1
 
-# C. 历史投递数：两次采样做差 = 这段时间内系统真正为本包唤醒了几次
-#    （这是 §4.3 之外的第二个独立计数，两者应当同量级，差得远说明有唤醒没走到投递）
-adb shell dumpsys alarm | grep -A12 "u0a<UID>:" | grep -E "total=|delivered="
+# C. 本包被唤醒了几次：先按 `u0aNNN:com.buaa.schedule` 锚定本包那一块，再往下读 3 行。
+#    首行的 `N wakeups` 是本包总唤醒数，桶行的 `K wakes L alarms` 是"这段时间投递了几次"。
+#    两次采样做差 = 这段时间内系统真正为本包唤醒了几次。
+#    ⚠️ 不要写成全局 `grep "wakes .*alarms"`：那一行每个包都有，实测会把无关包读进来。
+#    ⚠️ 原口径 `grep -A12 "u0a<UID>:" | grep -E "total=|delivered="` 在 API 36 上
+#    抓到的是紧接着的 `Alarm manager stats:` 里的 APPOPS 行
+#    （HAS_SCHEDULE_EXACT_ALARM: count=…, total=…），与本包投递数毫无关系。
+#    ⚠️ 这块是不是"自启动以来累计"未取证（§4.3 的口径才是累计），所以差值只在
+#    同一个待机窗口内可比；跨 `dumpsys batterystats --reset` 不要拿它当基线。
+adb shell dumpsys alarm | grep -A3 -E "^ +$UID_TAG:com\.buaa\.schedule"
 
-# D. 看门狗闹钟是否如约被取消（上课→下课后应重新回到 ≤6 条）
-adb shell dumpsys alarm | grep -c "ClassProgressReceiver"
+# D. 看门狗闹钟有没有如约被取消（上课→下课后应回到 §0.1 的稳态条数）。
+#    直接用 A 的条数差，不要按类名 grep：上/下课铃与看门狗共用同一个 receiver 类名，
+#    历史段里也全是它，条数才是答案（看门狗的时刻 = 下课 + 30min，见 ClassProgressDnd）
+adb shell dumpsys alarm | grep -oE "$UID_TAG:[0-9]+" | tail -1
 ```
 
 **改前/改后各跑一遍 A**：条数应该都不变（P1-① 不减唤醒次数）。若改后 A 变多，说明新的
 触发条件把某类闹钟漏排了，直接回退。**A 是这条链路的"没改坏"守卫，不是收益指标。**
+
+本机这个种子前态（课前提醒全关）只有 3 条，比 §0.1 的 ≤6 低一半——**≤6 那道守卫要在
+"开着课前提醒"的前态上测**，否则关掉提醒这一半链路根本没被走过。
+另外 §2.9 那条抖动的直接读数也在这里：课中每重排一次，A 会先掉到 1（`cancelAll` 撤双铃）
+再回到 3（过期上课铃补排），**掉下去的那一眼就是勿扰记录被抹掉的时刻**。
 
 ### 4.2 JobScheduler / WorkManager：本项目只有 1 条周期任务
 
@@ -470,13 +500,15 @@ adb shell dumpsys alarm | grep -c "ClassProgressReceiver"
 # 数的是"出现本包名的 job 描述行"，稳态期望 1 条 pending（widget_fallback_refresh）
 adb shell dumpsys jobscheduler | grep -i -B2 -A8 "com.buaa.schedule" | head -80
 
-# 只数条目，用 WORK_NAME 的落盘形式（WorkManager 会把 unique name 前缀成 SystemJob#<id>，
-# 所以按包名计数而不是按任务名）
-adb shell dumpsys jobscheduler | grep -c "com.buaa.schedule"
+# 只数条目。⚠️ 不要用 `grep -c "com.buaa.schedule"`：一条 job 的块里有十几行都带包名，
+# 实测本包只有 1 条 job 时会读出 18。job 条目行是固定形状的 `  JOB #u0aNNN/K: …`，锚它
+adb shell dumpsys jobscheduler | grep -cE "^ +JOB #$UID_TAG"        # → 1
 
 # 确认周期任务的 next-fire 没有被反复重置（KEEP 策略的直接证据）：
-# 连测两次间隔 >5 分钟，last-failed/next 时间戳应单调前移而不是回跳
-adb shell dumpsys jobscheduler | grep -A14 "com.buaa.schedule" | grep -E "interval|deadline|latency"
+# 连测两次间隔 >5 分钟，剩余延迟应单调变小而不是回跳成满值。
+# ⚠️ API 36 的 job 块里没有 `interval=` / `deadline=` 这两个字段（原口径 grep 不到东西），
+# 实际读得到的是 `Minimum latency: +5h18m…` 与 `Unsatisfied constraints: TIMING_DELAY`
+adb shell dumpsys jobscheduler | grep -A14 -E "^ +JOB #$UID_TAG" | grep -iE "Minimum latency|constraints"
 ```
 
 **这一项是 P1-① 的验收点之一**：`ensure()` 每 60 秒被组件广播最多调一次（`WidgetCommon.kt:53`），
@@ -498,16 +530,37 @@ sleep 1800
 adb shell dumpsys deviceidle unforce
 
 # --- 唤醒归因：本项目所有 WakeLock 都带 "buaa:schedule:<tag>" 标签 ---
-# 数的是"每种持锁名各醒了几次"。tag 直接对应到代码位置：
+# tag 直接对应到代码位置：
 #   reminder_show_and_reschedule -> ReminderReceiver.kt:41
-#   class_progress / class_reschedule -> ClassProgressReceiver.kt:26 / :88
+#   class_progress / class_reschedule -> ClassProgressReceiver.kt:36 / :106
 #   tomorrow_preview -> TomorrowPreviewReceiver.kt:41
 #   widget_refresh -> WidgetRefreshReceiver.kt:39
 #   boot_rebuild -> BootReceiver.kt:36
-# 这一条是 P1-① 与 P2(§2.5) 的主要验收数：改后同一 tag 的"次数"应持平，
-# 而"每次持锁时长"下降 —— 持锁时长才是真正耗电的那个乘数。
-adb shell dumpsys batterystats | grep -A6 "buaa:schedule"
+
+# A) 持锁**次数**：数 T8b 那行取证 log（每次 withPartialWakeLock 跑完恰好一行）。
+#    这才是"这段重活被跑了几遍"的数，也是 P1-① 与 §2.5 的验收数。
+adb shell logcat -d -s WakeLocks | grep -oE "tag=[a-z_]+" | sort | uniq -c
+
+# B) 每次持锁的**时长**：同一行里自带 elapsed 与超时上限，不用另一个工具
+adb shell logcat -d -s WakeLocks | grep -oE "tag=[a-z_]+ elapsed=[0-9]+ms timeout=[0-9]+ms held=[a-z]+"
 ```
+
+⚠️ **不要用 `dumpsys batterystats` 那一行来数次数**（本节原先就是这么写的）。它在 API 36
+模拟器上实测的是"**被归因到这把锁的唤醒次数**"，跟"这把锁被 acquire 了几次"是两个量：
+同一段待机里 `tag=class_progress` 的取证 log 有 **6 行**，batterystats 只记
+`class_progress: 23ms (2 times)`；而 `boot_rebuild` 真跑了 **2 次**（其中一次 477ms），
+batterystats 里它那一行连时间和次数都是空的（`Wake lock buaa:schedule:boot_rebuild realtime`）。
+进程本来就醒着时拿的锁不会 blamed 到任何一次唤醒——**所以它当"没改坏"守卫会永远偏小，
+改动前后的差值也就无从判断**。它唯一还有用的读数是"被 blamed 的那部分时长"，即真正耗电的量：
+
+```bash
+# C) 被归因到本包各把锁的唤醒时长（做**时长**对比用，别拿它的次数做判据）
+adb shell dumpsys batterystats | grep -E "buaa:schedule:[a-z_]+: [0-9]+ms \([0-9]+ times\)"
+```
+
+**验收读法**：改后同一 tag 的 **A 次数**应持平或下降，**B 的 elapsed** 应下降
+——持锁时长才是真正耗电的那个乘数。两者一起看：只降次数不降时长 = 少跑了一半但每次更重，
+那是把活挪了地方不是省了。
 
 **按字段名而不是列号取 checkin 列**（AOSP 会调整 `--checkin` 的列序，但会把字段名本身写进每行）：
 
