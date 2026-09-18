@@ -43,7 +43,8 @@ Manifest 动态注册零（`registerReceiver` 全仓库 0 命中），`SCREEN_ON
 | 级别 | 位置（文件:行号） | 症状 | 省电收益估计 | 改动风险 |
 | --- | --- | --- | --- | --- |
 | **P1** | `BUAAApplication.kt:36`、`:58-74`；放大点 `BackgroundSync.kt:112-126`、`:139-161`、`WidgetFallbackWorker.kt:71-73` | 每次冷启动进程无条件重跑整套后台链；而**每一个闹钟都把进程冷启动**（6 条闹钟 × 每日多次），于是"数据没变的唤醒"付两遍全量重排 + 全学期快照重写 + ≤18 次 Launcher binder 往返 | 单次冷唤醒的后台工作量：重复的那一半（约 7+2N 次查询、N 份快照写盘、≤12 趟 Launcher binder）**是可证明的净多余**；折算成功耗降幅 **推断，未取证**（需 §4.3/§4.4 前后对测）。待机总唤醒次数不变，降的是每次唤醒的 CPU 占空比与闪存活动。**2026-09-19 进度**：组件探测那一份已由 ai/T10 收成一次探测（≤12 趟已省掉）；"整套重排重跑"仍待办 | 中：幂等补注册（ROM 吞广播的自愈路径）与"升级后重建"依赖这条链，收窄触发条件必须保留事件式兜底，不能简单删 |
-| **P1** | `ClassProgressScheduler.kt:274-285`（破坏性分支）＋ `ReminderNotifications.kt:181-198`（判据是进程内 `@Volatile`）＋ `BUAAApplication.kt:23`（`Dispatchers.IO`，真并行） | onCreate 那条链与广播自己那条链并发跑同一次 `rescheduleWindows`；前者的"这是下课铃被吞的遗留"判据读的是进程内状态，**可能在课前倒计时已下发之后**才跑到，于是把刚上岛的倒计时停掉 | 直接收益小（省一次通知重下），**但这是 2026-09-17 事故的同类残留路径**，修掉 P1-①（重复链）后本条随之消失 | 高：动的是曾经拆掉过课前倒计时的同一段代码；建议**只通过消除重复链来间接修**，不要给 `rescheduleWindows` 加新分支 |
+| **P1** | `ClassProgressScheduler.kt:274-285`（破坏性分支）＋ `ReminderNotifications.kt:181-198`（判据是进程内 `@Volatile`）＋ `BUAAApplication.kt:23`（`Dispatchers.IO`，真并行） | onCreate 那条链与广播自己那条链并发跑同一次 `rescheduleWindows`；前者的"这是下课铃被吞的遗留"判据读的是进程内状态，**可能在课前倒计时已下发之后**才跑到，于是把刚上岛的倒计时停掉 | 直接收益小（省一次通知重下），**但这是 2026-09-17 事故的同类残留路径**，修掉 P1-①（重复链）后本条随之消失 | 高：动的是曾经拆掉过课前倒计时的同一段代码；建议**只通过消除重复链来间接修**，不要给 `rescheduleWindows` 加新分支。**2026-09-19 补**：另有一条**不依赖并发**的确定性同型抖动（同一处 `cancelAll` 被更早的一步抢先调用），见下一行与 §2.9 |
+| **P1** | `ReminderScheduler.kt:83-89`（`plan == null` 分支无条件 `ClassProgressScheduler.cancelAll`）＋ `ClassProgressScheduler.kt:321-325`（`setAlarmClock` 排已过时刻的上课铃 → 立刻投递） | 课前提醒全关的用户，只要此刻正在上课，**每一次重排**（下课铃续排 / 冷启动 / 开机 / 改时间）都会：勿扰被恢复 → 记录与看门狗被抹 → 5 秒后被一次"多出来的上课铃"重新 `enter()`。模拟器实测三次同型（§2.9 日志） | 每轮多一整趟上课铃副作用链（notify + startForegroundService + setInterruptionFilter + prefs 落盘）；折算电流未取证。**真实危害不是功耗**：那次过期闹钟被 ROM 吞掉时，这一节课的勿扰永久进不去且无自愈入口（记录已清，`selfCheck` 不进门） | 低-中：只删"抢先的那一份"清理，判据仍归 `rescheduleWindows:280-291` 唯一实现；两个课堂开关都关时必须保留 `cancelAll`（那条路 `rescheduleNextWindow:308` 会早退，没人接手） |
 | **P2** | `BackgroundSync.kt:67` 与 `:70-78` | 同一轮重排里 `planNextReminder` 算了**两遍**：`rescheduleAll` 内部已算（`ReminderScheduler.kt:64`），外层为了拿 `willRemind` 这个 Boolean 又把 O(课程数×剩余周次×节次段) 的全量搜索重跑一次 | 每次唤醒省一次全量窗口搜索（学期中段约上千次窗口构造，见 §2.3 的量级推导） | 低：让 `rescheduleAll` 复用已算出的 plan 即可，公开签名可保持 |
 | **P2** | `WidgetDataSynchronizer.kt:36-63`（尤其 `:50`） | 快照 sync 是 N+1：`getTimeSlots()` 是循环不变量却写在 `keys.forEach` 里（每 key 查一次）；且重写**全部学期**的快照（`"current"` + 每个 termCode），而每个组件只读自己那一个 key | N = 学期数+1 → 一轮 sync 从 `3+2N` 次查询降到 `4+N`（把循环不变量提出去）；若进一步只写被组件引用的 key，JSON 编码与 upsert 从 N 份降到 1–2 份。**待机时被 §0-P1 那条链每次都触发** | 低-中：查询提出循环是纯搬家；只写被引用的 key 要先确认 `WidgetBindingStore` 里没有"组件引用了但本轮没写"的 key |
 | **P2** | `WakeLocks.kt:22`（默认 5s）× `ReminderReceiver.kt:41`、`TomorrowPreviewReceiver.kt:41`、`ClassProgressReceiver.kt:88` | 三处把"重活"包在**默认 5 秒**锁里，而 `BootReceiver.kt:36-41` 与 `WidgetRefreshReceiver.kt:39-45` 明确注释"默认 5 秒会被提前收回"并传 10s。超时后系统静默收回锁 → 剩下的 DB 查询/重排跑在随时睡回去的 CPU 上，**等于回到加锁前那个故障**，且不留任何日志 | 表面是收益（少持锁），实为**故障面**：Doze 深睡下锁被收回会重演"这一节课没有提醒"。真实待机电流影响很小 | 低：只调超时参数；但要连带回答"跑不完时半套闹钟"的语义（见 §2.5） |
@@ -331,6 +332,59 @@ fun cancelWidgetMidnight(context: Context) {
 跑在 6 个 Provider 的 `onDisabled` 上——**"拖掉最后一个桌面组件"这个动作**每次都会造一个
 永不使用的 PendingIntent 记录。收益可忽略，价值全在口径一致性：留着两处反例，
 下一轮就有人会照着它再写第三处。
+
+### 2.9 P1（2026-09-19 模拟器补录）课前提醒全关的用户，每重排一次就被静音抖动一次
+
+这条不在第 1 轮的静态扫描视野里：它是 §2.5 那张"每次持锁留一行 log"的取证表跑出来的
+—— 没有 T8b 那行 `elapsed/held`，三次多余的 `class_progress` 混在正常铃声里看不出来。
+行号按 `ed70a1d`。
+
+**实测**（emulator-5554，`dnd_during_class=true`，此刻真有一节在上的课，下课铃 20:35:00）：
+
+```
+20:06:05.514  tag=class_reschedule  elapsed=70ms   held=true   ← 一次下课铃广播在续排
+20:06:05.517  tag=class_progress    elapsed=104ms  held=true
+20:06:10.637  tag=class_progress    elapsed=109ms  held=true   ← +5.1s：一节已经在上的课又响了一次"上课铃"
+              ZenModeController:  20:06:05.450 →0 ， 20:06:10.610 →2
+20:06:29.376  tag=boot_rebuild      elapsed=477ms  held=true   ← 冷启动链
+20:06:34.349  tag=class_progress    elapsed=53ms   held=true   ← 又是 +5.0s，同一件事
+              ZenModeController:  20:06:28.942 →0
+```
+
+`shared_prefs` 里 `dnd_restore_deadline=1789765500000`（=20:35 下课 +30min 宽限）与
+`dnd_saved_interruption_filter=1` 由 `enter()` 写下，随后被 `cancelAll→restore` 抹掉。
+
+**链路**：这类用户的课前提醒一条都没有，于是 `ReminderScheduler.rescheduleAll`
+走 `plan == null` 分支（`ReminderScheduler.kt:83-89`），它**无条件**补一句
+`ClassProgressScheduler.cancelAll(context)` 再 `return null`；`cancelAll`
+（`ClassProgressScheduler.kt:430-440`）做四件破坏性动作——撤双铃、停实况前台服务、
+撤常驻通知、`ClassProgressDnd.restore()` + `cancelWatchdog()`。
+`return null` 又触发 `BackgroundSync.rescheduleRemindersAndBells`（`BackgroundSync.kt:83-89`）
+的兜底续排 → `rescheduleWindows` → `schedule()`（`:321-325`）用 `setAlarmClock` 排**上课铃**，
+而 `planNextClassWindow` 的口径明写"**包含正在上课的那一次**"（`:171-173`），
+`startMillis` 已在过去 → AlarmManager 立刻投递 → 那一发"多出来的上课铃"再跑整套
+`enter()` + `startLiveWindow` + `scheduleEnd` + `requestLiveRefresh` + `cancelCourseReminder`。
+
+**所以省电之外更要紧的是**：中间那 5 秒里勿扰是**开着记录已被抹掉**的状态。第 4 步把
+`dnd_saved_interruption_filter` 和看门狗一起清了，`selfCheck` 的进门判据恰好是
+"有残留记录"（`ClassProgressDnd.kt:128`）——**一旦第 5 步那次过期闹钟被 ROM 吞掉
+（这正是澎湃/MIUI 的看家本领），这一节课的自动勿扰就永久进不去，且没有任何自愈入口**。
+真机上这一条的期望表现是"上课了没静音"，不是"卡死静音"，所以用户很难报上来。
+
+**修法方向**（本轮由 ai/T11 落，见 §1 表末行）：第 4 步那次 `cancelAll` 是**第二份**清理实现，
+而且比唯一那份更早、更没判据——`rescheduleWindows` 自己在 `:280-291` 已经有一条带判据的
+同类清理（"课还没开始**且**不在数这节课的课前倒计时"才收）。因此只删多余的那一半：
+`plan == null` 分支里只要「课程进行中 / 上课自动勿扰」任一开关还开着就不要抢先 `cancelAll`，
+交给紧随其后的续排链接手。两个开关都关时必须照旧 `cancelAll`——
+那条路上 `rescheduleNextWindow` 会在 `:308` 早退，没人接手。
+`semesterStart == null || courses.isEmpty()` 分支（`:70-76`）**不动**，那是真的没课表，
+"上课中途清空课表留下永久勿扰"的 R5 F-11 语义靠它。
+
+**为什么不给 `schedule()` 加"时刻已过就不排"的守卫**：那条过期投递恰好是
+`CourseFluidService.recoverMissedClassStart`（`CourseFluidService.kt:95-115`）故意依赖的机制——
+KDoc 原文"重排后到期的上课铃会立刻触发，把课中实况、勿扰进入与下课铃整套补上"。
+在排程端掐掉它等于把**中途重启后的勿扰自愈**一起掐了。要修的是"先无条件拆、再靠过期闹钟补回来"
+这个来回，不是补回来的那一步。
 
 ---
 
