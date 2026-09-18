@@ -10,7 +10,6 @@ import android.util.Log
 import androidx.work.WorkManager
 import com.buaa.schedule.data.repository.scheduleRepository
 import com.buaa.schedule.domain.model.ReminderMode
-import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.reminder.ClassProgressScheduler
 import com.buaa.schedule.reminder.ReminderScheduler
 import com.buaa.schedule.reminder.TomorrowPreviewReceiver
@@ -18,7 +17,6 @@ import com.buaa.schedule.reminder.TomorrowPreviewScheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
-import java.time.LocalDateTime
 import java.time.ZoneId
 
 /**
@@ -64,19 +62,9 @@ object BackgroundSync {
             val courses = repository.getDisplayCourses(semester)
             val timeSlots = repository.getTimeSlots()
             val reminders = repository.getReminders().associateBy { it.courseId }
-            ReminderScheduler.rescheduleAll(context, courses, semester, timeSlots, reminders)
-            // 与上面 rescheduleAll 用的是同一批已读出的数据，不再查库
-            val semesterStart = semester?.startLocalDate
-            val willRemind = semesterStart != null && courses.isNotEmpty() &&
-                ReminderScheduler.planNextReminder(
-                    courses = courses,
-                    semesterStart = semesterStart,
-                    timeSlots = timeSlots,
-                    reminders = reminders,
-                    now = LocalDateTime.now(),
-                    nowMillis = System.currentTimeMillis(),
-                ) != null
-            willRemind
+            // rescheduleAll 的返回值就是本轮那一次全量搜索的结论：
+            // 再搜一遍既白跑上千次窗口构造，又要多读一次时钟（同源约束见 ReminderScheduler）
+            ReminderScheduler.rescheduleAll(context, courses, semester, timeSlots, reminders) != null
         }.onFailure { Log.w(TAG, "重排提醒失败", it) }.getOrDefault(true)
     }
 

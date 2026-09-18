@@ -47,40 +47,45 @@ object ReminderScheduler {
         val week: Int,
     )
 
+    /**
+     * 重排课前提醒与上/下课铃。
+     *
+     * @return 本轮排上的那一条课前提醒；null 表示本轮没有待触发的课前提醒
+     *   （没配学期 / 课表为空 / 学期已结束 / 提醒全关）。
+     *
+     * 把结论带出来是为了让调用方复用：[com.buaa.schedule.widget.BackgroundSync.rescheduleReminders]
+     * 要的"还有没有待触发的提醒"与这里"排不排闹钟"是同一个问题的两面，
+     * 它自己再搜一遍等于把 O(课程数 × 剩余周次 × 节次段) 的窗口展开在一次唤醒里做两遍
+     * （学期中段上千次窗口构造），而且外层那一遍必须再读一次时钟——
+     * 正好破掉下面那段"一次重排只读一次时钟"的同源约束。
+     */
     fun rescheduleAll(
         context: Context,
         courses: List<Course>,
         semester: Semester?,
         timeSlots: List<TimeSlot>,
         reminders: Map<Long, ReminderSetting> = emptyMap(),
-    ) {
+    ): ReminderPlan? {
         val semesterStart = semester?.startLocalDate
         if (semesterStart == null || courses.isEmpty()) {
             cancelAll(context)
             // 只撤课前提醒还不够：上下课铃、常驻通知与勿扰都得收干净，
             // 否则"上课中途清空课表"会留下永久勿扰 + 一条滑不掉的常驻通知（与下方 plan==null 同口径）
             ClassProgressScheduler.cancelAll(context)
-            return
+            return null
         }
         // 一次重排只读一次时钟：planNextReminder 拿 `now` 判"这一段还没开始"、
         // 拿 `nowMillis` 判"触发时刻过了没有"，两次各读各的就会在跨秒那一刻自相矛盾
         // （表现为提前量刚好用尽的那节课被跳过，链条跳到下周）。
         val now = LocalDateTime.now()
-        val plan = planNextReminder(
-            courses = courses,
-            semesterStart = semesterStart,
-            timeSlots = timeSlots,
-            reminders = reminders,
-            now = now,
-            nowMillis = now.toEpochMillis(),
-        )
+        val plan = planOnce(courses, semesterStart, timeSlots, reminders, now)
         cancelAll(context)
         if (plan == null) {
             // 没有下一条提醒（课表被清空 / 学期已结束 / 全部提醒被关）：
             // 必须把上/下课铃、常驻通知、勿扰状态一并收干净，
             // 否则上课期间清空课表会留下"永不消失的常驻通知 + 永久勿扰"。
             ClassProgressScheduler.cancelAll(context)
-            return
+            return null
         }
         // 上/下课铃与常驻通知的撤销/重排统一交给 scheduleClassProgress：
         // 它会先撤掉旧的两个闹钟，再按最新的「尚未结束的最早一次课」重排，
@@ -125,7 +130,33 @@ object ReminderScheduler {
             // 别留着一条不会再更新的通知或一个永不恢复的勿扰
             ClassProgressScheduler.cancelAll(context)
         }
+        return plan
     }
+
+    /**
+     * 一轮重排里对全量搜索的**唯一一次**调用。
+     *
+     * 入参只给一个时钟读数 [now]，`nowMillis` 由它换算 —— 不给"两个判据各读各的钟"
+     * 留位置（同 [rescheduleAll] 里那段跨秒自相矛盾的注释）。
+     *
+     * [search] 是留给单测的注入缝：生产走 [planNextReminder]，单测换成计数版，
+     * 就能钉住"一次重排只搜一轮、结论与内部 plan 同源"。
+     */
+    internal fun planOnce(
+        courses: List<Course>,
+        semesterStart: LocalDate,
+        timeSlots: List<TimeSlot>,
+        reminders: Map<Long, ReminderSetting>,
+        now: LocalDateTime,
+        search: (
+            List<Course>,
+            LocalDate,
+            List<TimeSlot>,
+            Map<Long, ReminderSetting>,
+            LocalDateTime,
+            Long,
+        ) -> ReminderPlan? = ::planNextReminder,
+    ): ReminderPlan? = search(courses, semesterStart, timeSlots, reminders, now, now.toEpochMillis())
 
     /**
      * 纯函数：挑选下一个应触发的提醒。
