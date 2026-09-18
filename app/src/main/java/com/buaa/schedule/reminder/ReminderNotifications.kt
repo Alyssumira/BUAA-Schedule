@@ -17,6 +17,7 @@ import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.model.weekdayLabel
+import com.buaa.schedule.domain.schedule.minutesCeil
 import java.time.LocalDate
 
 /**
@@ -506,7 +507,7 @@ enum class LivePhase { BEFORE_CLASS, IN_CLASS }
  * 两处必须一致，否则岛上的数字会晚一分钟才跳。
  */
 internal fun minutesLeft(endMillis: Long, nowMillis: Long): Long =
-    ((endMillis - nowMillis + 59_999L) / 60_000L).coerceAtLeast(0L)
+    minutesCeil(endMillis - nowMillis)
 
 /** 卡片第一行：节次 · 时间区间 · 地点。缺项整段跳过，绝不留悬空的 " · " */
 internal fun liveMetaLine(sectionText: String, timeRange: String?, location: String?): String =

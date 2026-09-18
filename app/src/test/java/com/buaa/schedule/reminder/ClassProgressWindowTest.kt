@@ -3,6 +3,7 @@ package com.buaa.schedule.reminder
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.TimeSlot
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -123,5 +124,47 @@ class ClassProgressWindowTest {
 
         // 周一那节更早，应被选中
         assertTrue(window!!.courseName == "高等数学")
+    }
+
+    @Test
+    fun unconfiguredTimeSlotsFallBackToDefaultProfile() {
+        // 节次表为空（首次登录、导入前）：必须退到内置默认作息。
+        // 排不出窗口的后果不是"少一条通知"，而是整条课中链路静默 ——
+        // 上课铃、下课铃、常驻实况、自动勿扰全都不再被排出来。
+        val now = LocalDateTime.of(2026, 9, 7, 7, 30)
+
+        val window = ClassProgressScheduler.planNextClassWindow(
+            courses = listOf(course()),
+            semesterStart = semesterStart,
+            timeSlots = emptyList(),
+            now = now,
+        )
+
+        assertNotNull(window)
+        assertEquals(millisOf(LocalDateTime.of(2026, 9, 7, 8, 0)), window!!.startMillis)
+        assertEquals(millisOf(LocalDateTime.of(2026, 9, 7, 9, 35)), window.endMillis)
+    }
+
+    @Test
+    fun lateEndBellReschedulesTheFollowingClass() {
+        // 下课铃晚投 3 分钟才醒：刚结束那节必须已经过去，
+        // 否则重排又把同一节排一遍，用户在同一节课上看到第二条实况
+        val afternoon = listOf(
+            TimeSlot(number = 3, startTime = "10:00", endTime = "10:45"),
+            TimeSlot(number = 4, startTime = "10:50", endTime = "11:35"),
+        )
+        val next = course().copy(id = 2L, name = "大学物理", periods = listOf(3, 4))
+        val now = LocalDateTime.of(2026, 9, 7, 9, 38)
+
+        val window = ClassProgressScheduler.planNextClassWindow(
+            courses = listOf(course(), next),
+            semesterStart = semesterStart,
+            timeSlots = slots + afternoon,
+            now = now,
+        )
+
+        assertEquals("大学物理", window!!.courseName)
+        assertEquals(millisOf(LocalDateTime.of(2026, 9, 7, 10, 0)), window.startMillis)
+        assertFalse("迟到的这次醒来不能再认为 08:00 那节还在进行", window.ongoingAt(millisOf(now)))
     }
 }

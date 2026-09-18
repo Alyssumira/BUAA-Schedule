@@ -19,6 +19,7 @@ import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.model.toPeriodSegments
 import com.buaa.schedule.domain.model.toStartEndTimes
 import com.buaa.schedule.domain.schedule.CourseConstraints
+import com.buaa.schedule.domain.schedule.toEpochMillis
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -61,13 +62,17 @@ object ReminderScheduler {
             ClassProgressScheduler.cancelAll(context)
             return
         }
+        // 一次重排只读一次时钟：planNextReminder 拿 `now` 判"这一段还没开始"、
+        // 拿 `nowMillis` 判"触发时刻过了没有"，两次各读各的就会在跨秒那一刻自相矛盾
+        // （表现为提前量刚好用尽的那节课被跳过，链条跳到下周）。
+        val now = LocalDateTime.now()
         val plan = planNextReminder(
             courses = courses,
             semesterStart = semesterStart,
             timeSlots = timeSlots,
             reminders = reminders,
-            now = LocalDateTime.now(),
-            nowMillis = System.currentTimeMillis(),
+            now = now,
+            nowMillis = now.toEpochMillis(),
         )
         cancelAll(context)
         if (plan == null) {

@@ -66,8 +66,8 @@ object LiveClassResyncer {
         window: ClassProgressScheduler.ClassWindow?,
         nowMillis: Long,
     ): ResyncAction = when {
-        window == null -> ResyncAction.ClearLeftovers
-        window.startMillis > nowMillis || window.endMillis <= nowMillis -> ResyncAction.ClearLeftovers
+        // "不在进行中"只有一句：开课含、下课不含的口径在 ClassWindow.ongoingAt 里
+        window == null || !window.ongoingAt(nowMillis) -> ResyncAction.ClearLeftovers
         else -> ResyncAction.StartLive(window)
     }
 

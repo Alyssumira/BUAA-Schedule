@@ -19,6 +19,8 @@ import com.buaa.schedule.domain.model.periodLabel
 import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.model.toPeriodSegments
 import com.buaa.schedule.domain.model.toStartEndTimes
+import com.buaa.schedule.domain.schedule.periodWindowsOf
+import com.buaa.schedule.domain.schedule.toEpochMillis
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -72,6 +74,25 @@ object ClassProgressScheduler {
 
         /** [putInto] 的独立 Bundle 版：Intent 只接受 `putExtras(Bundle)` */
         fun toExtras(): Bundle = putInto(Bundle())
+
+        // ---- 「这个窗口相对此刻是什么状态」的唯一实现 ----
+        // 四个消费方此前各写一遍比较式（组件 `nextWidgetInClass`、实况服务的自停判据、
+        // LiveClassResyncer.decide、rescheduleWindows 的遗留清理分支），
+        // 边界口径靠"四处恰好都写对"维持。收敛后它们差的只是**谁在什么时候被叫醒**：
+        // 闹钟投递、下课铃广播、进前台校准、组件重绘，算法只此一份。
+        // 口径：开课那一秒起算进行中，下课那一秒起算已结束（end 取开区间）。
+
+        /** 此刻是否正在上这一节（含开课那一秒，不含下课那一秒） */
+        fun ongoingAt(nowMillis: Long = System.currentTimeMillis()): Boolean =
+            startMillis <= nowMillis && nowMillis < endMillis
+
+        /** 此刻这一节是否还没开始（含 end 缺失的 0 值窗口：那不算"正在上"） */
+        fun startsAfter(nowMillis: Long = System.currentTimeMillis()): Boolean =
+            startMillis > nowMillis
+
+        /** 此刻这一节是否已经结束 */
+        fun endedAt(nowMillis: Long = System.currentTimeMillis()): Boolean =
+            nowMillis >= endMillis
 
         companion object {
             /**
@@ -137,8 +158,8 @@ object ClassProgressScheduler {
     private const val REQUEST_END = 30_260_032
     private const val REQUEST_ALARM_SHOW = 30_260_033
 
-    /** 节次表缺下课时间时的兜底时长 */
-    private const val DEFAULT_CLASS_MINUTES = 45L
+    // 缺下课时间时的单节兜底时长只在 PeriodWindows.DEFAULT_CLASS_MINUTES 有一份：
+    // 这里曾自设过一个同值的私有常量，改名/调值时另一处不会跟着动。
 
     /**
      * 从课程列表里找「尚未结束的最早一次」上课窗口（开始→结束）。
@@ -188,6 +209,10 @@ object ClassProgressScheduler {
     /**
      * 该课程「尚未结束的最早一个节次段窗口」（含正在上的这次）；没有则返回 null。
      * 周次升序 × 段升序即时间升序，第一个未结束的窗口就是最近的一次。
+     *
+     * 窗口本身（哪一段、几点到几点、缺时间怎么兜）由
+     * [com.buaa.schedule.domain.schedule.periodWindowsOf] 给 —— 界面 Hero 与桌面组件
+     * 读的是同一份，三处各写一遍时"缺下课时间"就有三种答案。
      */
     private fun nextOrCurrentWindow(
         course: Course,
@@ -196,37 +221,15 @@ object ClassProgressScheduler {
         gapMinutes: (Int, Int) -> Long?,
         now: LocalDateTime,
     ): SegmentWindow? {
-        val segments = course.periods.toPeriodSegments(gapMinutes)
+        val gapSegments = course.periods.toPeriodSegments(gapMinutes)
         for (week in course.weeks.sorted()) {
             val date = semesterStart.plusWeeks((week - 1).toLong())
                 .plusDays((course.dayOfWeek - 1).toLong())
-            for (segment in segments) {
-                // 缺节次时间时**不要**兜底成 08:00：那会凭空造出一个"从 8 点开始"的窗口，
-                // 让某门没有任何时间信息的课在每天早上被判成"正在上课"，
-                // 触发上课铃 + 常驻通知 + 勿扰。缺数据就该跳过这一段。
-                val start = slots[segment.first]?.first ?: continue
-                val begin = date.atTime(start)
-                // 下课时间缺失时也不能丢掉整门课：节次表不完整（只缺最后节下班时间）的
-                // 学期会被整门忽略，表现为"常驻通知突然不再出现"。按默认时长兜底继续算。
-                val end = segmentEndTime(segment, date, slots)
-                    ?: begin.plusMinutes(DEFAULT_CLASS_MINUTES)
-                if (end.isAfter(now)) return SegmentWindow(begin, end, segment, week)
-            }
+            val window = periodWindowsOf(course, date, slots, gapSegments)
+                .firstOrNull { it.end.isAfter(now) } ?: continue
+            return SegmentWindow(window.begin, window.end, window.segment, week)
         }
         return null
-    }
-
-    /** 段末下课时间：最后一节缺时间时退到段内更早的有时间的节，都没有返回 null */
-    private fun segmentEndTime(
-        segment: IntRange,
-        date: LocalDate,
-        slots: Map<Int, Pair<LocalTime, LocalTime>>,
-    ): LocalDateTime? {
-        val end = slots[segment.last]?.second
-            ?: (segment.first until segment.last).toList().asReversed()
-                .firstNotNullOfOrNull { slots[it]?.second }
-            ?: return null
-        return date.atTime(end)
     }
 
     /**
@@ -261,17 +264,20 @@ object ClassProgressScheduler {
     ) {
         // 先撤掉旧的两个闹钟，再按最新的「尚未结束的最早一次课」重排
         cancel(context)
+        // 整次重排只读一次时钟：下面既要拿它选窗口、又要拿它判"课还没开始"，
+        // 两次各读各的就会在跨过节次边界的那一秒选出上一节、却按下下一节的清理分支。
+        val now = LocalDateTime.now()
         val window = planNextClassWindow(
             courses = courses,
             semesterStart = semesterStart,
             timeSlots = timeSlots,
-            now = LocalDateTime.now(),
+            now = now,
         )
         if (window == null) {
             cancelAll(context)
             return
         }
-        if (window.startMillis > System.currentTimeMillis() &&
+        if (window.startsAfter(now.toEpochMillis()) &&
             // 课前倒计时挂的就是这节即将到来的课（同一通知 id）。
             // 此前这里无条件把"课还没开始"当成下课铃被吞的遗留收干净，
             // ReminderReceiver 自己触发的重排会在倒计时下发后一秒内把它拆掉 ——

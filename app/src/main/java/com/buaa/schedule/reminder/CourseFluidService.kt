@@ -14,6 +14,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.buaa.schedule.BUAAApplication
 import com.buaa.schedule.R
+import com.buaa.schedule.domain.schedule.minutesCeil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -51,7 +52,7 @@ class CourseFluidService : Service() {
     private val updater = object : Runnable {
         override fun run() {
             val now = System.currentTimeMillis()
-            if (now < liveWindow.endMillis) {
+            if (!liveWindow.endedAt(now)) {
                 postProgressNotification()
                 handler.postDelayed(this, nextTickMs(now))
             } else {
@@ -348,7 +349,7 @@ internal fun nextCourseFluidTickMs(startMillis: Long, endMillis: Long, now: Long
     val nextStepElapsed = ((progress + 1L) * total + 99L) / 100L
     val progressTick = startMillis + nextStepElapsed - now
 
-    val minutesLeft = (endMillis - now + 59_999L) / 60_000L
+    val minutesLeft = minutesCeil(endMillis - now)
     // epsilon 只能加在真实时刻上：Long.MAX_VALUE 哨兵再 +150 会溢出成极小负数，
     // minOf 选中它、coerceAtLeast 再把间隔钉回 1 秒 —— 一旦外部条件哪天挡不住
     // minutesLeft<=0 这支，就是每秒重绘一次的忙轮询。

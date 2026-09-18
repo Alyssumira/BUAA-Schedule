@@ -2,11 +2,14 @@ package com.buaa.schedule.domain.schedule
 
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
+import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.model.toStartEndTimes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
 
 class TodayPlannerTest {
@@ -132,5 +135,59 @@ class TodayPlannerTest {
             now = LocalTime.of(9, 34, 30),
         )
         assertEquals(1L, whileOngoing.minutesRemaining)
+    }
+
+    @Test
+    fun segmentMissingEndTimeStillYieldsASlot() {
+        // 节次表只配了第 1 节的下课时间：第 1-2 节这段以前在这里被 `?: continue`
+        // 整段丢掉 —— Hero 上"没有这一节"，而组件与闹钟链上它清清楚楚在进行中。
+        // 收敛后同一份兜底：段内更早一节的下课时间（08:45）优先，否则按 45 分钟。
+        val plan = TodayPlanner.plan(
+            courses = listOf(course),
+            semester = semester,
+            timeSlots = listOf(TimeSlot(number = 1, startTime = "08:00", endTime = "08:45")),
+            today = today,
+            now = LocalTime.of(8, 30),
+        )
+        val slot = plan.slots.single()
+        assertEquals(LocalTime.of(8, 0), slot.start)
+        assertEquals(LocalTime.of(8, 45), slot.end)
+        assertEquals(SlotStatus.ONGOING, slot.status)
+        assertEquals(15L, plan.minutesRemaining)
+    }
+
+    @Test
+    fun planRowsAgreeWithTheSingleWindowAlgorithm() {
+        // 界面这一路不该再有第二套判定：Hero 的每一行必须与 PeriodWindows 逐一对得上
+        val timeSlots = listOf(
+            TimeSlot(number = 1, startTime = "08:00", endTime = "08:45"),
+            TimeSlot(number = 2, startTime = "08:50", endTime = "09:35"),
+            TimeSlot(number = 5, startTime = "11:30", endTime = "12:15"),
+        )
+        val now = LocalTime.of(9, 0)
+        val plan = TodayPlanner.plan(
+            courses = listOf(course.copy(periods = listOf(1, 2, 5))),
+            semester = semester,
+            timeSlots = timeSlots,
+            today = today,
+            now = now,
+        )
+        val windows = periodWindowsOf(
+            course.copy(periods = listOf(1, 2, 5)),
+            today,
+            timeSlots.toStartEndTimes(),
+        )
+        assertEquals(windows.size, plan.slots.size)
+        for ((slot, window) in plan.slots.zip(windows)) {
+            assertEquals(window.segment, slot.segment)
+            assertEquals(window.begin.toLocalTime(), slot.start)
+            assertEquals(window.end.toLocalTime(), slot.end)
+            assertEquals(window.statusAt(LocalDateTime.of(today, now)), slot.status)
+        }
+        assertEquals(SlotStatus.ONGOING, plan.slots[0].status)   // 第 1-2 节 08:00–09:35
+        assertEquals(SlotStatus.UPCOMING, plan.slots[1].status)  // 第 5 节 11:30–12:15
+        assertEquals(plan.slots[0], plan.ongoing)
+        assertEquals(plan.slots[1], plan.next)
+        assertEquals(35L, plan.minutesRemaining)
     }
 }

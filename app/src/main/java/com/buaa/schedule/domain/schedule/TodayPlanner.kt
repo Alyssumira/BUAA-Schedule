@@ -4,13 +4,11 @@ import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.TimeSlotProfile
-import com.buaa.schedule.domain.model.periodGapMinutesOf
 import com.buaa.schedule.domain.model.startLocalDate
-import com.buaa.schedule.domain.model.toPeriodSegments
 import com.buaa.schedule.domain.model.toStartEndTimes
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
-import java.time.temporal.ChronoUnit
 
 /** 课次状态：已结束 / 进行中 / 未开始 */
 enum class SlotStatus { PAST, ONGOING, UPCOMING }
@@ -54,21 +52,24 @@ object TodayPlanner {
         val week = WeekCalculator.currentWeekOrNull(semesterStart, semester.totalWeeks, today)
             ?: return EMPTY
         val dayOfWeek = today.dayOfWeek.value
-        val slots = (timeSlots.ifEmpty { TimeSlotProfile.DEFAULT }).toStartEndTimes()
-        val gapMinutes = periodGapMinutesOf(slots)
+        // 窗口构造与状态判定全部交给 PeriodWindows —— 界面、组件、通知三个面读的是同一份算法，
+        // 缺下课时间时按 45 分钟兜底（此前这里 `?: continue` 会把整段静默丢掉，
+        // 于是"Hero 说还有 20 分钟下课"与"列表里这一行没有状态"同屏打架）。
+        val slotTimes = (if (timeSlots.isNotEmpty()) timeSlots else TimeSlotProfile.DEFAULT)
+            .toStartEndTimes()
+        val moment = LocalDateTime.of(today, now)
 
         val todaySlots = mutableListOf<TodayCourseSlot>()
         for (course in courses) {
             if (course.dayOfWeek != dayOfWeek || !course.weeks.contains(week)) continue
-            for (segment in course.periods.toPeriodSegments(gapMinutes)) {
-                val start = slots[segment.first]?.first ?: continue
-                val end = slots[segment.last]?.second ?: continue
-                val status = when {
-                    now.isBefore(start) -> SlotStatus.UPCOMING
-                    now.isBefore(end) -> SlotStatus.ONGOING
-                    else -> SlotStatus.PAST
-                }
-                todaySlots += TodayCourseSlot(course, start, end, segment, status)
+            for (window in periodWindowsOf(course, today, slotTimes)) {
+                todaySlots += TodayCourseSlot(
+                    course = course,
+                    start = window.begin.toLocalTime(),
+                    end = window.end.toLocalTime(),
+                    segment = window.segment,
+                    status = window.statusAt(moment),
+                )
             }
         }
         todaySlots.sortWith(compareBy({ it.start }, { it.course.name }))
@@ -79,16 +80,10 @@ object TodayPlanner {
             slots = todaySlots,
             ongoing = ongoing,
             next = next,
-            // 向上取整，与实况通知的 minutesLeft 同一口径：
+            // 向上取整，与实况通知的分钟口径同一个实现（见 minutesCeil）：
             // 向下截断会在下课（上课）前最后一分钟显示"还有 0 分钟"，两处数字还恒定差一分钟
             minutesToNext = next?.let { minutesUntil(now, it.start) },
             minutesRemaining = ongoing?.let { minutesUntil(now, it.end) },
         )
-    }
-
-    /** [from] 到 [to] 之间还剩多少分钟：不足一分钟按一分钟算，永不为负 */
-    private fun minutesUntil(from: LocalTime, to: LocalTime): Long {
-        val seconds = ChronoUnit.SECONDS.between(from, to)
-        return ((seconds + 59) / 60).coerceAtLeast(0L)
     }
 }
