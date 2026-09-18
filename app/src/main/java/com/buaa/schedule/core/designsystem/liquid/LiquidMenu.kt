@@ -16,7 +16,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -87,6 +90,16 @@ fun liquidMenuHeight(count: Int): Dp =
 private val OpenSizeEasing = CubicBezierEasing(0.20f, 0.48f, 0.24f, 1.0f)
 private val CloseEasing = CubicBezierEasing(0.28f, 0.06f, 0.20f, 1.0f)
 
+/** 选中胶囊的圆角：参数是常量，原来每行每次重组都现 new 一个形状对象 */
+private val MenuSelectionShape = RoundedRectangle(SelectionCorner)
+
+/** 旧的组合期卸载阈值（进度低于它整块不出现），现在搬到绘制期当透明判据用 */
+private const val MountedThreshold = 0.01f
+
+/** 展开进度 → 内容浓度：后半段淡入（SleepDown contentStart/End 分段语义） */
+private fun menuContentAlpha(progress: Float): Float =
+    ((progress - 0.25f) / 0.5f).coerceIn(0f, 1f)
+
 /**
  * 液态玻璃弹出菜单（SleepDown HomeAddMenu 样式）。
  *
@@ -126,6 +139,11 @@ fun LiquidMenu(
     // 初值恒为 0：调用方也可以在菜单已经可见时才把它组合进来（课程卡长按菜单就是这么用的），
     // 那样下面的 animateTo 会补上展开动画，而不是凭空出现一个已经全开的菜单。
     val expansion = remember { Animatable(0f) }
+    // 卸载时机。原来这一判据是在组合期读 expansion.value（!visible && value < 0.01），
+    // 于是开合那 260/240ms 里**每一帧**都把整棵菜单子树重组一遍：
+    // Column、每行的 Box/Icon/Text、每行的 clip 形状全走一次。
+    // 改成由动画收尾写一个布尔值——它一轮动画只变一次；进度本身留给 graphicsLayer 读。
+    var shown by remember { mutableStateOf(visible) }
     // 时长/缓动/是否瞬到，全部交给 motionSpec 与 MotionTokens：
     // FAB 的图标旋转读的是同一组值（④M-02 的"两段动画各走各的"）
     val openSpec = motionSpec<Float>(MotionTokens.DURATION_MENU, MotionTokens.EasingEmphasized)
@@ -134,17 +152,15 @@ fun LiquidMenu(
     // 都把展开动画从头跑一遍
     LaunchedEffect(visible) {
         if (visible) {
+            shown = true
             expansion.animateTo(1f, openSpec)
         } else {
             expansion.animateTo(0f, closeSpec)
+            shown = false
         }
     }
-    if (!visible && expansion.value < 0.01f) return
+    if (!(visible || shown)) return
 
-    // 内容淡入在展开后半段（SleepDown contentStart/End 分段语义）
-    val contentAlpha = ((expansion.value - 0.25f) / 0.5f).coerceIn(0f, 1f)
-    // 尺寸曲线略滞后（挤压生长感），最小 0.12 避免完全消失
-    val sizeProgress = OpenSizeEasing.transform(expansion.value).coerceIn(0.12f, 1f)
     val menuShape = remember { RoundedRectangle(MenuTargetCorner) }
     // 装饰值只由 remember 过的材质决定，但 drawBackdrop 的几个回调每帧都会被节点
     // 各调一次：提到组合期求一次，省下每帧 3 个数据类 + 2 次 Color.copy 的分配。
@@ -155,7 +171,14 @@ fun LiquidMenu(
     Box(
         modifier = modifier
             .graphicsLayer {
-                alpha = contentAlpha.coerceAtLeast(0.04f)
+                val progress = expansion.value
+                // 内容淡入在展开后半段（SleepDown contentStart/End 分段语义）
+                val contentAlpha = menuContentAlpha(progress)
+                // 旧的卸载判据搬到这里：那一帧起整层画成透明，和原来直接 return 同一个画面
+                val hidden = !visible && progress < MountedThreshold
+                alpha = if (hidden) 0f else contentAlpha.coerceAtLeast(0.04f)
+                // 尺寸曲线略滞后（挤压生长感），最小 0.12 避免完全消失
+                val sizeProgress = OpenSizeEasing.transform(progress).coerceIn(0.12f, 1f)
                 scaleX = sizeProgress
                 scaleY = sizeProgress
                 transformOrigin = menuOrigin
@@ -197,7 +220,9 @@ fun LiquidMenu(
                 LiquidMenuRow(
                     item = item,
                     baseText = baseText,
-                    contentAlpha = contentAlpha,
+                    // 传求值函数而不是算好的 Float：值在每行自己的 graphicsLayer 里读，
+                    // 动画期间重跑的是绘制 lambda，不是组合
+                    contentAlpha = { menuContentAlpha(expansion.value) },
                     onDismiss = onDismiss,
                 )
             }
@@ -209,15 +234,15 @@ fun LiquidMenu(
 private fun LiquidMenuRow(
     item: LiquidMenuItem,
     baseText: Color,
-    contentAlpha: Float,
+    contentAlpha: () -> Float,
     onDismiss: () -> Unit,
 ) {
     Box(
         modifier = Modifier
             .width(ContentWidth)
             .height(ItemHeight)
-            .graphicsLayer { alpha = contentAlpha }
-            .clip(RoundedRectangle(SelectionCorner))
+            .graphicsLayer { alpha = contentAlpha() }
+            .clip(MenuSelectionShape)
             // 整行只有文字，不给 role 的话读屏只会念标签，听不出"这是一项可点的菜单"
             .clickable(role = Role.Button) {
                 onDismiss()
