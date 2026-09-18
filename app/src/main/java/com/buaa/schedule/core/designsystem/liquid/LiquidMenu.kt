@@ -146,6 +146,11 @@ fun LiquidMenu(
     // 尺寸曲线略滞后（挤压生长感），最小 0.12 避免完全消失
     val sizeProgress = OpenSizeEasing.transform(expansion.value).coerceIn(0.12f, 1f)
     val menuShape = remember { RoundedRectangle(MenuTargetCorner) }
+    // 装饰值只由 remember 过的材质决定，但 drawBackdrop 的几个回调每帧都会被节点
+    // 各调一次：提到组合期求一次，省下每帧 3 个数据类 + 2 次 Color.copy 的分配。
+    val menuHighlight = Highlight.Default.copy(alpha = material.highlightAlpha)
+    val menuShadow = material.outerShadow()
+    val menuInnerShadow = material.innerShadow()
 
     Box(
         modifier = modifier
@@ -165,9 +170,9 @@ fun LiquidMenu(
                             blur(material.blur.toPx())
                             lens(material.lensHeight.toPx(), material.lensAmount.toPx())
                         },
-                        highlight = { Highlight.Default.copy(alpha = material.highlightAlpha) },
-                        shadow = { material.outerShadow() },
-                        innerShadow = { material.innerShadow() },
+                        highlight = { menuHighlight },
+                        shadow = { menuShadow },
+                        innerShadow = { menuInnerShadow },
                         onDrawSurface = { drawRect(surface) },
                         // effect 输入全是常量（材质 remember 过、开合动画走 graphicsLayer），
                         // 固定 effectKey 即可长期缓存

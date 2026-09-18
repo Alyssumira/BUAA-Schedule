@@ -183,14 +183,22 @@ fun Modifier.liquidGlass(
         effectKey = { effectKey },
         cacheDecorations = true,
     )
+    // 装饰回调每帧都会被 HighlightNode/ShadowNode/InnerShadowNode 与 onDrawSurface 各调一次，
+    // 而它们的内容只由入参 material / surfaceTint / surfaceAlpha 决定——放在这里求一次，
+    // 每帧就少 new 一个 Highlight、一个 Shadow、一个 InnerShadow 和两个 Color
+    // （outerShadow()/innerShadow() 内部各带一次 Color.copy）。值与原来逐位相同。
+    val highlight = Highlight.Default.copy(alpha = material.highlightAlpha)
+    val outerShadow = material.outerShadow()
+    val innerShadow = material.innerShadow()
+    val surfaceColor = surfaceTint.copy(alpha = surfaceAlpha)
     return drawBackdrop(
         backdrop = backdrop,
         shape = shape,
         effects = effects,
-        highlight = { Highlight.Default.copy(alpha = material.highlightAlpha) },
-        shadow = { material.outerShadow() },
-        innerShadow = { material.innerShadow() },
-        onDrawSurface = { drawRect(surfaceTint.copy(alpha = surfaceAlpha)) },
+        highlight = { highlight },
+        shadow = { outerShadow },
+        innerShadow = { innerShadow },
+        onDrawSurface = { drawRect(surfaceColor) },
         renderOptions = renderOptions,
     )
 }

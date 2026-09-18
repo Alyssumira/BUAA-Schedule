@@ -107,7 +107,7 @@ fun LiquidFab(
                 if (backdrop != null) {
                     Modifier.drawBackdrop(
                         backdrop = backdrop,
-                        shape = { Capsule() },
+                        shape = { FabCapsuleShape },
                         effects = {
                             vibrancy()
                             blur(4.dp.toPx())
@@ -116,9 +116,10 @@ fun LiquidFab(
                         // 高光必须给具体 alpha：Highlight.Default 的默认 alpha 是 1f，
                         // 直接用会给整颗按钮镶一圈死白的边（看起来像实心白圆片）。
                         // 参考 SleepDown 的按钮：highlight 0.08、innerShadow 6dp/0.18。
-                        highlight = { Highlight.Default.copy(alpha = 0.10f) },
+                        // 两个值都是常量，提到文件级，免得每帧绘制时各 new 一个。
+                        highlight = { FabHighlight },
                         shadow = { Shadow.Default },
-                        innerShadow = { InnerShadow(radius = 6.dp, alpha = 0.18f) },
+                        innerShadow = { FabInnerShadow },
                         onDrawSurface = { drawRect(surface) },
                         // effectKey 必须非 null：为 null 时 kyant 会在**每一帧**重建
                         // blur/lens RenderEffect（按下动画期间尤其明显）。这里 effect 的输入
@@ -161,3 +162,12 @@ private val FabRenderOptions = BackdropRenderOptions(
     effectKey = { "liquid-fab" },
     cacheDecorations = true,
 )
+
+/**
+ * 胶囊的装饰与几何常量：三者参数都写死，本来却放在 drawBackdrop 的回调里，
+ * 每帧各 new 一个对象。`shape = { Capsule() }` 更贵——ShapeProvider 拿实例比
+ * （`_shape != shape`），每帧一个新的 Capsule 等于把它缓存的 outline 丢掉重算。
+ */
+private val FabCapsuleShape = Capsule()
+private val FabHighlight = Highlight.Default.copy(alpha = 0.10f)
+private val FabInnerShadow = InnerShadow(radius = 6.dp, alpha = 0.18f)

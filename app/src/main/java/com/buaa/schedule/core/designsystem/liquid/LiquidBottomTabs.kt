@@ -256,7 +256,7 @@ fun LiquidBottomTabs(
                 }
                 .drawBackdrop(
                     backdrop = backdrop,
-                    shape = { Capsule() },
+                    shape = { TabsCapsuleShape },
                     effects = {
                         vibrancy()
                         blur(blurRadius.toPx())
@@ -314,7 +314,7 @@ fun LiquidBottomTabs(
                     }
                     .drawBackdrop(
                         backdrop = backdrop,
-                        shape = { Capsule() },
+                        shape = { TabsCapsuleShape },
                         effects = {
                             val progress = dampedDragAnimation.pressProgress
                             vibrancy()
@@ -367,7 +367,7 @@ fun LiquidBottomTabs(
                 .then(dampedDragAnimation.modifier)
                 .drawBackdrop(
                     backdrop = indicatorBackdrop,
-                    shape = { Capsule() },
+                    shape = { TabsCapsuleShape },
                     effects = {
                         val progress = dampedDragAnimation.pressProgress
                         lens(
@@ -412,3 +412,12 @@ fun LiquidBottomTabs(
         )
     }
 }
+
+/**
+ * 底栏三处玻璃共用的胶囊形状实例。
+ *
+ * 写在 `shape = { Capsule() }` 里时它每帧被 ShapeProvider 调一次，除了白分配一个
+ * Shape，更要紧的是 ShapeProvider 按实例比 shape（`_shape != shape`），每帧一个新的
+ * 就把它缓存的 outline 判成过期、每帧重算一遍轮廓路径。
+ */
+private val TabsCapsuleShape = Capsule()
