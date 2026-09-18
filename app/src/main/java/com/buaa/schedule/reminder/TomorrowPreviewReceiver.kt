@@ -28,7 +28,9 @@ import java.time.ZoneId
  * 设计取舍：
  * - 默认开启（用户可在设置里关），时间暂固定 22:00，不做成可配（避免 UI 复杂化）；
  * - 有课才推：明天没课 / 假期中不推，避免无效打扰；
- * - 推送后自动排下一天 22:00，链条不断；设备重启由 BootReceiver 全家桶兜底重排。
+ * - 排在**下一个真正有内容可推的 22:00**，不是机械的 +1 天；找不到这样的日子链条就停下，
+ *   等改课表 / 开机 / 改时间重新对齐（事件入口用的是同一份判定，见
+ *   [nextScheduledPreviewDay]）；设备重启由 BootReceiver 全家桶兜底重排。
  */
 class TomorrowPreviewReceiver : BroadcastReceiver() {
 
@@ -76,24 +78,17 @@ class TomorrowPreviewReceiver : BroadcastReceiver() {
             ReminderNotifications.postTomorrowPreview(context, tomorrowCourses, tomorrow, timeSlots)
         }
 
-        // 把下一次预告排到「往后第一个『明天有课』的 22:00」，而不是机械地 +1 天：
+        // 把下一次预告排到「往后第一个真正有东西可推的 22:00」，而不是机械地 +1 天：
         // 周末、假期、学期结束后根本没有可推的内容，那一晚的精确闹钟是纯白醒
         // （还要查三张表）。找不到这样的日子就不再续排 —— 链条停下，等
-        // 改课表 / 开机 / 改时间这些事件重新对齐（BootReceiver 与
-        // WidgetRefreshReceiver 都会调 BackgroundSync.scheduleTomorrowPreview）。
-        val candidate = nextPreviewDay(courses, semester, today)
-        if (candidate != null) {
-            // ⚠️ 复核的是**真正会响的那一天**：22:00 已过时候选日会被顺延一天（闹钟排在
-            // 过去永远不会响，链条会当场断），而顺延出来的那一天从没参与过上面的搜索 ——
-            // 学期最后一节课的预告之后那一晚就是这么空转醒一次的。
-            val fireDay = TomorrowPreviewScheduler.fireDay(candidate)
-            if (hasPreviewContentOn(fireDay, courses, semester)) {
-                runCatching { TomorrowPreviewScheduler.schedule(context, fireDay) }
-                    .onFailure { Log.w(TAG, "续排明日预告失败", it) }
-            } else {
-                Log.d(TAG, "$fireDay 的次日已没有课可推，明日预告链在此停下")
-            }
+        // 改课表 / 开机 / 改时间这些事件重新对齐（它们走的是同一份判定）。
+        val fireDay = nextScheduledPreviewDay(courses, semester, today)
+        if (fireDay == null) {
+            Log.d(TAG, "往后没有可推的明日预告，链条在此停下，等下一次事件重新对齐")
+            return
         }
+        runCatching { TomorrowPreviewScheduler.schedule(context, fireDay) }
+            .onFailure { Log.w(TAG, "续排明日预告失败", it) }
     }
 
     companion object {
@@ -144,6 +139,31 @@ class TomorrowPreviewReceiver : BroadcastReceiver() {
         }
 
         /**
+         * 下一个**真正会响、而且响起来有东西可推**的 22:00 落在哪一天；
+         * null = 往后没有可推的内容，这一次什么都不排。
+         *
+         * 广播里的续排与事件入口
+         * （`com.buaa.schedule.widget.BackgroundSync.scheduleTomorrowPreview`）共用这一份判定：
+         * 两边各写一遍的代价已经付过一次 —— 事件入口此前只看一个 prefs 开关就排"明天 22:00"，
+         * 寒暑假与周末里每次改课表 / 开机 / 改时间都会重新武装一次必然空转的精确闹钟。
+         *
+         * ⚠️ [nextPreviewDay] 找到候选日之后还要过一道 [TomorrowPreviewScheduler.fireDay]：
+         * 当天 22:00 已过时闹钟会顺延到次日（排在过去的闹钟永远不会响，链条当场断），
+         * 而顺延出来的那天从没参与过搜索。只判 `nextPreviewDay != null` 就排，
+         * 学期最后一节课之后的那一晚照样空转 —— 那是同一条链上的偶发版本，不算修好。
+         */
+        internal fun nextScheduledPreviewDay(
+            courses: List<Course>,
+            semester: Semester?,
+            today: LocalDate,
+            now: LocalDateTime = LocalDateTime.now(),
+        ): LocalDate? {
+            val candidate = nextPreviewDay(courses, semester, today) ?: return null
+            val fireDay = TomorrowPreviewScheduler.fireDay(candidate, now)
+            return fireDay.takeIf { hasPreviewContentOn(it, courses, semester) }
+        }
+
+        /**
          * 明天要推的课程：没有学期、或明天落在教学周之外（假期中）时**必须为空** ——
          * 空列表一旦推出去，就是周末/假期每晚一条"明天没课"（R5 F-14）。
          */
@@ -190,8 +210,11 @@ object TomorrowPreviewScheduler {
     }
 
     /**
-     * 事件入口用的默认对齐：按"明天 22:00"排。
-     * 只有真正读过课表的那条路（[TomorrowPreviewReceiver]）才知道下一个值得醒的日子。
+     * 课表不在手时的对齐：按"明天 22:00"排。
+     *
+     * ⚠️ 事件入口（`BackgroundSync.scheduleTomorrowPreview`）已经不再走这里：不看课表就排，
+     * 等于寒暑假里每次改课表 / 开机 / 改时间都重新武装一次必然空转的精确闹钟。
+     * 手里有课表就排 [TomorrowPreviewReceiver.nextScheduledPreviewDay] 给的那一天。
      */
     fun schedule(context: Context) = schedule(context, LocalDate.now().plusDays(1))
 

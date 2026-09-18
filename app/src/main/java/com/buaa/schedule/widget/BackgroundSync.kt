@@ -14,7 +14,9 @@ import com.buaa.schedule.reminder.ClassProgressScheduler
 import com.buaa.schedule.reminder.ReminderScheduler
 import com.buaa.schedule.reminder.TomorrowPreviewReceiver
 import com.buaa.schedule.reminder.TomorrowPreviewScheduler
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.ZoneId
@@ -150,15 +152,43 @@ object BackgroundSync {
 
     /**
      * 调度明日课程预告（每天 22:00）。用户关闭开关时取消闹钟。
+     *
+     * 事件入口也要看课表：此前这里只读一个 prefs 开关就调 `schedule(context)`，
+     * 而那个重载写死"明天"。寒暑假与周末里，每次改课表（ScheduleViewModel）、每次开机、
+     * 每次改时间都会重新武装一次**必然空转**的 22:00 精确闹钟 —— 醒来查四张表、
+     * 再跑一遍 121 天 × 全课程的搜索，然后链条停下。判定与广播续排共用
+     * [TomorrowPreviewReceiver.nextScheduledPreviewDay]（含 22:00 已过时的顺延复核），
+     * 它给 null 就是"往后没有可推的内容"，这一次什么都不排：链条停下，
+     * 等下一次事件重新对齐 —— 与广播里那条续排同一个取舍，没有闹钟在空转等着醒。
+     *
+     * 读课表要在 IO 上，而这个入口有一个非挂起的调用点（设置页那枚开关的回调），
+     * 因此内部起一个 IO 协程；关掉开关那条路不查库，当场撤销。
+     * 协程晚几步不破坏正确性：排出去的时刻永远按执行那一刻重算（22:00 过了就顺延），
+     * 最坏是这一次没排上，等下一次事件。
      */
     fun scheduleTomorrowPreview(context: Context) {
         val enabled = context
             .getSharedPreferences("schedule_settings", Context.MODE_PRIVATE)
             .getBoolean(TomorrowPreviewReceiver.PREF_ENABLED, true)
-        if (enabled) {
-            TomorrowPreviewScheduler.schedule(context)
-        } else {
+        if (!enabled) {
             TomorrowPreviewScheduler.cancel(context)
+            return
+        }
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching {
+                val repository = context.scheduleRepository()
+                val semester = repository.getCurrentSemester()
+                val fireDay = TomorrowPreviewReceiver.nextScheduledPreviewDay(
+                    courses = repository.getDisplayCourses(semester),
+                    semester = semester,
+                    today = LocalDate.now(),
+                )
+                if (fireDay == null) {
+                    Log.d(TAG, "往后没有可推的明日预告，事件入口不排闹钟")
+                } else {
+                    TomorrowPreviewScheduler.schedule(context, fireDay)
+                }
+            }.onFailure { Log.w(TAG, "调度明日预告失败", it) }
         }
     }
 
