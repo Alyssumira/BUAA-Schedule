@@ -131,24 +131,61 @@ fun periodLabel(segment: IntRange): String =
  * 于是 `[5,6]` 的课在周视图渲染成两张卡、文案却写「第5-6节」，导出的 ICS 里
  * 两个事件都标着「第5-6节」而各自只覆盖 45 分钟（P1-2）。
  * 拿不到节次表时显式传 [NO_PERIOD_GAP]。
+ *
+ * **没有节次时返回空串**，不是 "第节"：以前的写法是 `joinToString` 得到 "" 再套上
+ * 「第…节」，于是通知里冒出一句只有包装、没有内容的「第节」。空串就是全应用约定的
+ * "这一项缺席"信号，由各调用点的 [joinMeta] 连分隔符一起丢掉 —— 与其在十来处
+ * 各写一遍判空，不如让口径只有一处。
  */
 fun periodLabel(periods: List<Int>, gapMinutes: (Int, Int) -> Long?): String =
     periods.toPeriodSegments(gapMinutes)
         .joinToString(",") { range ->
             if (range.first == range.last) "${range.first}" else "${range.first}-${range.last}"
         }
-        .let { "第${it}节" }
+        .takeIf { it.isNotEmpty() }
+        ?.let { "第${it}节" }
+        ?: ""
 
 /**
  * [periodLabel] 的节次表版本：自己从 [slots] 算间隔，省掉每个展示层调用点各写一遍样板。
  *
  * 空表回退 [TimeSlotProfile.DEFAULT] —— 与导出/渲染各处已有的兜底同口径
  * （学期还没同步到节次表时也要能标出节次，而不是干脆不写）。
+ * 这条兜底管的是**节次表缺失**，与「这门课没有节次」是两件事：`periods` 为空时
+ * 这里照样按 [periodLabel] 的口径返回空串，不会因为换了默认表就凭空造出节次。
  */
 fun periodLabelOf(periods: List<Int>, slots: List<TimeSlot>): String = periodLabel(
     periods,
     periodGapMinutesOf(slots.ifEmpty { TimeSlotProfile.DEFAULT }.toStartEndTimes()),
 )
+
+/**
+ * 剥掉 [periodLabel] 那层「第…节」包装，只留裸节次号："第1-2,9-10节" -> "1-2,9-10"。
+ *
+ * 课程管理页的摘要与桌面组件的行副字段都要这串裸号（「第…节」在窄行里没有信息量），
+ * 只是一个直接写、一个还要补回「节」字 —— 共用的是剥包装这一步，不是最终写法。
+ * **空标签原样返回空串**：组件那边补「节」字必须等确认有内容之后，
+ * 否则空节次会剩下一个光秃秃的「节」。
+ */
+fun unwrappedPeriodLabel(label: String): String =
+    label.removePrefix("第").removeSuffix("节").trim()
+
+/**
+ * 一行文案的段落拼接：**空段落连同分隔符一起缺席**（「缺项整段跳过」）。
+ *
+ * 这条约定全应用早就有了 —— 课程实况的 `liveMetaLine`、组件行副字段的 `widgetRowMeta`
+ * 都是 `listOfNotNull(x.takeIf { it.isNotBlank() }).joinToString(" · ")` 那个形状。
+ * 抽出来是因为节次这条链上有两处漏了：先无条件 `append(" · ")` 再拼标签，
+ * 标签一缺席就留下悬空分隔符。调用点只此一处判空，别在十来处各写一套 `if`。
+ *
+ * 分隔符默认「空格点空格」，与通知/组件既有口径一致；括号里用 "，"、
+ * 窄行里用 " " 的调用点自己传。
+ */
+fun joinMeta(parts: Iterable<String?>, separator: String = " · "): String =
+    parts.filterNotNull().filter { it.isNotBlank() }.joinToString(separator)
+
+/** [joinMeta] 的逐项写法，见上。 */
+fun joinMeta(vararg parts: String?, separator: String = " · "): String = joinMeta(parts.toList(), separator)
 
 /** 星期简写表，下标 0 = 周一。桌面组件与课程实况共用一份措辞 */
 val WEEKDAY_LABELS = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")

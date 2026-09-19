@@ -97,6 +97,19 @@ class WidgetTwoDayColumnTest {
     }
 
     @Test
+    fun `没有节次的课不编出一个第1节`() {
+        // 「第N节」那一条兜底是给"节次表缺这一节"用的：startPeriod 在空列表时兜底成 1，
+        // 于是没有节次的课会被安上第 1 节这个根本不存在的位置，还顺带一个前导空格
+        val out = twoDayColumnLines(
+            courses = listOf(Course(name = "高等数学", dayOfWeek = 1, periods = emptyList(), weeks = listOf(1))),
+            slotTimes = slots,
+            date = monday,
+            now = monday.atTime(9, 0),
+        )
+        assertEquals("高等数学", out)
+    }
+
+    @Test
     fun `四字预算里不泄漏括号`() {
         // 三格主干 + 一格括号首字；左括号本身不能占一格（两栏的 4 字档才会暴露这个问题）
         val out = lines(listOf(course("体育(篮球)", 1)), at = LocalTime.of(7, 0))

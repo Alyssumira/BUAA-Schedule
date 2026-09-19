@@ -87,6 +87,7 @@ import com.buaa.schedule.core.designsystem.motionSpringFor
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.model.joinMeta
 import com.buaa.schedule.domain.model.periodGapMinutesOf
 import com.buaa.schedule.domain.model.periodLabel
 import com.buaa.schedule.domain.model.periodLabelOf
@@ -854,10 +855,7 @@ private fun CourseTimelineCard(
                     )
                 }
                 Text(
-                    text = buildString {
-                        append(periodLabelOf(course.periods, timeSlots))
-                        course.teacher?.let { append(" · $it") }
-                    },
+                    text = dayCourseMetaLine(course, timeSlots),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     // 节次 + 教师可能很长（教师名多、带职称）：限一行省略，
@@ -886,6 +884,16 @@ private fun parsePeriodTimes(timeSlots: List<TimeSlot>): Map<Int, Pair<LocalTime
 /** LocalTime → "08:00"：节次表只到分钟，秒位显示出来只会让时间轴更挤 */
 private fun hhmm(time: LocalTime): String =
     time.truncatedTo(java.time.temporal.ChronoUnit.MINUTES).toString()
+
+/**
+ * 日视图卡片最后一行：节次 · 教师（纯函数，可单测）。
+ *
+ * 以前是 `append(节次); append(" · $教师")`：教师那一跳无条件带分隔符，
+ * 于是没有节次的课这一行以悬空的 " · " 开头（教师是空串时则以它结尾）。
+ * 与 [placeTimeLine] 同一条约定，交给 [joinMeta] 一处实现。
+ */
+internal fun dayCourseMetaLine(course: Course, timeSlots: List<TimeSlot>): String =
+    joinMeta(periodLabelOf(course.periods, timeSlots), course.teacher)
 
 /**
  * 「地点 · 08:00–09:40」一行摘要。地点为空（教务系统没抓到、走读课）时要连分隔符一起丢掉：

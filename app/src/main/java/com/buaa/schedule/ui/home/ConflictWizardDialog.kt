@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.model.joinMeta
 import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.model.weekdayLabel
 import com.buaa.schedule.domain.schedule.CourseConflictResolution
@@ -147,20 +148,19 @@ private fun ConflictGroupRow(
             fontWeight = FontWeight.SemiBold,
         )
         group.courses.forEach { course ->
-            val locationSuffix = if (course.location.isNullOrBlank()) "" else "，${course.location}"
             Text(
-                text = "• ${course.displayName}（${periodLabelOf(course.periods, timeSlots)}$locationSuffix）",
+                text = conflictCourseLine(course, timeSlots),
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 2.dp),
             )
         }
 
         when {
-            suggestion != null -> {
+            // 建议里没有节次时整条不出场：那句「移到 」读不通，而按它写回去等于把这门课
+            // 的节次清空。冲突课必有节次（冲突就是按节次重叠判的），这条是兜底。
+            suggestion != null && suggestion.periods.isNotEmpty() -> {
                 Text(
-                    text = "建议：${target.displayName} 移到 ${periodLabelOf(suggestion.periods, timeSlots)}" +
-                        if (suggestion.shiftedBy == 0) "" else
-                            "（${if (suggestion.shiftedBy > 0) "后" else "前"}挪 ${kotlin.math.abs(suggestion.shiftedBy)} 节）",
+                    text = conflictSuggestionLine(target, suggestion, timeSlots),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(top = DesignTokens.spaceXS),
@@ -202,4 +202,32 @@ private fun ConflictGroupRow(
             }
         }
     }
+}
+
+/**
+ * 冲突清单里的一行：「• 课程名（节次，教室）」（纯函数，可单测）。
+ *
+ * 括号里的两段都可能缺：节次缺失时以前写「（第节，J3-101）」，两段都缺时写「（）」。
+ * 现在交给 [joinMeta] 逐段判空，一段都没有就连括号一起不出场。
+ */
+internal fun conflictCourseLine(course: Course, timeSlots: List<TimeSlot>): String {
+    val detail = joinMeta(
+        listOf(periodLabelOf(course.periods, timeSlots), course.location),
+        separator = "，",
+    )
+    return "• ${course.displayName}" + if (detail.isEmpty()) "" else "（$detail）"
+}
+
+/** 平移建议那一句：「建议：课程名 移到 第3-4节（后挪 2 节）」（纯函数，可单测） */
+internal fun conflictSuggestionLine(
+    target: Course,
+    suggestion: CourseConflictResolution.ShiftSuggestion,
+    timeSlots: List<TimeSlot>,
+): String {
+    val shift = if (suggestion.shiftedBy == 0) {
+        ""
+    } else {
+        "（${if (suggestion.shiftedBy > 0) "后" else "前"}挪 ${kotlin.math.abs(suggestion.shiftedBy)} 节）"
+    }
+    return "建议：${target.displayName} 移到 ${periodLabelOf(suggestion.periods, timeSlots)}$shift"
 }

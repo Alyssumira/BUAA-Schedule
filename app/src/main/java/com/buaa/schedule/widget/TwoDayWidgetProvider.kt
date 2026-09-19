@@ -4,6 +4,7 @@ import android.appwidget.AppWidgetManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import com.buaa.schedule.domain.model.Course
+import com.buaa.schedule.domain.model.joinMeta
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -102,14 +103,17 @@ internal fun twoDayColumnLines(
     maxLines: Int = TWO_DAY_MAX_LINES,
 ): String = foldDayLines(
     courses.map { course ->
-        val clock = slotTimes[course.startPeriod]?.first?.let { TWO_DAY_CLOCK.format(it) }
-            ?: "第${course.startPeriod}节"
+        // 时刻与退回的节次号都取自**真实存在的第一节**：startPeriod 在节次为空时兜底成 1，
+        // 于是没有节次的课会被安上「08:00」或「第1节」这个根本不存在的位置
+        val clock = course.periods.minOrNull()?.let { period ->
+            slotTimes[period]?.first?.let { TWO_DAY_CLOCK.format(it) } ?: "第${period}节"
+        }
         val mark = if (widgetRowStatus(course.periods, date, slotTimes, now) == WidgetRowStatus.ONGOING) {
             "▸"
         } else {
             ""
         }
-        "$clock ${weekGridShortName(course.displayName, TWO_DAY_NAME_CHARS)}$mark"
+        joinMeta(clock, weekGridShortName(course.displayName, TWO_DAY_NAME_CHARS) + mark, separator = " ")
     },
     maxLines,
 )

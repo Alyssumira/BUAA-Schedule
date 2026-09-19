@@ -4,6 +4,7 @@ import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.TimeSlotProfile
+import com.buaa.schedule.domain.model.joinMeta
 import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.model.weekdayLabel
@@ -69,6 +70,9 @@ object ScheduleExporters {
      *
      * 不打学分：这段文本是给人看/往群里粘的，不是 `TextScheduleParser` 认的那个 6 列格式
      * （不会被解析回来），每行多挂一个 "3.5学分" 只是把课表撑长 —— 学分归统计页说。
+     *
+     * 一行里的地点与节次走 [joinMeta]：教务确实给过没有教室、也没有节次的行，
+     * 那时缺的那一段连同 " · " 一起不出场，而不是留下 "高等数学 · " 这种像被截断的尾巴。
      */
     fun toWeeklyText(
         courses: List<Course>,
@@ -98,13 +102,13 @@ object ScheduleExporters {
                 .sortedBy { it.startPeriod }
             if (dayCourses.isEmpty()) return@mapNotNull null
             val lines = dayCourses.joinToString("\n") { course ->
-                val startTime = slots.firstOrNull { it.number == course.startPeriod }?.startTime ?: ""
-                buildString {
-                    if (startTime.isNotBlank()) append("$startTime ")
-                    append(course.displayName)
-                    course.location?.takeIf { it.isNotBlank() }?.let { append(" · $it") }
-                    append(" · ").append(periodLabelOf(course.periods, slots))
-                }
+                // 与预告那条链同一条口径：时刻取自真实的第一节，startPeriod 的空表兜底
+                // 会在导出的文本里凭空写一个 08:00
+                val startTime = course.periods.minOrNull()?.let { first ->
+                    slots.firstOrNull { it.number == first }?.startTime
+                } ?: ""
+                val timePrefix = if (startTime.isNotBlank()) "$startTime " else ""
+                timePrefix + joinMeta(course.displayName, course.location, periodLabelOf(course.periods, slots))
             }
             "${weekdayLabel(day) ?: day}\n$lines"
         }

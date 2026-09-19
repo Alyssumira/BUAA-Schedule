@@ -63,6 +63,9 @@ import com.buaa.schedule.core.designsystem.LocalSemanticColors
 import com.buaa.schedule.core.designsystem.LocalSemanticPlate
 import com.buaa.schedule.core.designsystem.SettingsGroup
 import com.buaa.schedule.core.designsystem.SettingsRow
+import com.buaa.schedule.domain.model.Course
+import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.model.joinMeta
 import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.schedule.ImportPlanner
 import com.buaa.schedule.ui.ScheduleViewModel
@@ -314,9 +317,7 @@ fun ImportScreen(
                                         onCheckedChange = null,
                                     )
                                     Text(
-                                        text = "周${course.dayOfWeek} " +
-                                            "${periodLabelOf(course.periods, importState.timeSlots)} " +
-                                            "${course.name} ${course.location ?: ""}",
+                                        text = importCourseRowText(course, importState.timeSlots),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = if (excluded) MaterialTheme.colorScheme.onSurfaceVariant
                                         else MaterialTheme.colorScheme.onSurface,
@@ -501,6 +502,17 @@ fun ImportScreen(
         }
     }
 }
+
+/**
+ * 待导入清单里的一行：「周3 第1-2节 高等数学 J3-101」（纯函数，可单测）。
+ *
+ * 日期与节次之间走 [joinMeta]：教务给过没有节次的行，那一段整段缺席时后面只留一个空格，
+ * 而不是「周3  高数」这种中间塌出一个空位的样子（节次本身曾经写成空壳「第节」）。
+ * 课程名与地点那半截保持原写法不动：这一列是给人核对导入结果的，逐字比对旧文案才有意义。
+ */
+internal fun importCourseRowText(course: Course, timeSlots: List<TimeSlot>): String =
+    joinMeta("周${course.dayOfWeek}", periodLabelOf(course.periods, timeSlots), separator = " ") +
+        " ${course.name} ${course.location ?: ""}"
 
 /**
  * 北航教务导入 Hero。

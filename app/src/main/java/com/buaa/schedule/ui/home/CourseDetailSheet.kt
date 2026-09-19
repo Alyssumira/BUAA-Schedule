@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.model.joinMeta
 import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.schedule.WeekParser
 
@@ -63,8 +64,7 @@ internal fun CourseDetailSheet(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = periodLabelOf(course.periods, timeSlots) +
-                    " · " + WeekParser.toDisplayString(course.weeks),
+                text = courseDetailSubtitle(course, timeSlots),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -87,6 +87,16 @@ internal fun CourseDetailSheet(
         }
     }
 }
+
+/**
+ * 详情 Sheet 标题下那一行：节次 · 周次（纯函数，可单测）。
+ *
+ * 走 [joinMeta] 而不是 `节次 + " · " + 周次`：没有节次的课（教务给空、备份恢复回来空的）
+ * 以前整行是「第节 · 1-8周」，只把标签改成空串又会在行首留下一个悬空的 " · "。
+ * 周次那边 [WeekParser.toDisplayString] 自带「无周次」，永远不为空，所以这一行不会整行消失。
+ */
+internal fun courseDetailSubtitle(course: Course, timeSlots: List<TimeSlot>): String =
+    joinMeta(periodLabelOf(course.periods, timeSlots), WeekParser.toDisplayString(course.weeks))
 
 @Composable
 private fun DetailRow(label: String, value: String?) {

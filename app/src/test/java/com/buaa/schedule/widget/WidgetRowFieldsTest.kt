@@ -147,6 +147,38 @@ class WidgetRowFieldsTest {
     }
 
     @Test
+    fun `没有节次时不写一个光秃秃的节字`() {
+        // 空节次 = 这一项缺席：以前 `unwrapped + "节"` 会在窄行上留一个「节」字
+        assertEquals("", widgetPeriodsText(emptyList(), NO_PERIOD_GAP))
+        assertEquals(
+            "",
+            widgetPeriodsText(emptyList(), periodGapMinutesOf(TimeSlotProfile.DEFAULT.toStartEndTimes())),
+        )
+        // 段落缺席、分隔符也跟着缺席：这一行只剩地点
+        assertEquals(
+            "J3-101",
+            widgetRowMeta(
+                listOf(WidgetRowField.PERIODS, WidgetRowField.LOCATION),
+                WidgetRowFields(
+                    location = "J3-101",
+                    periodsText = widgetPeriodsText(emptyList(), NO_PERIOD_GAP),
+                ),
+            ),
+        )
+        // 有节次时还是原样（PERIODS 在前，所以它在先）
+        assertEquals(
+            "1-2节 · J3-101",
+            widgetRowMeta(
+                listOf(WidgetRowField.PERIODS, WidgetRowField.LOCATION),
+                WidgetRowFields(
+                    location = "J3-101",
+                    periodsText = widgetPeriodsText(listOf(1, 2), NO_PERIOD_GAP),
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun `有节次表时按墙钟间隔切段`() {
         // 真机取数走的是 periodGapMinutesOf(slotTimes)：第 5 节下课到第 6 节上课隔着 105 分钟午饭，
         // 组件必须写「5,6节」，不能写那张根本不存在的连堂（P1-2）

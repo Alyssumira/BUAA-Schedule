@@ -18,6 +18,7 @@ import com.buaa.schedule.domain.model.periodLabel
 import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.model.toPeriodSegments
 import com.buaa.schedule.domain.model.toStartEndTimes
+import com.buaa.schedule.domain.model.unwrappedPeriodLabel
 import com.buaa.schedule.domain.schedule.WeekCalculator
 import com.buaa.schedule.domain.schedule.WeekParser
 import androidx.compose.ui.graphics.toArgb
@@ -347,11 +348,20 @@ internal fun widgetRowMeta(
         }
     ).joinToString(" · ")
 
-/** 节次的短标签：第1-2节 → 1-2节（与改动前的 meta 口径逐字一致） */
+/**
+ * 节次的短标签：第1-2节 → 1-2节（与改动前的 meta 口径逐字一致）。
+ *
+ * 「节」字要等确认有内容再补：以前是无条件 `... + "节"`，节次为空时（剥包装后就是空串）
+ * 组件行上会剩一个光秃秃的「节」字。返回空串即"这一项缺席"，
+ * [widgetRowMeta] 那一头本来就会把空段连同分隔符一起丢掉。
+ */
 internal fun widgetPeriodsText(
     periods: List<Int>,
     gapMinutes: (Int, Int) -> Long?,
-): String = periodLabel(periods, gapMinutes).removePrefix("第").removeSuffix("节").trim() + "节"
+): String {
+    val numbers = unwrappedPeriodLabel(periodLabel(periods, gapMinutes))
+    return if (numbers.isEmpty()) "" else "${numbers}节"
+}
 
 /** 今日组件里一行的时间状态 */
 internal enum class WidgetRowStatus { UPCOMING, ONGOING, PAST }

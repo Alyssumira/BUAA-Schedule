@@ -75,7 +75,9 @@ import com.buaa.schedule.core.designsystem.motionSpec
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.CourseSaveOptions
 import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.model.joinMeta
 import com.buaa.schedule.domain.model.periodLabelOf
+import com.buaa.schedule.domain.model.unwrappedPeriodLabel
 import com.buaa.schedule.domain.model.weekdayLabel
 import com.buaa.schedule.ui.ScheduleViewModel
 import kotlinx.coroutines.launch
@@ -204,11 +206,7 @@ fun CourseManagementScreen(
             onDismissRequest = { pendingDelete = null },
             title = { Text("删除「${group.displayName}」？") },
             text = {
-                Text(
-                    text = "将删除这门课的全部 ${group.fragments.size} 个片段" +
-                        "（${group.fragments.joinToString("、") { periodLabelOf(it.periods, state.timeSlots) }}）。" +
-                        "删除后可在提示条里撤销。",
-                )
+                Text(text = deleteGroupConfirmText(group.fragments, state.timeSlots))
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -305,16 +303,15 @@ private fun CourseGroupCard(
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        text = listOfNotNull(
+                        text = joinMeta(
                             group.teacher,
                             // 别名生效时才提一句原名：管理页得能看出这个别名挂在哪门课上
                             if (group.name != group.displayName) "原名 ${group.name}" else null,
                             fragmentSummary(group.fragments, timeSlots),
                             "${group.fragments.size} 段",
-                        )
-                            // 空串也要滤：只判 null 的话，摘要为空就拼出「 · 5 段」这种悬空分隔符
-                            .filter { it.isNotBlank() }
-                            .joinToString(" · "),
+                        ),
+                        // 空串也要滤：只判 null 的话，摘要为空就拼出「 · 5 段」这种悬空分隔符
+                        // （joinMeta 就是这条约定的唯一实现）
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -367,15 +364,35 @@ private const val MaxSummaryFragments = 3
  *
  * 原来是要素拼完再 `.take(60)` 按**字符**硬截：60 会砍在「周三 3-」这种半截上，
  * 读者既不知道被截了、也不知道还剩几段（审查①V-03）。限量单位改成"段"。
+ *
+ * 段落里的「第…节」按 [unwrappedPeriodLabel] 剥掉包装，剩下的裸节次号与星期之间
+ * 用 [joinMeta] 连：片段没有节次时只写星期，既不拖一个空格也不留「节」字。
  */
-private fun fragmentSummary(fragments: List<Course>, timeSlots: List<TimeSlot>): String {
+internal fun fragmentSummary(fragments: List<Course>, timeSlots: List<TimeSlot>): String {
     if (fragments.isEmpty()) return ""
     val shown = fragments.take(MaxSummaryFragments).joinToString(" ") { fragment ->
-        "${weekdayLabel(fragment.dayOfWeek) ?: "周?"} ${
-            periodLabelOf(fragment.periods, timeSlots).removePrefix("第").removeSuffix("节").trim()
-        }"
+        joinMeta(
+            weekdayLabel(fragment.dayOfWeek) ?: "周?",
+            unwrappedPeriodLabel(periodLabelOf(fragment.periods, timeSlots)),
+            separator = " ",
+        )
     }
     return if (fragments.size > MaxSummaryFragments) "$shown …" else shown
+}
+
+/**
+ * 删除确认的正文（纯函数，可单测）：说清删掉几个片段、都排在第几节。
+ *
+ * 括号里那串节次走 [joinMeta]：没有节次的片段整段缺席，一个也没有时连「（）」
+ * 一起不出场 —— 以前它长成「（第节、第3节）」，那既不是节次也不是省略。
+ */
+internal fun deleteGroupConfirmText(fragments: List<Course>, timeSlots: List<TimeSlot>): String {
+    val periods = joinMeta(
+        fragments.map { periodLabelOf(it.periods, timeSlots) },
+        separator = "、",
+    )
+    val where = periods.takeIf { it.isNotBlank() }?.let { "（$it）" } ?: ""
+    return "将删除这门课的全部 ${fragments.size} 个片段$where。删除后可在提示条里撤销。"
 }
 
 /**

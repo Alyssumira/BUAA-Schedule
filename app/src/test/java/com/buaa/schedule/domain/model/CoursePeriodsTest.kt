@@ -138,4 +138,56 @@ class CoursePeriodsTest {
             )
         }
     }
+
+    // —— T26：没有节次就是"这一项不出场"，不是「第节」 ——————————————
+
+    @Test
+    fun emptyPeriodsProduceNoLabelAtAll() {
+        // 「第节」是包装留着、内容没了：joinToString 给出 ""，再被套上「第…节」
+        assertEquals("", periodLabel(emptyList(), NO_PERIOD_GAP))
+        // 节次表残缺的那一支同样不能造出内容（gap 恒为 null 时 [5,6] 会并成一段，空表还是空表）
+        assertEquals("", periodLabel(emptyList(), periodGapMinutesOf(emptyMap())))
+        // 节次表兜底 ≠ 节次兜底：DEFAULT 表补的是 slots，periods 为空仍然什么都没有
+        assertEquals("", periodLabelOf(emptyList(), TimeSlotProfile.DEFAULT))
+        assertEquals("", periodLabelOf(emptyList(), emptyList()))
+    }
+
+    @Test
+    fun nonEmptyLabelsKeepTheirExactSpelling() {
+        // 回归守卫：下面这些串是用户看惯的既有文案，这一轮只改「空节次」那一支。
+        // 逐字写死，不用任何生产函数反推 —— 否则改错口径时这条会跟着一起绿。
+        assertEquals("第1-2节", periodLabel(listOf(1, 2), NO_PERIOD_GAP))
+        assertEquals("第1-2,9-10节", periodLabel(listOf(1, 2, 9, 10), NO_PERIOD_GAP))
+        assertEquals("第3节", periodLabel(listOf(3), NO_PERIOD_GAP))
+        assertEquals("第5,6节", periodLabel(listOf(5, 6), defaultGap))
+        assertEquals("第1-2节", periodLabel(listOf(1, 2), defaultGap))
+        assertEquals("第1-2,9-10节", periodLabel(listOf(1, 2, 9, 10), defaultGap))
+        assertEquals("第5,6节", periodLabelOf(listOf(5, 6), TimeSlotProfile.DEFAULT))
+        assertEquals("第1-2节", periodLabelOf(listOf(1, 2), TimeSlotProfile.DEFAULT))
+        // 单段版：课堂实况、课前提醒与日视图色块读的都是它，段一定来自切段结果，恒非空
+        assertEquals("第1节", periodLabel(1..1))
+        assertEquals("第1-2节", periodLabel(1..2))
+    }
+
+    @Test
+    fun bareLabelStripsTheWrapperAndKeepsEmptyEmpty() {
+        assertEquals("1-2", unwrappedPeriodLabel(periodLabel(listOf(1, 2), NO_PERIOD_GAP)))
+        assertEquals("1-2,9-10", unwrappedPeriodLabel(periodLabel(listOf(1, 2, 9, 10), NO_PERIOD_GAP)))
+        assertEquals("3", unwrappedPeriodLabel(periodLabel(listOf(3), NO_PERIOD_GAP)))
+        // 空进空出：组件那一头是"有内容才补「节」字"，靠的就是这一条
+        assertEquals("", unwrappedPeriodLabel(periodLabel(emptyList(), NO_PERIOD_GAP)))
+    }
+
+    @Test
+    fun joinMetaDropsAbsentPartsAndTheirSeparators() {
+        assertEquals("A · B", joinMeta("A", null, "", "   ", "B"))
+        assertEquals("", joinMeta("", null, "  "))
+        assertEquals("A，B", joinMeta(listOf("A", "", "B"), separator = "，"))
+        assertEquals("A B", joinMeta("A", "B", separator = " "))
+        // 节次缺席的那一整段：不留尾部分隔符，也不留「第节」
+        assertEquals(
+            "高等数学 · J3-101",
+            joinMeta("高等数学", "J3-101", periodLabel(emptyList(), NO_PERIOD_GAP)),
+        )
+    }
 }

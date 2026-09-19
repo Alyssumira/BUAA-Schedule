@@ -4,7 +4,6 @@ import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.schedule.toEpochMillis
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -217,6 +216,40 @@ class CourseReminderTextTest {
         val text = ReminderNotifications.buildTomorrowPreviewText(
             courses = courses, date = LocalDate.of(2026, 9, 7), timeSlots = emptyList(),
         )
-        assertTrue(text, text.startsWith("08:00 高等数学 · J3-101 · 第1-2节"))
+        assertEquals("08:00 高等数学 · J3-101 · 第1-2节", text)
+    }
+
+    @Test
+    fun previewLineSkipsThePeriodSegmentEntirely() {
+        val text = ReminderNotifications.buildTomorrowPreviewText(
+            courses = listOf(
+                Course(
+                    name = "高等数学", location = "J3-101", dayOfWeek = 1,
+                    periods = emptyList(), weeks = listOf(1),
+                ),
+            ),
+            date = LocalDate.of(2026, 9, 7),
+            timeSlots = emptyList(),
+        )
+        // 这一行以前念作「08:00 高等数学 · J3-101 · 第节」：包装留着、内容没有。
+        // 现在缺的那一段连同它的 " · " 一起不出场，时刻也不再拿 startPeriod 的兜底值编
+        assertEquals("高等数学 · J3-101", text)
+        assertFalse(text, text.contains("第节"))
+        assertFalse(text, text.trimEnd().endsWith("·"))
+    }
+
+    @Test
+    fun previewLineWithoutRoomKeepsOnlyWhatExists() {
+        val text = ReminderNotifications.buildTomorrowPreviewText(
+            courses = listOf(
+                Course(
+                    name = "高等数学", location = "   ", dayOfWeek = 1,
+                    periods = emptyList(), weeks = listOf(1),
+                ),
+            ),
+            date = LocalDate.of(2026, 9, 7),
+            timeSlots = emptyList(),
+        )
+        assertEquals("高等数学", text)
     }
 }

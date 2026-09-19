@@ -15,6 +15,7 @@ import com.buaa.schedule.MainActivity
 import com.buaa.schedule.R
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.model.joinMeta
 import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.model.weekdayLabel
 import com.buaa.schedule.domain.schedule.minutesCeil
@@ -145,7 +146,15 @@ object ReminderNotifications {
     /** 预告标题（纯函数，可单测）：与 [previewDateLabel] 同一份日期写法 */
     internal fun tomorrowPreviewTitle(date: LocalDate): String = "${previewDateLabel(date)} 的课程"
 
-    /** 预览正文（纯函数，可单测）：按节次排序，每行「08:00 高等数学 · SH3-101」 */
+    /**
+     * 预览正文（纯函数，可单测）：按节次排序，每行「08:00 高等数学 · SH3-101」。
+     *
+     * 课程名之后的教室、节次都是可选项，走 [joinMeta] 的「缺项整段跳过」：
+     * 这一行以前是 `append(" · ").append(periodLabelOf(...))` 无条件收尾，
+     * 节次为空时念作「高等数学 · J3-101 · 第节」；只把标签改成空串还不够，
+     * 分隔符照旧拼下去就换成一个悬空的 " · "。同一个函数里地点那一行
+     * 早就守着这条约定，节次是漏掉的那一处。
+     */
     fun buildTomorrowPreviewText(
         courses: List<Course>,
         date: LocalDate,
@@ -156,13 +165,13 @@ object ReminderNotifications {
         return courses
             .sortedBy { it.startPeriod }
             .joinToString("\n") { course ->
-                val startTime = slots.firstOrNull { it.number == course.startPeriod }?.startTime ?: ""
-                buildString {
-                    if (startTime.isNotBlank()) append("$startTime ")
-                    append(course.displayName)
-                    course.location?.takeIf { it.isNotBlank() }?.let { append(" · $it") }
-                    append(" · ").append(periodLabelOf(course.periods, slots))
-                }
+                // 时刻取自**真实存在的**第一节：startPeriod 在节次为空时兜底成 1，
+                // 于是没有节次的课会被安上一个 08:00 —— 比那句「第节」更糟，因为它读起来像真有其事
+                val startTime = course.periods.minOrNull()?.let { first ->
+                    slots.firstOrNull { it.number == first }?.startTime
+                } ?: ""
+                val timePrefix = if (startTime.isNotBlank()) "$startTime " else ""
+                timePrefix + joinMeta(course.displayName, course.location, periodLabelOf(course.periods, slots))
             }
     }
 
@@ -546,13 +555,9 @@ enum class LivePhase { BEFORE_CLASS, IN_CLASS }
 internal fun minutesLeft(endMillis: Long, nowMillis: Long): Long =
     minutesCeil(endMillis - nowMillis)
 
-/** 卡片第一行：节次 · 时间区间 · 地点。缺项整段跳过，绝不留悬空的 " · " */
+/** 卡片第一行：节次 · 时间区间 · 地点。缺项整段跳过，绝不留悬空的 " · "（口径见 [joinMeta]） */
 internal fun liveMetaLine(sectionText: String, timeRange: String?, location: String?): String =
-    listOfNotNull(
-        sectionText.takeIf { it.isNotBlank() },
-        timeRange?.takeIf { it.isNotBlank() },
-        location?.takeIf { it.isNotBlank() },
-    ).joinToString(" · ")
+    joinMeta(sectionText, timeRange, location)
 
 /**
  * 标题右侧那一格的辅助标识：第 N 周 · 周X · 教师。
