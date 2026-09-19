@@ -34,8 +34,10 @@ import org.junit.Test
  * 经由续排再做**同一轮**搜索并按那份判据清理（`rescheduleWindows`：挑不出窗口 → cancelAll；
  * 课还没开始且不在数课前倒计时 → 停服务 + 撤常驻 + restore），在这里再搜一遍是纯白付。
  *
- * ①② 那两格判据（[BackgroundSync.shouldCancelAllInCalendarMode]）与"这一步撤了什么"是 JVM 测得到的；
- * "生产接线到底走没走这份判据"测不到（本模块没有 Robolectric，`getSharedPreferences`
+ * ①② 那两格判据（[BackgroundSync.shouldCancelAllInCalendarMode]）与"这一步撤了什么"是 JVM 测得到的：
+ * 清理的编排本身就在生产侧（[BackgroundSync.cleanUpInCalendarMode]，不接 Context、三件副作用全注入），
+ * ②那组行为断言跑的就是它 —— 撤几遍、开关读几遍、抛了报没报都是生产真做了几个动作。
+ * 剩下测不到的是"接线到底注没注对那三样"（本模块没有 Robolectric，`getSharedPreferences`
  * 与两个 `cancelAll` 都要 Context），按源码形状核对 —— 写法照抄
  * [com.buaa.schedule.reminder.BootDndSelfHealDecisionTest] 的
  * `balancedBlock` / `withoutComments` / `blankCommentsAndLiterals` / `findMainJavaDir`：
@@ -78,38 +80,61 @@ class CalendarModeClassBellCleanupTest {
 
     // ---- ② 行为：日历模式那一步到底撤了什么 ------------------------------------
 
-    /** 一轮清理的账：两类闹钟各撤了几遍、判据读了哪几枚开关、有没有向报告口留痕 */
+    /** 一轮清理的账：两类闹钟各撤了几遍、开关读了几遍、有没有向报告口留痕、按什么顺序 */
     private class Calls(
         val reminderAlarms: Int,
         val classBells: Int,
-        val switchesRead: List<String>,
+        val switchReads: Int,
         val failures: List<String>,
+        val events: List<String>,
     )
 
     /**
-     * [BackgroundSync.rescheduleReminders] 日历模式那一支的编排：形状与生产逐字对齐
-     * （同一个 `runCatching`、同一个报告口标签、判据只认两枚开关），只差把
-     * 两个 `cancelAll` 与那次 prefs 读换成计数 —— 生产那三步都要 Context，JVM 里跑不到。
+     * 跑一遍**生产**那条编排本体 [BackgroundSync.cleanUpInCalendarMode]：三件要 Context 的副作用
+     * 换成计数，报告口换成收集标签，日志钩子换成记一笔（`android.util.Log` 在本模块 JVM 单测里
+     * 是抛 "not mocked" 的桩，不隔开就永远轮不到报告口 —— 同 `ClassProgressRescheduleFailureReportTest`）。
+     *
+     * ai/T15 收工之前这里是**测试自己复刻**的一份日历分支，`reminders++` / `switches += …` /
+     * `failures += CLEANUP_LABEL` 全是复刻体自己写的，于是下面那 4 条"行为"断言数的是复刻体：
+     * 生产里把 `ReminderScheduler.cancelAll(context)` 删掉、把报告标签改掉，它们照样绿。
+     * 编排抽成生产侧的 internal seam 之后（形状照抄 [BackgroundSync.runColdStartWidgetSteps] 与
+     * [com.buaa.schedule.reminder.ClassProgressScheduler.rescheduleNextWindow]），这里数到的才是
+     * 生产真的做了几个动作。"接线注没注对那三样"仍然测不到，归 ③ 那组源码形状守卫。
      */
     private fun runCalendarModeCleanup(
-        cancelReminderAlarms: () -> Unit,
         classProgress: Boolean,
         dndEnabled: Boolean,
+        cancelInAppReminderAlarms: () -> Unit = {},
+        cancelClassBells: () -> Unit = {},
     ): Calls {
         var reminders = 0
         var bells = 0
-        val switches = mutableListOf<String>()
+        var reads = 0
         val failures = mutableListOf<String>()
-        runCatching {
-            cancelReminderAlarms()
-            reminders++
-            switches += PREF_CLASS_PROGRESS
-            switches += PREF_DND
-            if (BackgroundSync.shouldCancelAllInCalendarMode(classProgress, dndEnabled)) {
+        val events = mutableListOf<String>()
+        BackgroundSync.cleanUpInCalendarMode(
+            cancelInAppReminderAlarms = {
+                events += "alarm"
+                cancelInAppReminderAlarms()
+                reminders++
+            },
+            readClassSwitches = {
+                events += "switches"
+                reads++
+                classProgress to dndEnabled
+            },
+            cancelClassBells = {
+                events += "bells"
+                cancelClassBells()
                 bells++
-            }
-        }.onFailure { failures += CLEANUP_LABEL }
-        return Calls(reminders, bells, switches, failures)
+            },
+            onStepFailed = { label, _ ->
+                events += "report"
+                failures += label
+            },
+            logFailure = { events += "log" },
+        )
+        return Calls(reminders, bells, reads, failures, events)
     }
 
     @Test
@@ -117,7 +142,7 @@ class CalendarModeClassBellCleanupTest {
         for ((classProgress, dndEnabled) in listOf(
             true to true, true to false, false to true, false to false,
         )) {
-            val calls = runCalendarModeCleanup({}, classProgress, dndEnabled)
+            val calls = runCalendarModeCleanup(classProgress, dndEnabled)
             assertEquals(
                 "日历模式本轮就是不用应用内闹钟，四种开关下都要撤那条：$classProgress/$dndEnabled",
                 1,
@@ -129,7 +154,7 @@ class CalendarModeClassBellCleanupTest {
     @Test
     fun classBellsAreCancelledOnlyWhenBothSwitchesAreOff() {
         for ((classProgress, dndEnabled) in listOf(true to true, true to false, false to true)) {
-            val calls = runCalendarModeCleanup({}, classProgress, dndEnabled)
+            val calls = runCalendarModeCleanup(classProgress, dndEnabled)
             assertEquals(
                 "至少有一枚开着就不许撤（撤了就是日历模式用户被收掉上课实况与自动勿扰）：" +
                     "classProgress=$classProgress dndEnabled=$dndEnabled",
@@ -137,7 +162,7 @@ class CalendarModeClassBellCleanupTest {
                 calls.classBells,
             )
         }
-        val cancelled = runCalendarModeCleanup({}, classProgress = false, dndEnabled = false)
+        val cancelled = runCalendarModeCleanup(classProgress = false, dndEnabled = false)
         assertEquals(
             "两枚都关（用户自己关了本功能）时不撤就是留一条永不消失的常驻通知 + 永久勿扰",
             1,
@@ -148,60 +173,118 @@ class CalendarModeClassBellCleanupTest {
     /** 清理仍然整块裹在同一道 `runCatching` 里，失败照旧报给那一个报告口（ai/T14 的账） */
     @Test
     fun cleanupFailureStillGoesToTheOneReportPort() {
-        val failed = runCalendarModeCleanup({ error("prefs 读不了") }, classProgress = false, dndEnabled = false)
+        val failed = runCalendarModeCleanup(
+            classProgress = false,
+            dndEnabled = false,
+            cancelInAppReminderAlarms = { error("撤闹钟这一步抛了") },
+        )
         assertEquals("失败没报给报告口（闸门会把这一轮记成干净）：", listOf(CLEANUP_LABEL), failed.failures)
         assertEquals("撤提醒闹钟那步就抛了，不许记成「撤过了」", 0, failed.reminderAlarms)
         assertEquals(0, failed.classBells)
+        assertEquals("抛在撤闹钟那一步就不该再去读开关、再撤课堂铃：${failed.events}", 0, failed.switchReads)
 
-        val clean = runCalendarModeCleanup({}, classProgress = false, dndEnabled = false)
+        // 报告口只此一个标签、而且在那句取证日志之后（顺序反了 §4.4 的账就数歪）
+        val throwingBells = runCalendarModeCleanup(
+            classProgress = false,
+            dndEnabled = false,
+            cancelClassBells = { error("撤铃抛了") },
+        )
+        assertEquals("撤铃那一步抛了也要报，而且只报一次：", listOf(CLEANUP_LABEL), throwingBells.failures)
+        assertEquals(
+            "这一轮的步骤顺序与抽出前逐条一致（日志钩子排在报告口之前）：",
+            "alarm,switches,bells,log,report",
+            throwingBells.events.joinToString(","),
+        )
+
+        val clean = runCalendarModeCleanup(classProgress = false, dndEnabled = false)
         assertEquals("干净一轮不该留痕：", emptyList<String>(), clean.failures)
+        assertEquals("干净一轮不该碰日志钩子：", "alarm,switches,bells", clean.events.joinToString(","))
     }
 
     @Test
     fun theCriterionConsultsExactlyTheTwoClassSwitches() {
-        val calls = runCalendarModeCleanup({}, classProgress = false, dndEnabled = false)
+        val calls = runCalendarModeCleanup(classProgress = false, dndEnabled = false)
         assertEquals(
-            "判据读了第三样状态（同族又要长一份判据）：${calls.switchesRead}",
-            listOf(PREF_CLASS_PROGRESS, PREF_DND),
-            calls.switchesRead,
+            "那一轮把两枚开关读了不止一遍（同一轮两次磁盘，两次结论可以不一致）：${calls.events}",
+            1,
+            calls.switchReads,
         )
+
+        val seam = calendarCleanupSeam()
+        assertTrue(
+            "判据不再只由那一次读出来的两枚开关喂（同族又要长一份判据）：\n$seam",
+            seam.contains("val (classProgress, dndEnabled) = readClassSwitches()") &&
+                seam.contains("shouldCancelAllInCalendarMode(classProgress, dndEnabled)"),
+        )
+        assertEquals("一次清理里把判据问了不止一遍：\n$seam", 1, occurrences(seam, "shouldCancelAllInCalendarMode("))
     }
 
     // ---- ③ 源码形状：生产接线确实按这份判据走 ----------------------------------
 
-    /** 窄判据守着那次 `ClassProgressScheduler.cancelAll`，而且撤的是完整那一份 */
+    /** 窄判据守着那次撤课堂铃，而且撤的仍然是完整那一份（判据在编排本体里，接线的尊号在分支里） */
     @Test
     fun cancelAllInCalendarBranchIsGuardedByTheCriterion() {
         val branch = calendarModeBranch()
-        val guard = balancedBlock(branch, "if (shouldCancelAllInCalendarMode(")
+        val seam = calendarCleanupSeam()
+        val guard = balancedBlock(seam, "if (shouldCancelAllInCalendarMode(")
+        // 分支里注给 cancelClassBells 的那一样，就是守卫块唯一会执行的撤
+        val bells = balancedBlock(branch, "cancelClassBells = {")
 
         assertTrue(
-            "日历模式那一步的课堂铃清理不再走窄判据（同族第四处回来了）：\n$branch",
-            branch.contains("shouldCancelAllInCalendarMode("),
+            "日历模式那一步的课堂铃清理不再走窄判据（同族第四处回来了）：\n$seam",
+            seam.contains("if (shouldCancelAllInCalendarMode("),
         )
         assertTrue(
-            "守卫块里撤的必须是完整那一份（cancelAll 才带 restore 与撤常驻；" +
-                "只 cancel 双铃就是「只撤一半」的新残留）：\n$guard",
-            guard.contains("ClassProgressScheduler.cancelAll(context)"),
+            "守卫块里撤的必须是编排那三件里的 cancelClassBells（判据之外又多撤一样 = 新的一处无条件撤）：\n$guard",
+            guard.contains("cancelClassBells()"),
+        )
+        assertTrue(
+            "注给 cancelClassBells 的不再是完整那一份（cancelAll 才带 restore 与撤常驻；" +
+                "只 cancel 双铃就是「只撤一半」的新残留）：\n$bells",
+            bells.contains("ClassProgressScheduler.cancelAll(context)"),
+        )
+        assertEquals(
+            "分支里除了注入那一次还自己动手撤了一遍课堂铃（绕开了判据）：\n$branch",
+            1,
+            occurrences(branch, "ClassProgressScheduler.cancelAll"),
+        )
+        assertEquals(
+            "日历模式那一步不再调用生产那一份编排（三件注入有了着落却没人执行，等于这条清理没了）：\n$branch",
+            1,
+            occurrences(branch, "cleanUpInCalendarMode("),
         )
     }
 
-    /** 判据之前一次 cancelAll 都不许有 —— 有的话就是"无条件撤"回来了 */
+    /** 判据之前一次撤课堂铃都不许有 —— 有的话就是"无条件撤"回来了 */
     @Test
     fun cancelAllIsNoLongerUnconditionalInTheCalendarBranch() {
         val branch = calendarModeBranch()
-        val at = branch.indexOf("if (shouldCancelAllInCalendarMode(")
-        assertTrue("找不到那道守卫：\n$branch", at >= 0)
-        val beforeGuard = branch.substring(0, at)
+        val seam = calendarCleanupSeam()
+        val at = seam.indexOf("if (shouldCancelAllInCalendarMode(")
+        assertTrue("找不到那道守卫：\n$seam", at >= 0)
+        // 只数编排本体：签名里那三个参数名各自带着 cancelClassBells / cancelInAppReminderAlarms
+        val bodyStart = seam.indexOf("runCatching {")
+        check(bodyStart in 0 until at) { "编排本体里找不到那道 runCatching（抽出去的分支又长回 Context 侧了？）：\n$seam" }
+        val beforeGuard = seam.substring(bodyStart, at)
 
         assertFalse(
-            "守卫之前还出现一次 ClassProgressScheduler.cancelAll = 无条件撤回来了：" +
-                "正在上课时每重排一次就被放开勿扰约 5 秒，那份勿扰记录与看门狗一并抹掉：\n$beforeGuard",
-            beforeGuard.contains("ClassProgressScheduler.cancelAll"),
+            "守卫之前还出现一次撤课堂铃 = 无条件撤回来了：正在上课时每重排一次就被放开勿扰约 5 秒，" +
+                "那份勿扰记录与看门狗一并抹掉：\n$beforeGuard",
+            beforeGuard.contains("cancelClassBells"),
         )
         assertTrue(
-            "应用内提醒闹钟那一头仍然一律撤（那就是这个模式的本意）：\n$beforeGuard",
-            beforeGuard.contains("ReminderScheduler.cancelAll(context)"),
+            "应用内提醒闹钟那一头仍然一律撤（那就是这个模式的本意），而且排在判据之前：\n$beforeGuard",
+            beforeGuard.contains("cancelInAppReminderAlarms()"),
+        )
+        // 顺序钉完了要钉"那一头撤的到底是哪样本尊"：两本尊对调，上面两条一起被骗过去
+        val alarms = balancedBlock(branch, "cancelInAppReminderAlarms = {")
+        assertTrue(
+            "判据之前一律撤的那一本尊不再是 ReminderScheduler.cancelAll(context)：\n$alarms",
+            alarms.contains("ReminderScheduler.cancelAll(context)"),
+        )
+        assertFalse(
+            "撤应用内闹钟那一头被注成了课堂铃那一样（无条件撤就藏在这一次对调里）：\n$alarms",
+            alarms.contains("ClassProgressScheduler"),
         )
         assertEquals(
             "日历模式仍然一律不接手课堂窗口（返回值契约不许改：[ColdStartRebuild] 的钥匙 2 在读它）：\n$branch",
@@ -243,16 +326,21 @@ class CalendarModeClassBellCleanupTest {
         )
     }
 
-    /** 这里只长"两枚开关"这一份轻判据，不许把续排那份重判据搬过来 */
+    /** 这里只长"两枚开关"这一份轻判据，不许把续排那份重判据搬过来（分支与编排本体两头都钉） */
     @Test
     fun theCalendarBranchDoesNotGrowASecondFullPlan() {
         val branch = calendarModeBranch()
+        val seam = calendarCleanupSeam()
 
         for (second in listOf("shouldTakeDownClassProgress", "planNextClassWindow(", "isCountingDownTo")) {
             assertFalse(
                 "日历模式那一步长出了第二份判据（$second）：这里只认两枚开关，重判据归" +
                     "rescheduleWindows 那一份（紧随其后的续排会再做一遍同样的搜索）：\n$branch",
                 branch.contains(second),
+            )
+            assertFalse(
+                "清理的编排本体里长出了第二份判据（$second）：口径同上，两处一起才算一份：\n$seam",
+                seam.contains(second),
             )
         }
     }
@@ -343,9 +431,20 @@ class CalendarModeClassBellCleanupTest {
      */
     @Test
     fun classSwitchesStayEditableAndHonestInCalendarMode() {
-        val settings = withoutComments(read(SETTINGS_SCREEN_FILE))
-        val progress = balancedBlock(settings, "item(key = \"classProgress\") {")
-        val dnd = balancedBlock(settings, "item(key = \"dnd\") {")
+        // 顺序只能是"先在原始源码上按括号配平切段，再对这一小段抹注释"，两个方向都换不得：
+        // - 整份文件先抹注释：withoutComments 不认字符串字面量，SettingsScreen.kt 第 1167 行那个
+        //   写在字面量里的「斜杠紧跟星号」（壁纸选择器的 image MIME 通配）会让它一路吞到下一个
+        //   块注释结尾，1474 行往后的真代码整段消失，锚点直接找不到（就是这条守卫红过的原因，
+        //   坑本身写在 [mainJavaSources] 的注释里）；
+        // - 改走 blankCommentsAndLiterals：它连**字面量内容**一起抹掉，下面那句 "不生效" 与那两行
+        //   正常文案就成了恒真的空守卫（本项目专门盯过"命中了但恒真"的形状）。
+        // 切段之后只抹这一小段的注释是必要的：那段解释性注释自己就引了一句「文案还写着"不生效"」，
+        // 不抹掉它，第一条 summary 断言会误红。这两段里没有写在字面量里的块注释开头两个字符
+        // （切完逐字核过：classProgress 段 1474-1502、dnd 段 1503-1560，段内花括号各自配平，
+        // 也没有别处那种字面量里的星号斜杠组合），于是 withoutComments 在这里只碰行注释。
+        val settings = read(SETTINGS_SCREEN_FILE)
+        val progress = withoutComments(balancedBlock(settings, "item(key = \"classProgress\") {"))
+        val dnd = withoutComments(balancedBlock(settings, "item(key = \"dnd\") {"))
 
         assertFalse("课堂铃那枚开关又按提醒模式置灰了：\n$progress", progress.contains("enabled ="))
         assertFalse("勿扰那枚开关又按提醒模式置灰了：\n$dnd", dnd.contains("enabled ="))
@@ -436,9 +535,20 @@ class CalendarModeClassBellCleanupTest {
 
     // ---- 源码核对工具（抄 BootDndSelfHealDecisionTest）--------------------------
 
-    /** [BackgroundSync.rescheduleReminders] 里日历模式那条早退分支（含它自己的花括号） */
+    /**
+     * [BackgroundSync.rescheduleReminders] 里日历模式那条早退分支（含它自己的花括号）：
+     * 三件要 Context 的副作用在这里**注入**给编排本体，"注的是哪两本尊、prefs 读几遍"归它钉。
+     */
     private fun calendarModeBranch(): String =
         balancedBlock(withoutComments(read(BACKGROUND_SYNC_FILE)), "if (!usesInAppReminders(context)) {")
+
+    /**
+     * [BackgroundSync.cleanUpInCalendarMode] 的编排本体（含花括号）：
+     * 判据、两步的**先后**、以及"整块仍然吞异常 + 那一个报告标签"都在这里，②那组行为断言跑的
+     * 就是这一份，③这组形状守卫钉的是"生产接线真的调了它、而且注对了样"。
+     */
+    private fun calendarCleanupSeam(): String =
+        balancedBlock(withoutComments(read(BACKGROUND_SYNC_FILE)), "internal fun cleanUpInCalendarMode(")
 
     private fun read(relative: String): String {
         val file = File(findMainJavaDir(), relative)
@@ -589,14 +699,14 @@ class CalendarModeClassBellCleanupTest {
         const val SCHEDULE_VIEW_MODEL_FILE = "com/buaa/schedule/ui/ScheduleViewModel.kt"
         const val SETTINGS_SCREEN_FILE = "com/buaa/schedule/ui/settings/SettingsScreen.kt"
 
-        /** 报告口那个标签：生产与这里必须同名，否则闸门数不到这一格 */
+        /**
+         * 报告口那个标签：生产与这里必须同名，否则闸门数不到这一格。
+         * ai/T15 收工之前这里比的是复刻体自己塞进去的值（恒真），现在比的是
+         * [BackgroundSync.cleanUpInCalendarMode] 真的报出来的那个标签。
+         */
         const val CLEANUP_LABEL = "cleanUpInCalendarMode"
 
         /** 判据声明的锚点（改过名这条守卫要跟着改） */
         const val SHOULD_CANCEL_ALL_DECLARATION = "fun shouldCancelAllInCalendarMode("
-
-        /** 本地副本的两枚开关名：只用来数「判据读了几样状态」，生产那一份的来源由上面的形状守卫钉 */
-        const val PREF_CLASS_PROGRESS = "class_progress_enabled"
-        const val PREF_DND = "dnd_during_class"
     }
 }

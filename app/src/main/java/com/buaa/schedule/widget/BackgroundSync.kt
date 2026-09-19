@@ -43,6 +43,21 @@ internal val LOG_COLD_START_STEP_FAILURE: (label: String, error: Throwable) -> U
 }
 
 /**
+ * 日历模式那一步清理失败的那句 `Log.w` —— 原样搬来，tag 与文案一字未改
+ * （审计 §4.4 的取证过滤条件不许变），只是挪成了 [BackgroundSync.cleanUpInCalendarMode]
+ * 编排本体的日志钩子默认值。
+ *
+ * 为什么非挪不可：`android.util.Log` 在本模块 JVM 单测里是抛 "not mocked" 的桩，
+ * 留在 `onFailure { }` 里第一句就让报告口根本轮不到被调用，那条"失败要能被闸门看见"的
+ * 断言会红得看不出原因（同 [com.buaa.schedule.reminder.ClassProgressScheduler] 里
+ * `LOG_RESCHEDULE_WINDOW_FAILURE` 那一份，理由一字不差）。
+ * 同样写成顶层属性而不是签名里的 lambda：本仓库的源码形状守卫按"锚点后第一个 `{`"切函数体。
+ */
+internal val LOG_CALENDAR_CLEANUP_FAILURE: (Throwable) -> Unit = {
+    Log.w(LOG_TAG, "日历模式下清理应用内闹钟失败", it)
+}
+
+/**
  * 后台任务统一入口：提醒重排、Widget 刷新与零点刷新调度。
  *
  * 设计原则（事件驱动，无固定轮询）：
@@ -91,32 +106,27 @@ object BackgroundSync {
     ): Boolean {
         if (!usesInAppReminders(context)) {
             // 日历模式：应用内课前提醒那条通道一个闹钟都不排，已经把排好的那些清干净。
-            runCatching {
-                ReminderScheduler.cancelAll(context)
-                // 课堂铃（上课实况 + 自动勿扰）**不跟着一起撤** —— 这一枚是同族第四处：
-                // 无条件 cancelAll 的第一步就是撤双铃 + restore + 抹掉勿扰记录与看门狗，
-                // 正在上课时每重排一次，用户就被放开勿扰约 5 秒，而且那份记录正是当下
-                // 要靠的自愈凭据（同 ai/T11 / ai/T11b 那两处的账，只多不少）。
-                // 「系统日历提醒」管的是**课前提醒从哪条通道下发**，课堂链没有日历等价物，
-                // 所以这条链在日历模式下照样该跑，闸门只有那两枚课堂开关。
-                // 两枚都关（= 用户自己把本功能关了）才当场收；只要有一枚还开着就整块跳过，
-                // 清理交给这个 `return false` 兑现的那条续排链 —— 它自己那份带判据的清理
-                // （[ClassProgressScheduler.rescheduleWindows]）管得了"挑不出窗口"与
-                // "课还没开始且不在数课前倒计时"两种遗留，这里不复用它的全量窗口搜索
-                // （紧接着就再搜一遍，纯白付；口径见 [shouldCancelAllInCalendarMode]）。
-                val prefs = context.getSharedPreferences(
-                    ClassProgressReceiver.PREFS_NAME,
-                    Context.MODE_PRIVATE,
-                )
-                val classProgress = prefs.getBoolean(ClassProgressReceiver.PREF_CLASS_PROGRESS, true)
-                val dndEnabled = prefs.getBoolean(ClassProgressReceiver.PREF_DND, false)
-                if (shouldCancelAllInCalendarMode(classProgress, dndEnabled)) {
-                    ClassProgressScheduler.cancelAll(context)
-                }
-            }.onFailure {
-                Log.w(TAG, "日历模式下清理应用内闹钟失败", it)
-                onStepFailed("cleanUpInCalendarMode", it)
-            }
+            // 撤哪几样、按什么顺序、失败报给谁全写在编排本体 [cleanUpInCalendarMode] 里
+            // （那一份不接 Context，JVM 单测数得出来"撤了几遍、报了几次"）；这里只把三件要
+            // Context 的事读成参数注进去 —— 手法同 [runColdStartWidgetSteps] 与
+            // [com.buaa.schedule.reminder.ClassProgressScheduler.rescheduleNextWindow]。
+            cleanUpInCalendarMode(
+                cancelInAppReminderAlarms = { ReminderScheduler.cancelAll(context) },
+                // 那一轮 prefs 仍然只读一遍（同一轮里两次磁盘，两次结论可以不一致）
+                readClassSwitches = {
+                    val prefs = context.getSharedPreferences(
+                        ClassProgressReceiver.PREFS_NAME,
+                        Context.MODE_PRIVATE,
+                    )
+                    Pair(
+                        prefs.getBoolean(ClassProgressReceiver.PREF_CLASS_PROGRESS, true),
+                        prefs.getBoolean(ClassProgressReceiver.PREF_DND, false),
+                    )
+                },
+                // 完整那一份：cancelAll 才带 restore 与撤常驻
+                cancelClassBells = { ClassProgressScheduler.cancelAll(context) },
+                onStepFailed = onStepFailed,
+            )
             return false
         }
         return runCatching {
@@ -158,6 +168,61 @@ object BackgroundSync {
      */
     internal fun shouldCancelAllInCalendarMode(classProgress: Boolean, dndEnabled: Boolean): Boolean =
         !classProgress && !dndEnabled
+
+    /**
+     * [rescheduleReminders] 日历模式那一支的编排本体：**不接 Context，三件副作用全是注入的 lambda**。
+     *
+     * 形状抄 [runColdStartWidgetSteps] 与
+     * [com.buaa.schedule.reminder.ClassProgressScheduler.rescheduleNextWindow] 那两份 seam ——
+     * 本模块单测没有 Robolectric，`ReminderScheduler.cancelAll` / `ClassProgressScheduler.cancelAll`
+     * 与 `getSharedPreferences` 都要 Context，真跑一次这条清理要设备。而这张卡要钉的恰好是
+     * 数得出来的那三件事：应用内闹钟撤了几遍、课堂铃在四种开关组合下撤没撤、抛了有没有向闸门
+     * 报一声（见 `CalendarModeClassBellCleanupTest`）。放在这里的代价是"接线到底注没注对那三样"
+     * 只能按源码形状核对 —— 与前一处 seam 完全同一套取舍。
+     *
+     * 语义与抽出前逐字相同，一步不多、一步不少：
+     * - 应用内课前提醒那条闹钟**一律**撤（那就是这个模式的本意），而且撤在判据**之前**；
+     * - 课堂铃（上课实况 + 自动勿扰）**不跟着一起撤** —— 这一枚是同族第四处：无条件 cancelAll
+     *   的第一步就是撤双铃 + restore + 抹掉勿扰记录与看门狗，正在上课时每重排一次，用户就被
+     *   放开勿扰约 5 秒，而且那份记录正是当下要靠的自愈凭据（同 ai/T11 / ai/T11b 那两处的账，
+     *   只多不少）。只有 [shouldCancelAllInCalendarMode] 认的两枚开关都关（= 用户自己把本功能
+     *   关了）才当场收；只要有一枚还开着就整块跳过，清理交给调用方那个 `return false` 兑现的
+     *   那条续排链 —— 它自己那份带判据的清理（[ClassProgressScheduler.rescheduleWindows]）管得了
+     *   "挑不出窗口"与"课还没开始且不在数课前倒计时"两种遗留，这里不复用它的全量窗口搜索
+     *   （紧接着就再搜一遍，纯白付；口径见 [shouldCancelAllInCalendarMode]）；
+     * - 两枚开关只读一遍（同一轮里两次磁盘，两次结论可以不一致）；
+     * - 整块仍然吞异常（改成向外抛，等于把这条清理链变成调用方的崩溃），失败同时留两处：
+     *   原样那句 `Log.w`（默认值 [LOG_CALENDAR_CLEANUP_FAILURE]，tag 与文案一字未改）先走，
+     *   然后 [onStepFailed] 那**一个**标签 `cleanUpInCalendarMode` —— 闸门（[ColdStartRebuild]）
+     *   靠它把这一轮记成失败，标签换个名它就数不到这一格。
+     *
+     * @param cancelInAppReminderAlarms 撤应用内课前提醒那条闹钟（生产：`ReminderScheduler.cancelAll`）
+     * @param readClassSwitches 两枚课堂开关，顺序是 `classProgress to dndEnabled`
+     *   （生产：读一遍 `ClassProgressReceiver.PREFS_NAME` 那份 prefs）
+     * @param cancelClassBells 撤课堂铃那一份完整的收（生产：`ClassProgressScheduler.cancelAll`，
+     *   只有它带 restore 与撤常驻；只 `cancel` 双铃就是"只撤一半"的新残留）
+     * @param onStepFailed "这一步抛了"的留痕口，由 [rescheduleReminders] 把它自己那个原样传下来
+     * @param logFailure 那句 `Log.w` 的位置，默认 [LOG_CALENDAR_CLEANUP_FAILURE]（= 抽出前那一行，
+     *   一字不差）；收成参数的理由同 [runColdStartWidgetSteps] 那个参数，一字不差。
+     */
+    internal fun cleanUpInCalendarMode(
+        cancelInAppReminderAlarms: () -> Unit,
+        readClassSwitches: () -> Pair<Boolean, Boolean>,
+        cancelClassBells: () -> Unit,
+        onStepFailed: (label: String, error: Throwable) -> Unit,
+        logFailure: (Throwable) -> Unit = LOG_CALENDAR_CLEANUP_FAILURE,
+    ) {
+        runCatching {
+            cancelInAppReminderAlarms()
+            val (classProgress, dndEnabled) = readClassSwitches()
+            if (shouldCancelAllInCalendarMode(classProgress, dndEnabled)) {
+                cancelClassBells()
+            }
+        }.onFailure {
+            logFailure(it)
+            onStepFailed("cleanUpInCalendarMode", it)
+        }
+    }
 
     /**
      * 「重排提醒」+「课堂铃兜底」的完整一次调用：[rescheduleReminders] 的返回值契约
