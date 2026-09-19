@@ -57,6 +57,7 @@ import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalAnimatedVisibilityScope
 import com.buaa.schedule.core.designsystem.LocalSharedTransitionScope
+import com.buaa.schedule.core.designsystem.LocalSemanticPlate
 import com.buaa.schedule.core.designsystem.ModalTransition
 import com.buaa.schedule.core.designsystem.SettingsSwitchRow
 import com.buaa.schedule.core.designsystem.fieldError
@@ -346,7 +347,9 @@ fun CourseEditorScreen(
                 ) {
                     Text(
                         text = "还有字段未通过校验，请检查标红的输入框",
-                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        // 卡位只声明意图（error），底板与文字成对解出
+                        color = LocalSemanticPlate.current?.foreground
+                            ?: MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }

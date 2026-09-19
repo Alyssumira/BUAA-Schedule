@@ -48,6 +48,7 @@ import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassTopBar
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalSemanticColors
+import com.buaa.schedule.core.designsystem.LocalSemanticPlate
 import com.buaa.schedule.data.import.SpocSession
 import com.buaa.schedule.data.import.SPOC_CAS_ENTRY
 import com.buaa.schedule.data.import.redactUrl
@@ -199,12 +200,12 @@ fun SpocLoginScreen(
             val isErrorStatus = loadError != null || timedOut || harvestFailed
             // 「登录状态已保存」是这一页唯一做完了的回执：success 进状态卡
             val isDoneStatus = saved
-            val successInk = LocalSemanticColors.current.success
+            val successTint = LocalSemanticColors.current.success
             GlassSurface(
                 variant = if (isErrorStatus) GlassVariant.ALERT else GlassVariant.PANEL,
                 semanticTint = when {
                     isErrorStatus -> MaterialTheme.colorScheme.error
-                    isDoneStatus -> successInk
+                    isDoneStatus -> successTint
                     else -> null
                 },
                 contentPadding = DesignTokens.spaceL,
@@ -224,11 +225,9 @@ fun SpocLoginScreen(
                     Text(
                         text = statusText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = when {
-                            isErrorStatus -> MaterialTheme.colorScheme.error
-                            isDoneStatus -> successInk
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        },
+                        // 成对取墨：染了语义色（失败/已保存）时底板与文字一次解出，没染色的中性进度仍走 onSurfaceVariant
+                        color = LocalSemanticPlate.current?.foreground
+                            ?: MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     // 收割轮次是确定的（HARVEST_ATTEMPTS），给出分母就画确定性进度（M5）
                     if (harvesting) {

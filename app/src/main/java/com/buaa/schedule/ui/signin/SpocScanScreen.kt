@@ -64,6 +64,7 @@ import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassTopBar
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalSemanticColors
+import com.buaa.schedule.core.designsystem.LocalSemanticPlate
 import com.buaa.schedule.core.designsystem.ModalTransition
 import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -368,12 +369,10 @@ fun SpocScanScreen(
                     Text(
                         text = resultText,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = when (state) {
-                            // 与卡片 tint 同源：绿卡配蓝字会读成两件事
-                            is SignInState.Signed -> LocalSemanticColors.current.success
-                            is SignInState.Failed -> MaterialTheme.colorScheme.error
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        },
+                        // 成对取墨：绿卡配绿字（1.00:1）就是这张卡改前的读数；
+                        // 现在底板与文字由同一处解出，没染色的进行中仍走 onSurfaceVariant
+                        color = LocalSemanticPlate.current?.foreground
+                            ?: MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     when (val s = state) {
                         is SignInState.Failed -> Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {

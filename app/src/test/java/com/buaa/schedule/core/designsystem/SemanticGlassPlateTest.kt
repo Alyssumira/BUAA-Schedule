@@ -85,7 +85,6 @@ class SemanticGlassPlateTest {
                 alpha = slot.alphaOf(intent),
                 darkTheme = theme.dark,
                 scheme = theme.scheme,
-                semantic = theme.semantic,
             )
             val ink = plate.foreground.readableLuminance()
             val memberLevel = contrastRatio(plate.tint.readableLuminance(), ink)
@@ -155,7 +154,6 @@ class SemanticGlassPlateTest {
                 alpha = raw,
                 darkTheme = theme.dark,
                 scheme = theme.scheme,
-                semantic = theme.semantic,
             )
             assertTrue(
                 "${theme.name}：error 卡把 ${intent.toHex()} 本体当底板——它就是那条实心粉底",
@@ -187,7 +185,7 @@ class SemanticGlassPlateTest {
         for (theme in schemes) for (slot in slots) {
             val intent = slot.intent(theme.scheme, theme.semantic)
             val raw = slot.alphaOf(intent)
-            val plate = semanticGlassPlateOf(intent, raw, theme.dark, theme.scheme, theme.semantic)
+            val plate = semanticGlassPlateOf(intent, raw, theme.dark, theme.scheme)
             val alpha = glassSurfaceAlpha(
                 variant = slot.variant,
                 material = DesignTokens.glassMaterial(slot.variant),
@@ -233,38 +231,117 @@ class SemanticGlassPlateTest {
     }
 
     /**
-     * 配对只准有一处：凡是给 [GlassSurface] 传了 `semanticTint` 的文件，
-     * 必须同时从 [semanticGlassPlate] 取文字色。
+     * 配对只准有一处：凡给 [GlassSurface] 传了 `semanticTint` 的卡位，
+     * 卡内文字必须从 [LocalSemanticPlate] 取墨，不许再自己点名语义色。
      *
      * 本模块的 JVM 单测没有 Compose 运行时（无 Robolectric、无 ui-test），
      * 卡位上那句 `color = …` 只能按源码核对；定位目录的办法与 GlassSurfaceSingleChildTest 一致。
+     *
+     * 按「一处调用」而不是「整个文件」扫：同一个页面里合法地还有别的 error 用法
+     * （按钮文字、字段校验提示、[GlassSurface] 之外的 errorContainer 平板），
+     * 它们与玻璃卡的配对无关，扫紧了就是假警报。
      */
     @Test
     fun noCardPicksItsOwnInkAnymore() {
         val offenders = mutableListOf<String>()
-        var users = 0
+        var calls = 0
         for (file in mainSources()) {
             val code = blankComments(file.readText())
             if (code.contains("fun GlassSurface(")) continue
-            if (!code.contains("semanticTint =")) continue
-            users++
-            if (!code.contains("semanticGlassPlate(")) {
-                offenders += "${file.relativeTo(rootMainJava())}: 传了 semanticTint 却还在自己挑文字色"
-            }
-            // 旧配对的残留：卡内文字直接引用 onErrorContainer（它是 errorContainer 的前景，
-            // 卡位自己挑它就等于绕过配对表）
-            for (stale in listOf("color = MaterialTheme.colorScheme.onErrorContainer")) {
-                if (code.contains(stale)) offenders += "${file.relativeTo(rootMainJava())}: 仍有 $stale"
+            for (call in glassSurfaceCalls(code)) {
+                if (!call.args.contains("semanticTint =")) continue
+                if (call.args.contains("semanticTint = null")) continue
+                calls++
+                val where = "${file.relativeTo(rootMainJava())}"
+                if (!call.body.contains("LocalSemanticPlate")) {
+                    offenders += "$where: 染了语义色却没从 LocalSemanticPlate 取墨 → ${call.body.inkLines()}"
+                }
+                // 卡内 `color =` 又点名语义色：底板与文字就此再次裂成两处
+                for (stale in STALE_INKS) {
+                    if (call.body.contains(stale)) offenders += "$where: 卡内仍有 color = …$stale"
+                }
             }
         }
-        assertTrue("一个语义卡位都没扫到，八成是写法变了，这条守卫是空的（users=$users）", users >= 6)
+        assertTrue("一个语义卡位都没扫到，八成是写法变了，这条守卫是空的（calls=$calls）", calls >= 6)
         assertTrue(
             "底板与文字必须成对从一个入口取（配对有两处就会再裂开一次）：\n" + offenders.joinToString("\n"),
             offenders.isEmpty(),
         )
     }
 
+    /** [GlassSurface] 的一次调用：参数表与尾随 content lambda（都去掉了括号本身）。 */
+    private class GlassCall(val args: String, val body: String)
+
+    /**
+     * 扫出文件里每一处 `GlassSurface(` 调用：参数表 = 头一对圆括号的内容，
+     * content = 紧跟其后的花括号（没有尾随 lambda 时为空串）。
+     *
+     * 括号计数跳过字符串字面量与字符字面量，否则 `"存在 3 组（点这里）"` 这种
+     * 中文括号之外的转义与模板串会把配对走歪。
+     */
+    private fun glassSurfaceCalls(code: String): List<GlassCall> {
+        val out = mutableListOf<GlassCall>()
+        var from = 0
+        while (true) {
+            val hit = code.indexOf("GlassSurface(", from)
+            if (hit < 0) return out
+            val argsEnd = matching(code, hit + "GlassSurface".length, '(', ')')
+            var i = argsEnd + 1
+            while (i < code.length && code[i].isWhitespace()) i++
+            val bodyEnd = if (i < code.length && code[i] == '{') matching(code, i, '{', '}') else i
+            out += GlassCall(
+                args = code.substring(hit + "GlassSurface(".length, argsEnd),
+                body = code.substring(i, bodyEnd),
+            )
+            from = bodyEnd + 1
+        }
+    }
+
+    /** 返回与 [code]（[open] 在 [openAt] 处）配对的 [close] 的下标。 */
+    private fun matching(code: String, openAt: Int, open: Char, close: Char): Int {
+        require(code[openAt] == open) { "$openAt 处不是 $open：${code.substring(openAt, (openAt + 8).coerceAtMost(code.length))}" }
+        var depth = 0
+        var inString = false
+        var inChar = false
+        var i = openAt
+        while (i < code.length) {
+            val c = code[i]
+            when {
+                inString -> if (c == '\\') i++ else if (c == '"') inString = false
+                inChar -> if (c == '\\') i++ else if (c == '\'') inChar = false
+                c == '"' -> inString = true
+                c == '\'' -> inChar = true
+                c == open -> depth++
+                c == close -> {
+                    depth--
+                    if (depth == 0) return i
+                }
+            }
+            i++
+        }
+        throw IllegalStateException("找不到与 $open（第 $openAt 个字符）配对的 $close")
+    }
+
+    /** 断言失败时只回显真正相关的几行，否则整张卡的源码会糊满报告。 */
+    private fun String.inkLines(): String =
+        lines().filter { "color =" in it || "color=" in it }.joinToString(" | ").take(400)
+
     // ---- 表 ----------------------------------------------------------------
+
+    private companion object {
+        /**
+         * 染了语义色的卡里再出现这些当 `color =`，就是配对又裂成两处了：
+         * `error` 是强调色、`onErrorContainer` 是 `errorContainer` 的前景、
+         * `success` 是"只有色相没有配套墨"的那支（三张登录/扫码卡曾经拿它直接当字色，
+         * 于是绿板配绿字 1.00:1）。
+         */
+        val STALE_INKS = listOf(
+            "colorScheme.onErrorContainer",
+            "colorScheme.error",
+            "SemanticColors.current.success",
+            "successInk",
+        )
+    }
 
     private class Scheme(val name: String, val scheme: ColorScheme, val semantic: SemanticColors, val dark: Boolean)
 

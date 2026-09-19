@@ -60,6 +60,7 @@ import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalSemanticColors
+import com.buaa.schedule.core.designsystem.LocalSemanticPlate
 import com.buaa.schedule.core.designsystem.SettingsGroup
 import com.buaa.schedule.core.designsystem.SettingsRow
 import com.buaa.schedule.domain.model.periodLabelOf
@@ -383,11 +384,9 @@ fun ImportScreen(
                     Text(
                         text = message.text,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = if (message.isError) {
-                            MaterialTheme.colorScheme.onErrorContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
+                        // 失败/成功两档的底板与文字成对解出（卡位只报意图），中性进度仍是无染面板
+                        color = LocalSemanticPlate.current?.foreground
+                            ?: MaterialTheme.colorScheme.onSurface,
                     )
                 }
             }

@@ -57,6 +57,7 @@ import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassTopBar
 import com.buaa.schedule.core.designsystem.LocalSemanticColors
+import com.buaa.schedule.core.designsystem.LocalSemanticPlate
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.data.import.BuaaInPageFetcher
 import com.buaa.schedule.data.import.redactUrl
@@ -338,8 +339,8 @@ fun BuaaLoginScreen(
             val isErrorStatus = loadError != null || timedOut
             // 「课程已获取完成」是这一页唯一做完了的回执：success 进状态卡
             val isDoneStatus = importPrepared
-            // 正文与卡片 tint 同源：绿卡配灰字会读成两件不相干的事
-            val successInk = LocalSemanticColors.current.success
+            // 只声明意图（这块卡想染成 success）；最终染哪支、上面写哪支由 GlassSurface 配对
+            val successTint = LocalSemanticColors.current.success
             val fetchFraction = if (fetchTotal > 0 && fetchStateText != null) {
                 (fetchWeek.toFloat() / fetchTotal).coerceIn(0f, 1f)
             } else {
@@ -349,7 +350,7 @@ fun BuaaLoginScreen(
                 variant = if (isErrorStatus) GlassVariant.ALERT else GlassVariant.PANEL,
                 semanticTint = when {
                     isErrorStatus -> MaterialTheme.colorScheme.error
-                    isDoneStatus -> successInk
+                    isDoneStatus -> successTint
                     else -> null
                 },
                 contentPadding = DesignTokens.spaceL,
@@ -370,11 +371,10 @@ fun BuaaLoginScreen(
                     Text(
                         text = statusText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = when {
-                            isErrorStatus -> MaterialTheme.colorScheme.error
-                            isDoneStatus -> successInk
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        },
+                        // 成对取墨：染了语义色（失败/完成）时底板与文字一次解出，
+                        // 中性进度那张卡没染色的仍走 onSurfaceVariant
+                        color = LocalSemanticPlate.current?.foreground
+                            ?: MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     // 19 周逐周请求在网络差时要跑几十秒。只有文案在换的话，
                     // 这段等待读起来就是"卡住了"；有分母就画确定性进度（M5）

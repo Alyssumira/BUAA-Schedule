@@ -83,6 +83,7 @@ import com.buaa.schedule.core.designsystem.GlassSegmentedControl
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalSceneBackdrop
+import com.buaa.schedule.core.designsystem.LocalSemanticPlate
 import com.buaa.schedule.core.designsystem.ModalTransition
 import com.buaa.schedule.core.designsystem.Personalization
 import com.buaa.schedule.core.designsystem.SemesterProgressLine
@@ -482,7 +483,9 @@ fun HomeScreen(
                     Text(
                         text = "存在 ${state.conflicts.size} 组课程时间冲突，点这里按建议处理。",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        // 卡位只声明意图（这张卡是 error），底板与文字成对由 GlassSurface 解
+                        color = LocalSemanticPlate.current?.foreground
+                            ?: MaterialTheme.colorScheme.onSurface,
                     )
                 }
             }
