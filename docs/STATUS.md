@@ -116,19 +116,38 @@
       `automaticGenerationDuringBuild` 保持默认 false：打开后每次 assembleRelease 都会去抢设备。
       采集场景 = `BaselineProfileGenerator`（冷启动 → 另出一份 startup profile，全工程唯一带
       `includeInStartupProfile` 的）+ `InteractionBaselineProfileGenerator` 四条日常交互
-      （周表滚动+翻周 / 课次行↔24 小时时间轴来回切 / 今日视图 / 设置页滚动）。
+      （周表滚动+翻周 / 课次行↔24 小时时间轴来回切 / 今日视图 / 设置页），四个 CUJ 落成
+      **五个采集方法**：「切时间轴」在真机上是两件不同的控件（周课表侧那颗胶囊 +
+      今日页的「列表/时间轴」分段），锚点不通用，合在一个方法里必有一边空跑。
       **扫码页与 WebView 导入页刻意不进 profile**：前者会让每次冷启动为走不到的 CameraX+MLKit
       帧回调付编译成本，后者是系统组件在编译、ART 管不着。
-      ⚠️ 这六个场景**没有连过设备**，锚点全部取自源码（本工程无 `testTagsAsResourceId`，
-      只有 `By.desc` / `By.text` 可用；核不到的分组标题退化成坐标级 swipe），
-      在已播种库上的实际可跑性靠下面这一次生成来验。
+      ✅ 这五条场景的锚点已在 emulator-5554（API 36 / release nonMinified / 已播种）上按
+      `uiautomator dump` 订正过一轮（T16b）。订正掉的三件事：①本工程无 `testTagsAsResourceId`，
+      只有 `By.desc` / `By.text` 可用，而**带文案的节点全部 `clickable=false`**（可点容器的
+      bounds 是另外的无名节点）→ 点击一律改成拿节点 `visibleBounds` 的中心做 `UiDevice.click`；
+      ②场景不靠 app 的默认落位，各自点分段切到起点页并用 dump 里的证据确认，确认不了**抛异常**
+         （静默空跑产出的是一份"看着成功其实没覆盖交互"的 profile，比红一条测试危险）；
+         周课表侧的场景会**先刻意切一次今日页、再切回来**，为的是吃掉 `HomeScreen.kt:178-183`
+         那个只在首次数据到位后触发一次、且只会把页签改成今日的 `LaunchedEffect` ——
+         屏幕上页签连跳两下是预期，不是抖动，别在人工盯屏时把它当成 bug；
+      ③唯一的残余未验项是今日页「哪一格被选中」的判据（`BySelector.selected(true)` 按 bounds
+      罩住文字中心来认，见 `segmentSelected` 的 KDoc）—— 它红了就是 Compose 没把选中态映射进
+      accessibility 树，复核动作是 dump 后 grep `selected="true"`，不是改判据写法。
 
       **生成与验收步骤（要连设备，由编排者按序执行）**：
       1. **先播种**，条件是：库里有一个学期 + 多门课，且 `currentWeek` 落在学期**中间**
          （第 1 周和最后一周都不行：「下一周」/「上一周」有一侧是禁用态，翻周那步会空跑）；
-         `schedule_settings` 里 `privacy_consent_at` 与 `onboarding_completed=true` 两个门都要过，
-         否则冷启动落在引导页、采到的是引导页的方法；时间轴模式保持默认（课次行），
-         切换场景要从默认态起步。**生成前不要 `pm clear`**，那会把播种一起清掉。
+         **今天这一天要有课**：`HomeScreen.kt:180` 的
+         `selectedTab = if (hasTodayCourses) 1 else 0` 使冷启动**直接落在「今日」页**
+         （五条场景现在都自己点分段声明起点页、不再依赖这个落位，但验收 dump 时要知道
+         默认那一帧在哪页）；而今天有课时日视图内容区才有课可换 —— 空的那一天
+         「列表/时间轴」两格照样渲染（`DayView.kt:247` 那个分段控件没有数量门），
+         一切却只是换掉一块 `EmptyState`，这条 CUJ 就没什么价值了；
+         拦冷启动的是 `schedule_settings` 里的 **`onboarding_completed=true`** 这一扇门
+         （`MainActivity.kt:158` 只读它），**不是** `privacy_consent_at` —— 订正：那个键
+         （`FirstRun.kt:21`）只管出网闸门（`UpdateCheck.kt:126`），没它也能进主页，
+         只是更新检查会静默不发；时间轴模式保持默认（课次行），切换场景要从默认态起步。
+         **生成前不要 `pm clear`**，那会把播种一起清掉。
       2. `./gradlew :app:generateBaselineProfile`（可加 `--stacktrace`）。它驱动
          `:benchmark:connectedNonMinifiedReleaseAndroidTest` → `:collectNonMinifiedReleaseBaselineProfile`
          → `:app:mergeReleaseBaselineProfile` → `:app:copyReleaseBaselineProfileIntoSrc`。
