@@ -130,9 +130,22 @@ object BackgroundSync {
      * 是给 [ColdStartRebuild] 用的：钥匙 2 下一次该探哪一头闹钟由它决定。
      * 其余调用点照旧丢弃它。
      *
-     * ⚠️ 已知残余：兜底续排那一步（[ClassProgressScheduler.rescheduleNextWindow]）自己吞异常，
-     * 这道失败出不了它那个 `runCatching`，闸门看不见。方向上是安全的 ——
-     * 它没跑成功就是没排出闹钟，下一次冷启动钥匙 2 当场探"不在"→ 整链重跑。
+     * 兜底续排那一步（[ClassProgressScheduler.rescheduleNextWindow]）自己吞异常，但失败现在
+     * 报给同一个 [onStepFailed]。ai/T13 在两处注释里登记的那条"已知残余 / 方向安全"就是这里，
+     * 本卡（ai/T14）把它收掉。
+     *
+     * 为什么那句"方向安全"不够：它只在**铃确实被撤了却没排上**这半边成立 —— 那时钥匙 2 探
+     * [ClassProgressScheduler.hasPendingClassBells] 得到"不在"，下一次冷启动照跑。
+     * 可续排那一步真正会抛的点全在 [ClassProgressScheduler.rescheduleWindows] 的第一句
+     * `cancel`（撤上/下课铃）**之前**：读 prefs、`scheduleRepository()`、`getCurrentSemester()`、
+     * `getDisplayCourses` / `getTimeSlots` 任意一处抛（Room 的 `SQLiteFullException`、
+     * cursor window 都是现实存在的），此时**上一轮那对课堂铃还挂在那里**，
+     * 而本轮的清理与重排一个字都没执行。于是：
+     * - 钥匙 2 探到"闹钟在"、钥匙 1 与 3 也放行 ⇒ 这一整轮被跳过，**最长 24 小时**；
+     * - 被跳过的这 24 小时里用户用的是**上一轮的窗口** —— 课被删了还在响、
+     *   改过时间了还按旧的时刻响。
+     * 只有把这道失败记进 [ColdStartRebuild] 的 `failures` 清单（⇒ 不写指纹 ⇒
+     * 下一次冷启动无条件重跑）才补得上这个洞。
      */
     suspend fun rescheduleRemindersAndBells(
         context: Context,
@@ -142,7 +155,9 @@ object BackgroundSync {
         if (!reminderArmed) {
             // 与 WidgetFallbackWorker 同一口径：只在提醒那条链没接手课堂铃时才补排，
             // 无条件再排一遍等于把刚排上的上课铃撤了重排。
-            ClassProgressScheduler.rescheduleNextWindow(context)
+            // 报告口必须传下去（ai/T14）：这里不传，续排那道抛在 cancel 之前的失败就出不了
+            // 它自己那个 runCatching，闸门会把这一轮记成成功并写下指纹。
+            ClassProgressScheduler.rescheduleNextWindow(context, onStepFailed)
         }
         return reminderArmed
     }

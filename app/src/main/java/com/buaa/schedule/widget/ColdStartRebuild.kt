@@ -104,9 +104,16 @@ private val LOG_REBUILD_DECISION: (ColdStartRebuild.Decision) -> Unit = { decisi
  *    legacy 任务自己的下一次唤醒又会被判成"无事可做"继续跳过 ——
  *   那是个自我闭合的死循环，被退役的任务会一路polling到某次 versionCode 变化为止。
  *   留在外面付的是"一次幂等 cancelUniqueWork"，而这个代价正是它存在的理由。
- * - `ClassProgressScheduler.rescheduleNextWindow`（续排那一步）自己吞异常，
- *   闸门看不见它的失败 —— 已知残余：那一轮仍会被记成成功。
- *   方向上是安全的，因为闹钟没排上就是排不上，下一次冷启动钥匙 2 会当场探出来。
+ *
+ * ✅ 订正（ai/T14 收掉 ai/T13 登记的最后一条残余）：这一节过去还列着
+ * `ClassProgressScheduler.rescheduleNextWindow`（课堂铃兜底续排）—— 它自己吞异常，
+ * 闸门看不见它的失败，那一轮因此仍被记成成功。**现在它归本闸门的第一半管**：
+ * 那一步把失败报给 [BackgroundSync.rescheduleRemindersAndBells] 的同一个报告口
+ * ⇒ 进下面的 `failures` 清单 ⇒ 不写指纹 ⇒ 下一次冷启动无条件重跑。
+ * 旧注释那句"方向上是安全的"不成立：那道失败抛在 `rescheduleWindows` 第一句 `cancel` **之前**，
+ * 此时上一轮那对课堂铃还挂着，钥匙 2 反倒因此判"在"→ 白跳过一整轮，
+ * 最长 24 小时里用户用的是上一轮的窗口（课删了还在响、改过时间还按旧的时刻响）。
+ * 完整的账写在 [BackgroundSync.rescheduleRemindersAndBells] 的注释里。
  *
  * ## 指纹为什么不进 Room
  *

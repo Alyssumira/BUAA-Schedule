@@ -27,6 +27,30 @@ import java.time.LocalTime
 import java.time.ZoneId
 
 /**
+ * [ClassProgressScheduler.rescheduleNextWindow] 的默认失败留痕口：什么都不做。
+ *
+ * 形状照 `widget.BackgroundSync.NO_STEP_FAILURE`，但**不复用那一份**：`internal` 同模块确实
+ * 调得到，可依赖方向是 widget → reminder（`BackgroundSync` 正是那一步的调用方之一），
+ * 让被调方去 import 调用方的常量，等于给这条已经缠得够紧的链再加一根反向的线。
+ * 与那一份同样的理由写成顶层属性而不是签名里的 lambda：本仓库的源码形状守卫按
+ * "函数体第一个 `{`"切函数体，签名里出现 lambda 它会切到默认值上去
+ * （原话见 `BackgroundSync.kt` 里 `NO_STEP_FAILURE` 的注释）。
+ */
+private val NO_RESCHEDULE_STEP_FAILURE: (label: String, error: Throwable) -> Unit = { _, _ -> }
+
+/**
+ * 续排失败的那句 `Log.w` —— 原样搬来，tag 与文案一字未改（审计 §4.4 的取证过滤条件不许变），
+ * 只是挪成了 [ClassProgressScheduler.rescheduleNextWindow] 编排本体的日志钩子默认值。
+ *
+ * 为什么非挪不可：`android.util.Log` 在本模块 JVM 单测里是抛 "not mocked" 的桩，
+ * 留在 `onFailure { }` 里第一句就报告口根本轮不到被调用，那条"失败要能被闸门看见"的断言
+ * 会红得看不出原因（同 `ColdStartRebuild` 顶部那两个 `LOG_*` 属性，理由一字不差）。
+ */
+private val LOG_RESCHEDULE_WINDOW_FAILURE: (Throwable) -> Unit = {
+    Log.w("ClassProgressScheduler", "下课后续排课堂窗口失败", it)
+}
+
+/**
  * 「课程进行中」常驻通知的调度。
  *
  * 在课程提醒（上课前）之外再加两个时刻：
@@ -298,25 +322,90 @@ object ClassProgressScheduler {
      * 独立于课前提醒开关：全部提醒关闭时 [ReminderScheduler.rescheduleAll] 走
      * "没有下一条提醒"分支直接收铃返回，下课铃若不自己续排，这类用户在第一节课之后
      * 就再也不会有课程实况与上课自动勿扰。两个开关都关时不武装任何闹钟。
+     *
+     * @param onStepFailed "这一步抛了"的留痕口，默认 `NO_RESCHEDULE_STEP_FAILURE` 等于无操作。
+     *   多出来的这个口不为日志（那句 `Log.w` 由文件顶层的 `LOG_RESCHEDULE_WINDOW_FAILURE`
+     *   原样承担，tag 与文案一字未改，审计 §4.4 的取证过滤条件不许变），
+     *   只为让冷启动闸门看得见这一层的失败 —— 完整的账写在
+     *   [com.buaa.schedule.widget.BackgroundSync.rescheduleRemindersAndBells] 的注释里。
+     *   两条 `return`（两个开关都关 / 没有学期或学期没有起始日期）**不报**：那是"没有可排的窗口"，
+     *   不是"排失败了"，记成失败只会逼闸门白重跑一整轮。
      */
-    suspend fun rescheduleNextWindow(context: Context) {
-        runCatching {
+    suspend fun rescheduleNextWindow(
+        context: Context,
+        onStepFailed: (label: String, error: Throwable) -> Unit = NO_RESCHEDULE_STEP_FAILURE,
+    ) = rescheduleNextWindow(
+        readClassSwitches = {
             val prefs =
                 context.getSharedPreferences(ClassProgressReceiver.PREFS_NAME, Context.MODE_PRIVATE)
-            val classProgress = prefs.getBoolean(ClassProgressReceiver.PREF_CLASS_PROGRESS, true)
-            val dndEnabled = prefs.getBoolean(ClassProgressReceiver.PREF_DND, false)
-            if (!classProgress && !dndEnabled) return
+            Pair(
+                prefs.getBoolean(ClassProgressReceiver.PREF_CLASS_PROGRESS, true),
+                prefs.getBoolean(ClassProgressReceiver.PREF_DND, false),
+            )
+        },
+        loadWindowInput = load@{
             val repository = context.scheduleRepository()
-            val semester = repository.getCurrentSemester() ?: return
-            val semesterStart = semester.startLocalDate ?: return
-            rescheduleWindows(
-                context = context,
+            val semester = repository.getCurrentSemester() ?: return@load null
+            val semesterStart = semester.startLocalDate ?: return@load null
+            NextWindowInput(
                 courses = repository.getDisplayCourses(semester),
                 semesterStart = semesterStart,
                 timeSlots = repository.getTimeSlots(),
             )
-        }.onFailure { Log.w(TAG, "下课后续排课堂窗口失败", it) }
+        },
+        reschedule = { input ->
+            rescheduleWindows(
+                context = context,
+                courses = input.courses,
+                semesterStart = input.semesterStart,
+                timeSlots = input.timeSlots,
+            )
+        },
+        onStepFailed = onStepFailed,
+    )
+
+    /**
+     * [rescheduleNextWindow] 的编排本体：**不接 Context，三步副作用全是注入的 lambda**。
+     *
+     * 形状抄 [com.buaa.schedule.widget.BackgroundSync.runColdStartWidgetSteps] —— 本模块单测
+     * 没有 Robolectric（android.jar 里全是抛 "not mocked" 的桩），真跑一次这条链要设备，
+     * 而这张卡要钉的恰好是数得出来的那件事：抛了有没有向闸门报一声、报的标签是什么、
+     * 以及"没东西可排"那几条早退不许被算成失败（见 `ClassProgressRescheduleFailureReportTest`）。
+     *
+     * 整体仍然吞异常（`runCatching` 不许改成向外抛）：五个调用点里四个没有报告口，
+     * 让它们把异常逃出去等于把下课铃广播 / 前台服务那条链变成崩溃或被静默吞掉。
+     *
+     * @param readClassSwitches 两个课堂开关，顺序是 `classProgress to dndEnabled`
+     * @param loadWindowInput 读库定位下一个窗口要用的三样输入；null = 没有可排的窗口（早退，不算失败）
+     * @param reschedule 真正的重排（第一句就是 [cancel]，见 [rescheduleWindows]）
+     * @param logFailure 那句 `Log.w` 的位置，默认 `LOG_RESCHEDULE_WINDOW_FAILURE`（= 原来那行，
+     *   一字不差）。同样收成参数是为了让 JVM 单测不被 android.jar 的桩带偏
+     *   （同 [com.buaa.schedule.widget.BackgroundSync.runColdStartWidgetSteps] 的那个参数，理由一字不差）。
+     */
+    internal suspend fun rescheduleNextWindow(
+        readClassSwitches: () -> Pair<Boolean, Boolean>,
+        loadWindowInput: suspend () -> NextWindowInput?,
+        reschedule: suspend (NextWindowInput) -> Unit,
+        onStepFailed: (label: String, error: Throwable) -> Unit,
+        logFailure: (Throwable) -> Unit = LOG_RESCHEDULE_WINDOW_FAILURE,
+    ) {
+        runCatching {
+            val (classProgress, dndEnabled) = readClassSwitches()
+            if (!classProgress && !dndEnabled) return
+            val input = loadWindowInput() ?: return
+            reschedule(input)
+        }.onFailure {
+            logFailure(it)
+            onStepFailed("rescheduleNextWindow", it)
+        }
     }
+
+    /** 续排一个课堂窗口要读的三样输入：只在 seam 与生产接线之间传一次，不落任何状态 */
+    internal data class NextWindowInput(
+        val courses: List<Course>,
+        val semesterStart: LocalDate,
+        val timeSlots: List<TimeSlot>,
+    )
 
     fun schedule(context: Context, window: ClassWindow) {
         val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return

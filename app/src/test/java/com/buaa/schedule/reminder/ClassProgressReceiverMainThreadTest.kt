@@ -164,7 +164,9 @@ class ClassProgressReceiverMainThreadTest {
         val windowOf = funModifiers(code, "fun windowOf(intent: Intent)")
         assertTrue("windowOf(intent) 不再是公开伴生函数（实况链/组件三条渲染链都在用它）",
             windowOf.none { it == "private" || it == "internal" || it == "protected" })
-        val reschedule = funModifiers(code, "fun rescheduleNextWindow(context: Context)")
+        // 锚点只到左括号：ai/T14 给同名函数加了默认参数（另一模块那份），写死整条签名的锚点
+        // 会找不到函数；这里钉的是**可见性**，语义与锚点宽度无关（先例：scheduleWidgetMidnight）
+        val reschedule = funModifiers(code, "fun rescheduleNextWindow(")
         assertTrue("rescheduleNextWindow(context) 的可见性被放宽了：它只是内部实现",
             reschedule.contains("private"))
     }
