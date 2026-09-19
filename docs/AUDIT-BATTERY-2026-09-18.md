@@ -42,7 +42,7 @@ Manifest 动态注册零（`registerReceiver` 全仓库 0 命中），`SCREEN_ON
 
 | 级别 | 位置（文件:行号） | 症状 | 省电收益估计 | 改动风险 |
 | --- | --- | --- | --- | --- |
-| **P1** | `BUAAApplication.kt:36`、`:58-74`；放大点 `BackgroundSync.kt:112-126`、`:139-161`、`WidgetFallbackWorker.kt:71-73` | 每次冷启动进程无条件重跑整套后台链；而**每一个闹钟都把进程冷启动**（6 条闹钟 × 每日多次），于是"数据没变的唤醒"付两遍全量重排 + 全学期快照重写 + ≤18 次 Launcher binder 往返 | 单次冷唤醒的后台工作量：重复的那一半（约 7+2N 次查询、N 份快照写盘、≤12 趟 Launcher binder）**是可证明的净多余**；折算成功耗降幅 **推断，未取证**（需 §4.3/§4.4 前后对测）。待机总唤醒次数不变，降的是每次唤醒的 CPU 占空比与闪存活动。**2026-09-19 进度**：组件探测那一份已由 ai/T10 收成一次探测（≤12 趟已省掉）；"整套重排重跑"仍待办 | 中：幂等补注册（ROM 吞广播的自愈路径）与"升级后重建"依赖这条链，收窄触发条件必须保留事件式兜底，不能简单删 |
+| **P1** | `BUAAApplication.kt:36`、`:58-74`；放大点 `BackgroundSync.kt:112-126`、`:139-161`、`WidgetFallbackWorker.kt:71-73` | 每次冷启动进程无条件重跑整套后台链；而**每一个闹钟都把进程冷启动**（6 条闹钟 × 每日多次），于是"数据没变的唤醒"付两遍全量重排 + 全学期快照重写 + ≤18 次 Launcher binder 往返 | 单次冷唤醒的后台工作量：重复的那一半（约 7+2N 次查询、N 份快照写盘、≤12 趟 Launcher binder）**是可证明的净多余**；折算成功耗降幅 **推断，未取证**（需 §4.3/§4.4 前后对测）。待机总唤醒次数不变，降的是每次唤醒的 CPU 占空比与闪存活动。**2026-09-19 进度**：组件探测那一份已由 ai/T10 收成一次探测（≤12 趟已省掉）；"整套重排重跑"已由 ai/T13 收成三把钥匙闸门、ai/T14 再把闸门看不见的课堂铃兜底续排失败接进 `failures` 清单（见 §2.1 两段"已落地"）；跳过率与省电幅度仍待 §4.3/§4.4 前后对测 | 中：幂等补注册（ROM 吞广播的自愈路径）与"升级后重建"依赖这条链，收窄触发条件必须保留事件式兜底，不能简单删 |
 | **P1** | `ClassProgressScheduler.kt:274-285`（破坏性分支）＋ `ReminderNotifications.kt:181-198`（判据是进程内 `@Volatile`）＋ `BUAAApplication.kt:23`（`Dispatchers.IO`，真并行） | onCreate 那条链与广播自己那条链并发跑同一次 `rescheduleWindows`；前者的"这是下课铃被吞的遗留"判据读的是进程内状态，**可能在课前倒计时已下发之后**才跑到，于是把刚上岛的倒计时停掉 | 直接收益小（省一次通知重下），**但这是 2026-09-17 事故的同类残留路径**，修掉 P1-①（重复链）后本条随之消失 | 高：动的是曾经拆掉过课前倒计时的同一段代码；建议**只通过消除重复链来间接修**，不要给 `rescheduleWindows` 加新分支。**2026-09-19 补**：另有一条**不依赖并发**的确定性同型抖动（同一处 `cancelAll` 被更早的一步抢先调用），见下一行与 §2.9 |
 | **P1** | `ReminderScheduler.kt:83-89`（`plan == null` 分支无条件 `ClassProgressScheduler.cancelAll`）＋ `ClassProgressScheduler.kt:321-325`（`setAlarmClock` 排已过时刻的上课铃 → 立刻投递） | 课前提醒全关的用户，只要此刻正在上课，**每一次重排**（下课铃续排 / 冷启动 / 开机 / 改时间）都会：勿扰被恢复 → 记录与看门狗被抹 → 5 秒后被一次"多出来的上课铃"重新 `enter()`。模拟器实测三次同型（§2.9 日志） | 每轮多一整趟上课铃副作用链（notify + startForegroundService + setInterruptionFilter + prefs 落盘）；折算电流未取证。**真实危害不是功耗**：那次过期闹钟被 ROM 吞掉时，这一节课的勿扰永久进不去且无自愈入口（记录已清，`selfCheck` 不进门） | 低-中：只删"抢先的那一份"清理，判据仍归 `rescheduleWindows:280-291` 唯一实现；两个课堂开关都关时必须保留 `cancelAll`（那条路 `rescheduleNextWindow:308` 会早退，没人接手） |
 | **P2** | `BackgroundSync.kt:67` 与 `:70-78` | 同一轮重排里 `planNextReminder` 算了**两遍**：`rescheduleAll` 内部已算（`ReminderScheduler.kt:64`），外层为了拿 `willRemind` 这个 Boolean 又把 O(课程数×剩余周次×节次段) 的全量搜索重跑一次 | 每次唤醒省一次全量窗口搜索（学期中段约上千次窗口构造，见 §2.3 的量级推导） | 低：让 `rescheduleAll` 复用已算出的 plan 即可，公开签名可保持 |
@@ -181,6 +181,56 @@ WeekGrid / NextClass / TwoDay，`any { }` 短路时最少 1 趟、最坏 6 趟�
 > 门禁：新增 23 条判据单测（三把钥匙各自正反例、24h 边界、任一步抛 ⇒ 不写时间戳、跳过不续期、
 > 四类人群口径、2×2×2 真值表）+ 6 条生产接线形状守卫；§4.4 那笔冷启动账要有定量结论，
 > 仍按上面那条对改动前后各测一次同一待机窗口。
+
+> **已落地（ai/T14，`a9ec26a`）**：ai/T13 自己在两处注释里登记的那条残余收掉了 ——
+> 课堂铃兜底续排（`ClassProgressScheduler.rescheduleNextWindow`）过去整体裹在 `runCatching` 里，
+> 闸门看不见它的失败，那一轮仍被记成"成功"并写下指纹。
+>
+> **为什么旧的"方向安全"论证不够**（登记处的原话是：闹钟没排上就是排不上，
+> 下一次冷启动钥匙 2 当场探"不在"→ 整链重跑）：它只在**铃确实被撤了却没排上**这半边成立。
+> 而 `rescheduleWindows` 的第一句就是 `cancel`（撤上/下课铃），续排那一步真正会抛的点
+> **全在 `cancel` 之前** —— 读 prefs、`scheduleRepository()`、`getCurrentSemester()`、
+> `getDisplayCourses` / `getTimeSlots` 任意一处抛（Room 的 `SQLiteFullException`、
+> cursor window 都是现实存在的失败），此时**上一轮那对课堂铃还挂在那里**，
+> 本轮的清理与重排一个字都没执行。于是钥匙 2 探到"闹钟在"、钥匙 1 与 3 也放行
+> ⇒ 这一整轮被跳过，**最长 24 小时**；而被跳过的这 24 小时里用户用的是**上一轮的窗口** ——
+> 课被删了还在响、改过时间了还按旧的时刻响。只有把这道失败记进闸门的 `failures` 清单
+> （⇒ 不写指纹 ⇒ 下一次冷启动无条件重跑）才补得上这个洞。
+>
+> **改法（窄）**：`rescheduleNextWindow(context, onStepFailed = NO_RESCHEDULE_STEP_FAILURE)`，
+> 那句 `Log.w`（"下课后续排课堂窗口失败"）tag 与文案一字未改，只是挪成文件顶层的
+> `LOG_RESCHEDULE_WINDOW_FAILURE` 作编排 seam 的日志钩子默认值 —— `android.util.Log` 在本模块
+> JVM 单测里是抛 "not mocked" 的桩，硬留在 `onFailure` 里第一句就把报告口挤掉了。
+> 无操作默认值在 `reminder/` 侧自己声明，不复用 `widget` 那份（方向是 widget → reminder）。
+> 生产接线只改 `BackgroundSync` 那一处（复用 `rescheduleRemindersAndBells` 已有的 `onStepFailed`）；
+> 另外四处（`WidgetFallbackWorker` 1、`CourseFluidService` 2、`ClassProgressReceiver` 1）吃默认值 ——
+> 它们没有 `failures` 清单可落。`runCatching` 仍然整体吞异常（**不许改成向外抛**：
+> 那四处里坐着下课铃广播与前台服务链路）。三条早退（两个课堂开关都关 / 学期为空 /
+> 学期没有起始日期）**不算失败** —— 那是"没有可排的窗口"，记成失败等于让闸门每一轮都无条件重跑，
+> §2.1 这半张卡的省电量级会被整个抹掉。
+>
+> **测了几遍**：新增 14 条 = 9 条编排 seam 行为（三个失败点各报**一次**、标签是
+> `rescheduleNextWindow`、日志先于报告、异常不外逃、干净跑完 0 次、三条早退 0 次、
+> 只开一个开关时仍往下走）+ 5 条源码形状（`rescheduleRemindersAndBells` 传的是它自己那个报告口，
+> 而非常量、也不是漏传；全仓库 `ClassProgressScheduler.rescheduleNextWindow(` 的调用点集合 =
+> 已知 5 处、其中只 1 处带报告口；那四处实参仍是 `context` / `applicationContext`；
+> 日志文案未改且只一份；早退走 null 而不是走报告口）。两处按精确签名串切的既有守卫**只改锚点**
+> （`ClassProgressReceiverMainThreadTest` 改成只到左括号、钉的仍是可见性；
+> `ClassProgressCleanupDecisionTest` 里 BackgroundSync 那处改成匹配新接线）。
+> 两处变异实测确认守卫是活的：抹掉 `BackgroundSync` 那个报告口 ⇒ 形状守卫两条红；
+> 抹掉编排本体的日志钩子 ⇒ 顺序断言与形状守卫各一条红（共 4 条）。
+>
+> **门禁**（worktree `T14` @ `a9ec26a`，`--offline --rerun`）：`:app:testDebugUnitTest`
+> **748 tests / 0 failures**（master 地板 734，只涨不跌）；`:app:lintDebug`
+> **0 error / 14 warning**，其中 `.kt` 9 条与基线同口径（`BuaaWebSession` / `SettingsScreen` /
+> `ReminderGuidance` / `HomeScreen` / `OnboardingScreen` / `WeekView` ×3 / `SceneBackground`）。
+>
+> ⚠️ 顺带登记本轮造成的**行号漂移**（本轮不动，留给下一次统一订正，同上一轮那条订正任务）：
+> `ClassProgressScheduler.kt` 顶部多了两个顶层属性、`rescheduleNextWindow` 拆成"接线 + seam"两层，
+> 该文件里 `rescheduleWindows` 及之前 **+24**、`schedule` / `cancel` / `cancelAll` /
+> `hasPendingClassBells` 及之后 **+89**。本文件与 `ColdStartRebuild` 类注释里那些绝对行号
+> （`:349`、`:383`、`:399-405`、`:409-413`、`:414-421`、`:430-440`、`:274-285`、`:280-291`、
+> `rescheduleNextWindow:308`）要按这两个偏移换算；本轮只保证**新写**的引用是当前行号。
 
 ### 2.2 P1-② 并发重复重排 vs 进程内倒计时归属（事故残留面）
 
