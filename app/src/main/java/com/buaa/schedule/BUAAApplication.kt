@@ -2,6 +2,7 @@ package com.buaa.schedule
 
 import android.app.Application
 import android.content.ComponentCallbacks2
+import androidx.work.Configuration
 import com.buaa.schedule.core.designsystem.Personalization
 import com.buaa.schedule.data.local.AppDatabase
 import com.buaa.schedule.data.repository.ScheduleRepository
@@ -12,7 +13,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
-class BUAAApplication : Application() {
+/**
+ * [Configuration.Provider] 是 WorkManager 按需初始化的另一半：清单里摘掉
+ * `androidx.work.WorkManagerInitializer` 之后，work-runtime 2.9.1 的
+ * `WorkManagerImpl.getInstance(Context)` 在「还没初始化」这一支上**不**自我初始化，
+ * 而是问 `applicationContext is Configuration.Provider`，拿不到就抛
+ * IllegalStateException（反编译过字节码确认，两条分支都看着 sLock 里面）。
+ * 所以这两处改动是一个整体：只摘 initializer 会直接把兜底任务变成"永远注册不上"。
+ */
+class BUAAApplication : Application(), Configuration.Provider {
 
     val database: AppDatabase by lazy { AppDatabase.getInstance(this) }
     val repository: ScheduleRepository by lazy { ScheduleRepository(database) }
@@ -22,6 +31,24 @@ class BUAAApplication : Application() {
      * 排下的下一节课窗口）。服务/广播Receiver 不要自建常驻作用域。
      */
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * WorkManager 按需初始化时读到的那份配置。
+     *
+     * 与被摘掉的 `androidx.work.WorkManagerInitializer.create()` **逐字相同**
+     * （反编译看过：它就是 `WorkManager.initialize(context, new Configuration.Builder().build())`）：
+     * 默认日志档、默认后台 executor、默认的反射 WorkerFactory。
+     * [com.buaa.schedule.widget.WidgetFallbackWorker] 用的是 `(Context, WorkerParameters)`
+     * 这个标准构造，反射工厂建得起来，所以这边不需要自定义工厂。
+     * 保持等价是有意为之：这张卡要改的只有"什么时候初始化"，不是"用什么初始化"。
+     *
+     * ⚠️ 这个 getter 由**第一个调到 `WorkManager.getInstance(context)` 的线程**执行，
+     * 而且是在 WorkManager 那把静态 `sLock` 里面执行的（见 WorkManagerImpl.getInstance
+     * 的字节码：monitorenter 之后才 checkcast Configuration.Provider）。
+     * 因此它不许碰 WorkManager 自己、不许读盘、不许等任何人 —— 只构造一个对象就返回。
+     */
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder().build()
 
     override fun onCreate() {
         super.onCreate()
@@ -34,6 +61,15 @@ class BUAAApplication : Application() {
         // 应用启动/升级（升级会清掉已注册闹钟）：重排提醒并调度零点刷新。
         // WorkManager 第一次 getInstance 会初始化它自己的数据库，属于磁盘活，
         // 因此连同"旧版周期轮询退出"和兜底任务注册一起放这里，不占 onCreate 主线程。
+        //
+        // T18 之后这段话从"顺便说说"变成了**这条链存在的理由之一**：清单里
+        // `androidx.work.WorkManagerInitializer` 已被摘掉（按需初始化），
+        // 于是"进程里第一次 `WorkManager.getInstance` 的那个线程"就是付初始化钱的人。
+        // 这个块跑在 Dispatchers.IO 上，而且是 `Application.onCreate` 里排出去的，
+        // 比任何广播/服务回调都早 —— 冷进程被组件广播唤醒时，钱付在这里而不是
+        // 付在 `onReceive` 的主线程上。另外六个 Provider 的 onEnabled/onDisabled
+        // 也已经挪进后台协程（见 WidgetCommon 的那两个 *FromReceiver 入口），
+        // 所以主线程侧根本没有调到 getInstance 的路径，不需要额外的门闩。
         applicationScope.launch {
             // 这个作用域是 SupervisorJob 且没有 CoroutineExceptionHandler：块内任何
             // 未捕获异常都会落到线程的默认处理器，直接杀进程。

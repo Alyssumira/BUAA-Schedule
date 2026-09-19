@@ -222,7 +222,8 @@ class ColdStartWidgetStepsTest {
         val background = readMainSource(BACKGROUND_SYNC_FILE)
         val disabled = normalize(declarationBlock(background, "fun cancelWidgetMidnightIfNoWidgets(context: Context)"))
         assertTrue(
-            "onDisabled 那条路自己探测（六个 Provider 的 onDisabled 直连这里，没有上游可共享）：\n$disabled",
+            "onDisabled 那条路自己探测（六个 Provider 的 onDisabled 经 " +
+                "WidgetCommon.cancelMidnightIfNoWidgetsFromReceiver 落到这里，没有上游可共享）：\n$disabled",
             disabled.contains("hasAnyWidgetSafely(context)"),
         )
         assertEquals(

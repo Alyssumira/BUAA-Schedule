@@ -68,6 +68,34 @@ abstract class ScheduleAppWidgetProvider : AppWidgetProvider() {
         rerenderOnRebind(context, restoredAppWidgetIds)
     }
 
+    /**
+     * 首个实例被添加：补注册后台刷新链（零点闹钟 + 12 小时兜底任务）。
+     *
+     * 这一步不能省：零点闹钟与兜底轮询的其它事件入口只有"数据变化 / 开机 / 时间变化"，
+     * 装完组件后用户不再改课表的话，一个事件都不会来 —— 组件会一直停在放置当天。
+     *
+     * 六家 Provider 此前各写一份、内容逐字相同，收在这里之后新增一种组件不可能漏。
+     * 走 `*FromReceiver` 而不是同步那一份的原因见
+     * [WidgetCommon.bootstrapFromReceiver]：`onEnabled` 跑在**广播主线程**上，
+     * 而这条链要碰 `WorkManager.getInstance`（T18 起 WorkManager 是按需初始化的，
+     * 谁第一个调它谁就地付建库的钱）与跨 binder 的组件探测。
+     * 异常同样由那一份的 [WidgetCommon] 口径吞掉：从 `onReceive` 逃出去就是当场崩溃，
+     * 组件停在半初始化态。
+     */
+    override fun onEnabled(context: Context) {
+        super.onEnabled(context)
+        WidgetCommon.bootstrapFromReceiver(this, context)
+    }
+
+    /**
+     * 最后一个实例被移除：撤零点闹钟、退出旧版周期任务，并把兜底任务交回
+     * `ensure()` 重新判定（组件没了但提醒仍走应用内闹钟时要留着）。
+     * 线程口径与 [onEnabled] 同一条链、同一个理由。
+     */
+    override fun onDisabled(context: Context) {
+        WidgetCommon.cancelMidnightIfNoWidgetsFromReceiver(this, context)
+    }
+
     private fun rerenderOnRebind(context: Context, appWidgetIds: IntArray) {
         val due = appWidgetIds.filterNot { throttled(it) }
         if (due.isEmpty()) return

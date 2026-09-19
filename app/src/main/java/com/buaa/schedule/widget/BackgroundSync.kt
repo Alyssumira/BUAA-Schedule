@@ -506,8 +506,13 @@ object BackgroundSync {
 
     /** 所有 Widget 都被移除时调用：取消零点闹钟与旧版周期任务，并让兜底轮询重新判定自己是否还需要 */
     fun cancelWidgetMidnightIfNoWidgets(context: Context) {
-        // 六个 Provider 的 onDisabled 都直连这里，跑在广播主线程上：
-        // 可抛版 hasAnyWidget 会让"拖掉最后一个组件"变成一次进程崩溃。
+        // 这条链现在只从 WidgetCommon.cancelMidnightIfNoWidgetsFromReceiver 进来
+        // （六个 Provider 的 onDisabled 已在 T18 收进基类的那一份）：活跑在 goAsync()
+        // 续命的那条 Dispatchers.IO 协程上，不再占广播的主线程。
+        // 之所以必须挪：WorkManager 改成按需初始化之后，进程里第一个
+        // `WorkManager.getInstance` 的人要就地建它自己的库，而这条链一次带上两处
+        // getInstance（旧版周期任务退出 + 兜底重判定）外加一次跨 binder 探测。
+        // 探测仍要走不可抛版本：挪线程只解决"钱付在哪个线程"，不解决"抛了会崩广播"。
         // 探测失败按"有组件"处理 = 不取消零点闹钟，零点白刷一次，无害。
         if (!hasAnyWidgetSafely(context)) {
             cancelWidgetMidnight(context)
@@ -517,7 +522,16 @@ object BackgroundSync {
         }
     }
 
-    /** 旧版本的固定周期刷新任务在升级后应退出 */
+    /**
+     * 旧版本的固定周期刷新任务在升级后应退出。
+     *
+     * T18 之后它多了一重身份：`BUAAApplication.onCreate` 那条后台链的第一就是这一步，
+     * 而 WorkManager 的自动初始化已从清单摘掉 —— 也就是**进程里第一次
+     * `getInstance` 由这里发起**，建库的钱付在 Dispatchers.IO 上。
+     * 这一步刻意留在 [ColdStartRebuild] 的闸门外面（论证见那里的类注释），
+     * 所以每一次冷启动都会把这道预热走一遍，不依赖"这次到底有没有事要做"。
+     * 自己那句 `runCatching` 是这条链不崩的唯一原因：初始化抛出来就是杀进程。
+     */
     fun cancelLegacyPeriodicWork(context: Context) {
         runCatching { WorkManager.getInstance(context).cancelUniqueWork(LEGACY_PERIODIC_WORK) }
     }

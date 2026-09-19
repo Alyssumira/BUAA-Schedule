@@ -119,6 +119,47 @@ object WidgetCommon {
             .onFailure { Log.w(TAG, "组件兜底任务注册失败", it) }
     }
 
+    /**
+     * [bootstrapBackgroundSync] 的**广播回调**入口（六个 Provider 的 `onEnabled`）。
+     *
+     * 与直接调用的区别只有一件：活挪进 [launchRefresh] 那条 IO 协程里，主线程只做一次
+     * `goAsync()` + 一次协程派发。注册时机、逐步吞异常、时间闸门全是同一份实现。
+     *
+     * 为什么非挪不可（T18）：清单里 `androidx.work.WorkManagerInitializer` 摘掉之后，
+     * "进程里第一个调到 `WorkManager.getInstance(context)` 的线程"就要就地把它初始化完
+     * （反编译 work-runtime 2.9.1：Room 那颗 WORKDATABASE 的构造 + 连上 JobScheduler 的
+     * scheduler + 一组约束 tracker，全在调用的那一行里；`ForceStopRunnable` 的磁盘清理
+     * 是它自己 task 线程派的，不在这条账上），不再是
+     * ContentProvider 抢在 `Application.onCreate` 之前替所有人付掉。
+     * 而 `ACTION_APPWIDGET_ENABLED` 恰恰是**冷进程**的常见入口：桌面把组件广播进来时
+     * 进程可能刚从不存在被拉起来，那一刻 `onReceive` 跑在主线程上，
+     * 于是这笔钱会从"起手"整搬运到"用户刚放下组件、组件还没画出来的那一次广播"里 ——
+     * 比原来更贵也更难看。`onDisabled`（拆掉最后一个组件）同理。
+     *
+     * `goAsync()` 只有一份票、且被别处先取走时它**返回 null 而不抛**
+     * （口径见 [ScheduleAppWidgetProvider.takeRebindPendingResult]）；
+     * [launchRefresh] 的 `pendingResult?.finish()` 因此天然兜得住，
+     * 最坏结果是这次补注册不再替进程续命，活照样跑完。
+     */
+    internal fun bootstrapFromReceiver(receiver: BroadcastReceiver, context: Context) {
+        launchRefresh(receiver.goAsync()) { bootstrapBackgroundSync(context) }
+    }
+
+    /**
+     * [BackgroundSync.cancelWidgetMidnightIfNoWidgets] 的广播回调入口（六个 Provider 的
+     * `onDisabled`），理由与线程口径与 [bootstrapFromReceiver] 完全相同：那一条链里
+     * 既有 `hasAnyWidgetSafely` 的跨 binder 探测，也连着两次
+     * `WorkManager.getInstance`（旧版周期任务退出 + 兜底任务重判定）。
+     */
+    internal fun cancelMidnightIfNoWidgetsFromReceiver(
+        receiver: BroadcastReceiver,
+        context: Context,
+    ) {
+        launchRefresh(receiver.goAsync()) {
+            BackgroundSync.cancelWidgetMidnightIfNoWidgets(context)
+        }
+    }
+
     fun goAsyncUpdate(
         context: Context,
         appWidgetIds: IntArray,

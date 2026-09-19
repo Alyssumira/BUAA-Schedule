@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -126,6 +127,56 @@
             <meta-data
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
+        </provider>
+
+        <!--
+          WorkManager 改为按需初始化（T18：冷启动主线程账）。
+
+          androidx.startup 的 InitializationProvider 是**起手**装的 ContentProvider，
+          它跑在 Application.attachBaseContext 之后、onCreate 之前，全程在主线程上。
+          它的 meta-data 里登记了四个 Initializer，其中
+          `androidx.work.WorkManagerInitializer` 那一条会在主线程上就地
+          `WorkManager.initialize(context, Configuration.Builder().build())`。
+          反编译 work-runtime 2.9.1 看清了这一次到底在主线程上做了什么（量级待设备上量）：
+          - `WorkManagerImplExtKt.createWorkManager` → `WorkDatabase.create(...)`：
+            Room 那颗 WORKDATABASE 的构造（生成的 `WorkDatabase_Impl` 类加载 + OpenHelper 配置），
+            真正的 SQLite 打开要等第一次 DAO 访问；
+          - `Schedulers.createBestAvailableBackgroundScheduler` → `SystemJobScheduler`：
+            连上 JobScheduler；
+          - `Trackers` / `Processor` / `GreedyScheduler` / `WorkManagerTaskExecutor` 全套对象。
+          注意 `ForceStopRunnable`（清理过期 work、pruneWork，是真磁盘活）只在这里被**构造**，
+          跑是 `executeOnTaskThread` 派的 —— 它本来就不在主线程上，这张卡别把它记错了。
+          这里只摘那一条 meta-data，让上面那一坨改由第一次真正使用 WorkManager 的调用点付。
+
+          ⚠️ **只摘 meta-data，绝不摘 provider**（tools:node="merge" 而不是 "remove"）：
+          provider 本身还挂着另外三条——
+          - androidx.profileinstaller.ProfileInstallerInitializer：本应用自己分发、
+            拿不到 Play 的云端 profile，Baseline Profile 只能靠它把包内那份写进
+            /data/misc/release-profile（minSdk 26–30 那档设备只有这一条生效路径）；
+            它同样是从这个 provider 的 meta-data 注册的，删 provider 等于删 profile；
+          - androidx.emoji2.text.EmojiCompatInitializer、
+            androidx.lifecycle.ProcessLifecycleInitializer：分别管 emoji 字体与
+            进程级生命周期，都有别的东西在依赖，不在这张卡的账上。
+
+          ⚠️ 摘掉 initializer 之后，BUAAApplication **必须**实现
+          `androidx.work.Configuration.Provider`：work-runtime 2.9.1 的
+          `WorkManagerImpl.getInstance(Context)` 在「未初始化 + Application 不是
+          Configuration.Provider」时不自我初始化，而是直接抛
+          IllegalStateException（反编译确认，message 里就写着 "You have explicitly
+          disabled WorkManagerInitializer in your manifest"）。少了那一半改动，
+          结果不是"晚点初始化"而是兜底任务静默消失。
+
+          改动后应用内每一处 `WorkManager.getInstance` 都只在后台线程上被调到，
+          逐条线程与进程入口见 docs/PERF-STARTUP-2026-09-19.md 的调用点线程表。
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                tools:node="remove" />
         </provider>
 
         <receiver

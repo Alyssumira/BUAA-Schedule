@@ -73,9 +73,21 @@ class WidgetFallbackWorker(
          */
         fun ensure(context: Context, hasAnyWidget: Boolean = BackgroundSync.hasAnyWidgetSafely(context)) {
             // 两份调用方（onEnabled 与应用启动块）都指望这里不抛：
-            // getInstance 在 WorkManager 尚未初始化的进程里会抛 IllegalStateException，
             // 探测组件要跨 binder 问 Launcher（默认参数里的 hasAnyWidgetSafely 自己已经把异常吞成"有组件"）。
             // 注册失败的代价只是"这一轮没有兜底"，不值得用崩溃换。
+            //
+            // ⚠️ 必须是**接 Context 的那个重载**（T18 起 WorkManager 是按需初始化的）：
+            // `getInstance(context)` 未初始化时会经由 BUAAApplication 的
+            // Configuration.Provider 就地把它建起来；而无参的 `WorkManager.getInstance()`
+            // 在未初始化的进程里直接抛 IllegalStateException。两者在这里长得几乎一样，
+            // 换错的那一瞬间外面还套着 runCatching —— 症状不是崩溃，而是
+            // **兜底任务从此再也注册不上**（HyperOS 那批吞闹钟的机型提醒跟着一起哑），
+            // 是这一族最难发现的失败形状。同理，谁把 BUAAApplication 那个
+            // Configuration.Provider 摘掉而不清单里的 initializer 一起改回来，
+            // 下面这一整块会静默变成空操作。
+            //
+            // 还有一条线程上的约束：按需初始化之后"第一个调到这里的人"就是付建库钱的人，
+            // 所以广播回调那条路必须先挪出主线程（见 WidgetCommon.bootstrapFromReceiver）。
             runCatching {
                 val manager = WorkManager.getInstance(context)
                 if (hasAnyWidget || BackgroundSync.usesInAppReminders(context)) {

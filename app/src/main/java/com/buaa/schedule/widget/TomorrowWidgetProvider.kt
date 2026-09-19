@@ -15,13 +15,6 @@ class TomorrowWidgetProvider : ScheduleAppWidgetProvider() {
         WidgetCommon.goAsyncUpdate(context, appWidgetIds, pendingResult, ListWidgetMode.TOMORROW)
     }
 
-    override fun onEnabled(context: Context) {
-        super.onEnabled(context)
-        // 与 TodayWidgetProvider 同口径：onEnabled 在广播主线程上跑，而
-        // hasAnyWidget 的 binder 调用与 WorkManager.getInstance 都可能抛异常。
-        WidgetCommon.bootstrapBackgroundSync(context)
-    }
-
     override fun onUpdate(
         context: Context,
         appWidgetManager: AppWidgetManager,
@@ -40,11 +33,6 @@ class TomorrowWidgetProvider : ScheduleAppWidgetProvider() {
         WidgetAppearanceStore.remove(context, appWidgetIds)
         // appWidgetId 会被系统复用，残留的课表绑定会让新组件显示成旧学期
         WidgetBindingStore.remove(context, appWidgetIds)
-    }
-
-    override fun onDisabled(context: Context) {
-        // 最后一个实例被移除：没有任何 Widget 时取消全部后台刷新任务
-        BackgroundSync.cancelWidgetMidnightIfNoWidgets(context)
     }
 
     companion object {
