@@ -13,7 +13,9 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
     // Baseline Profile Gradle 插件：把 :benchmark 在设备上采到的 profile 合并进
-    // app/src/main/baselineProfiles/，并由 AGP 打进 release 产物。
+    // app/src/release/generated/baselineProfiles/（生成产物只落 release 源集下这个目录；
+    // app/src/main/baselineProfiles/ 是要手写规则时才建的目录，插件从不往那儿写），
+    // 并由 AGP 打进 release 产物。
     // 只在 :app 上应用——它需要 applicationId 与 release variant，:benchmark 只是采集端。
     alias(libs.plugins.baselineprofile)
 }
@@ -253,7 +255,9 @@ androidComponents {
 //
 // 只走已连接设备：本仓库没有也不该有"云设备/无头生成器"这条路 —— 生成要在
 // API 28+ 的真机或模拟器上跑 :benchmark 的 instrumented test（模块 minSdk 28 是
-// 有意的），产物再合并回 app/src/main/baselineProfiles/。
+// 有意的），生成产物落 app/src/release/generated/baselineProfiles/ —— 而不是
+// app/src/main/baselineProfiles/（那只是手写规则时才建的目录，插件从不往那儿写）。
+// 生成与入库的完整步骤见 docs/STATUS.md 的 T16 一节第 3 步。
 //
 // automaticGenerationDuringBuild 保持默认 false：打开后每次 assembleRelease 都会去
 // 抢一台连着的设备，CI 与发布脚本当场就挂；生成只在显式执行
@@ -264,8 +268,16 @@ androidComponents {
 //   com.android.application → apptarget + consumer（:app 走这条）
 //   com.android.test        → producer          （:benchmark 走这条）
 // "用连着的设备还是用 Managed Device" 是采集端的事，所以那个开关在
-// benchmark/build.gradle.kts 里。本模块这侧能配的是产物去向与合并策略，
-// 两者都用默认值：产物落 app/src/main/baselineProfiles/、并进 main sourceset。
+// benchmark/build.gradle.kts 里。本模块这侧能配的是产物去向与合并策略，两者都用默认值：
+// 默认产物落 app/src/release/generated/baselineProfiles/、并进 release 源集，而不是
+// app/src/main/baselineProfiles/（那目录只有手写规则时才建，插件从不往那儿写；consumer
+// 两个目录都会读，所以手写进去的那份照样生效 —— 见 docs/STATUS.md 的 T16 一节第 3 步）。
+// 入库的是文本 profile：它经 mergeReleaseBaselineProfile → expandReleaseArtProfileWildcards
+// 编成二进制 baseline.prof 进包，装包后由 ProfileInstaller 落到平台的 ref/ 目录，
+// 再由 bg-dexopt-job 按 speed-profile 编译一次。二进制的大小随**当次构建输入**变
+// （通配符展开出的方法集合不同），所以这里与文档都不钉字节数；装机后的验收判据见
+// docs/STATUS.md 的 T16 一节第 4 步，收益两档各算各的、不可相加见
+// docs/PERF-STARTUP-2026-09-19.md §8。
 
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")

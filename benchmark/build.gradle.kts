@@ -4,9 +4,11 @@ plugins {
     id("com.android.test")
     id("org.jetbrains.kotlin.android")
     // 同一个 wrapper 插件，在 com.android.test 模块上落到 producer 那一半：
-    // 负责把本模块的 instrumented test 推到设备上跑、把采到的 profile 拉回
-    // :app 的 app/src/main/baselineProfiles/。不应用它的话，:app 侧的
+    // 负责把本模块的 instrumented test 推到设备上跑、把采到的 profile 交给 consumer，
+    // 由它写进 :app 的 app/src/release/generated/baselineProfiles/（插件从不写
+    // app/src/main/baselineProfiles/，那目录只有手写规则时才建）。不应用它的话，:app 侧的
     // baselineProfile(project(":benchmark")) 会因为拿不到约定属性而配置失败。
+    // 去向与入库口径见 docs/STATUS.md 的 T16 一节第 3 步。
     alias(libs.plugins.baselineprofile)
 }
 
