@@ -12,6 +12,10 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+    // Baseline Profile Gradle 插件：把 :benchmark 在设备上采到的 profile 合并进
+    // app/src/main/baselineProfiles/，并由 AGP 打进 release 产物。
+    // 只在 :app 上应用——它需要 applicationId 与 release variant，:benchmark 只是采集端。
+    alias(libs.plugins.baselineprofile)
 }
 
 // 评审 P2：固定 Kotlin/Java 编译工具链为 JDK 21。
@@ -240,6 +244,29 @@ androidComponents {
     }
 }
 
+// ---------- Baseline Profile ----------
+//
+// 为什么值得单独开一条要连设备的生成链路：本应用走 Gitee 自分发 + 应用内自更新，
+// 每次自更新后系统的安装过滤会退回 verify；而"云端 ART profile"是 Google Play 专属
+// 的分发通道，我们自己发的包结构性拿不到。于是 Baseline Profile 是唯一能补上这笔
+// 账的手段（官方口径首启执行速度 +30%）。
+//
+// 只走已连接设备：本仓库没有也不该有"云设备/无头生成器"这条路 —— 生成要在
+// API 28+ 的真机或模拟器上跑 :benchmark 的 instrumented test（模块 minSdk 28 是
+// 有意的），产物再合并回 app/src/main/baselineProfiles/。
+//
+// automaticGenerationDuringBuild 保持默认 false：打开后每次 assembleRelease 都会去
+// 抢一台连着的设备，CI 与发布脚本当场就挂；生成只在显式执行
+// `:app:generateBaselineProfile` 时发生。
+//
+// 这里**没有** useConnectedDevices：androidx.baselineprofile 到 1.4.1 已经拆成
+// 一个 wrapper + 三个子插件，wrapper 按本模块应用的 Android 插件类型分发——
+//   com.android.application → apptarget + consumer（:app 走这条）
+//   com.android.test        → producer          （:benchmark 走这条）
+// "用连着的设备还是用 Managed Device" 是采集端的事，所以那个开关在
+// benchmark/build.gradle.kts 里。本模块这侧能配的是产物去向与合并策略，
+// 两者都用默认值：产物落 app/src/main/baselineProfiles/、并进 main sourceset。
+
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
@@ -295,6 +322,15 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.mlkit.barcode.scanning)
+    // Baseline Profile 的**运行时**这一半：profileinstaller 负责在冷启动时把包内那份
+    // profile 写进设备的 curated 目录。API 31+ 平台自己会读 asset、这枚依赖近乎空转，
+    // 但 26–30 只有靠它才有效（本应用 minSdk 26）。
+    // 显式声明而不是吃传递依赖：它此前只是某个上游库带进来的传递依赖
+    // （merged release manifest 里早就有 androidx.profileinstaller.ProfileInstallerInitializer，
+    // 也就是**生效路径本来就在**，缺的从来只是没人去生成 profile 内容）。
+    // 把 minSdk 26 那档设备的唯一生效路径押在上游的传递关系上，等于上游一升/降级
+    // 就静默摘掉 —— 而 baseline profile 不生效这件事是**不报错**的。
+    implementation(libs.androidx.profileinstaller)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
@@ -303,6 +339,12 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     debugImplementation(libs.androidx.compose.ui.tooling.pinned)
+
+    // 采集端模块：只被 :app:generateBaselineProfile 消费（它去连着的设备上跑
+    // :benchmark 里的 BaselineProfileGenerator），不参与打包、也不让 :app 的常规
+    // 构建/测试任务依赖 :benchmark —— 所以 :benchmark 的 minSdk 28 与真机要求
+    // 都不会传染给 :app 的 minSdk 26。
+    baselineProfile(project(":benchmark"))
 }
 
 // ---------- 发布 ----------

@@ -29,6 +29,19 @@ androidxJunit = "1.2.1"
 espressoCore = "3.6.1"
 testRunner = "1.6.2"
 benchmarkMacro = "1.4.1"
+# Baseline Profile 的 Gradle 插件不是独立产品线，它就是 androidx.benchmark 那次发布里的
+# benchmark-baseline-profile-gradle-plugin（插件标记 androidx.baselineprofile:*:1.4.1 的
+# 唯一依赖）。所以这个数必须与 benchmarkMacro 同代际一起动：插件负责解析设备上采到的
+# profile，:benchmark 里的 BaselineProfileRule 负责采，两边版本错位就是拿新工具读旧格式。
+baselineProfile = "1.4.1"
+# 显式钉住 profileinstaller（此前只被 benchmark-macro 传递性带进来）。
+# 分界在 API 31：31+ 由平台自己在安装时读 APK 里的 baseline profile，26–30 平台
+# 根本不碰包内那份 asset，唯一的生效路径是 androidx.profileinstaller 的
+# ProfileInstallerInitializer 启动时把它写进设备的 curated 目录 —— 而本应用
+# minSdk 26，26–30 这档设备真实存在。只靠传递依赖的话，任何一个上游库升/降级
+# 都可能把它整条摘掉，而 baseline profile 静默失效是不报错的。
+# 1.4.1 与上面的 benchmarkMacro 同代际，且已在离线仓库内。
+profileinstaller = "1.4.1"
 uiautomator = "2.3.0"
 
 [libraries]
@@ -72,6 +85,7 @@ mlkit-barcode-scanning = { group = "com.google.mlkit", name = "barcode-scanning"
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJunit" }
 androidx-benchmark-macro-junit4 = { group = "androidx.benchmark", name = "benchmark-macro-junit4", version.ref = "benchmarkMacro" }
+androidx-profileinstaller = { group = "androidx.profileinstaller", name = "profileinstaller", version.ref = "profileinstaller" }
 androidx-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
 androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "testRunner" }
@@ -83,3 +97,4 @@ kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+baselineprofile = { id = "androidx.baselineprofile", version.ref = "baselineProfile" }
