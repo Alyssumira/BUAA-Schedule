@@ -452,8 +452,8 @@ adb pull /data/misc/perfetto-traces/scan.pftrace
   - 改后：`4274 4277 4414 4833 4681 10418 4882 5073 4608 4602 4595`
 - **口径必须这样读**：两版都是 **debuggable**，ART 不会对 debuggable 包做 `speed-profile`，
   所以这一组数里**不含 Baseline Profile 的收益** —— 那笔账是 T16 用 release 包量的
-  （编排者给的口径：中位 −18%。**这个数没有落进仓库里任何一份文档或提交说明**，别去
-  `docs/STATUS.md` 找它），而且它在一档、这里在另一档，**两个数不能相加**。
+  （编排者给的口径：中位 −18%。**这个数已由 T16c 落进 `docs/STATUS.md` 的 T16 一节收尾**：
+  release 包 `am start -W` 中位 1,075 ms → 882 ms），而且它在一档、这里在另一档，**两个数不能相加**。
   两边同档 ⇒ 这一组差值只归这张卡。§6 前言里"两版都先对齐 Baseline Profile 状态"那句
   在 debuggable 包上不起作用，已就地标注。
 - 模拟器噪声大：改前那两条 >9 s 恰好是连打的头两轮（原始文件里就在头两行），改后那条在第 6 轮。

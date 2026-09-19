@@ -168,6 +168,8 @@
       accessibility 树，复核动作是 dump 后 grep `selected="true"`，不是改判据写法。
 
       **生成与验收步骤（要连设备，由编排者按序执行）**：
+      2026-09-19 已在 buaa36（API 36 / Google APIs 镜像）上按这五步跑通并入库，下面三处读数
+      就是那一轮的；这一节里被实测证伪的三条说法已就地订正。
       1. **先播种**，条件是：库里有一个学期 + 多门课，且 `currentWeek` 落在学期**中间**
          （第 1 周和最后一周都不行：「下一周」/「上一周」有一侧是禁用态，翻周那步会空跑）；
          **今天这一天要有课**：`HomeScreen.kt:180` 的
@@ -184,25 +186,69 @@
       2. `./gradlew :app:generateBaselineProfile`（可加 `--stacktrace`）。它驱动
          `:benchmark:connectedNonMinifiedReleaseAndroidTest` → `:collectNonMinifiedReleaseBaselineProfile`
          → `:app:mergeReleaseBaselineProfile` → `:app:copyReleaseBaselineProfileIntoSrc`。
-      3. 产物落在 **`app/src/main/baselineProfiles/`**（当前只有占位 `.gitkeep`）：
+      3. 产物落在 **`app/src/release/generated/baselineProfiles/`**（生成结束时插件自己打印的就是
+         这个路径，不是 `src/main`）：
+         ```
+         A baseline profile was generated for the variant `release`:
+         file:///D:/schedule/BUAA-Schedule/app/src/release/generated/baselineProfiles/baseline-prof.txt
+         A startup profile was generated for the variant `release`:
+         file:///D:/schedule/BUAA-Schedule/app/src/release/generated/baselineProfiles/startup-prof.txt
+         ```
+         为什么会以为在 `src/main`：那一步的 task 叫 `copyReleaseBaselineProfileIntoSrc`，"IntoSrc"
+         说的是**写回源集**，而它写的是 **release 源集**下的 `src/release/generated/` —— 后续构建正是从
+         `src/release/generated/baselineProfiles/` 把这两份读走的，跟 `src/main` 无关。接线时按字面
+         理解建的 `app/src/main/baselineProfiles/` 里只有一个占位 `.gitkeep`，插件从来没往那儿写过
+         东西，本卡已把它删掉（真要手写规则时目录随时建得回来，git 只是不跟踪空目录）。
          常规 profile 与 startup profile 是两份并列的文件，都要 commit 入库，不要加进 .gitignore。
-         这条链路已实测通：往该目录手写一行合法方法规则，`assembleRelease` 后包内
-         `assets/dexopt/baseline.prof` 从 6,500 变 6,508 字节 —— 也就是文件放进这个目录就会进包。
+         本仓库当前这两份的量级：`baseline-prof.txt` **2,868,063 B / 26,601 行**（其中
+         `com/buaa/schedule` 自己的条目 **3,901** 条），`startup-prof.txt` **2,272,111 B / 21,790 行**。
+         行数是全部依赖库 profile 拼接后的总数 —— 与下面那条"报错行号在拼接之后才数出来"同源。
+         这条链路已实测通：手写一行合法方法规则进 profile 目录，`assembleRelease` 后包内
+         `assets/dexopt/baseline.prof` 从 6,500 变 6,508 字节 —— 也就是文件放进目录就会进包。
+         那次实验（`1c64c1e`）写的是 `app/src/main/baselineProfiles/`，AGP 那侧确实也读它；
+         但**生成产物**只落 `src/release/generated/`，两个目录不是一回事。
          ⚠️ 但格式很硬：`.txt` 里一条方法规则行**少了 H/S/P 任一标志位**（比如只写
          `Lcom/...;->foo()V`），`:app:expandReleaseArtProfileWildcards` 会直接让整条
          assembleRelease 失败，且报的行号是在全部依赖库 profile 拼接**之后**才数出来的
          （实测报 `baseline-prof.txt:3949:1`，而那个文件只有 1 行）—— 看着像不存在的行，
          别被误导去找依赖库。
-      4. `./gradlew :app:assembleRelease` 重装到机上，然后
-         `adb shell dumpsys package com.buaa.schedule | grep -i profile`：
-         预期看到 `primaryProfile=` / `secondaryProfile=` 指向 `/data/misc/profiles/cur/<uid>/com.buaa.schedule/primary.prof`
-         一类的路径，且 `profileVersion=` 不再是空；安装后状态里 `Verify` 之后会走一次
-         `speed-profile`。API 26–30 上没有 `ProfileInstallerInitializer` 就没有这一行，
+      4. `./gradlew :app:assembleRelease` 重装到机上，验收看**这两处**（订正：先前写的
+         `dumpsys package com.buaa.schedule | grep -i profile` 在这台设备上**不成立** —— 那条 grep
+         打不出 `primaryProfile=`，而 `cur/0/com.buaa.schedule/` 在只有静态 profile、还没做过运行期
+         采样时**就是空的**）：
+         - `/data/misc/profiles/ref/com.buaa.schedule/primary.prof` 存在，大小 **8,104 B**
+           （包内 `assets/dexopt/baseline.prof` 是 8,133 B；落到 `ref/` 时差几十字节是正常的
+           头/编码差异，别写成相等。⚠️ 这两个数都是**那一轮那枚包**的读数，构建输入一变
+           通配符展开出的方法集合就变（T16c 门禁那侧 unsigned 构建量到 10,554 B），要重量）。
+         - `dumpsys package dexopt` 里这个包那一行显示 `status=speed-profile`、`reason=bg-dexopt`。
+           `bg-dexopt-job` 有它自己的排期，`adb root` 后用 `cmd jobscheduler run -f com.buaa.schedule 0`
+           一类手段可以主动催，不必等它自己排上。
+         为什么是 `ref/` 而不是 `cur/`：包内那份文本 profile 经 `mergeReleaseBaselineProfile` →
+         `expandReleaseArtProfileWildcards` 编成二进制 `baseline.prof` 打进 APK，`ProfileInstaller`
+         装包后把它落到平台的 `ref/` 目录，随后 `bg-dexopt-job` 按 `speed-profile` 编译一次；
+         `cur/` 是 ART 运行期采样写的那一份，跟 Baseline Profile 不是一回事。
+         API 26–30 上没有 `ProfileInstallerInitializer` 就没有落盘这一步，
          这也是为什么那枚依赖要显式钉住。
       5. **验收对照**（这步才是收益本身，用 `HomeStartupBenchmark` 现成的 None vs Partial）：
          `./gradlew :benchmark:connectedNonMinifiedReleaseAndroidTest`
          跑 `HomeStartupBenchmark#startupWithoutCompilation` 与 `#startupWithBaselineProfile`，
-         比 `TotalTime` 的分布。注意：插件侧我没找到任何按类过滤的机制，
-         所以 `generateBaselineProfile` 很可能把 `HomeStartupBenchmark`（5 轮 × 2 组）一起跑掉，
-         多花十几分钟不算错；只想跑采集就补
+         比 `TotalTime` 的分布。**这组对照要单独跑**：插件没有对外暴露按类过滤的开关，
+         但 producer 那侧自己就把不带 `includeInStartupProfile` 的启动基准跳掉了 ——
+         生成日志（`:benchmark:connectedNonMinifiedReleaseAndroidTest` 那一段）打的是
+         ```
+         com.buaa.schedule.benchmark.HomeStartupBenchmark > startupWithBaselineProfile[buaa36(AVD) - 16] SKIPPED
+         com.buaa.schedule.benchmark.HomeStartupBenchmark > startupWithoutCompilation[buaa36(AVD) - 16] SKIPPED
+         ```
+         一行没跑，所以先前那句"很可能把 `HomeStartupBenchmark`（5 轮 × 2 组）一起跑掉、多花十几分钟"
+         不成立，也就不需要拿 `-Pandroid.testInstrumentationRunnerArguments.class=...` 去挡它。
+         那条参数**仍然有用**，只是用途换成收窄：只想重跑某一个交互 CUJ、不想等整轮的时候用它
+         （这一轮全量是 `BUILD SUCCESSFUL in 17m 29s`），例如
          `-Pandroid.testInstrumentationRunnerArguments.class=com.buaa.schedule.benchmark.InteractionBaselineProfileGenerator`。
+
+      **这一轮的收益与代价（2026-09-19，buaa36 实测）**：接入 Baseline Profile 的**包体代价
+      +2,270 B**（`classes.dex` 那一侧反而 −70 B；这个数是在**同一份构建输入**上 clean A/B 出来的，
+      跨构建直接比 APK 总字节不可信）。**冷启动收益**在 release 包上量到 `am start -W` 中位
+      **1,075 ms → 882 ms（约 −18%）**（改前 `verify` / 改后 `speed-profile`，各 15 轮）。
+      ⚠️ 口径：这 −18% 是 **release + profile** 那一档的账，T18 的 −11.4%
+      （`docs/PERF-STARTUP-2026-09-19.md` §8 ①）是 **debug 双版本**的账 —— ART 不对 debuggable 包做
+      `speed-profile`，profile 那一笔进不了它的差值。两档各算各的，**不可相加**。
