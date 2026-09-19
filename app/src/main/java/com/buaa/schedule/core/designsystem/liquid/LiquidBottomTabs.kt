@@ -137,9 +137,13 @@ fun LiquidBottomTabs(
     // 栏体只认调用方给的 containerColor —— 调用方已经按主题挑好色（Light/DarkGlassTint）。
     // 旧实现在深色档另写死 0xFF121212，把 MainActivity 传入的深色 tint 静默吞掉：
     // 同一条栏两处决定颜色，哪处都不作数（审查 V-组件层裸色）。
-    val effectiveContainerAlpha = (containerAlpha * userAlphaScale)
-        .coerceAtMost(0.60f)
-        .coerceAtLeast(legibilityAlphaFloor(containerColor, scheme.onSurfaceVariant, !isLightTheme))
+    val effectiveContainerAlpha = bottomBarSurfaceAlpha(
+        containerAlpha = containerAlpha,
+        userAlphaScale = userAlphaScale,
+        containerColor = containerColor,
+        text = scheme.onSurfaceVariant,
+        darkTheme = !isLightTheme,
+    )
     val containerSurface = containerColor.copy(alpha = effectiveContainerAlpha)
 
     BoxWithConstraints(
@@ -421,3 +425,31 @@ fun LiquidBottomTabs(
  * 就把它缓存的 outline 判成过期、每帧重算一遍轮廓路径。
  */
 private val TabsCapsuleShape = Capsule()
+
+/**
+ * 底栏栏体的表面 alpha 天花板。
+ *
+ * 比卡片的 [com.buaa.schedule.core.designsystem.SURFACE_ALPHA_CEILING]（0.96）低一档：
+ * 底栏是悬浮 overlay，课表网格在它底下整屏滚动，栏体一实心就变成"一条永久盖住课表的
+ * 横带"（基准 0.20 的来由见 DesignTokens.CHROME_SURFACE_ALPHA）。0.60 是"还读得出是
+ * 玻璃"的界线，也就是那条注释里列的"分段控件 0.82、底栏 0.60、FAB 0.55"中的底栏档。
+ */
+internal const val BOTTOM_BAR_SURFACE_ALPHA_CEILING = 0.60f
+
+/**
+ * 底栏栏体表面 alpha：原始值（containerAlpha × 用户透明度倍率）夹在"读得清的下限"
+ * 与"这条栏的天花板"之间。
+ *
+ * 从 composable 里逐字搬出来，数值口径一个字没改。抽函数的理由与
+ * [com.buaa.schedule.core.designsystem.glassSurfaceAlpha] 相同：本模块的 JVM 单测没有
+ * Compose 运行时，留在 `@Composable` 体内测不到。
+ */
+internal fun bottomBarSurfaceAlpha(
+    containerAlpha: Float,
+    userAlphaScale: Float,
+    containerColor: Color,
+    text: Color,
+    darkTheme: Boolean,
+): Float = (containerAlpha * userAlphaScale)
+    .coerceAtMost(BOTTOM_BAR_SURFACE_ALPHA_CEILING)
+    .coerceAtLeast(legibilityAlphaFloor(containerColor, text, darkTheme))
