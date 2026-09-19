@@ -471,6 +471,67 @@ KDoc 原文"重排后到期的上课铃会立刻触发，把课中实况、勿�
 这一轮没接手，那条期限未到的记录要等下一次冷启动 `selfCheck` 才收 —— 改前那种场景是被
 开机无条件 restore"顺带"覆盖的，代价恰恰就是上面这 5 秒抖动。
 
+**2026-09-19 补：同族的第三处由 ai/T11b 落（`1170d86`）**。上一枚（ai/T11，`b5dc353`）给
+`shouldTakeDownClassProgress` 补的那道判据只看了 `ongoingAt`，于是"**窗口还没开始**"
+仍被当成该收 —— 而课前提醒刚触发、倒计时刚上岛的那一刻 `plan` 同样是 null（唯一那条
+课前提醒已经用掉了）。那一刻任何一次重排（改设置 / 改课表 / 关掉提醒）都会：
+
+- 岛上那条课前倒计时当场消失（`cancelAll:433` 撤的 `cancelClassOngoing` 就是同一条通知 id）；
+- 更要紧的是 `cancelAll` 第一步撤掉的双铃里包含**几秒后正要响的那发上课铃**，而这条分支
+  本来就没有下一条提醒，被撤掉的铃再没有任何人续排（`rescheduleNextWindow` 只在铃响时跑）
+  —— 那一节课的课堂实况与自动勿扰**永久缺席**。与"正在上课"那处同族，差的只是窗口状态。
+
+**判据**：`shouldTakeDownClassProgress`（现 `ReminderScheduler.kt:273-291`）多收一个注入的
+`(courseId, classStartMillis) -> Boolean`，`takeDownClassProgressIfNeeded`（`:198-220`）透传，
+生产接线在 `:129` 传 `ReminderNotifications::ownsCountdownTo` —— 读的就是
+`ClassProgressScheduler.rescheduleWindows:280-291` 那个分支用的同一对进程内状态，
+**没有长出第二份"在不在数倒计时"的实现**，`isCountingDownTo` / `ownsCountdownTo` 本身
+一个字未改。三判次序保持（两开关都关 → 挑不出窗口 → 正在上课 → 倒计时），第一判必须在前：
+两条课堂开关都关时 `rescheduleNextWindow:308` 直接早退、`rescheduleAll:169-175` 走的也是
+`cancelAll`，没有"下一环再判一次"可等，收了才是终态。为什么传 `ownsCountdownTo` 而不是
+`isCountingDownTo`：后者内部自己读 `System.currentTimeMillis()`，而"课还没开始"这一判用的
+已经是注入的那只 `now` —— 两只钟会在跨秒那一瞬给出相反的答案，守卫恰好在最该生效的
+"这一节正要开始、勿扰正要生效"的那一秒失效；`ownsCountdownTo` 的归属是清得掉的
+（ACTION_START 落地即以 IN_CLASS 重发实况、顺带归零），"归属还在 + 注入的 `now` 说没开始"
+合起来就是 `isCountingDownTo` 想表达的内容，而时间只由 `now` 读一次。
+为什么放过不会变成"永远收不掉"：那一发上课铃正是同一次 `ReminderReceiver` 广播
+（`:44-62`，下发倒计时的同一段里就调 `rescheduleAll`）经 `rescheduleWindows` 排下的，
+"不收"保住的正是它；铃一响 ACTION_START 重发实况、归零倒计时、排好下课铃，
+续排链因此在下一环重新判一次 —— 与 `rescheduleWindows:281-285` 那笔取舍是同一笔账。
+归属对不上（课被删 / 时间被改 / 数的是别的课）时照常 `cancelAll`，R5 F-11 的清理语义不变。
+
+**测了几遍**：`ClassProgressCleanupDecisionTest` 由 14 行扩到 **24 行**（+10）。新增 8 行
+行为断言（归属对得上⇒不收、只开勿扰时同样不收、课被删⇒照收、时间被改⇒照收、
+数的是别的课⇒照收、两开关都关⇒照收**且倒计时判连问都不问**、正在上课⇒不问、
+挑不出窗口⇒不问），期望值全部手写、不从实现反推；另 2 行接线守卫
+（`productionWiresTheRealCountdownOwnerNotAConstant` 钉住生产传的确是 `ReminderNotifications`
+那一份而不是恒 true / 恒 false 的常量，
+`criterionOrderIsPassThroughThenSwitchesThenWindowThenCountdown` 钉住透传与三判次序）。
+这两条不是冗余：上面那 8 行全由**注入的假判据**驱动，接线漏了它们一条都不会红，
+而 `shouldTakeDownClassProgress(` 那个形状锚点只匹配签名前缀、加参数不会翻面。
+顺带把原有那条"判据里不许出现 `startMillis`"的守卫改成"只许出现一次、且必须是
+`countingDownTo` 的实参"——它禁的是本地重写窗口比较式，不是禁把窗口身份交给别人判。
+
+**门禁**（worktree `T11b` @ `1170d86`，`--offline --rerun`）：`:app:testDebugUnitTest`
+**734 tests / 0 failures**（master 地板 724）；`:app:lintDebug` **0 error / 14 warning**，
+其中 `.kt` 9 条与基线同口径。**只能真机证伪的部分**：`plan == null` + 倒计时在数的现场
+（课前那十分钟里进设置页随便改一项、或把「课程进行中」之外的提醒全关掉），改前表现为
+倒计时一秒内消失且那一节课再无铃，改后应看到 `ReminderScheduler: 正处在课堂窗口内
+（正在上课 / 正数着这节的课前倒计时）：本轮不撤销课堂铃与勿扰，交给续排链`
+一行，且上课铃照响、勿扰照进。
+
+> **第四处同族（只登记，本轮不动代码）**：日历模式那条路径也是同一族 ——
+> `BackgroundSync.rescheduleReminders` 的 `if (!usesInAppReminders(context))` 分支
+> （`BackgroundSync.kt:88-99`，`ClassProgressScheduler.cancelAll` 在 `:94`）
+> → `cancelAll`（`ClassProgressScheduler.kt:430-440`）→ **`:434 ClassProgressDnd.restore`
+> 无条件恢复勿扰**：正上着课时切换提醒模式 / 每次冷唤醒走日历模式那条清理，都会重演
+> §2.9 上面那 5 秒抖动，顺带把勿扰记录与看门狗一起抹掉。
+> **本轮不动它**：那一句是无条件 restore 里唯一还有人在依赖的自愈腿 ——
+> ai/T12 把开机那条改走 `restoreIfStale` 之后，日历模式下"没有课在进行"的遗留
+> 就是靠这句收的（`rescheduleReminders` 返回 `false` ⇒ `rescheduleRemindersAndBells:142-146`
+> 只补排课堂铃，不再回头清理）。要改得先解决"自愈"与"跳过"互斥：给这一句加判据的同时，
+> 得先有一条能区分"真遗留"与"课上正用到一半"的状态来源，那是另一张卡的量级。
+
 ---
 
 ## 3. 看起来该改、但本轮判断**不该改**的项
