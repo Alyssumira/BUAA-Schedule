@@ -51,6 +51,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
@@ -342,18 +343,23 @@ private val navItems = listOf(
  *
  * @param accentTint 玻璃底栏的折射指示器压在这一项上时也要主题色：
  *   它比用户的手指更快到位，画成灰色会读成"没选中"
+ * @param ink 悬浮玻璃底栏按**这块板实际画出来有多亮**解出来的中性墨（`LocalLiquidBottomTabInk`）。
+ *   默认 null = 「底栏没说话」：旧式底栏与宽屏导航栏走 `GlassSurface(CHROME)`，表面 alpha
+ *   是 0.96 那一档口径，它们的墨不归底栏管（ai/T25b 明确不许顺带改）。
+ *   只接管未选中态那一支——选中态是主题 primary，与本卡无关。
  */
 @Composable
 private fun ColumnScope.NavItemContent(
     item: NavItem,
     selected: Boolean,
     accentTint: Boolean = false,
+    ink: Color? = null,
 ) {
     val emphasized = selected || accentTint
     val itemColor = if (emphasized) {
         MaterialTheme.colorScheme.primary
     } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
+        ink ?: MaterialTheme.colorScheme.onSurfaceVariant
     }
     Icon(
         imageVector = item.icon,
@@ -1060,8 +1066,11 @@ private fun FloatingGlassBottomBar(
         tabContent = { index ->
             val item = navItems[index]
             val accentTint = com.buaa.schedule.core.designsystem.liquid.LocalLiquidBottomTabAccentTint.current
+            // 底栏按"这块板实际画出来有多亮"解出来的墨，读法与上一行同一条线：
+            // 颜色由那条栏决定（它才知道 alpha 被夹到了多少、壁纸有多亮），这里只消费。
+            val barInk = com.buaa.schedule.core.designsystem.liquid.LocalLiquidBottomTabInk.current
             val selected = currentRoute?.hierarchy?.any { it.route == item.route } == true
-            NavItemContent(item, selected = selected, accentTint = accentTint)
+            NavItemContent(item, selected = selected, accentTint = accentTint, ink = barInk)
         },
     )
 }

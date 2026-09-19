@@ -13,6 +13,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -28,6 +29,21 @@ internal val LocalLiquidBottomTabScale =
  */
 val LocalLiquidBottomTabAccentTint =
     staticCompositionLocalOf { false }
+
+/**
+ * 底栏 tab 该用哪支墨（图标与文字同一支），由 [LiquidBottomTabs] 按**这块板实际画出来
+ * 有多亮/多暗**解出来交给内容（[bottomBarInk]，ai/T25b）。
+ *
+ * 走 CompositionLocal 而不是让 `tabContent` 再算一次，理由与 `LocalSemanticPlate` 完全相同：
+ * 墨色依赖栏体 alpha，而栏体 alpha 又在 [LiquidBottomTabs] 里被用户透明度偏好、壁纸亮度
+ * 现场夹出来——第二处算的就是第二块板。形状照 [LocalLiquidBottomTabAccentTint] 那一族命名。
+ *
+ * **默认值是 null，含义是「底栏没说话」**：`NavItemContent` 还被旧式底栏与宽屏导航栏复用
+ * （那两条走 `GlassSurface(CHROME)`，表面 alpha 口径是 0.96 不是 0.60），它们不该吃到这里
+ * 解出来的墨，null 时那两处继续逐字用主题的 `onSurfaceVariant`。
+ */
+val LocalLiquidBottomTabInk =
+    staticCompositionLocalOf<Color?> { null }
 
 @Composable
 fun RowScope.LiquidBottomTab(

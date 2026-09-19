@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
@@ -42,11 +43,18 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.ChromeSurfaceLight
+import com.buaa.schedule.core.designsystem.ContentDark
+import com.buaa.schedule.core.designsystem.ContentLight
 import com.buaa.schedule.core.designsystem.LocalReduceMotion
 import com.buaa.schedule.core.designsystem.Personalization
+import com.buaa.schedule.core.designsystem.compositeLuma
+import com.buaa.schedule.core.designsystem.contentOnLuma
+import com.buaa.schedule.core.designsystem.contrastRatio
 import com.buaa.schedule.core.designsystem.legibilityAlphaFloor
 import com.buaa.schedule.core.designsystem.motionSpec
 import com.buaa.schedule.core.designsystem.motionSpring
+import com.buaa.schedule.core.designsystem.readableLuminance
+import com.buaa.schedule.core.designsystem.worstGlassSceneLuma
 import androidx.compose.ui.util.fastCoerceIn
 import androidx.compose.ui.util.fastRoundToInt
 import androidx.compose.ui.util.lerp
@@ -137,12 +145,28 @@ fun LiquidBottomTabs(
     // 栏体只认调用方给的 containerColor —— 调用方已经按主题挑好色（Light/DarkGlassTint）。
     // 旧实现在深色档另写死 0xFF121212，把 MainActivity 传入的深色 tint 静默吞掉：
     // 同一条栏两处决定颜色，哪处都不作数（审查 V-组件层裸色）。
+    //
+    // 这条「最不利场景亮度」在这里读一次，栏体 alpha 的下限与 tab 的墨色都从它来：
+    // 两处各读一次 SceneLuma 全局，就等于一块板两个口径（ai/T25b 的第 4 条契约）。
+    val sceneLuma = bottomBarSceneLuma(containerColor, scheme.onSurfaceVariant, !isLightTheme)
     val effectiveContainerAlpha = bottomBarSurfaceAlpha(
         containerAlpha = containerAlpha,
         userAlphaScale = userAlphaScale,
         containerColor = containerColor,
         text = scheme.onSurfaceVariant,
         darkTheme = !isLightTheme,
+    )
+    // 0.60 之下这条栏在亮壁纸块上只压出 0.405 的复合亮度，而 onSurfaceVariant（深色档
+    // #C5C6D0，亮度 0.5681）压在上面实测 1.36:1 —— ai/T25 报回的就是这一格。
+    // 抬天花板能治它，但那条栏悬浮在整屏滚动的课表之上，抬到 AA 需要的 ≈0.92 就是把它
+    // 压成一条实心横带（本仓口径：小玻璃好看、大玻璃板丑），所以这里动的是**墨**：
+    // 品牌墨在这块板上读得清就原样留着，读不清才退黑白。
+    val tabInk = bottomBarInk(
+        containerColor = containerColor,
+        effectiveAlpha = effectiveContainerAlpha,
+        text = scheme.onSurfaceVariant,
+        darkTheme = !isLightTheme,
+        sceneLuma = sceneLuma,
     )
     val containerSurface = containerColor.copy(alpha = effectiveContainerAlpha)
 
@@ -294,7 +318,11 @@ fun LiquidBottomTabs(
                     selected = selectedTabIndex() == index,
                     onClick = { onTabSelected(index) }
                 ) {
-                    tabContent(index)
+                    // 与下面隐藏层提供的是同一个值：指示器折射出来的那一份鬼影必须与
+                    // 看得见的这一排同墨，否则切换的瞬间文字会跳色。
+                    CompositionLocalProvider(LocalLiquidBottomTabInk provides tabInk) {
+                        tabContent(index)
+                    }
                 }
             }
         }
@@ -307,6 +335,7 @@ fun LiquidBottomTabs(
                 lerp(1f, pressedContentScale, dampedDragAnimation.pressProgress)
             },
             LocalLiquidBottomTabAccentTint provides true,
+            LocalLiquidBottomTabInk provides tabInk,
         ) {
             Row(
                 Modifier
@@ -452,7 +481,9 @@ internal const val BOTTOM_BAR_SURFACE_ALPHA_CEILING = 0.60f
  * （约定本身写在 [legibilityAlphaFloor] 的文档里；T22 修过的 `coerceIn` 空区间
  * 崩溃是同一族账）。换成先取小再夹，越顶的下限收敛为"走满天花板"——
  * 读不清就如实透着一档，而不是无声地把栏压成实心条。
- * 代价与 0.60 是否够用的量化账在 BottomBarSurfaceAlphaTest 与 T25 报告里。
+ * 代价与 0.60 是否够用的量化账在 BottomBarSurfaceAlphaTest 与 T25 报告里；
+ * 而"走满天花板仍然读不出"的那一格（深色档 × 极白块：复合 0.405 配品牌墨 1.36:1）
+ * 由同族的墨色那一侧收口——[bottomBarInk]，抬天花板不在选项里（实心横带）。
  */
 internal fun bottomBarSurfaceAlpha(
     containerAlpha: Float,
@@ -466,4 +497,73 @@ internal fun bottomBarSurfaceAlpha(
         legibilityAlphaFloor(containerColor, text, darkTheme).coerceAtMost(ceiling),
         ceiling,
     )
+}
+
+/**
+ * 这条栏该担心哪一档场景亮度：栏体 alpha 的下限与 tab 的墨色**共用这一个值**。
+ *
+ * 判据与 [com.buaa.schedule.core.designsystem.legibilityAlphaFloor] 里那句逐字同构
+ * （连 `luminance()` 都用同一支，换成 `readableLuminance()` 就差一个 sRGB 拐点、
+ * 两处算出的下限不再同源）。[bottomBarInk] 要的正是"下限当初看的是哪一档亮度"——
+ * 让它自己去读 [com.buaa.schedule.core.designsystem.SceneLuma] 就成了第二处读全局：换壁纸时两次读落在不同帧上，
+ * 解出来的墨对的就是块并不存在的板（ai/T25b 第 4 条契约）。
+ */
+internal fun bottomBarSceneLuma(containerColor: Color, text: Color, darkTheme: Boolean): Float =
+    worstGlassSceneLuma(darkTheme, plateIsDark = containerColor.luminance() < text.luminance())
+
+/**
+ * 底栏 tab 实际该用的墨色（图标与文字同一支）：[text]（= `scheme.onSurfaceVariant`）在
+ * **这块板真实的复合底色**上读得清就原样留着它，读不清才退到黑/白里较优的那支。
+ *
+ * ## 为什么 alpha 钉死了还得动墨（ai/T25b）
+ *
+ * [bottomBarSurfaceAlpha] 的 0.60 天花板被 ai/T25 夹对之后，深色档 × 极白壁纸块这一格
+ * 露出下一层错：暗板 `#14161C`（亮度 0.0081）以 0.60 叠在亮度 1.00 的白块上，复合亮度
+ * **0.405**，而 `onSurfaceVariant` `#C5C6D0`（亮度 0.5681）压在上面只有 **1.36:1**
+ * （正文要求 [DesignTokens.WCAG_AA_RATIO] = 4.5:1）。同族的第二处修法是把天花板抬到
+ * 0.92 —— 那等于把一条悬浮在整屏滚动课表之上的 overlay 压成实心横带，产品明确不要这个
+ * 观感（"小玻璃好看、大玻璃板丑"）。所以这一族的这一格改的是**墨**：文字/图标的墨按
+ * 实际画出来有多亮解，而不是按主题写死。换完之后同一格是 **7.45:1**。
+ *
+ * 这是同族第三处，前两处就在本仓：[com.buaa.schedule.core.designsystem.contentOnLuma]
+ * （周视图课程卡：只有亮度的合成底）与
+ * [com.buaa.schedule.core.designsystem.semanticGlassPlateOf]（语义玻璃卡，ai/T23）。
+ * 三处共用 [compositeLuma] / [contrastRatio] 这一套数值口径，这里不另发明。
+ *
+ * ## 不许无条件换成黑白
+ *
+ * 达标就原样返回 [text]：`onSurfaceVariant` 是品牌调过的一支（深色 #C5C6D0 / 浅色 #44474F），
+ * 无条件按亮度挑黑/白等于把整套品牌调墨丢掉，而 tab 文字变成纯白是用户看得出来的事。
+ * 内置渐变场景下深色档 5.35:1、浅色档 5.58:1，现网绝大多数场景走的就是这条保留分支。
+ *
+ * ## 黑白都读不清的那一档
+ *
+ * [contentOnLuma] 的文档记着那条带：复合亮度 0.183~0.225 时黑（4.17:1 @0.2048）与白
+ * （4.12:1 @0.2048）**两支都不到 AA**。这一带里"哪支较优"只差 ≤0.7 档、且都不达标，
+ * 不携带可读性信息，携带的全是观感：几何解会让深色主题的 tab 文字在壁纸亮度扫过 0.203
+ * 时整个翻成近黑。于是这一带按主题方向取墨，带外一律走几何较优解。
+ * 无解残账本身不靠墨解决——它要靠底板色，那是 [com.buaa.schedule.core.designsystem.legibleTintPlate]
+ * 的职责（它会压 tint），而压 tint 会改动栏体观感，不在本卡口径内。全族扫描里这些格
+ * 由 BottomBarInkTest 精确钉住格数。
+ *
+ * 不是 `@Composable`：本模块的 JVM 单测没有 Compose 运行时，留在组合体内测不到这条口径。
+ *
+ * @param effectiveAlpha [bottomBarSurfaceAlpha] 夹完的那一个值，别传夹之前的 raw
+ * @param sceneLuma 与 alpha 的下限同源的那一档最不利场景亮度，见 [bottomBarSceneLuma]
+ * @see com.buaa.schedule.core.designsystem.legibilityAlphaFloor 前景色**已定**时反推底板要多实
+ * @see com.buaa.schedule.core.designsystem.legibleTintPlate 底板色也还没定时的完整解
+ */
+internal fun bottomBarInk(
+    containerColor: Color,
+    effectiveAlpha: Float,
+    text: Color,
+    darkTheme: Boolean,
+    sceneLuma: Float,
+): Color {
+    val composite = compositeLuma(containerColor.readableLuminance(), sceneLuma, effectiveAlpha)
+    if (contrastRatio(composite, text.readableLuminance()) >= DesignTokens.WCAG_AA_RATIO) return text
+    val best = contentOnLuma(composite) // 该函数的判据就是"黑白里较优的那支"，交点已实测校准
+    if (contrastRatio(composite, best.readableLuminance()) >= DesignTokens.WCAG_AA_RATIO) return best
+    // 走到这里两支都不到 AA：那 0.05~0.7 档的差距换不来可读性，跟着主题走
+    return if (darkTheme) ContentLight else ContentDark
 }

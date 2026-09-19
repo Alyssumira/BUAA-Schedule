@@ -118,9 +118,13 @@ fun Color.readableLuminance(): Float {
  * 课程卡上大面积的文字用近黑而不是纯黑（护眼、也不显得"糊"），
  * 反过来深色底用纯白。两档都是**固定的**，不能是 `onSurface`：
  * 深色主题下 onSurface 本身就是近白，于是"亮底用 onSurface、暗底用 White"两支都成了浅色。
+ *
+ * internal 而不是 private：[liquid.bottomBarInk] 那类"品牌墨读不清才退黑白"的解法要复用
+ * 这两支候选墨（口径同当初把 [contrastRatio]、[compositeLuma] 提到 internal——
+ * 设计系统外面抄一份裸色，下一处改动就只会落在其中一份上）。数值一个字没改。
  */
-private val ContentDark = Color(0xFF1A1B20)
-private val ContentLight = Color.White
+internal val ContentDark = Color(0xFF1A1B20)
+internal val ContentLight = Color.White
 
 /**
  * 根据背景亮度自动选择可读前景色（黑或白），
