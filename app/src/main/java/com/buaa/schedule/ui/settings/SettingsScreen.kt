@@ -1479,18 +1479,16 @@ fun SettingsScreen(
                         )
                     )
                 }
-                // 日历模式下课堂铃整条链被撤掉（见 BackgroundSync.rescheduleReminders），
-                // 开关留着显示 ON 等于骗人：置灰并说明原因
-                val calendarMode = reminderMode == com.buaa.schedule.domain.model.ReminderMode.CALENDAR
+                // 这枚开关在「系统日历提醒」模式下**同样生效**：那个模式管的是课前提醒从哪条
+                // 通道下发，而课堂铃 / 上课实况 / 自动勿扰这条链没有日历等价物，照旧跑
+                // （闸门就是这两枚课堂开关，见 BackgroundSync.rescheduleReminders 的日历分支
+                // 与 ClassProgressScheduler.rescheduleNextWindow）。此前这里按 calendarMode 置灰，
+                // 文案还写着"不生效" —— 而 pref 一直是 true 且用户改不动，等于把功能
+                // 藏起来还骗用户说它没在工作。
                 SettingsSwitchRow(
                     title = "课程进行中常驻提醒",
-                    summary = if (calendarMode) {
-                        "「系统日历提醒」模式下不生效"
-                    } else {
-                        "上课期间显示一条带倒计时的常驻通知"
-                    },
+                    summary = "上课期间显示一条带倒计时的常驻通知",
                     checked = classProgress,
-                    enabled = !calendarMode,
                     onCheckedChange = {
                         classProgress = it
                         prefs.edit {
@@ -1540,13 +1538,10 @@ fun SettingsScreen(
                 } else {
                     SettingsSwitchRow(
                         title = "上课自动勿扰",
-                        summary = if (reminderMode == com.buaa.schedule.domain.model.ReminderMode.CALENDAR) {
-                            "「系统日历提醒」模式下不生效"
-                        } else {
-                            "上课期间开启勿扰，下课后自动恢复"
-                        },
+                        // 同上：勿扰与课堂铃同一条链，「系统日历提醒」模式下照样生效，
+                        // 这里置灰只会让用户以为它被那个模式接管了
+                        summary = "上课期间开启勿扰，下课后自动恢复",
                         checked = dndEnabled,
-                        enabled = reminderMode != com.buaa.schedule.domain.model.ReminderMode.CALENDAR,
                         onCheckedChange = {
                             dndEnabled = it
                             prefs.edit {

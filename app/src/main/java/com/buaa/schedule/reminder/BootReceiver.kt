@@ -57,13 +57,18 @@ class BootReceiver : BroadcastReceiver() {
                     // 判据走 ClassProgressDnd 那侧唯一的期限口径（selfCheck：有记录且期限已过；
                     // 无记录照旧 no-op，绝不动用户自己的勿扰设置；旧记录缺期限照旧当场自愈）。
                     // 「记录还在但期限未到」交给紧随其后的重建链收口 —— 此刻没有课在进行时它
-                    // 必然走到带判据的清理并把 restore 调下去：
-                    //   日历模式 BackgroundSync.kt:51-57（早退分支先清两类闹钟）→ ClassProgressScheduler.kt:434；
-                    //   没配学期 / 课表为空 ReminderScheduler.kt:73-79 → 同上；
-                    //   课前提醒全关（plan==null）ReminderScheduler.kt:103-111 → 同上；
-                    //   有下一条提醒 ClassProgressScheduler.kt:276-291（挑不出窗口 :277 cancelAll；
-                    //   课还没开始 :290 restore —— 开机新进程里不存在课前倒计时归属，
-                    //   ReminderNotifications.kt:198 那两个变量都是进程内状态）。
+                    // 必然走到带判据的清理并把那枚 restore 调下去（行号取 ai/T15 之后的形状）：
+                    //   日历模式 BackgroundSync.kt:92-121 一律只撤应用内课前提醒闹钟，课堂铃
+                    //     那一半走两枚课堂开关的窄判据（:113 那道守卫）：两枚都关才走
+                    //     ClassProgressScheduler.kt:519-529 那份完整撤除（:523 恢复勿扰）；
+                    //     只要有一枚开着就整块跳过 —— 这条链在日历模式下照旧活着，
+                    //     收口归下面最后那条 rescheduleWindows（:304-315 那份判据，不是这里）；
+                    //   没配学期 / 课表为空 ReminderScheduler.kt:81-89（那条分支不看判据）→ 同上；
+                    //   课前提醒全关（plan==null）ReminderScheduler.kt:100-136，
+                    //     按 shouldTakeDownClassProgress 决定收不收，不收就交给续排链 → 同上；
+                    //   有下一条提醒 ClassProgressScheduler.kt:283-317（挑不出窗口 :300-302 cancelAll；
+                    //   课还没开始 :304-315 里的 :314 restore —— 开机新进程里不存在课前倒计时归属，
+                    //   ReminderNotifications.kt:197-202 那两个变量都是进程内状态）。
                     // 真在上课则续排链重排出已过期的上课铃、立刻投递重新 enter，勿扰一秒都不掉。
                     step("dndSelfCheck") { ClassProgressDnd.selfCheck(context) }
                     // rescheduleReminders 的 Boolean 返回值代表「提醒链是否已接手课堂铃」，

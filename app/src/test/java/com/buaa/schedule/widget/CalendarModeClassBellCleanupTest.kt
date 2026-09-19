@@ -334,6 +334,35 @@ class CalendarModeClassBellCleanupTest {
         )
     }
 
+    /**
+     * 设置页那两枚课堂开关不再按提醒模式置灰（ai/T15 第三枚）：它们改的就是
+     * [com.buaa.schedule.reminder.ClassProgressScheduler.rescheduleNextWindow] 开头读的那两枚
+     * pref，而那份读**与提醒模式无关** —— 置灰 + 「『系统日历提醒』模式下不生效」的文案
+     * 合起来等于把用户唯一能关掉这条链的入口藏掉，还告诉他这条链没在工作
+     * （`PREF_CLASS_PROGRESS` 默认 true，于是"日历模式 + 课堂铃在跑"是默认状态）。
+     */
+    @Test
+    fun classSwitchesStayEditableAndHonestInCalendarMode() {
+        val settings = withoutComments(read(SETTINGS_SCREEN_FILE))
+        val progress = balancedBlock(settings, "item(key = \"classProgress\") {")
+        val dnd = balancedBlock(settings, "item(key = \"dnd\") {")
+
+        assertFalse("课堂铃那枚开关又按提醒模式置灰了：\n$progress", progress.contains("enabled ="))
+        assertFalse("勿扰那枚开关又按提醒模式置灰了：\n$dnd", dnd.contains("enabled ="))
+        assertFalse(
+            "课堂铃那枚开关的 summary 又长出「日历模式下不生效」那种假话：\n$progress",
+            progress.contains("不生效"),
+        )
+        assertFalse("勿扰那枚开关的 summary 同上：\n$dnd", dnd.contains("不生效"))
+        assertTrue(
+            "那两行正常文案被顺手删了（开关说的是它自己做的事）：\n$progress",
+            progress.contains("上课期间显示一条带倒计时的常驻通知"),
+        )
+        assertTrue("勿扰那行正常文案不在了：\n$dnd", dnd.contains("上课期间开启勿扰，下课后自动恢复"))
+        assertTrue("课堂铃那枚开关不再写 PREF_CLASS_PROGRESS：\n$progress", progress.contains("PREF_CLASS_PROGRESS"))
+        assertTrue("勿扰那枚开关不再写 PREF_DND：\n$dnd", dnd.contains("PREF_DND"))
+    }
+
     // ---- ④ 全仓库计数 ----------------------------------------------------------
 
     /**
@@ -558,6 +587,7 @@ class CalendarModeClassBellCleanupTest {
         const val CLASS_PROGRESS_SCHEDULER_FILE = "com/buaa/schedule/reminder/ClassProgressScheduler.kt"
         const val BOOT_RECEIVER_FILE = "com/buaa/schedule/reminder/BootReceiver.kt"
         const val SCHEDULE_VIEW_MODEL_FILE = "com/buaa/schedule/ui/ScheduleViewModel.kt"
+        const val SETTINGS_SCREEN_FILE = "com/buaa/schedule/ui/settings/SettingsScreen.kt"
 
         /** 报告口那个标签：生产与这里必须同名，否则闸门数不到这一格 */
         const val CLEANUP_LABEL = "cleanUpInCalendarMode"
