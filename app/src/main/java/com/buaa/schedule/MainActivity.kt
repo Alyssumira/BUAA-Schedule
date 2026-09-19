@@ -96,6 +96,7 @@ import com.buaa.schedule.ui.importing.BuaaLoginScreen
 import com.buaa.schedule.ui.importing.ImportHistoryScreen
 import com.buaa.schedule.ui.importing.ImportScreen
 import com.buaa.schedule.ui.settings.SettingsScreen
+import com.buaa.schedule.ui.signin.ScanChainWarmUp
 import com.buaa.schedule.ui.signin.SpocLoginScreen
 import com.buaa.schedule.ui.signin.SpocScanScreen
 import com.buaa.schedule.ui.stats.StatsScreen
@@ -196,6 +197,20 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        // 扫码链预热（T18）：ML Kit 解码器的 libbarhopper_v3.so 的 dlopen 写在
+        // BarhopperV3 的实例构造函数里，起手那颗 MlKitInitProvider 一点也帮不上，
+        // 那一下原本砸在用户点开扫码页的瞬间。这里只是**排**两次帧回调（微秒级），
+        // 真正的活在首帧画完之后由后台协程去付，判据见 ScanChainWarmUp 的类注释。
+        //
+        // 故意不按 onboardingCompleted 分叉：门闩是进程内一次性的，而走完引导只是把
+        // 那棵子树换掉、并不会重建 Activity —— 一旦这一趟没排，整个会话就再也不会预热。
+        // 作用域取 applicationScope 而不是 lifecycleScope：同理，转屏把协程掐死时
+        // 门闩已经翻过去了，这次预热就等于被悄悄丢掉。
+        ScanChainWarmUp.scheduleAfterFirstFrame(
+            scope = (application as BUAAApplication).applicationScope,
+            context = applicationContext,
+        )
     }
 
     /** launchMode=singleTop：应用已在前台时点组件不会重建 Activity，请求从这里进来 */
