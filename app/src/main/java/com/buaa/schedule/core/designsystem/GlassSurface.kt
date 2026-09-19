@@ -4,9 +4,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -173,15 +175,29 @@ internal fun glassSurfaceAlpha(
     text: Color,
     darkTheme: Boolean,
 ): Float {
-    val rawAlpha = when (variant) {
-        GlassVariant.ALERT -> (if (semanticTint != null) 0.45f else material.surfaceAlpha) * alphaScale
-        else -> material.surfaceAlpha * alphaScale
-    }
     val ceiling = SURFACE_ALPHA_CEILING
-    return rawAlpha.coerceIn(
+    return glassRawAlpha(variant, material, semanticTint, alphaScale).coerceIn(
         legibilityAlphaFloor(baseTint, text, darkTheme).coerceAtMost(ceiling),
         ceiling,
     )
+}
+
+/**
+ * 未经可读性下限与天花板夹取的 tint alpha：材质档位 × 用户透明度偏好。
+ *
+ * 逐字从 [glassSurfaceAlpha] 里抽出来，数值口径一个字没改（T22 的
+ * `GlassSurfaceAlphaTest` 仍按原样钉住它）。抽出来只为一个理由：语义卡的**文字色**
+ * 要按"这块板实际画出来有多实"来解，而最终 alpha 又按下限反依赖文字色，
+ * 于是需要一个不打折的起点当参照；ALERT 那一档的 0.45 更不能有第二份。
+ */
+internal fun glassRawAlpha(
+    variant: GlassVariant,
+    material: LiquidGlassMaterial,
+    semanticTint: Color?,
+    alphaScale: Float,
+): Float = when (variant) {
+    GlassVariant.ALERT -> (if (semanticTint != null) 0.45f else material.surfaceAlpha) * alphaScale
+    else -> material.surfaceAlpha * alphaScale
 }
 
 /**
@@ -212,5 +228,58 @@ internal fun legibilityAlphaFloor(surfaceTint: Color, text: Color, darkTheme: Bo
         sceneLuma = worstGlassSceneLuma(darkTheme, plateIsDark = surfaceLuma < textLuma),
         textLuma = textLuma,
     )
+}
+
+/**
+ * 一张语义玻璃卡的成对颜色：玻璃底板实际染的 [tint] + 压在上面读得清的 [foreground]。
+ *
+ * 两个字段必须成对用。把它们拆开、底板归底板挑一个色、文字归文字挑一个色，
+ * 就是 ai/T23 修的那条 1.39:1（见 [semanticGlassPlateOf]）。
+ */
+@Immutable
+data class SemanticPlate(
+    val tint: Color,
+    val foreground: Color,
+)
+
+/**
+ * 卡位取文字色的入口：传"这张卡想表达哪种语义色"（主题成员），拿回成对的（底板, 文字）。
+ * 中性玻璃（[tint] 为 null）返回 null，文字色仍由卡位自己定。
+ */
+@Composable
+fun semanticGlassPlate(variant: GlassVariant, tint: Color?): SemanticPlate? {
+    if (tint == null) return null
+    val scheme = MaterialTheme.colorScheme
+    return semanticGlassPlateOf(
+        tint = tint,
+        alpha = glassRawAlpha(
+            variant = variant,
+            material = DesignTokens.glassMaterial(variant, Personalization.panelBlurDp),
+            semanticTint = tint,
+            alphaScale = DesignTokens.cardAlphaScale(Personalization.cardAlpha),
+        ),
+        darkTheme = scheme.background.luminance() < 0.5f,
+        scheme = scheme,
+        semantic = LocalSemanticColors.current,
+    )
+}
+
+/**
+ * [semanticGlassPlate] 的纯函数体（JVM 单测没有 Compose 运行时，配对表要能单独钉住）。
+ *
+ * 这一步先把六个卡位**各自**挑的配对收成一个函数，挑法逐字照搬、数值一个字没改：
+ * 底板就是传进来的那支语义色，文字按"错误卡配 onErrorContainer、其余配 onSurface"给。
+ * 于是深色主题下 `error`（#FFB4AB，luma 0.5684）压着 `onErrorContainer`（#FFE2DE）
+ * 实测 1.39:1 —— 表驱动测试 [SemanticGlassPlateTest] 现在应当是红的。
+ */
+internal fun semanticGlassPlateOf(
+    tint: Color,
+    alpha: Float,
+    darkTheme: Boolean,
+    scheme: ColorScheme,
+    semantic: SemanticColors,
+): SemanticPlate = when (tint) {
+    scheme.error -> SemanticPlate(tint, scheme.onErrorContainer)
+    else -> SemanticPlate(tint, scheme.onSurface)
 }
 

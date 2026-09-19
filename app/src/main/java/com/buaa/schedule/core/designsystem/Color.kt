@@ -235,13 +235,25 @@ private fun dimForeground(foreground: Color, plateLuma: Float): Color {
     return foreground.copy(alpha = ceil(solved * 255f) / 255f)
 }
 
-private fun compositeLuma(tintLuma: Float, sceneLuma: Float, alpha: Float): Float =
+/**
+ * 底板与场景的线性合成亮度，口径与 [DesignTokens.glassAlphaFloor] 的反解完全一致。
+ *
+ * internal：[GlassSurface] 的语义卡要按"这块 tint 叠上去之后实际多亮"挑文字色，
+ * 必须复用同一条合成式，不能另写一份。
+ */
+internal fun compositeLuma(tintLuma: Float, sceneLuma: Float, alpha: Float): Float =
     tintLuma * alpha + sceneLuma * (1f - alpha)
 
 private fun contrastRatio(luma: Float, other: Color): Float =
     contrastRatio(luma, other.readableLuminance())
 
-private fun contrastRatio(a: Float, b: Float): Float {
+/**
+ * 两块亮度之间的 WCAG 对比度。
+ *
+ * internal 而不是 private：[GlassSurface] 的语义卡要按"这块板实际画出来有多亮/多暗"挑文字色，
+ * 用的必须是同一条公式，不能在设计系统里再抄第二份。阈值口径见 [DesignTokens.WCAG_AA_RATIO]。
+ */
+internal fun contrastRatio(a: Float, b: Float): Float {
     val hi = maxOf(a, b)
     val lo = minOf(a, b)
     return (hi + 0.05f) / (lo + 0.05f)
