@@ -291,7 +291,15 @@ internal fun weekGridDaySummary(
     courses: List<Course>,
     maxLines: Int = WEEK_GRID_MAX_LINES,
 ): String = foldDayLines(
-    courses.map { "${it.startPeriod}${weekGridShortName(it.displayName)}" },
+    // 节次号取 firstPeriodOrNull，**缺节次就整行不进摘要**（T27）：这里此前是
+    // `it.startPeriod`，而它在空表时兜底成 1 —— 桌面组件上老实印出一行「1高等数学」，
+    // 宣称这门课第 1 节上课。这一格回答的是"今天有几节课、第几节上什么"，
+    // 属于位置渲染而不是清单，所以按"这一项不出场"处理；课程本身在课程管理页
+    // 照旧看得见。少了这行，[foldDayLines] 的「＋N」计数也就跟着只数真上过场的课。
+    courses.mapNotNull { course ->
+        val first = course.firstPeriodOrNull ?: return@mapNotNull null
+        "$first${weekGridShortName(course.displayName)}"
+    },
     maxLines,
 )
 

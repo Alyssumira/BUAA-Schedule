@@ -50,8 +50,35 @@ data class Course(
      */
     val credit: Double? = null,
 ) {
+    /**
+     * 起始/结束节次。**空表兜底成 1**，所以它回答的是"排在哪门课前面"，
+     * 不是"这门课第 1 节有课"。
+     *
+     * 全仓十来处 `sortedBy { it.startPeriod }` / `minByOrNull` 靠的就是这个语义：
+     * 没有节次的课排到最前面，是次序问题，不出错。改成可空会把那串调用点全变成
+     * `?:` 或 `!!`，等于把同一件事摊到十几处重做一遍判断。
+     *
+     * 但**别拿它当位置用**：一旦把这个 Int 当成"确实有一节在 N"来渲染、导出、
+     * 撑时间轴，空节次的课就会凭空占掉第 1 节（T27：WakeUp JSON 里的
+     * `startNode:1,step:0`、组件上的「1高等数学」、24h 轴被拉到 08:00）。
+     * 需要区分"第 1 节"和"根本没有节次"时用 [firstPeriodOrNull] / [lastPeriodOrNull]，
+     * 拿不准就直呼 `periods.minOrNull()` —— 两个属性只是它的一层薄壳。
+     */
     val startPeriod: Int get() = periods.minOrNull() ?: 1
+    /** 见 [startPeriod]：结束节次的同一条口径，同样不可用于定位。 */
     val endPeriod: Int get() = periods.maxOrNull() ?: 1
+
+    /**
+     * [startPeriod] 的可空版：没有节次就是 null，不替用户宣称"第 1 节有课"。
+     *
+     * 位置渲染 / 对外导出走这一条，与 T26 定下的「缺项整段跳过」（[joinMeta]）同源：
+     * 缺的那一项不出场，而不是换个猜测值顶上。清单类界面（课程管理页、待导入清单）
+     * 仍要照常列出这门课 —— 它是用户数据，不能因为缺节次就人间蒸发。
+     */
+    val firstPeriodOrNull: Int? get() = periods.minOrNull()
+
+    /** 见 [firstPeriodOrNull]：[endPeriod] 的可空版。 */
+    val lastPeriodOrNull: Int? get() = periods.maxOrNull()
 
     /** 显示名：别名优先，空别名回退教务原名 */
     val displayName: String

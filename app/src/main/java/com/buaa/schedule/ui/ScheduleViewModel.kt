@@ -1452,10 +1452,17 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     repository.getTimeSlots(),
                 )
             }
+            // 空节次的课不进导出件（T27），所以报数必须是"写出去了几门"而不是 courses.size：
+            // 后者会在丢掉课时仍然承诺"N 门课"，而对方 App 里少了哪几门用户无从知道。
+            // 这门课在课表网格上本来就画不出来（没有一段可画），所以这里不说就彻底没有下文。
+            val unplaceable = courses.count { it.periods.isEmpty() }
             val written = withContext(Dispatchers.IO) { writeTextToUri(uriString, json) }
             showMessage(
-                if (written) "WakeUp JSON 已导出（${courses.size} 门课）"
-                else "导出失败：无法写入所选位置",
+                if (written) {
+                    if (unplaceable == 0) "WakeUp JSON 已导出（${courses.size} 门课）"
+                    else "WakeUp JSON 已导出（${courses.size - unplaceable} 门课；" +
+                        "另有 $unplaceable 门没有节次、无法定位，未写入"
+                } else "导出失败：无法写入所选位置",
                 isError = !written,
             )
         }

@@ -461,25 +461,7 @@ private fun WeekGrid(
     val timeMode = Personalization.weekGridMode == Personalization.WEEK_GRID_TIME_24H
     val hourHeight = DesignTokens.weekHourHeight * Personalization.weekRowScale
     val timeWindow: Pair<Int, Int> = remember(coursesForContent, slotIndex, timeMode) {
-        if (timeMode) {
-            val mins = buildList {
-                coursesForContent.forEach { course ->
-                    slotIndex.range(course.startPeriod..course.startPeriod).first.let {
-                        add(it.hour * 60 + it.minute)
-                    }
-                    slotIndex.range(course.endPeriod..course.endPeriod).second.let {
-                        add(it.hour * 60 + it.minute)
-                    }
-                }
-                if (isEmpty()) {
-                    add(8 * 60)
-                    add(22 * 60)
-                }
-            }
-            (mins.min() / 60) * 60 to ((mins.max() + 59) / 60) * 60
-        } else {
-            0 to 0
-        }
+        if (timeMode) timeWindowOf(coursesForContent, slotIndex) else 0 to 0
     }
     // 基准布局**不含动画值**：animatedGapHeight 每秒变化 60 次，
     // 把它放进 remember key 会让 300ms 动画期间每帧重建整份 periodLayouts，
@@ -1419,8 +1401,11 @@ private fun MovePickerStepper(
  * 取代此前的 `slotRange`：每次调用要 2 次线性扫描 + 2 次 `LocalTime.parse`，
  * 而「当前节课」判断是**在每张卡片的绘制期**跑的 —— 40 张卡 × 每次重绘 =
  * 160 次/帧的解析与扫描（R5 F-23）。构造一次即可整帧复用。
+ *
+ * internal 而非 private：[timeWindowOf] 的守卫由 JVM 单测把守，测试要拿到的是
+ * 这份真实索引（含"节次缺失退回 08:00–22:15"那条兜底），而不是在测试里另拼一遍。
  */
-private class TimeSlotIndex(slots: List<TimeSlot>) {
+internal class TimeSlotIndex(slots: List<TimeSlot>) {
     private val starts: Map<Int, LocalTime> = slots.mapNotNull { slot ->
         runCatching { slot.number to LocalTime.parse(slot.startTime) }.getOrNull()
     }.toMap()
@@ -1441,6 +1426,37 @@ private class TimeSlotIndex(slots: List<TimeSlot>) {
         val begin = starts[to] ?: return null
         return ChronoUnit.MINUTES.between(end, begin)
     }
+}
+
+/**
+ * 24 小时连续时间轴的上下界（分钟，取整到点）：门上界、点下界。
+ *
+ * 一门**没有节次**的课整门不贡献 mins（T27）：这里此前取 `course.startPeriod`
+ * 与 `course.endPeriod`，而它们在空表时兜底成 1 —— 于是这门在网格里一格都画不出来的课
+ * （`segmentsByCourse` 为空，压根没有卡片）能把整条时间轴的上界拉到第 1 节的下课时间，
+ * 用户滚到的那一片空白就是它撑出来的。空节次时"这一项不出场"，与导出/组件那两处
+ * 定位链同口径：宁可少一门，不替它编一个上课时间。
+ *
+ * 一门课都贡献不出 mins 时落到下面那句 08:00–22:00 的默认窗口：它说的是"这一天没有
+ * 可排的课"，此前空节次的课会顶掉这个默认值，冒充成一节真的 08:00 开始的课。
+ */
+internal fun timeWindowOf(
+    courses: List<Course>,
+    slotIndex: TimeSlotIndex,
+): Pair<Int, Int> {
+    val mins = buildList {
+        courses.forEach { course ->
+            val first = course.firstPeriodOrNull ?: return@forEach
+            val last = course.lastPeriodOrNull ?: return@forEach
+            slotIndex.range(first..first).first.let { add(it.hour * 60 + it.minute) }
+            slotIndex.range(last..last).second.let { add(it.hour * 60 + it.minute) }
+        }
+        if (isEmpty()) {
+            add(8 * 60)
+            add(22 * 60)
+        }
+    }
+    return (mins.min() / 60) * 60 to ((mins.max() + 59) / 60) * 60
 }
 
 /** 拖拽时卡片伸进视口边缘多深就开始滚动（①I-01）：一截拇指宽度，够得着也不会误触 */
