@@ -68,12 +68,14 @@ fun GlassSurface(
     // 倍率口径全站统一在 DesignTokens.cardAlphaScale（②V-12）——下限必须是 0.18 而不是 0.5，
     // 否则滑条 0.3~0.44 那一段算出来是同一个值，用户往左拖到底看不到任何变化。
     val alphaScale = DesignTokens.cardAlphaScale(userAlpha)
-    val surfaceAlpha = when (variant) {
-        GlassVariant.ALERT -> (if (semanticTint != null) 0.45f else material.surfaceAlpha) * alphaScale
-        else -> material.surfaceAlpha * alphaScale
-    }.coerceIn(
-        legibilityAlphaFloor(baseTint, colorScheme.onSurfaceVariant, darkTheme),
-        0.96f,
+    val surfaceAlpha = glassSurfaceAlpha(
+        variant = variant,
+        material = material,
+        semanticTint = semanticTint,
+        alphaScale = alphaScale,
+        baseTint = baseTint,
+        text = colorScheme.onSurfaceVariant,
+        darkTheme = darkTheme,
     )
     val wantsGlass = DesignTokens.surfaceUsesGlass(tier, variant)
     var acquired by remember { mutableStateOf(false) }
@@ -126,6 +128,40 @@ fun GlassSurface(
             content()
         }
     }
+}
+
+/**
+ * 玻璃底板 tint 的 alpha 天花板：再实也不许把玻璃压成一块不透明板（产品口径）。
+ *
+ * 各个手写表面另有更严的自有天花板（分段控件 0.82、底栏 0.60、FAB 0.55），
+ * 这一档只管 [GlassSurface] 的绝对上限。
+ */
+internal const val SURFACE_ALPHA_CEILING = 0.96f
+
+/**
+ * [GlassSurface] 的 tint alpha：材质档位 × 用户透明度偏好，下限托到读得清、上限压住通透感。
+ *
+ * 从 composable 里抽出来只为一个理由：本模块的 JVM 单测没有 Compose 运行时
+ * （无 Robolectric、无 ui-test），留在 `@Composable` 体内测不到这条数值口径。
+ * 计算逐字不变。
+ */
+internal fun glassSurfaceAlpha(
+    variant: GlassVariant,
+    material: LiquidGlassMaterial,
+    semanticTint: Color?,
+    alphaScale: Float,
+    baseTint: Color,
+    text: Color,
+    darkTheme: Boolean,
+): Float {
+    val rawAlpha = when (variant) {
+        GlassVariant.ALERT -> (if (semanticTint != null) 0.45f else material.surfaceAlpha) * alphaScale
+        else -> material.surfaceAlpha * alphaScale
+    }
+    return rawAlpha.coerceIn(
+        legibilityAlphaFloor(baseTint, text, darkTheme),
+        SURFACE_ALPHA_CEILING,
+    )
 }
 
 /**
