@@ -30,6 +30,10 @@
 - [x] 课程提醒（AlarmManager 只保留下一条闹钟，含上课倒计时、时区/时间变化重排）
 - [x] 五种桌面组件（今日 / 明日 / 本周课表 / 本周网格 4×2 / 下一节课）
 - [x] Widget 事件驱动刷新（数据变化 + 每日零点，无固定轮询）
+      首个/最后一个实例的注册与注销（`onEnabled` / `onDisabled`）自 T18 起收在
+      `ScheduleAppWidgetProvider` 基类一份实现里（此前六家各写一份、内容逐字相同），
+      并且整条链跑在 `goAsync()` 续命的 `Dispatchers.IO` 协程上而不是广播主线程上 ——
+      WorkManager 已改按需初始化，"进程里第一个调 `getInstance` 的线程"就是付建库钱的人
 - [x] 备份恢复预览（版本校验 + 内容摘要确认）
 - [x] 课表分享口令（压缩编码，聊天工具可直接粘贴互导）
       ⚠️ 口令是**明文编码**（无加密、无口令保护），拿到即可完整还原课表（课程/教师/教室）；
@@ -85,6 +89,25 @@
       模拟器上进这一页会自动降级为相册 + 手输，没有实时取景
       ⚠️ **真机联调未跑过**：老师端二维码的字面内容是唯一没取到证的环节，解析器按三形态
       兼容。偏差与待答问题见 `docs/BUAA_SPOC_SIGNIN_PLAN.md` §11、`docs/KNOWN_ISSUES.md` §11
+- [x] 冷启动链瘦身（T18）：三件事。① **WorkManager 改按需初始化** —— 清单里给
+      `androidx.startup.InitializationProvider` 挂 `tools:node="merge"`、只对它下面
+      `androidx.work.WorkManagerInitializer` 那**一条** meta-data 挂 `tools:node="remove"`
+      （provider 本身必须留着：`ProfileInstallerInitializer` 挂在它身上，是本应用自分发拿不到
+      云端 ART profile 时 Baseline Profile 唯一的落盘路径），配套 `BUAAApplication`
+      实现 `androidx.work.Configuration.Provider`（少这一半 `getInstance` 会抛
+      `IllegalStateException`，而调用点外面的 `runCatching` 会把它压成一行 WARN =
+      兜底任务从此注册不上）。② 六家组件 Provider 逐字重复的 `onEnabled` / `onDisabled`
+      收进 `ScheduleAppWidgetProvider` 基类一份，并经 `WidgetCommon` 的两个
+      `*FromReceiver` 入口把整条链挪到 `goAsync()` 续命的 `Dispatchers.IO` 协程上。
+      ③ **首帧之后预热一次扫码链**（`ui/signin/ScanChainWarmUp`：两次 `postFrameCallback`
+      落到下一帧，两档各 ≤5 秒上限、进程内 `AtomicBoolean` 只付一次、失败静默、
+      不申请权限不开相机），为的是把 `libbarhopper_v3.so` 的 `dlopen` 从扫码页首帧挪走。
+      改前/改后的 provider 逐项对照、调用点线程表与静态账见
+      **`docs/PERF-STARTUP-2026-09-19.md`**；门禁：780 单测 0 失败、lint 0 error / 14 warning。
+      ⚠️ **设备上那三个数还没量**（本卡不碰设备）：① 冷启动 `am start -W` 的 `TotalTime`
+      改前/改后，② 「冷进程 + 组件广播」第一次 `getInstance` 落在哪条线程、多少毫秒，
+      ③ 预热是否真的把扫码页首帧的 `dlopen` 藏掉了。命令形态与判据在那份文档 §6；
+      ③ 若量出来收益接近零，这第三件事应当整体删掉（它唯一的净代价是常驻映射）
 
 ## 不做的内容
 
