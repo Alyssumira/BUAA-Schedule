@@ -10,6 +10,7 @@ import android.util.Log
 import androidx.work.WorkManager
 import com.buaa.schedule.data.repository.scheduleRepository
 import com.buaa.schedule.domain.model.ReminderMode
+import com.buaa.schedule.reminder.ClassProgressReceiver
 import com.buaa.schedule.reminder.ClassProgressScheduler
 import com.buaa.schedule.reminder.ReminderScheduler
 import com.buaa.schedule.reminder.TomorrowPreviewReceiver
@@ -64,7 +65,10 @@ object BackgroundSync {
      *
      * @return 本轮 [ReminderScheduler.rescheduleAll] 是否已经把「上/下课铃」一起接手。
      *   返回 false 时课堂窗口没人排，需要兜底链自己续排一次：
-     *   ①「系统日历提醒」模式（应用内一个闹钟都不排）；
+     *   ①「系统日历提醒」模式（应用内课前提醒一个闹钟都不排）。返回 false 这条契约不变，
+     *     但那一支里的课堂铃清理**不再无条件**：只撤应用内提醒闹钟，课堂铃要等
+     *     [shouldCancelAllInCalendarMode] 那两枚开关都关才当场收，否则整块跳过、
+     *     清理交给这个 false 兑来的续排链（①与②走的是同一条收口，见下面那句 R5 F-12）；
      *   ② 没有下一条提醒（课表清空 / 学期已结束 / 提醒全关）—— 那条分支里 rescheduleAll
      *     只在"此刻没有课在进行"时才把课堂铃一起 cancelAll（否则会留下永不消失的常驻通知 +
      *     永久勿扰）；正上着课就不收，免得把勿扰记录与看门狗闹钟一起抹掉（见
@@ -86,12 +90,29 @@ object BackgroundSync {
         onStepFailed: (label: String, error: Throwable) -> Unit = NO_STEP_FAILURE,
     ): Boolean {
         if (!usesInAppReminders(context)) {
-            // 日历模式：应用内闹钟与上下课铃一起清干净（口径同
-            // ScheduleViewModel.afterDataChangedInternal），只清课前提醒会留下
-            // 永不消失的常驻通知与永久勿扰。
+            // 日历模式：应用内课前提醒那条通道一个闹钟都不排，已经把排好的那些清干净。
             runCatching {
                 ReminderScheduler.cancelAll(context)
-                ClassProgressScheduler.cancelAll(context)
+                // 课堂铃（上课实况 + 自动勿扰）**不跟着一起撤** —— 这一枚是同族第四处：
+                // 无条件 cancelAll 的第一步就是撤双铃 + restore + 抹掉勿扰记录与看门狗，
+                // 正在上课时每重排一次，用户就被放开勿扰约 5 秒，而且那份记录正是当下
+                // 要靠的自愈凭据（同 ai/T11 / ai/T11b 那两处的账，只多不少）。
+                // 「系统日历提醒」管的是**课前提醒从哪条通道下发**，课堂链没有日历等价物，
+                // 所以这条链在日历模式下照样该跑，闸门只有那两枚课堂开关。
+                // 两枚都关（= 用户自己把本功能关了）才当场收；只要有一枚还开着就整块跳过，
+                // 清理交给这个 `return false` 兑现的那条续排链 —— 它自己那份带判据的清理
+                // （[ClassProgressScheduler.rescheduleWindows]）管得了"挑不出窗口"与
+                // "课还没开始且不在数课前倒计时"两种遗留，这里不复用它的全量窗口搜索
+                // （紧接着就再搜一遍，纯白付；口径见 [shouldCancelAllInCalendarMode]）。
+                val prefs = context.getSharedPreferences(
+                    ClassProgressReceiver.PREFS_NAME,
+                    Context.MODE_PRIVATE,
+                )
+                val classProgress = prefs.getBoolean(ClassProgressReceiver.PREF_CLASS_PROGRESS, true)
+                val dndEnabled = prefs.getBoolean(ClassProgressReceiver.PREF_DND, false)
+                if (shouldCancelAllInCalendarMode(classProgress, dndEnabled)) {
+                    ClassProgressScheduler.cancelAll(context)
+                }
             }.onFailure {
                 Log.w(TAG, "日历模式下清理应用内闹钟失败", it)
                 onStepFailed("cleanUpInCalendarMode", it)
@@ -112,6 +133,31 @@ object BackgroundSync {
             onStepFailed("rescheduleReminders", it)
         }.getOrDefault(true)
     }
+
+    /**
+     * 日历模式那条早退分支要不要连「上/下课铃」一起撤 —— **只认两枚课堂开关**。
+     *
+     * 判据口径与 [ClassProgressScheduler.rescheduleNextWindow] 开头读的那一份逐字相同
+     * （`PREF_CLASS_PROGRESS` 默认 true、`PREF_DND` 默认 false，同一份 prefs）：
+     * 续排链自己认为"两个开关都关 = 用户关了本功能"，那这里就跟着当场收干净；
+     * 只要有一枚还开着，这条链在日历模式下**照样该跑**，一个字都不许撤 ——
+     * 「系统日历提醒」这个选项管的是**课前提醒从哪条通道下发**（模式选择器自己的文案就是
+     * 「提醒方式」），课堂实况与自动勿扰没有日历等价物，收掉等于从一整类用户手里拿走主打功能。
+     *
+     * 为什么这里是"两枚开关"而不是 [com.buaa.schedule.reminder.ReminderScheduler.shouldTakeDownClassProgress]
+     * 那份完整判据（同族前三处用的就是它）：那一份要先做一轮
+     * [ClassProgressScheduler.planNextClassWindow] 全量搜索才知道"课还在上 / 还在数倒计时"，
+     * 而这个 `false` 紧随其后就要经由续排再做**同一轮**搜索并按那份判据清理
+     * （`rescheduleWindows`：挑不出窗口 → cancelAll；课还没开始且不在数课前倒计时 →
+     * 停服务 + 撤常驻 + restore）。在这里再搜一遍是纯白付的 O(课程数 × 剩余周次 × 节次段)
+     * （学期中段上千次窗口构造，且挂在每一次冷唤醒上），买到的结论一秒钟后就会被再算一遍。
+     *
+     * 收成不接 Context 的两个 Boolean 参数，为的是这条判据在 JVM 单测里数得出来
+     * （本模块没有 Robolectric，`getSharedPreferences` 是抛 "not mocked" 的桩）——
+     * 与 [runColdStartWidgetSteps] 那个注入版本同一个理由。
+     */
+    internal fun shouldCancelAllInCalendarMode(classProgress: Boolean, dndEnabled: Boolean): Boolean =
+        !classProgress && !dndEnabled
 
     /**
      * 「重排提醒」+「课堂铃兜底」的完整一次调用：[rescheduleReminders] 的返回值契约
