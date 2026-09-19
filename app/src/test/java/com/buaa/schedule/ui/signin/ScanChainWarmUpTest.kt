@@ -19,7 +19,7 @@ import org.junit.Test
  * `AtomicBoolean`，八线程抢一次门闩、只许一个人赢。这条比任何形状核对都硬，因为它测的
  * 就是那段代码。
  *
- * 守卫要挡住的四种坏形状，都不红：
+ * 守卫要挡住的五种坏形状，都不红：
  * ① 把预热挪回 `onCreate` 里同步做 —— 那不是"首帧之后"，那是把成本搬到**更早**的主线程；
  * ② 只 `BarcodeScanning.getClient()` 就以为预热到了 —— `libbarhopper_v3.so` 的
  *    `System.loadLibrary` 写在 `BarhopperV3` 的**实例构造函数**里，那个实例第一次真解码
@@ -27,7 +27,12 @@ import org.junit.Test
  * ③ 顺手申请相机权限 / 开相机 / `bindToLifecycle` —— 用户没点扫码页就该什么都不弹；
  * ④ 异常逃出 [ScanChainWarmUp.warmUp] —— 它跑在 `BUAAApplication.applicationScope` 上，
  *    那个作用域是 `SupervisorJob + Dispatchers.IO` 且**没有** `CoroutineExceptionHandler`，
- *    逃出去就是顺着线程默认处理器把整个进程打死。
+ *    逃出去就是顺着线程默认处理器把整个进程打死；
+ * ⑤ 把两档换回"相机那一档先跑" —— 两档之间确实没有数据依赖，看着像谁先谁后都行，可它们共用
+ *    同一段"用户还没点进扫码页"的窗口，而相机档在相机枚举慢的设备上会把 5 秒上限**整额吃掉**
+ *    （buaa36 实测：`TimeoutException ... ProcessCameraProvider-initializeCameraX`，
+ *    见 docs/PERF-STARTUP-2026-09-19.md §8 ③），把只值约 340 ms 的那一下顶到它后面就等于没跑。
+ *    这条是 T18b 量完设备之后补的。
  */
 class ScanChainWarmUpTest {
 
@@ -199,6 +204,45 @@ class ScanChainWarmUpTest {
             "作用域不是进程级那个 applicationScope：用 lifecycleScope 的话转屏会把跑到一半的预热" +
                 "掐死，而门闩已经翻过去，这次预热就永远不会补做",
             code.contains("scope = (application as BUAAApplication).applicationScope"),
+        )
+    }
+
+    /**
+     * ⑧ 两档的**先后**：解码那一档必须排在相机那一档之前（换回去就红）。
+     *
+     * 为什么这条只能按形状核对，而不是"把两档抽成可注入的参数、传两个记账 lambda 进去跑一遍"：
+     * - 跑 `warmUp` 需要一个真的 `android.content.Context`。本模块没有 Robolectric、没有 Mockito，
+     *   `testOptions.unitTests.isReturnDefaultValues` 也没开 —— 连 `ContextWrapper()` 这个构造函数
+     *   都是一句 "Stub!"，那个 Context 在 JVM 里造不出来（同本文件开头那句"没有 Robolectric"）；
+     * - 就算把两档抽成带默认实参的函数引用参数，注入之后测试量到的也只是**自己传进去的那两个假
+     *   lambda** 的先后，真接线（谁站在第一个位子上）还得回头按源码核对。一条断言拆成两半、
+     *   internal 面还多两个符号，不划算。
+     * 所以沿用本文件既有的手法（`ClassProgressRescheduleWiringTest` ④ 钉"取证日志排在报告口之前"
+     * 用的是同一个形状）：锚点找不到就抛，找得到就比两个调用在 `warmUp` 函数体里的位置。
+     */
+    @Test
+    fun decoderStepIsScheduledBeforeTheCameraStep() {
+        val code = normalize(withoutComments(readSource(WARM_UP_FILE)))
+        val body = balancedBlock(code, "internal suspend fun warmUp(appContext: Context)")
+        val decoder = body.indexOf("warmUpBarcodeDecoder()")
+        val camera = body.indexOf("warmUpCameraProvider(appContext)")
+        check(decoder >= 0 && camera >= 0) { "warmUp 里那两行调用换过形状了：\n$body" }
+        // 各只许调用一次：多出来的那一遍会先占住窗口，下面的顺序断言就成了摆设
+        assertEquals("解码那一档在 warmUp 里被调用不止一次：\n$body", 1, count(body, "warmUpBarcodeDecoder"))
+        assertEquals("相机那一档在 warmUp 里被调用不止一次：\n$body", 1, count(body, "warmUpCameraProvider"))
+        // 顺序只在"两档都跑在 IO 那一段里"时才有意义：排到 withContext 外面就是排回主线程
+        val io = body.indexOf("Dispatchers.IO")
+        assertTrue("两档没落在 withContext(Dispatchers.IO) 里面：\n$body", io in 0 until decoder && io in 0 until camera)
+        assertTrue(
+            "两档的顺序被换回「相机那一档先跑」了（解码档在 $decoder、相机档在 $camera）。" +
+                "两档之间确实没有数据依赖，但它们共用同一段「用户还没点进扫码页」的窗口：" +
+                "相机档在相机枚举慢的设备上会把 CAMERA_TIMEOUT_SECONDS 那 5 秒整额耗光 —— " +
+                "buaa36 实测 TimeoutException: Waited 5000000000 nanoseconds " +
+                "[tag=[ProcessCameraProvider-initializeCameraX]] status=PENDING，" +
+                "而解码档（`.so` 的 dlopen + 解码器构造）只值约 340 ms 且收益已被实测证明。" +
+                "换回去的代价不是慢 5 秒，是这次预热对「打开应用就为了签到」的用户等于没跑" +
+                "（docs/PERF-STARTUP-2026-09-19.md §8 ③ / T18b）：\n$body",
+            decoder < camera,
         )
     }
 

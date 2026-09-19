@@ -124,10 +124,27 @@ internal object ScanChainWarmUp {
      */
     internal suspend fun warmUp(appContext: Context) {
         withContext(Dispatchers.IO) {
-            // 两档各一次，谁先谁后无所谓：它们之间没有任何依赖。
-            // 关掉某一档 = 删掉对应那一行。
-            warmUpCameraProvider(appContext)
+            // 两档各一次，彼此没有数据依赖 —— 但**先后要紧**：它们共用同一段"用户还没点进
+            // 扫码页"的窗口，而两档的代价与收益差着一个数量级。判据一句话：
+            // **300 ms 量级、收益已被实测证明的那一档排前面；贵的、可能整额超时的那一档排后面**。
+            //
+            // 实测出处（buaa36 / API 36 / 冷启动后停在首页、全程没点开扫码页，读数与口径见
+            // docs/PERF-STARTUP-2026-09-19.md §8 ③）：
+            //   08:32:41.476  TimeoutException: Waited 5000000000 nanoseconds
+            //                 [tag=[ProcessCameraProvider-initializeCameraX] status=PENDING]
+            //   08:32:41.653  nativeloader: Load .../base.apk!/lib/x86_64/libbarhopper_v3.so  ok
+            //   08:32:41.733  barhopper::deep_learning::OnedDecoderClient is created successfully.
+            //   08:32:41.991  解码器预热完成
+            // 也就是相机档在那台 AVD 上把 [CAMERA_TIMEOUT_SECONDS] 这 5 秒**整额耗光**（相机枚举
+            // 慢的设备上就会这样，模拟器正是最典型的一台），而真正有用的那一下 —— 那颗 `.so` 的
+            // dlopen + 解码器构造 —— 只值约 340 ms，却被排在这段必然白等的 5 秒之后。一个"打开
+            // 应用就是为了签到"的用户，从首帧到点开扫码页通常用不了 5 秒 —— 排在后面等于没跑。
+            //
+            // 换序不给相机档减代价：它排在后面之后照样占着一个 IO 线程直到 5 秒上限，这笔账
+            // 认了（类注释的「代价与开关」+ 那份文档的 §4.4 / §7），不改数值、不加开关。
+            // 关掉某一档 = 删掉对应那一行；顺序由 ScanChainWarmUpTest ⑧ 钉着，换回去会红。
             warmUpBarcodeDecoder()
+            warmUpCameraProvider(appContext)
         }
     }
 
