@@ -59,7 +59,8 @@ object ReminderScheduler {
      *
      * @return 本轮排上的那一条课前提醒；null 表示本轮没有待触发的课前提醒
      *   （没配学期 / 课表为空 / 学期已结束 / 提醒全关）。
-     *   ⚠️ null **不等于**"课堂侧状态已经被收干净"：此刻正处在课堂窗口内时那道撤销会被跳过
+     *   ⚠️ null **不等于**"课堂侧状态已经被收干净"：此刻正处在课堂窗口内（正在上课，
+     *   或在数着一节还没开始的课的课前倒计时）时那道撤销会被跳过
      *   （见 [shouldTakeDownClassProgress]），清理交给调用方的续排链
      *   （[ClassProgressScheduler.rescheduleNextWindow]）。
      *
@@ -107,17 +108,30 @@ object ReminderScheduler {
             // 带判据的清理只此一份实现（ClassProgressScheduler.rescheduleWindows 里那个
             // "课还没开始且不在数课前倒计时"的分支），这里只决定"现在就收"还是
             // "交给续排链收"，不长出第二份判据。
+            // ai/T11 那枚补上了"正在上课"，这一枚补的是同族的另一半：**正在数一节还没开始的
+            // 课的课前倒计时**。那一刻 plan 也是 null（唯一一条课前提醒已经触发过了），
+            // 于是每次改设置 / 改课表 / 关掉提醒引发的重排都会走这里，把岛上那条倒计时
+            // 连同**紧随其后那一发上课铃**一起撤掉（cancelAll 第一步就是撤双铃）——
+            // 与"正在上课"那处不同，这里被撤掉的铃再也没有哪条链会补回来：本轮没有下一条提醒，
+            // 那一节课的课堂实况与自动勿扰就此永久缺席。
             val takenDown = takeDownClassProgressIfNeeded(
                 courses = courses,
                 semesterStart = semesterStart,
                 timeSlots = timeSlots,
                 classProgressEnabled = classProgress,
                 dndEnabled = dndEnabled,
-                // 与上面那次搜索同一只钟：选窗口与判"在不在上课"必须同源
+                // 与上面那次搜索同一只钟：选窗口、判"在不在上课"、以及喂给倒计时判据的
+                // 开课毫秒都由这一个 now 派生
                 now = now,
+                // 只判**归属**、不带上 ReminderNotifications.isCountingDownTo 那个内部读真钟的
+                // 时间判：这一判问的"课还没开始"上面已经用注入的 now 判过了（见
+                // shouldTakeDownClassProgress 的论证 3 —— 两处判据各读一只钟就是跨秒自相矛盾）
+                countingDownTo = ReminderNotifications::ownsCountdownTo,
                 tearDown = { ClassProgressScheduler.cancelAll(context) },
             )
-            if (!takenDown) Log.d(TAG, "正处在课堂窗口内：本轮不撤销课堂铃与勿扰，交给续排链")
+            if (!takenDown) {
+                Log.d(TAG, "正处在课堂窗口内（正在上课 / 正数着这节的课前倒计时）：本轮不撤销课堂铃与勿扰，交给续排链")
+            }
             return null
         }
         // 上/下课铃与常驻通知的撤销/重排统一交给 scheduleClassProgress：
@@ -172,7 +186,13 @@ object ReminderScheduler {
      * 真跑一次撤销得设备，JVM 侧钉得住的只有"那个撤销动作被调了几遍"，
      * 所以撤销本身收成一个注入的 lambda（生产接线传的就是 `cancelAll`）。
      *
-     * @return true 表示当场收了；false 表示此刻正处在课堂窗口内、这道撤销被跳过
+     * [countingDownTo] 走同一套路：它读的是 [ReminderNotifications] 那对进程内 `@Volatile`
+     * （倒计时挂在谁身上），JVM 侧既造不出来也不该造，只能注进来才测得到判据本身。
+     * 生产接线传 [ReminderNotifications.ownsCountdownTo]，理由见
+     * [shouldTakeDownClassProgress] 的论证 3。
+     *
+     * @return true 表示当场收了；false 表示这一节课正在进行、或它的课前倒计时正挂在屏幕上
+     *   （那节课还没开始），这道撤销被跳过
      *   （调用方据此留一行取证日志，设备上看勿扰有没有又被抖一次）
      */
     internal fun takeDownClassProgressIfNeeded(
@@ -182,6 +202,7 @@ object ReminderScheduler {
         classProgressEnabled: Boolean,
         dndEnabled: Boolean,
         now: LocalDateTime,
+        countingDownTo: (courseId: Long, classStartMillis: Long) -> Boolean,
         tearDown: () -> Unit,
     ): Boolean {
         val due = shouldTakeDownClassProgress(
@@ -191,6 +212,7 @@ object ReminderScheduler {
             classProgressEnabled = classProgressEnabled,
             dndEnabled = dndEnabled,
             now = now,
+            countingDownTo = countingDownTo,
         )
         if (!due) return false
         tearDown()
@@ -200,23 +222,53 @@ object ReminderScheduler {
     /**
      * 纯函数：本轮没有课前提醒可排时，课堂侧那一揽子撤销该不该当场执行。
      *
-     * 只有**此刻正处在课堂窗口内**才放过，其余三种情况照旧当场收干净：
+     * 只有**此刻与课堂窗口有关**才放过：正在上这一节，或屏幕上正数着这一节（还没开始）的
+     * 课前倒计时；其余情况照旧当场收干净：
      * - 两个课堂开关都关着：[ClassProgressScheduler.rescheduleNextWindow] 会因此早退，
      *   续排链根本不会跑，不当场收就永远收不掉；
      * - 挑不出课堂窗口（没有课 / 学期已结束）：此刻没有课在进行，收铃正是 R5 F-11 要的；
      * - 窗口还没开始、或已经结束：遗留的常驻通知与勿扰该收，
-     *   用户把正在上的那门课删掉（重排后窗口对不上）也走这一条。
+     *   用户把正在上的那门课删掉（重排后窗口对不上）也走这一条 ——
+     *   **但"屏幕上正数着这节还没开始的课的课前倒计时"时不收**，见下面论证 1。
      *
      * 而"正在上课"时收干净的代价是**连自愈凭据一起抹掉**：勿扰记录与看门狗闹钟都在
      * [ClassProgressDnd] 那一侧，撤销走的 restore 会把记录清掉，之后
      * [ClassProgressDnd.selfCheck] 判的是"有残留记录才动手" —— 救不回来。
      * 偏偏"正在上课"说明这两样都是当下正要用的东西。
      *
-     * 两个判据都不在这里重写：窗口口径是 [ClassProgressScheduler.planNextClassWindow]
+     * 三个判据都不在这里重写：窗口口径是 [ClassProgressScheduler.planNextClassWindow]
      * （含正在上的这一节），"在不在上课"是 [ClassProgressScheduler.ClassWindow.ongoingAt]，
-     * 带判据的那份清理实现仍然只有 [ClassProgressScheduler.rescheduleWindows] 一处。
+     * "在不在数这节课的课前倒计时"由 [countingDownTo] 注入（生产传
+     * [ReminderNotifications.ownsCountdownTo]），带判据的那份清理实现仍然只有
+     * [ClassProgressScheduler.rescheduleWindows] 一处（它在 `:280-291` 用的就是同一对状态）。
      *
-     * [now] 一次判断只读一次时钟：选窗口与判"在不在上课"共用它（同 [planOnce] 的约束）。
+     * **论证 1 —— 为什么放过这一判不会变成"永远收不掉"**：能走到这里说明窗口就在眼前，
+     * 而那一发上课铃不是别处来的：课前提醒的广播（`ReminderReceiver.kt:44-62`）在下发倒计时的
+     * 同一次里就调 `rescheduleAll`，走到 [ClassProgressScheduler.rescheduleWindows] 把这一节的
+     * 上课铃排成 `setAlarmClock`。"不收"保住的就是它 —— 反过来当场 `cancelAll` 会连它一起撤，
+     * 而这条分支本来就没有下一条提醒，被撤掉的铃再没有任何人续排（这一节的实况与自动勿扰永久缺席）。
+     * 铃一响，ACTION_START 以 IN_CLASS 重发实况、把倒计时归零，并排好下课铃，续排链因此在
+     * 下一环重新判一次；归属对不上（课被删 / 时间被改）时 [countingDownTo] 直接返回 false，
+     * 照收，R5 F-11 的清理语义一字未动。这与 `rescheduleWindows:281-285` 已经做的取舍是同一笔账。
+     *
+     * **论证 2 —— 为什么"两个开关都关"那一判必须排在倒计时判之前**：那条路上没有人在续排
+     * （[ClassProgressScheduler.rescheduleNextWindow] 判完开关就 `return`，
+     * [rescheduleAll] 下面那段也走 `cancelAll` 而不是重排），"等下一环重新判"这个前提不成立，
+     * 收了才是终态；反过来若让倒计时判抢先，留下的就是一条永远不会再被更新的常驻通知加一个
+     * 永不恢复的勿扰。倒计时只是"展示状态"，不是"有人在接手"的证据 —— 它是进程内的
+     * `@Volatile`，重启即归零，撑不起"继续等"的承诺。
+     *
+     * **论证 3 —— 为什么只判归属、不用 [ReminderNotifications.isCountingDownTo]**：
+     * 那只把 `System.currentTimeMillis()` 读在自己身上，而本函数"课还没开始"这件事判的是
+     * 注入的 [now]（[planOnce] 与 `rescheduleWindows:267-269` 各有一段同类注释防的就是
+     * 一次判断两只钟）。两个时刻都从真钟读，就会在跨秒那一瞬先掉个儿：注入的 now 说还没开始、
+     * 真钟说已开始 ⇒ 守卫失效，当场拆掉的恰恰是"这一节正要开始、勿扰正要生效"的那一秒 ——
+     * 与本卡要修的故障同形。[ReminderNotifications.ownsCountdownTo] 的归属是清得掉的
+     * （ACTION_START 落地即归零），"归属还在 + 注入的 now 说没开始"这两条合起来就是
+     * isCountingDownTo 想表达的内容，而且时间只由 [now] 读一次。
+     *
+     * [now] 一次判断只读一次时钟：选窗口、判"在不在上课"、以及喂给 [countingDownTo] 的
+     * 开课毫秒全部由它派生（同 [planOnce] 的约束）。
      */
     internal fun shouldTakeDownClassProgress(
         courses: List<Course>,
@@ -225,6 +277,7 @@ object ReminderScheduler {
         classProgressEnabled: Boolean,
         dndEnabled: Boolean,
         now: LocalDateTime,
+        countingDownTo: (courseId: Long, classStartMillis: Long) -> Boolean,
     ): Boolean {
         if (!classProgressEnabled && !dndEnabled) return true
         val window = ClassProgressScheduler.planNextClassWindow(
@@ -233,7 +286,8 @@ object ReminderScheduler {
             timeSlots = timeSlots,
             now = now,
         ) ?: return true
-        return !window.ongoingAt(now.toEpochMillis())
+        if (window.ongoingAt(now.toEpochMillis())) return false
+        return !countingDownTo(window.courseId, window.startMillis)
     }
 
     /**
