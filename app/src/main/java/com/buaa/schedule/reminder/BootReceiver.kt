@@ -46,9 +46,26 @@ class BootReceiver : BroadcastReceiver() {
                     suspend fun step(label: String, block: suspend () -> Unit) {
                         runCatching { block() }.onFailure { Log.w(TAG, "开机重建失败：$label", it) }
                     }
-                    // 重启把闹钟全清了，遗留的勿扰记录再没有下课铃来恢复 —— 开机即无条件清一次
-                    // （没进过勿扰时 restore 本身就是 no-op，不会动用户自己的勿扰设置）
-                    step("dndRestore") { ClassProgressDnd.restore(context) }
+                    // 重启把闹钟全清了：真正没主的遗留勿扰记录（下课铃与看门狗都随重启没了）
+                    // 确实要开机自愈，但不能再无条件抢先恢复 —— 正在上课时那条记录是当下正要用的
+                    // 自愈凭据。实测（emulator-5554，2026-09-18，一节 20:40–21:25 的课在上、
+                    // dnd_during_class=true、课前提醒全关）：
+                    //   20:50:47.085 ZenModeController →0（唤醒锁后 14ms，就是这一步）、
+                    //   20:50:52.308 →2（5.2 秒后续排链排出已过期的上课铃重新进入）——
+                    // 每收一次重建广播，正在上课的用户就被静音放开 5 秒（覆盖安装走同一接收器；
+                    // 同审计 §2.9 / ai/T11 那一族的第二处）。
+                    // 判据走 ClassProgressDnd 那侧唯一的期限口径（selfCheck：有记录且期限已过；
+                    // 无记录照旧 no-op，绝不动用户自己的勿扰设置；旧记录缺期限照旧当场自愈）。
+                    // 「记录还在但期限未到」交给紧随其后的重建链收口 —— 此刻没有课在进行时它
+                    // 必然走到带判据的清理并把 restore 调下去：
+                    //   日历模式 BackgroundSync.kt:51-57（早退分支先清两类闹钟）→ ClassProgressScheduler.kt:434；
+                    //   没配学期 / 课表为空 ReminderScheduler.kt:73-79 → 同上；
+                    //   课前提醒全关（plan==null）ReminderScheduler.kt:103-111 → 同上；
+                    //   有下一条提醒 ClassProgressScheduler.kt:276-291（挑不出窗口 :277 cancelAll；
+                    //   课还没开始 :290 restore —— 开机新进程里不存在课前倒计时归属，
+                    //   ReminderNotifications.kt:198 那两个变量都是进程内状态）。
+                    // 真在上课则续排链重排出已过期的上课铃、立刻投递重新 enter，勿扰一秒都不掉。
+                    step("dndSelfCheck") { ClassProgressDnd.selfCheck(context) }
                     // rescheduleReminders 的 Boolean 返回值代表「提醒链是否已接手课堂铃」，
                     // 开机时闹钟全清、返回值此前被直接丢弃 —— 用打包版补齐课堂铃重排
                     step("rescheduleReminders") { BackgroundSync.rescheduleRemindersAndBells(context) }

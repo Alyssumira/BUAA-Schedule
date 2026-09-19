@@ -386,6 +386,39 @@ KDoc 原文"重排后到期的上课铃会立刻触发，把课中实况、勿�
 在排程端掐掉它等于把**中途重启后的勿扰自愈**一起掐了。要修的是"先无条件拆、再靠过期闹钟补回来"
 这个来回，不是补回来的那一步。
 
+**2026-09-19 补：开机重建那一步是同一族里的第二处**（由 ai/T12 落）。上一行的修法实测生效
+（`rescheduleAll` 之后不再抖，log 里那句「正处在课堂窗口内：本轮不撤销」按预期出现），
+但同一次验证里冷启动链还是抖了一下，而且发生在更早的位置（emulator-5554，2026-09-18，
+一节 20:40–21:25 的课在上、`dnd_during_class=true`、课前提醒全关）：
+
+```
+20:50:47.071  WakeLocks 进入 tag=boot_rebuild
+20:50:47.085  ZenModeController: Zen mode setting changed to 0   ← 唤醒锁后 14ms，rescheduleReminders 之前
+20:50:47.133  ReminderScheduler: 正处在课堂窗口内：本轮不撤销课堂铃与勿扰，交给续排链
+20:50:47.266  WakeLocks 跑完 tag=boot_rebuild elapsed=195ms held=true
+20:50:52.308  ZenModeController: Zen mode setting changed to 2   ← 5.2s 后续排链排出已过期的上课铃，重新 enter
+```
+
+`→0` 唯一对得上的语句是 `BootReceiver.kt:51`（`b5dc353` 时点）：开机重建的第一步**无条件**
+`ClassProgressDnd.restore(context)`。它的前提"重启把闹钟全清了、遗留记录再没有下课铃来恢复"
+只对**真正遗留**的记录（期限已过 / 旧版本缺期限）成立；正在上课时那条记录连同看门狗是当下
+正要用的自愈凭据。覆盖安装（`MY_PACKAGE_REPLACED`）走同一接收器，抖动一样。
+
+**修法**：那一步换成 `selfCheck` 的期限判据（有记录**且**期限已过才动手；无记录照旧 no-op，
+绝不动用户自己的勿扰设置；旧记录缺期限照旧当场自愈）。判据只此一份，收在
+`ClassProgressDnd.restoreIfStale`（不接 Context、动作注入 lambda，形状同
+`ReminderScheduler.takeDownClassProgressIfNeeded`），开机侧不长第二份比较式。
+「有记录但期限未到」交给紧随其后的重建链收口——没有课在进行时它必然走到带判据的清理
+并把 `restore` 调下去：日历模式 `BackgroundSync.kt:51-57` → `ClassProgressScheduler.kt:434`；
+无学期 / 空课表 `ReminderScheduler.kt:73-79` → 同上；课前提醒全关（`plan == null`）
+`ReminderScheduler.kt:103-111` → 同上；有下一条提醒 `ClassProgressScheduler.kt:276-291`
+（挑不出窗口 :277 收；课没开始 :290 恢复——开机新进程里不存在课前倒计时归属，
+`ReminderNotifications.kt:198` 那对变量是进程内的）。真在上课则续排链重排出已过期的
+上课铃、立刻投递重新 `enter`，勿扰一秒都不掉。
+**已知残余**：开机重建查库抛异常时（`rescheduleReminders` 兜住并按 `true` 返回），续排链
+这一轮没接手，那条期限未到的记录要等下一次冷启动 `selfCheck` 才收 —— 改前那种场景是被
+开机无条件 restore"顺带"覆盖的，代价恰恰就是上面这 5 秒抖动。
+
 ---
 
 ## 3. 看起来该改、但本轮判断**不该改**的项

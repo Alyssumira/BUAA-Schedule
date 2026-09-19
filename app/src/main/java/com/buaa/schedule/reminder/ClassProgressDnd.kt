@@ -116,7 +116,8 @@ object ClassProgressDnd {
     }
 
     /**
-     * 硬超时自愈：**冷启动**（BUAAApplication）与**看门狗闹钟**共用这一个入口。
+     * 硬超时自愈：**冷启动**（BUAAApplication）、**开机重建**（BootReceiver）与**看门狗闹钟**
+     * 共用这一个入口。
      *
      * 只在「有残留记录」且「恢复期限已过」时动手，因此正在上课的那节课不会被误恢复。
      * 期限缺失（0）说明这条记录是加看门狗之前的旧版本留下的 —— 那种记录本来就没人会
@@ -125,12 +126,42 @@ object ClassProgressDnd {
     fun selfCheck(context: Context) {
         runCatching {
             val prefs = prefs(context)
-            if (!prefs.contains(KEY_SAVED_FILTER)) return
             val deadline = prefs.getLong(KEY_DND_DEADLINE, 0L)
-            if (deadline > System.currentTimeMillis()) return
-            Log.w(TAG, "勿扰已过恢复期限仍未收到下课铃（$deadline），按硬超时恢复")
-            restore(context)
+            restoreIfStale(
+                hasSavedFilter = prefs.contains(KEY_SAVED_FILTER),
+                deadline = deadline,
+                nowMillis = System.currentTimeMillis(),
+            ) {
+                Log.w(TAG, "勿扰已过恢复期限仍未收到下课铃（$deadline），按硬超时恢复")
+                restore(context)
+            }
         }.onFailure { Log.w(TAG, "勿扰自愈失败", it) }
+    }
+
+    /**
+     * 「这一轮到底该不该按硬超时动手」判据的唯一出处 + 编排：
+     * 「有记录」且「恢复期限已过（缺失/0 按已过处理）」时把动作交给 [onStale] 并返回 true，
+     * 其余情况原样返回 false、什么都不做。
+     *
+     * 判据体从 [selfCheck] 里搬出来 —— 不接 Context、动作收成注入的 lambda
+     * （同 [ReminderScheduler.takeDownClassProgressIfNeeded] 的手法：本模块单测没有
+     * Robolectric，[restore] 要 Context，android.jar 里全是抛 "not mocked" 的桩，
+     * JVM 侧钉得住的只有"恢复动作被调了几遍"）。开机那一步（BootReceiver）经 [selfCheck]
+     * 共用这份判据，**不许**在调用点再长第二份「有记录 + 期限」的比较式。
+     *
+     * [hasSavedFilter] 即"是否记录过用户原状态"；[deadline] 是 `dnd_restore_deadline`；
+     * [nowMillis] 是这一次判断唯一的时钟读数（调用方传入，判据自己不读钟）。
+     */
+    internal fun restoreIfStale(
+        hasSavedFilter: Boolean,
+        deadline: Long,
+        nowMillis: Long,
+        onStale: () -> Unit,
+    ): Boolean {
+        if (!hasSavedFilter) return false
+        if (deadline > nowMillis) return false
+        onStale()
+        return true
     }
 
     /** 恢复期限 = 下课 + 宽限；下课时刻不可用时按兜底上限从此刻算 */
