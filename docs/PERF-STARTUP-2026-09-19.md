@@ -541,10 +541,22 @@ JOB #u0a220/1: com.buaa.schedule/androidx.work.impl.background.systemjob.SystemJ
 3. → **T18b 换序**：`ScanChainWarmUp.warmUp()` 里改成解码档先、相机档后。两档各自独立、
    各自 `catch (Throwable)`、进程内一次的那颗门闩都不变；相机档那 5 秒上限以及它排到后面之后
    仍然占着一个 IO 线程的代价**保留不动**（不改数值、不加开关）。
-   顺序由 `ScanChainWarmUpTest` ⑧ 钉住，换回去会红。换序之后同一条命令下
-   `解码器预热完成` 的时间戳应当排在相机那一档任何一行**之前** —— 这条已并回 §6 ③ 判据 1。
-   ⚠️ 但这最后一步**是预期、不是复量**：T18b 只改了顺序、没有在设备上重跑 ③
-   （本 worktree 不碰设备）。下一次量 ③ 时按新判据读那两行的先后即可。
+   顺序由 `ScanChainWarmUpTest` ⑧ 钉住，换回去会红。
+4. **换序后已复量（编排者 2026-09-19 第二轮，T18b 包 `44bb83b`）**：同一条命令、同样停在首页、
+   同样没点开扫码页，先后整个反过来 ——
+
+   ```
+   09:11:35.747  I ActivityTaskManager: Displayed com.buaa.schedule/.MainActivity: +3s724ms
+   09:11:36.174  D nativeloader: Load .../base.apk!/lib/x86_64/libbarhopper_v3.so ... ok
+   09:11:36.332  barhopper::deep_learning::OnedDecoderClient is created successfully.
+   09:11:36.899  D ScanChainWarmUp: 解码器预热完成
+   09:11:41.957  D ScanChainWarmUp: 相机 provider 预热未成功（忽略）+ TimeoutException 5e9 ns
+   ```
+
+   解码器就绪这一行落在**首帧上屏后 1.15 秒**（`.so` 映射更早，+0.43 秒），而换序之前它是
+   排在相机那一档整额 5 秒**之后**才开始的。红线照旧成立：停在首页时
+   `dumpsys media.camera | grep -c com.buaa.schedule` == 0（没开相机），`CAMERA` 授权态未被改动。
+   代价一笔没变：相机档仍在，只是排到了后面，照样占着一个 IO 线程到 5 秒上限。
 
 ### 本节改动（T18b）的门禁复跑
 
