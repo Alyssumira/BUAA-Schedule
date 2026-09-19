@@ -440,9 +440,19 @@ internal const val BOTTOM_BAR_SURFACE_ALPHA_CEILING = 0.60f
  * 底栏栏体表面 alpha：原始值（containerAlpha × 用户透明度倍率）夹在"读得清的下限"
  * 与"这条栏的天花板"之间。
  *
- * 从 composable 里逐字搬出来，数值口径一个字没改。抽函数的理由与
- * [com.buaa.schedule.core.designsystem.glassSurfaceAlpha] 相同：本模块的 JVM 单测没有
- * Compose 运行时，留在 `@Composable` 体内测不到。
+ * 从 composable 里抽出来的理由与 [com.buaa.schedule.core.designsystem.glassSurfaceAlpha]
+ * 相同：本模块的 JVM 单测没有 Compose 运行时，留在 `@Composable` 体内测不到。
+ *
+ * ## 夹区间的顺序与 [glassSurfaceAlpha] 同构：下限先跟天花板取小，再喂 coerceIn
+ *
+ * 旧写法是 `.coerceAtMost(0.60).coerceAtLeast(floor)`。[legibilityAlphaFloor] 的值域
+ * 上界是 1.0（那块板无论压到多实都读不清时会饱和），于是下限一旦越过 0.60，
+ * 两步夹取等于"天花板不作数"：深色档 × 亮壁纸块实测 floor 可到 0.920，
+ * 0.60 这条上限在深色场景从来没真正生效过，产出的 alpha 两处口径都不认
+ * （约定本身写在 [legibilityAlphaFloor] 的文档里；T22 修过的 `coerceIn` 空区间
+ * 崩溃是同一族账）。换成先取小再夹，越顶的下限收敛为"走满天花板"——
+ * 读不清就如实透着一档，而不是无声地把栏压成实心条。
+ * 代价与 0.60 是否够用的量化账在 BottomBarSurfaceAlphaTest 与 T25 报告里。
  */
 internal fun bottomBarSurfaceAlpha(
     containerAlpha: Float,
@@ -450,6 +460,10 @@ internal fun bottomBarSurfaceAlpha(
     containerColor: Color,
     text: Color,
     darkTheme: Boolean,
-): Float = (containerAlpha * userAlphaScale)
-    .coerceAtMost(BOTTOM_BAR_SURFACE_ALPHA_CEILING)
-    .coerceAtLeast(legibilityAlphaFloor(containerColor, text, darkTheme))
+): Float {
+    val ceiling = BOTTOM_BAR_SURFACE_ALPHA_CEILING
+    return (containerAlpha * userAlphaScale).coerceIn(
+        legibilityAlphaFloor(containerColor, text, darkTheme).coerceAtMost(ceiling),
+        ceiling,
+    )
+}
