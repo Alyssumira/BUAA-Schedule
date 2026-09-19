@@ -97,17 +97,13 @@ fun CourseEditorScreen(
     // 一门 1-2 + 9-10 的课只改一下老师的名字，保存时 parsePeriods 就会把 1..10
     // 展开成连续块——非连续节次被静默拉直（P0）。
     // 首段进「开始/结束节次」，其余段拼成 parsePeriods 认得的 "9-10" 文本进「额外节次」。
-    val periodSegments = remember(initialCourse) {
-        // 这里是**编辑器**的分段，不是课次：改的是节次本身，按节次号相邻切才对。
-        // 若套上时间表把 [5,6] 拆成两段，用户只是改个老师名字就会把这门课存成两段。
-        initialCourse?.periods.orEmpty().toPeriodSegments(NO_PERIOD_GAP)
-    }
-    val initialStartSection = (periodSegments.firstOrNull()?.first ?: 1).toString()
-    val initialEndSection = (periodSegments.firstOrNull()?.last ?: 2).toString()
-    val initialExtraPeriods = periodSegments.drop(1).joinToString(",") { segment ->
-        if (segment.first == segment.last) "${segment.first}"
-        else "${segment.first}-${segment.last}"
-    }
+    // 算法本体在 [editorPeriodDraft]：内联在 composable 里 JVM 单测碰不到（同 parsePeriods）。
+    val periodDraft = remember(initialCourse) { editorPeriodDraft(initialCourse) }
+    val initialStartSection = periodDraft.startSection
+    val initialEndSection = periodDraft.endSection
+    val initialExtraPeriods = periodDraft.extraPeriods
+    // 「这门课本身就没有节次」与「用户把格子清空了」是两件事，提示分得开才不误导
+    val courseHadNoPeriods = periodDraft.courseHadNoPeriods
     var startSection by rememberSaveable { mutableStateOf(initialStartSection) }
     var endSection by rememberSaveable { mutableStateOf(initialEndSection) }
     var extraPeriods by rememberSaveable { mutableStateOf(initialExtraPeriods) }
@@ -173,17 +169,20 @@ fun CourseEditorScreen(
         parsePeriods(startSection, endSection, extraPeriods)
     }
     val weeks = remember(weeksText) { WeekParser.parse(weeksText) }
-    val canSave = weeks.isNotEmpty() && periods.isNotEmpty() && !saving
+    // 没有节次就没有"这门课几点上"，保存必须禁用（本体在 editorCanSave，单测钉住）
+    val canSave = editorCanSave(weeks = weeks, periods = periods, saving = saving)
 
     // 字段级校验：判定与 parsePeriods 一一对应，这样"红框"和"存不存得进去"永远同步，
     // 不会出现标了红却能保存、或者没标红却被拦住。
     val startPeriodNumber = startSection.trim().toIntOrNull()
     val endPeriodNumber = endSection.trim().toIntOrNull()
+    val sectionOrderReversed = startPeriodNumber != null && endPeriodNumber != null &&
+        endPeriodNumber < startPeriodNumber
     val startSectionInvalid = startPeriodNumber == null ||
         startPeriodNumber !in 1..CourseConstraints.MAX_PERIOD
     val endSectionInvalid = endPeriodNumber == null ||
         endPeriodNumber !in 1..CourseConstraints.MAX_PERIOD ||
-        (startPeriodNumber != null && endPeriodNumber < startPeriodNumber)
+        sectionOrderReversed
     // 额外节次是可选的：留空不算错，填了就必须能解析成 1..MAX_PERIOD 的节次
     val extraPeriodsInvalid = extraPeriods.isNotBlank() &&
         WeekParser.parse(extraPeriods).let { list ->
@@ -437,7 +436,11 @@ fun CourseEditorScreen(
                         isError = startSectionInvalid,
                         supportingText = fieldError(
                             startSectionInvalid,
-                            "节次范围 1–${CourseConstraints.MAX_PERIOD}",
+                            sectionSupportingText(
+                                text = startSection,
+                                orderReversed = false,
+                                courseHadNoPeriods = courseHadNoPeriods,
+                            ),
                         ),
                     )
                     OutlinedTextField(
@@ -451,9 +454,11 @@ fun CourseEditorScreen(
                         isError = endSectionInvalid,
                         supportingText = fieldError(
                             endSectionInvalid,
-                            if (startPeriodNumber != null && endPeriodNumber != null &&
-                                endPeriodNumber < startPeriodNumber
-                            ) "结束需晚于开始" else "节次范围 1–${CourseConstraints.MAX_PERIOD}"
+                            sectionSupportingText(
+                                text = endSection,
+                                orderReversed = sectionOrderReversed,
+                                courseHadNoPeriods = courseHadNoPeriods,
+                            ),
                         ),
                     )
                 }
@@ -727,6 +732,58 @@ internal fun parsePeriods(startText: String, endText: String, extraText: String)
     val extra = if (extraText.isBlank()) emptyList() else WeekParser.parse(extraText)
     if (extra.any { it < 1 || it > CourseConstraints.MAX_PERIOD }) return emptyList()
     return (base + extra).distinct().sorted()
+}
+
+/** 编辑器「时间安排」那一组里三格节次字段的回填值，外加一句"这门课本来有没有节次"。 */
+internal data class EditorPeriodDraft(
+    val startSection: String,
+    val endSection: String,
+    val extraPeriods: String,
+    /** true = 打开的这门课 `periods` 为空。与"用户自己把格子清空"分得开（提示口径不同）。 */
+    val courseHadNoPeriods: Boolean,
+)
+
+/**
+ * 把一门课（或"新建"）回填成编辑器里的节次三格。
+ *
+ * 这里是**编辑器**的分段，不是课次：改的是节次本身，按节次号相邻切才对。
+ * 若套上时间表把 [5,6] 拆成两段，用户只是改个老师名字就会把这门课存成两段。
+ */
+internal fun editorPeriodDraft(initialCourse: Course?): EditorPeriodDraft {
+    val segments = initialCourse?.periods.orEmpty().toPeriodSegments(NO_PERIOD_GAP)
+    val first = segments.firstOrNull()
+    return EditorPeriodDraft(
+        startSection = (first?.first ?: 1).toString(),
+        endSection = (first?.last ?: 2).toString(),
+        extraPeriods = segments.drop(1).joinToString(",") { segment ->
+            if (segment.first == segment.last) "${segment.first}"
+            else "${segment.first}-${segment.last}"
+        },
+        courseHadNoPeriods = initialCourse != null && first == null,
+    )
+}
+
+/**
+ * 保存闸门。`periods.isNotEmpty()` 这一项不许放宽：节次解析为空时点保存
+ * 会写出一门没有节次的课（或被解析器吞掉），而这两条都该由界面先拦住。
+ */
+internal fun editorCanSave(weeks: List<Int>, periods: List<Int>, saving: Boolean): Boolean =
+    weeks.isNotEmpty() && periods.isNotEmpty() && !saving
+
+/**
+ * 「开始/结束节次」两格的 supportingText 措辞（[fieldError] 只在判红时才用它）。
+ *
+ * 三种"说不通"要分得开：顺序反了说顺序；**这门课根本没有节次**要说"还没有节次"，
+ * 而不是用一句格式提示暗示"填个 1 就行"；其余（用户清空、填了非数字、越界）
+ * 才是格式口径。第三分支只在格子上还空着时成立——用户已经动手填了就按格式说。
+ */
+internal fun sectionSupportingText(
+    text: String,
+    orderReversed: Boolean,
+    courseHadNoPeriods: Boolean,
+): String = when {
+    orderReversed -> "结束需晚于开始"
+    else -> "节次范围 1–${CourseConstraints.MAX_PERIOD}"
 }
 
 @Composable
