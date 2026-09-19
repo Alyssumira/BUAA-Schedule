@@ -310,6 +310,30 @@ class CalendarModeClassBellCleanupTest {
         )
     }
 
+    /**
+     * UI 路（改课表 / 改提醒 / 改节次那次收尾）两种模式都必须把铃排回来：
+     * 此前 `ScheduleViewModel.afterDataChangedInternal` 给 CALENDAR 单开一条"只撤不排"的分支，
+     * 日历模式用户改一次课表就没有课堂铃，直到下一次冷启动 / 开机 / 兜底 Worker。
+     * 撤应用内闹钟那半件事本来就归 [BackgroundSync.rescheduleReminders] 的日历分支管
+     * （它撤完返回 false，包装随即续排）。
+     */
+    @Test
+    fun uiPathRearsTheBellsInBothReminderModes() {
+        val body = balancedBlock(withoutComments(read(SCHEDULE_VIEW_MODEL_FILE)), "private suspend fun afterDataChangedInternal()")
+
+        assertTrue(
+            "改数据后的收尾不再无条件补排课堂铃（日历模式那半边的「只撤不排」回来了）：\n$body",
+            body.contains("BackgroundSync.rescheduleRemindersAndBells(app)"),
+        )
+        assertEquals("收尾里续排被走了不止一遍：\n$body", 1, occurrences(body, "rescheduleRemindersAndBells("))
+        assertFalse("收尾还在自己撤闹钟（判据只该有一份实现）：\n$body", body.contains("cancelAll("))
+        assertFalse("收尾还在按提醒模式分叉：\n$body", body.contains("ReminderMode"))
+        assertFalse(
+            "收尾还在读 prefs 问提醒模式（那个结论已经不需要了：两种模式同一条路）：\n$body",
+            body.contains("getSharedPreferences("),
+        )
+    }
+
     // ---- ④ 全仓库计数 ----------------------------------------------------------
 
     /**
@@ -533,6 +557,7 @@ class CalendarModeClassBellCleanupTest {
         const val BACKGROUND_SYNC_FILE = "com/buaa/schedule/widget/BackgroundSync.kt"
         const val CLASS_PROGRESS_SCHEDULER_FILE = "com/buaa/schedule/reminder/ClassProgressScheduler.kt"
         const val BOOT_RECEIVER_FILE = "com/buaa/schedule/reminder/BootReceiver.kt"
+        const val SCHEDULE_VIEW_MODEL_FILE = "com/buaa/schedule/ui/ScheduleViewModel.kt"
 
         /** 报告口那个标签：生产与这里必须同名，否则闸门数不到这一格 */
         const val CLEANUP_LABEL = "cleanUpInCalendarMode"

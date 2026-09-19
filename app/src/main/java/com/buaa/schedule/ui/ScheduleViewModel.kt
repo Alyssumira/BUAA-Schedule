@@ -24,8 +24,6 @@ import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.CourseSaveOptions
 import com.buaa.schedule.domain.model.ImportHistory
 import com.buaa.schedule.domain.model.ReminderSetting
-import com.buaa.schedule.domain.model.ReminderMode
-import com.buaa.schedule.reminder.ReminderScheduler
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.TimeSlotProfile
@@ -726,24 +724,24 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     /**
      * 课程/提醒/学期/节次等数据变化后的统一收尾：
      * 重排下一条提醒 + 刷新全部桌面组件（事件驱动，无轮询）。
-     * 提醒模式为“系统日历”时不注册应用内闹钟，避免双重通知。
+     *
+     * 「系统日历提醒」不再单开一条**只撤不排**的特判（ai/T15）：那条特判的实际后果是
+     * 日历模式用户改一次课表就没有课堂铃、没有上课实况、没有自动勿扰，
+     * 要等到下一次冷启动 / 开机 / 12 小时兜底 Worker 才回来 —— 与
+     * [com.buaa.schedule.widget.BackgroundSync.rescheduleReminders] 的 KDoc 把
+     * 「① 系统日历提醒模式」列成"本轮课堂铃没人排、要补排"的第一类人群正好相反。
+     * 两种模式现在都走 [com.buaa.schedule.widget.BackgroundSync.rescheduleRemindersAndBells]：
+     * 日历模式下 `rescheduleReminders` 那一半照样撤掉应用内闹钟（不注册 = 不会双重通知），
+     * 返回 false 之后铃由续排链按它自己那份判据接手，"只撤前者会留下永不消失的常驻通知和
+     * 永久勿扰"那件事本来就归 [com.buaa.schedule.reminder.ClassProgressScheduler.rescheduleWindows]
+     * 的带判据清理管（同 ai/T11 / ai/T11b 的口径），不需要在这里抢先拆一遍。
      */
     private suspend fun afterDataChangedInternal() {
         val app = getApplication<Application>()
-        val mode = app
-            .getSharedPreferences("schedule_settings", android.content.Context.MODE_PRIVATE)
-            .getString(ReminderMode.PREF_KEY, ReminderMode.APP)
-        if (mode == ReminderMode.CALENDAR) {
-            // 切到"系统日历提醒"时，应用内闹钟与"上课铃/下课铃"必须一起撤掉：
-            // 只撤前者会留下永不消失的常驻通知和永久勿扰状态。
-            ReminderScheduler.cancelAll(app)
-            com.buaa.schedule.reminder.ClassProgressScheduler.cancelAll(app)
-        } else {
-            // 必须兑现 rescheduleReminders 的 Boolean 契约（false=课堂铃没人排、当场补排），
-            // 此前这里丢弃返回值：改一节课后上/下课铃被 cancelAll 清掉且不再续排，
-            // 实况岛最长 12 小时不出现（只有兜底 Worker 兑现了契约）
-            com.buaa.schedule.widget.BackgroundSync.rescheduleRemindersAndBells(app)
-        }
+        // 必须兑现 rescheduleReminders 的 Boolean 契约（false=课堂铃没人排、当场补排），
+        // 此前这里丢弃返回值：改一节课后上/下课铃被 cancelAll 清掉且不再续排，
+        // 实况岛最长 12 小时不出现（只有兜底 Worker 兑现了契约）
+        com.buaa.schedule.widget.BackgroundSync.rescheduleRemindersAndBells(app)
         com.buaa.schedule.widget.BackgroundSync.refreshWidgets(app)
         // 明日预告的续排此前只挂在开机广播与设置开关上：假期结束回到有课周，
         // 预告链条不会自己回来。数据每次变化都重新判定一次（内部按开关决定排/撤）
