@@ -1,3 +1,0 @@
-# 占位：Baseline Profile 的产物目录（git 不跟踪空目录）。
-# 这里的 .baselines/.pb 由 :app:generateBaselineProfile 生成后入库，
-# AGP 在 mergeReleaseBaselineProfile 里把它们打进 release 产物。
