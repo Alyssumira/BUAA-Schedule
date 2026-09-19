@@ -32,8 +32,9 @@ import org.junit.Test
  * 而这条模型过去混的是**线性相对亮度**。sRGB 的解码曲线是凸函数，于是凸函数上的线性插值
  * 永远 ≥ 真实渲染结果（Jensen）——差多少不靠辩论，这张表就是尺子：
  * 深色档 × 纯白壁纸那一行，旧模型给 0.4049，像素是 0.1717，**差 2.36 倍**。
- * 断言用 ±0.03 绝对亮度这道闸门（宽松地包住壁纸采样与中位取整的误差；实测最大偏差
- * 0.0028，闸门宽度只用来吸收浮点与采样噪声，不给口径错误留位置）。
+ * 断言用 ±0.03 绝对亮度这道闸门（宽松地包住壁纸采样与中位取整的误差；混合维度搬对之后
+ * 八行的模型-像素偏差最大 0.0008（浅色 × 纯黑那一行），闸门宽度只用来吸收浮点与采样噪声，
+ * 不给口径错误留位置）。
  *
  * @see com.buaa.schedule.core.designsystem.compositeLuma 被校准的那条式子
  * @see CompositeLumaChannelCrossCheckTest 同一件事的算法侧交叉核对（逐通道混合）
@@ -348,14 +349,14 @@ class GlassPlateDeviceCalibrationTest {
             // 那一档是**画下去的事实**，所以按输入钉死、不填 null：搬对混合维度之后链路会解出
             // 别的 alpha，拿链路值去对 0.0721 那片像素就成了两套口径互比。
             DeviceRow("深色 × 纯黑壁纸", true, 0, 0.0000f, 0.0013f, null),
-            DeviceRow("深色 × 灰阶 96", true, 96, 0.1170f, 0.0721f, 0.272f),
-            DeviceRow("深色 × 灰阶 160", true, 160, 0.3515f, 0.0744f, 0.60f),
+            DeviceRow("深色 × 灰阶 96", true, 96, 0.1170f, 0.0721f, 0.272f, chainMoved = true),
+            DeviceRow("深色 × 灰阶 160", true, 160, 0.3515f, 0.0744f, 0.60f, chainMoved = true),
             DeviceRow("深色 × 灰阶 224", true, 224, 0.7454f, 0.1359f, 0.60f),
             DeviceRow("深色 × 纯白壁纸", true, 255, 1.0000f, 0.1717f, 0.60f),
             // 浅色档：#F2F4F8。v=0 那档画的是旧下限解出的 0.505（它自以为抬到了 AA 线），
             // v=160/255 两档画的是 0.20 基准值。
             DeviceRow("浅色 × 纯黑壁纸", false, 0, 0.0000f, 0.1978f, 0.505f, chainMoved = true),
-            DeviceRow("浅色 × 灰阶 160", false, 160, 0.3515f, 0.4389f, 0.20f),
+            DeviceRow("浅色 × 灰阶 160", false, 160, 0.3515f, 0.4389f, 0.20f, chainMoved = true),
             DeviceRow("浅色 × 纯白壁纸", false, 255, 1.0000f, 0.9810f, 0.20f),
         )
     }

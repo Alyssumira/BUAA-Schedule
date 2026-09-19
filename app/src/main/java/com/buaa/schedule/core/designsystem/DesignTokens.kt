@@ -165,9 +165,14 @@ object DesignTokens {
     /**
      * 玻璃底板 tint 的 alpha **下限**：让"文字—玻璃—壁纸"三层仍满足 [WCAG_AA_RATIO]。
      *
-     * 复合亮度按线性近似 `luma = surface * a + scene * (1 - a)`，解出满足对比度的最小 a：
+     * 反解与 [compositeLuma] **在同一个空间里、严格互逆**：把两个亮度与那条 AA 临界亮度都
+     * 折成中性灰的 sRGB 编码通道值（[neutralChannelOf]），alpha 是那条通道插值的自变量，
+     * 解出来再解回去就是它自己——旧口径写的是"复合亮度按线性近似
+     * `luma = surface * a + scene * (1 - a)`"，那条近似恒把板算得比画出来的更亮，
+     * 于是下限也跟着偏（口径正确的对照物是 `WidgetAppearance.autoShouldUseDarkText`）。
      * 深色底板配浅色文字时复合必须**不亮于** `(text + .05)/R - .05`，
-     * 浅色底板配深色文字时复合必须**不暗于** `(text + .05) * R - .05`。
+     * 浅色底板配深色文字时复合必须**不暗于** `(text + .05) * R - .05`——这两条极限值是亮度，
+     * 折进编码通道之后再参与插值。
      *
      * [sceneLuma] 传的是**最不利**的区域亮度（见 [SceneLuma] 的 darkest / brightest），
      * 不是平均值——一块玻璃底下同时压着亮斑和暗斑时平均值会严重低估风险。
@@ -184,8 +189,9 @@ object DesignTokens {
      * | 只有底色，**前景色还要一起定**（课程色卡片、日程时间块） | [legibleTintPlate] → `TintPlate` |
      * | 前景色**已定**（主题 `onSurface`），只要知道底板至少多实（[GlassSurface]、分段控件、底栏） | [legibilityAlphaFloor] → `Float` |
      *
-     * 也就是说：`legibleTintPlate` 是"选字 + 压实"的完整流程（先试黑白色、再抬 alpha、
-     * 最后才动底色），`legibilityAlphaFloor` 是它的第 2 步单独拿出来用。
+     * 也就是说：`legibleTintPlate` 是"选字 + 压实"的完整流程（两支候选墨各解一次所需的最小
+     * alpha、取便宜的那支，两支都读不出才动底色），`legibilityAlphaFloor` 是这条解里
+     * "给定一支墨要多少 alpha"单独拿出来用。
      * 已经定了文字色还去调 `legibleTintPlate`，它会擅自替你换成黑或白。
      */
     fun glassAlphaFloor(
@@ -201,10 +207,15 @@ object DesignTokens {
         } else {
             (textLuma + 0.05f) * WCAG_AA_RATIO - 0.05f
         }
-        val span = if (darkPlate) sceneLuma - surfaceLuma else surfaceLuma - sceneLuma
+        // 反解与 compositeLuma 必须在同一个空间里：先把三个亮度都折成中性灰的 sRGB 编码通道值，
+        // alpha 才是那条插值的自变量（直接用线性亮度就等于让下限去追一块画不出来的板）。
+        val surfaceChannel = neutralChannelOf(surfaceLuma)
+        val sceneChannel = neutralChannelOf(sceneLuma)
+        val limitChannel = neutralChannelOf(limit)
+        val span = if (darkPlate) sceneChannel - surfaceChannel else surfaceChannel - sceneChannel
         // 底板与场景亮度几乎相同：alpha 怎么调都不影响结果，直接给绝对下限
         if (span <= 0.001f) return hardMin
-        val gap = if (darkPlate) sceneLuma - limit else limit - sceneLuma
+        val gap = if (darkPlate) sceneChannel - limitChannel else limitChannel - sceneChannel
         return (gap / span).coerceIn(hardMin, 1f)
     }
 

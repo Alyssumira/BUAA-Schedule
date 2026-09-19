@@ -125,12 +125,17 @@ class BottomBarSurfaceAlphaTest {
             Case("内置渐变", SceneLuma.Stats.Unknown, false, 0.88f, 0.20f),
             Case("内置渐变", SceneLuma.Stats.Unknown, false, 0.3f, 0.08f),
             Case("内置渐变", SceneLuma.Stats.Unknown, false, 1.0f, 0.2273f),
-            // 深色档亮块到 0.20：floor=0.587 仍 ≤ 0.60，两种顺序在此同值
-            Case("亮块 0.20", SceneLuma.Stats(0.45f, 0.02f, 0.20f), true, 0.88f, 0.5869f),
-            Case("亮块 0.20", SceneLuma.Stats(0.45f, 0.02f, 0.20f), true, 1.0f, 0.5869f),
-            // 浅色档黑块：floor=0.507 < 0.60，同样不受顺序影响
-            Case("黑块 0.00", SceneLuma.Stats(0.35f, 0.0f, 0.20f), false, 0.88f, 0.5074f),
-            Case("黑块 0.00", SceneLuma.Stats(0.35f, 0.0f, 0.20f), false, 1.0f, 0.5074f),
+            // 深色档亮块：下限反解与 compositeLuma 互逆，混合搬到编码通道之后这一格
+            // 从 0.5869 松到 0.3957——旧线性口径把板算得偏亮，于是白要了一档 alpha。
+            // 仍 ≤ 0.60 天花板，两种夹取顺序在此同值；cardAlpha=1.0 那档 raw=0.2273 已越过
+            // 这个下限，透出的是 raw 本身（下限不许比 raw 更松）。
+            Case("亮块 0.20", SceneLuma.Stats(0.45f, 0.02f, 0.20f), true, 0.88f, 0.3957f),
+            Case("亮块 0.20", SceneLuma.Stats(0.45f, 0.02f, 0.20f), true, 1.0f, 0.3957f),
+            // 浅色档黑块：旧口径解出 0.5074 就自以为把板抬到了 AA 线上（它算出的板 0.4585，
+            // 真画出来只有 0.198）。搬对维度之后同一格要 0.74，越过天花板 → 走满 0.60，
+            // 这一格的可读性改由墨色那一侧收口（见 BottomBarInkTest）。
+            Case("黑块 0.00", SceneLuma.Stats(0.35f, 0.0f, 0.20f), false, 0.88f, 0.60f),
+            Case("黑块 0.00", SceneLuma.Stats(0.35f, 0.0f, 0.20f), false, 1.0f, 0.60f),
         )
         for (case in cases) {
             SceneLuma.wallpaper = case.scene

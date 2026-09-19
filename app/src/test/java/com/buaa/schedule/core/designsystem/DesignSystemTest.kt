@@ -118,6 +118,11 @@ class DesignSystemTest {
         }
     }
 
+    /**
+     * 下限的"承诺"必须兑现在**生产那条混合式**上：拿 [compositeLuma] 而不是测试自己抄的一份
+     * 线性混合——否则改了生产口径而这里还绿着，就是判据在替一个已经不存在的模型背书。
+     * 穷尽版（紧不紧、退化格、NaN）见 [glassAlphaFloorInvertsCompositeLumaOnEveryPlateSceneTextCell]。
+     */
     @Test
     fun glassAlphaFloorBuysBackTheContrastItPromises() {
         val plates = listOf(0.008f, 0.03f, 0.06f, 0.30f, 0.60f, 0.90f)
@@ -129,7 +134,7 @@ class DesignSystemTest {
             // 那是调用方选错了 tint，不是下限算错，跳过。
             if (contrastRatio(plate, text) < DesignTokens.WCAG_AA_RATIO) continue
             val floor = DesignTokens.glassAlphaFloor(plate, scene, text)
-            val ratio = contrastRatio(composite(plate, scene, floor), text)
+            val ratio = contrastRatio(compositeLuma(plate, scene, floor), text)
             assertTrue(
                 "板=$plate 景=$scene 字=$text → 下限=$floor 后对比度只有 $ratio",
                 ratio >= DesignTokens.WCAG_AA_RATIO - 0.02f,
@@ -167,26 +172,22 @@ class DesignSystemTest {
     @Test
     fun coursePlateIsReadableAcrossEveryColorAndWallpaper() {
         // 自定义色由取色器任意挑，所以扫一片网格；灰阶是重灾区（中间亮度黑白都嫌不够）
-        val tints = CourseColors + (0..10).map { v ->
-            val channel = (v * 25 + 12).coerceAtMost(255)
-            Color(channel / 255f, channel / 255f, channel / 255f)
-        } + listOf(
-            Color(0xFFF2994A), Color(0xFF00B8D4), Color(0xFFE0E0E0), Color(0xFF3B0764),
-        )
+        val tints = coursePlateTintGrid()
         // 关玻璃时恒为 0.92；开玻璃时 tint 在 0.26~0.68 之间随滑条线性变化
-        val alphas = listOf(0.26f, 0.47f, 0.68f, 0.92f)
+        val alphas = COURSE_PLATE_ALPHAS
         var checked = 0
-        for (tint in tints) for (scene in listOf(0.03f, 0.50f, 0.83f)) for (alpha in alphas) {
+        for (tint in tints) for (scene in COURSE_PLATE_SCENES) for (alpha in alphas) {
             val plate = legibleTintPlate(tint, alpha, scene)
-            val plateLuma = composite(plate.tint.readableLuminance(), scene, plate.alpha)
+            val plateLuma = compositeLuma(plate.tint.readableLuminance(), scene, plate.alpha)
             val primary = contrastRatio(plateLuma, plate.foreground.readableLuminance())
             assertTrue(
                 "课程色 $tint 叠在亮度 $scene 上（alpha=$alpha）主文字只有 $primary",
                 primary >= DesignTokens.WCAG_AA_RATIO - 0.02f,
             )
-            // 次级文字自带 alpha，要按叠完的亮度算
+            // 次级文字自带 alpha，要按叠完的亮度算——叠的口径仍是生产那一条 compositeLuma，
+            // 不再在测试里手写第二份混合式（那正是本卡拆掉的东西）。
             val subtle = plate.secondaryForeground
-            val subtleLuma = subtle.readableLuminance() * subtle.alpha + plateLuma * (1f - subtle.alpha)
+            val subtleLuma = compositeLuma(subtle.readableLuminance(), plateLuma, subtle.alpha)
             val secondary = contrastRatio(plateLuma, subtleLuma)
             assertTrue(
                 "同组次级文字只有 $secondary（alpha=${subtle.alpha}）",
@@ -195,6 +196,57 @@ class DesignSystemTest {
             checked++
         }
         assertTrue("参数化测试退化：只检查了 $checked 组", checked == tints.size * 3 * alphas.size)
+    }
+
+    /**
+     * 这片网格的**经济**判据，与上一条的可读判据正交：不许出现"另一支墨明明更省 alpha，
+     * 却选了贵的"。[contentOnLuma] 只看初始板，而 [DesignTokens.glassAlphaFloor] 抬完 alpha
+     * 之后板已经挪位——先定墨再抬价的走法在暗部尤其容易选错（近黑压近黑本来就无解，
+     * 解出的下限饱和到 1.0，白墨那一支却只要一半的 alpha）。
+     *
+     * 判据用的是生产那把尺 [alphaNeededByInk]（两支候选墨量同一个量才叫"谁更省"），
+     * 比的是**所选墨所需**与**另一支所需**：这条只钉选择，改回"先 contentOnLuma 再抬 alpha"
+     * 立刻炸（实测 276 格里 4 格选贵了）。
+     */
+    @Test
+    fun legibleTintPlateNeverPicksTheInkThatCostsMoreAlpha() {
+        val otherInk = mapOf(ContentLight to ContentDark, ContentDark to ContentLight)
+        val pricier = mutableListOf<String>()
+        var checked = 0
+        var ties = 0
+        for (tint in coursePlateTintGrid()) for (scene in COURSE_PLATE_SCENES) for (alpha in COURSE_PLATE_ALPHAS) {
+            val plate = legibleTintPlate(tint, alpha, scene)
+            val chosen = plate.foreground
+            val other = otherInk.getValue(chosen)
+            val tintLuma = tint.readableLuminance()
+            val chosenNeeds = alphaNeededByInk(tintLuma, scene, alpha, chosen)
+            val otherNeeds = alphaNeededByInk(tintLuma, scene, alpha, other)
+            if (chosenNeeds > otherNeeds + NEEDED_ALPHA_TOLERANCE) {
+                pricier += "$tint x $scene x $alpha：选 $chosen 要 $chosenNeeds，更省的 $other 只要 $otherNeeds"
+            }
+            if (abs(chosenNeeds - otherNeeds) <= NEEDED_ALPHA_TOLERANCE) ties++
+            checked++
+        }
+        assertTrue("参数化测试退化：只检查了 $checked 组", checked > 200)
+        // 一次报全：撞第一格就停的话，就没人知道这片网格到底错了多少格
+        assertTrue(
+            "${pricier.size}/$checked 格选到了更贵的那支墨（选墨该跟压实同解，不许先定墨再抬价）：\n" +
+                pricier.take(8).joinToString("\n"),
+            pricier.isEmpty(),
+        )
+        // 等档格（两支墨一样省）由 contentOnLuma 的偏好收掉，也得有覆盖，否则这条只在少数格上说话
+        assertTrue("没有任何一格两支墨同档（$ties）：比较口径退化成单选", ties > 0)
+
+        // 报修那一格：灰 12/255（亮度 0.047）以 0.47 叠在亮度 0.83 的场景上。
+        // 先定墨的走法判给近黑 → 无解 → alpha 顶到 1.0 → 板 0.0037、对比度 1.14；
+        // 同解之后该落白墨、alpha ≈0.52、恰好 4.5:1。
+        val gray12 = Color(12 / 255f, 12 / 255f, 12 / 255f)
+        val fixed = legibleTintPlate(gray12, 0.47f, 0.83f)
+        val fixedPlateLuma = compositeLuma(fixed.tint.readableLuminance(), 0.83f, fixed.alpha)
+        val fixedRatio = contrastRatio(fixedPlateLuma, fixed.foreground.readableLuminance())
+        assertEquals("这一格该换白墨", ContentLight, fixed.foreground)
+        assertTrue("白墨只要 ≈0.52，解到 ${fixed.alpha} 说明还在追无解的近黑", fixed.alpha < 0.9f)
+        assertTrue("同解之后这一格的主文字只有 $fixedRatio", fixedRatio >= DesignTokens.WCAG_AA_RATIO)
     }
 
     @Test
@@ -283,6 +335,13 @@ class DesignSystemTest {
      * 于是"灰的相对亮度"与"灰的编码通道值"互为解析反函数——**混合发生在哪一维**
      * 这件事在中性灰上没有代理误差，模型说什么就是什么。深色档玻璃板叠在白壁纸上
      * 那格实测差到 2.36 倍（见 [GlassPlateDeviceCalibrationTest]），错的正是这一维。
+     *
+     * 界为什么写成"AA − 浮点容差 − [frameBufferSlack]"而不是干脆 ≥ AA：下限是**反解**出来的，
+     * 它把模型板正好推到 4.5:1 那一格上，而混合出来的通道值只能存成 8 bit 整数格
+     * （`灰 0 × 灰 136 @ 0.1275` 要的是 118.656，帧缓冲里躺着的是 119）。差半格在交点附近就值
+     * 0.02 档，"正好压线"这种断言在物理上不可能成立。预算按格现算（见 [frameBufferSlack]），
+     * 上限一整个 1/255，最多 0.03 档；而混合维度错了是 0.23 亮度、两三档的量级——
+     * 这道预算连它的零头都盖不住（按旧口径重算这 960 格，越界的仍有 234 格）。
      */
     @Test
     fun glassAlphaFloorDeliversAAOnThePlateThePlatformActuallyRenders() {
@@ -290,6 +349,7 @@ class DesignSystemTest {
         var unfixable = 0
         var darkPlates = 0
         var brightPlates = 0
+        var nearLine = 0
         for (tintStep in GRAY_STEPS) for (sceneStep in GRAY_STEPS) for (text in INK_LUMAS) {
             val plate = gray(tintStep).readableLuminance()
             val scene = gray(sceneStep).readableLuminance()
@@ -301,17 +361,31 @@ class DesignSystemTest {
             val floor = DesignTokens.glassAlphaFloor(plate, scene, text)
             val rendered = renderedGrayPlate(tintStep, sceneStep, floor)
             val ratio = contrastRatio(rendered, text)
+            val slack = frameBufferSlack(tintStep, sceneStep, floor, rendered, text)
             assertTrue(
                 "灰 $tintStep 以解出的下限 $floor 叠在灰 $sceneStep 上：模型板 ${compositeLuma(plate, scene, floor)}，" +
-                    "真实板 $rendered → 文字只有 $ratio",
-                ratio >= DesignTokens.WCAG_AA_RATIO - TOLERANT_RATIO,
+                    "真实板 $rendered → 文字只有 $ratio（AA 减浮点容差再减一格帧缓冲预算 $slack）",
+                ratio >= DesignTokens.WCAG_AA_RATIO - TOLERANT_RATIO - slack,
             )
+            if (ratio < DesignTokens.WCAG_AA_RATIO + NEAR_LINE_BAND) {
+                nearLine++
+                // 一格量化在交点附近值 0.064 档。它要是连"贴着 AA 线"这条带子本身都装不下，
+                // 那它记的就不是量化，而是能在界上随便挑地方填的数了。
+                assertTrue(
+                    "灰 $tintStep 叠在灰 $sceneStep 上（$ratio）：一格预算 $slack 超过了近线带本身",
+                    slack < NEAR_LINE_BAND,
+                )
+            }
             checked++
         }
         assertTrue("物理往返只跑了 $checked 格：网格被跳过条件吃光了", checked > 900)
         assertTrue("没有'任何 alpha 都救不了'的格（$unfixable）：跳过条件形同虚设", unfixable > 0)
         assertTrue("暗板方向零格（$darkPlates）", darkPlates > 0)
         assertTrue("亮板方向零格（$brightPlates）", brightPlates > 0)
+        // 预算本身也得有界：交点附近一格 1/255 值 0.064 档（实测最大值，见下面这条），
+        // 而混合维度错了是 0.23 亮度、两档起步。只约束贴着 AA 线的那批格——板本来就到
+        // 15:1 时一格量化就值 0.2 档，那与"读得清"根本不是一个尺度，也不该由这条管。
+        assertTrue("一格都没压在 AA 线附近（$nearLine）：这条预算闸门是空的", nearLine > 0)
     }
 
     /**
@@ -446,14 +520,45 @@ class DesignSystemTest {
         )
     }
 
+    /**
+     * 课程底板扫描用的那批 tint：自定义色由取色器任意挑，所以除默认调色板外再扫一片灰阶
+     * （重灾区：中间亮度黑白两支都嫌不够），末尾四支是真实用户挑出来的补色。
+     * 可读性守卫与"选墨不许选贵"守卫共用这一份，两边各自列一份就会漂移。
+     */
+    private fun coursePlateTintGrid(): List<Color> = CourseColors + (0..10).map { v ->
+        val channel = (v * 25 + 12).coerceAtMost(255)
+        Color(channel / 255f, channel / 255f, channel / 255f)
+    } + listOf(
+        Color(0xFFF2994A), Color(0xFF00B8D4), Color(0xFFE0E0E0), Color(0xFF3B0764),
+    )
+
     // ---- 渲染侧口径 -------------------------------------------------------
+
+    /**
+     * 一格帧缓冲的量化预算：把已经画出来的那块板**再往靠近墨的方向挪一整格 1/255**，
+     * 对比度掉多少就记多少。
+     *
+     * 反解出的 alpha 是连续值，混合出来的通道值（[drawnPlateLsb]）落在两个整数格之间，
+     * 帧缓冲四舍五入之后最多偏半格；这里给的是**一整格**，而且是照着"更不利"的方向给的，
+     * 所以它必然盖得住真实的取整误差——同时又是一整格，而不是凭手感调出来的数。
+     */
+    private fun frameBufferSlack(tintStep: Int, sceneStep: Int, alpha: Float, plate: Float, ink: Float): Float {
+        val step = if (plate > ink) -1 else +1 // 朝墨的方向挪一格才是往界上踩
+        val shifted = grayAt((drawnPlateLsb(tintStep, sceneStep, alpha) + step).coerceIn(0, 255).toFloat())
+            .readableLuminance()
+        return abs(contrastRatio(plate, ink) - contrastRatio(shifted, ink))
+    }
+
+    /** 下限解出的那档 alpha 混出来的板，在 8 bit 帧缓冲上落在哪一格（0..255）。 */
+    private fun drawnPlateLsb(tintStep: Int, sceneStep: Int, alpha: Float): Int =
+        (alpha * tintStep + (1f - alpha) * sceneStep).roundToInt().coerceIn(0, 255)
 
     /**
      * 平台真正画出来的那块中性灰板：三条通道各按 alpha 插值，再折回相对亮度。
      * 灰的通道值与它的相对亮度互为解析反函数（亮度权重之和为 1），所以这里不需要自己写曲线。
      */
     private fun renderedGrayPlate(tintStep: Int, sceneStep: Int, alpha: Float): Float =
-        grayAt(alpha * tintStep + (1f - alpha) * sceneStep).readableLuminance()
+        grayAt(drawnPlateLsb(tintStep, sceneStep, alpha).toFloat()).readableLuminance()
 
     /** 把一块墨按它自带的 alpha 叠到中性灰板上：逐通道插值之后再量亮度（平台口径）。 */
     private fun renderInkOnPlate(ink: Color, plateChannel: Float): Float = Color(
@@ -513,9 +618,6 @@ class DesignSystemTest {
         throw IllegalStateException("$name 的大括号没配对")
     }
 
-    private fun composite(surfaceLuma: Float, sceneLuma: Float, alpha: Float): Float =
-        surfaceLuma * alpha + sceneLuma * (1f - alpha)
-
     private fun contrastRatio(lumaA: Float, lumaB: Float): Float {
         val hi = maxOf(lumaA, lumaB)
         val lo = minOf(lumaA, lumaB)
@@ -525,6 +627,12 @@ class DesignSystemTest {
     private companion object {
         /** 扫描用的中性灰阶：每 8 档一格，覆盖黑到白 */
         val GRAY_STEPS = (0..31).map { it * 8 }
+
+        /** 课程底板扫描的场景亮度档：内置暗渐变、中间档、白壁纸 */
+        val COURSE_PLATE_SCENES = listOf(0.03f, 0.50f, 0.83f)
+
+        /** 课程底板扫描的 tint alpha 档：滑条最透的一档到关玻璃的恒定值 */
+        val COURSE_PLATE_ALPHAS = listOf(0.26f, 0.47f, 0.68f, 0.92f)
 
         /** 两支候选墨的相对亮度：就是 [contentOnLuma] 手里那对 [ContentDark] / [ContentLight] */
         val INK_LUMAS = listOf(ContentDark.readableLuminance(), ContentLight.readableLuminance())
@@ -537,6 +645,19 @@ class DesignSystemTest {
 
         /** 下限"松一格"的步长：比 1/255 大得多，免得量化噪声冒充口径错误 */
         const val SLACK_ALPHA = 0.05f
+
+        /**
+         * 比较"两支墨谁更省 alpha"的容差：差不到 [SLACK_ALPHA] 十分之一的两支算同档，
+         * 交给 [contentOnLuma] 的偏好收掉——真的选贵了的那一支差的是一整档、半档，不会落进这里。
+         */
+        const val NEEDED_ALPHA_TOLERANCE = 0.005f
+
+        /**
+         * "贴着 AA 线"的带子有多宽：比值落在 [DesignTokens.WCAG_AA_RATIO] 起 0.1 档以内。
+         * 同一个数也是这条带里**一格量化预算的上限**——预算要是连这条带子都装不下，
+         * 它就已经不是 8 bit 取整，而是能拿来越界的东西了。
+         */
+        const val NEAR_LINE_BAND = 0.1f
 
         /** 次级墨退一格时的宽容差：alpha 是向上取整的，退一格可能恰好退回解本身 */
         const val ONE_STEP_SLACK = 0.05f
