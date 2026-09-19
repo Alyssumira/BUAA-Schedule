@@ -748,18 +748,36 @@ internal data class EditorPeriodDraft(
  *
  * 这里是**编辑器**的分段，不是课次：改的是节次本身，按节次号相邻切才对。
  * 若套上时间表把 [5,6] 拆成两段，用户只是改个老师名字就会把这门课存成两段。
+ *
+ * **两条"没有节次"要分开**：
+ * - `initialCourse == null`（新建）：给 1-2 节是"用户的起点"，此时库里还没有任何一行
+ *   会被这句话篡改，照旧保留。
+ * - 已存在的课 `periods` 为空（备份/分享口令里的 `"periods":[]`、被改写的 .db 行）：
+ *   两格回填**空串**。以前这里写的是 `?: 1` / `?: 2`，于是打开编辑器就等于先把
+ *   「开始节次 1 / 结束节次 2」填进格子，而 `parsePeriods("1","2","")` 非空恰好把
+ *   `editorCanSave` 的 `periods.isNotEmpty()` 喂满——用户只是改个教师名字点保存，
+ *   这门课就凭空多出第 1-2 节（08:00 上课）并写进数据库。
+ *   空串 → 解析为空 → 保存禁用 + 字段判红，要存就得自己明确选一节。
  */
 internal fun editorPeriodDraft(initialCourse: Course?): EditorPeriodDraft {
-    val segments = initialCourse?.periods.orEmpty().toPeriodSegments(NO_PERIOD_GAP)
+    if (initialCourse == null) {
+        return EditorPeriodDraft(
+            startSection = "1",
+            endSection = "2",
+            extraPeriods = "",
+            courseHadNoPeriods = false,
+        )
+    }
+    val segments = initialCourse.periods.toPeriodSegments(NO_PERIOD_GAP)
     val first = segments.firstOrNull()
     return EditorPeriodDraft(
-        startSection = (first?.first ?: 1).toString(),
-        endSection = (first?.last ?: 2).toString(),
+        startSection = first?.first?.toString() ?: "",
+        endSection = first?.last?.toString() ?: "",
         extraPeriods = segments.drop(1).joinToString(",") { segment ->
             if (segment.first == segment.last) "${segment.first}"
             else "${segment.first}-${segment.last}"
         },
-        courseHadNoPeriods = initialCourse != null && first == null,
+        courseHadNoPeriods = first == null,
     )
 }
 
@@ -783,6 +801,7 @@ internal fun sectionSupportingText(
     courseHadNoPeriods: Boolean,
 ): String = when {
     orderReversed -> "结束需晚于开始"
+    courseHadNoPeriods && text.isBlank() -> "这门课还没有节次，请先选一节"
     else -> "节次范围 1–${CourseConstraints.MAX_PERIOD}"
 }
 
