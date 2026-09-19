@@ -225,8 +225,13 @@ Compose 的组合/测量在 animation 阶段、真正的首帧绘制在同一帧
 - 可取消/可关：`warmUp()` 里就这两行调用，**各删一行关一档**，不新增编译期或运行时开关
   （红线扫描钉 `BuildConfig` 与 `getSharedPreferences` 不得出现在这个文件里）。
 - 失败静默：两步各自 `catch (t: Throwable)` 只留一行 `Log.d`。用 `Throwable` 而不是
-  `runCatching`：非 arm64 设备上是 `UnsatisfiedLinkError`（Error），而
-  `SpocScanScreen` 的降级路径按的就是同一个 catch。
+  `runCatching`：接的是超时、`close()` 失败这类**发生在调用线程上**的 Error/Exception。
+  ⚠️ 这个 catch **接不住缺库那一下**（T24 订正，此前这里写的是"降级走的也是同一个
+  catch"，那是错的）：`System.loadLibrary` 由 ML Kit 在**它自己的 worker 线程**上调，
+  `UnsatisfiedLinkError` 落在那个线程的默认处理器上，进程当场就没了 —— 实测
+  `FATAL EXCEPTION: pool-6-thread-2`。缺库由 `BarhopperNativeLibProbe` 在
+  `warmUpBarcodeDecoder()` 第一行挡掉：判定不可用时那段 ML Kit 调用整体不发（守卫：
+  `ScanChainWarmUpTest` ⑨⑩）。
 - ⚠️ 为什么必须吞干净：它跑在 `applicationScope`（`SupervisorJob` 且**没有**
   `CoroutineExceptionHandler`）上，逃出这里就是顺着线程默认处理器把整个进程打死。
 

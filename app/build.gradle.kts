@@ -229,8 +229,18 @@ androidComponents {
         // 四 ABI 全带、合计 37KB，一旦被连带裁掉，那档设备就一个 .so 都不剩，
         // 装包直接 INSTALL_FAILED_NO_MATCHING_ABIS：整个 App 装不上，
         // 而不是只丢扫码功能（x86_64 模拟器同理）。
-        // 现在这个写法下，非 arm64 设备照常安装运行，只是扫码页 dlopen 失败，
-        // 由 SpocScanScreen 的可用性探测接住、降级到相册识别 / 手输签到码。
+        // 现在这个写法下，非 arm64 设备照常安装运行，但**扫码解码整条不可用**：
+        // release 的 x86_64 模拟器上它原本是冷启动约 1.5 秒后 FATAL ——
+        // ML Kit 在它自己的 worker 线程上调 System.loadLibrary，UnsatisfiedLinkError
+        // 落在那个线程的默认处理器上，我们调用侧的 catch 接不到。
+        // 接住这件事的是 app/src/main/java/com/buaa/schedule/ui/signin/
+        // BarhopperNativeLibProbe.kt：它在**任何一次 ML Kit 解码调用之前**真去
+        // loadLibrary(BARHOPPER_NATIVE_LIBRARY) 判一次（在 IO 线程上，失败就地转成结论），
+        // 判定不可用时预热那一档一次 ML Kit 调用都不发、扫码页把 scanner 置 null，
+        // 于是相机分析器不建、相册识别（用的是同一个 process()）也一并不再承诺 ——
+        // 那一页在这种设备上真正还能走的只剩手输签到码。
+        // 这三个文件名与探针里那个常量必须同源，漂移由 BarhopperNativeLibProbeTest
+        // 读这份脚本文本比对钉住（不是注释提醒）：改一边不改另一边，测试就红。
         variant.packaging.jniLibs.excludes.addAll(
             setOf(
                 "lib/armeabi-v7a/libbarhopper_v3.so",

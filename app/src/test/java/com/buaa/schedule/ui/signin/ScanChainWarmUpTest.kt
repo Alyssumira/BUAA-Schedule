@@ -3,6 +3,7 @@ package com.buaa.schedule.ui.signin
 import java.io.File
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -17,9 +18,9 @@ import org.junit.Test
  *
  * 真正能在 JVM 里跑出来的是"进程内只付一次"：[ScanChainWarmUp.claim] 背后就是一颗
  * `AtomicBoolean`，八线程抢一次门闩、只许一个人赢。这条比任何形状核对都硬，因为它测的
- * 就是那段代码。
+ * 就是那段代码（T24 之后 ⑨⑩ 也走同一条路：真调解码那一档，靠注入的探针决定闸门）。
  *
- * 守卫要挡住的五种坏形状，都不红：
+ * 守卫要挡住的坏形状，都不红：
  * ① 把预热挪回 `onCreate` 里同步做 —— 那不是"首帧之后"，那是把成本搬到**更早**的主线程；
  * ② 只 `BarcodeScanning.getClient()` 就以为预热到了 —— `libbarhopper_v3.so` 的
  *    `System.loadLibrary` 写在 `BarhopperV3` 的**实例构造函数**里，那个实例第一次真解码
@@ -33,6 +34,15 @@ import org.junit.Test
  *    （buaa36 实测：`TimeoutException ... ProcessCameraProvider-initializeCameraX`，
  *    见 docs/PERF-STARTUP-2026-09-19.md §8 ③），把只值约 340 ms 的那一下顶到它后面就等于没跑。
  *    这条是 T18b 量完设备之后补的。
+ *
+ * T24 之后这里还多两条形影不离的守卫（⑨⑩）：**探针判定「这份包里没有
+ * libbarhopper_v3.so」时，解码那一档一次 ML Kit 调用都不发**。这条只能真跑一遍才量得到 ——
+ * 源码形状核对只量得到「闸门写在调用之前」，量不到「零次」。跑法是注入探针的加载动作、
+ * 直接调 `warmUpBarcodeDecoder()`（因此它是 `internal`），然后看它有没有安静地返回：
+ * 在 JVM 里越过闸门必然抛（android.jar 是桩，`createBitmap` 与 catch 里那句 `Log.d`
+ * 都是 "not mocked"），所以「没抛」就是「没走到 ML Kit」的证据。观测通道本身由 ⑩ 校准：
+ * 闸门放开时若不再抛，⑩ 先红，提醒这条通道断了（例如哪天有人开了
+ * `isReturnDefaultValues`，或把 catch 里的日志换掉）。
  */
 class ScanChainWarmUpTest {
 
@@ -110,11 +120,16 @@ class ScanChainWarmUpTest {
         assertTrue("解码侧没有超时：\n$body", code.contains("DECODE_TIMEOUT_SECONDS"))
     }
 
-    /** ④ 解码那一档必须真的解一帧，否则 `.so` 根本没被 dlopen，这张卡就是白做的 */
+    /**
+     * ④ 解码那一档必须真的解一帧，否则 `.so` 根本没被 dlopen，这张卡就是白做的。
+     *
+     * 锚点里的 `private` → `internal` 是跟着 T24 走的：⑨ 要在 JVM 里真调这一档。
+     * 改的只有这一个修饰符，断言一条没动。
+     */
     @Test
     fun decoderStepPerformsARealDecode() {
         val code = withoutComments(readSource(WARM_UP_FILE))
-        val body = normalize(balancedBlock(code, "private suspend fun warmUpBarcodeDecoder()"))
+        val body = normalize(balancedBlock(code, "internal suspend fun warmUpBarcodeDecoder()"))
         assertTrue("没建 scanner：\n$body", body.contains("BarcodeScanning.getClient("))
         assertTrue(
             "没有真正 process 一帧：getClient() 碰不到 BarhopperV3 的构造函数，" +
@@ -244,6 +259,81 @@ class ScanChainWarmUpTest {
                 "（docs/PERF-STARTUP-2026-09-19.md §8 ③ / T18b）：\n$body",
             decoder < camera,
         )
+    }
+
+    /**
+     * ⑨ 探针判定「这份包里没有 libbarhopper_v3.so」时，解码那一档**零 ML Kit 调用**。
+     *
+     * 这是 T24 的根因守卫：release 在非 arm64 设备上启动约 1.5 s 后 FATAL，
+     * 抛点是 ML Kit 自己 worker 线程上的 `System.loadLibrary`
+     * （`FATAL EXCEPTION: pool-6-thread-2 java.lang.UnsatisfiedLinkError:
+     * dlopen failed: library "libbarhopper_v3.so" not found`），我们这一侧的
+     * `catch (Throwable)` 接不到 —— 所以唯一的解是**根本不发这次调用**。
+     *
+     * 三条断言各挡一种坏形状：
+     * - 「安静返回」：越过闸门在 JVM 里必然抛（⑩ 校准的就是这条），所以不抛 == 没走到 ML Kit；
+     * - 探针只被加载一次：闸门真的读的是探针的结论，而不是别处再猜一遍；
+     * - 闸门写在 `BarcodeScanning.getClient(` 之前（形状核对）：位置漂到 try 里面，
+     *   前两条就都白量了。
+     */
+    @Test
+    fun decoderStepIssuesNoMlKitCallWhenProbeSaysMissing() {
+        val loads = AtomicInteger(0)
+        withProbe(
+            BarhopperNativeLibProbe {
+                loads.incrementAndGet()
+                throw UnsatisfiedLinkError("dlopen failed: library \"libbarhopper_v3.so\" not found")
+            },
+        ) {
+            val outcome = runCatching { runBlocking { ScanChainWarmUp.warmUpBarcodeDecoder() } }
+            assertTrue(
+                "探针判定不可用时这一档还是走到了 ML Kit：${outcome.exceptionOrNull()} —— " +
+                    "缺库的设备上那一下会抛在 ML Kit 自己的线程上，本函数的 catch 接不住，进程当场没",
+                outcome.isSuccess,
+            )
+            assertEquals("闸门没读探针，或者读了不止一次（探针的结论是进程内缓存的）：", 1, loads.get())
+        }
+
+        val body = normalize(balancedBlock(withoutComments(readSource(WARM_UP_FILE)), "internal suspend fun warmUpBarcodeDecoder()"))
+        val gate = body.indexOf("barhopperNativeLib.decideNow()")
+        val firstMlKitCall = body.indexOf("BarcodeScanning.getClient(")
+        check(gate >= 0 && firstMlKitCall >= 0) { "解码档的闸门或第一次 getClient 换过形状了：\n$body" }
+        assertTrue(
+            "闸门挪到第一次 ML Kit 调用之后了（闸门在 $gate、getClient 在 $firstMlKitCall）：" +
+                "这等于把守卫退化成「抛得更早然后接住」，而缺库那一下根本不在我们的线程上",
+            gate < firstMlKitCall && body.indexOf("return", gate) in 0 until firstMlKitCall,
+        )
+    }
+
+    /**
+     * ⑩ ⑨ 那条观测通道的校准：闸门放开（探针说可用）时，同一句调用在 JVM 里**必须抛**。
+     *
+     * 它不是多余的。⑨ 量的是「没抛 == 没走到 ML Kit」，这个等价式成立只因为 android.jar
+     * 是桩：越过闸门后 `createBitmap` 或者就地抛、或者被自己的 catch 接住后由 `Log.d`
+     * 抛出去。哪天有人开了 `testOptions.unitTests.isReturnDefaultValues`、或者把 catch 里
+     * 那句日志换掉，⑨ 就会变成一个永远绿的假守卫 —— 那条通道断了这里先红。
+     */
+    @Test
+    fun mlKitCallIsAudiblyBrokenOnJvmSoTheQuietReturnIsRealEvidence() {
+        withProbe(BarhopperNativeLibProbe { }) {
+            val outcome = runCatching { runBlocking { ScanChainWarmUp.warmUpBarcodeDecoder() } }
+            assertTrue(
+                "越过闸门之后这一档在 JVM 里居然安安静静跑完了 —— ⑨ 的「安静返回」不再是" +
+                    "「零 ML Kit 调用」的证据，去看是不是开了 returnDefaultValues 或换了日志写法",
+                outcome.isFailure,
+            )
+        }
+    }
+
+    /** 换掉进程内那枚探针，跑完换回去（探针把自己的结论一起换掉了，不需要额外"清空"） */
+    private fun withProbe(probe: BarhopperNativeLibProbe, block: () -> Unit) {
+        val saved = barhopperNativeLib
+        barhopperNativeLib = probe
+        try {
+            block()
+        } finally {
+            barhopperNativeLib = saved
+        }
     }
 
     // ---- 源码核对工具（抄 ColdStartRebuildWiringTest）----

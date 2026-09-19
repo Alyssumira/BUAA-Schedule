@@ -117,6 +117,14 @@ packaging {
 降级为「相册选图识别」+「手输签到码」，且**不能**让 MLKit 的类出现在启动路径上
 （放 `remember` 惰性构造，避免全局 `dlopen`）。x86_64 模拟器同理走降级。
 
+> **T24 订正（落地时的两处偏离）**：① 那句"探测"当初只写在注释里、代码里没有，
+> 而 `dlopen` 其实是 ML Kit 在**自己的 worker 线程**上做的（`loadLibrary` 在
+> `BarhopperV3` 的实例构造函数里），应用侧任何一处 catch 都接不到 —— 预热一跑，
+> 非 arm64 的 release 包变成**启动约 1.5 秒后 FATAL**，不必等到进扫码页。
+> 现在由 `ui/signin/BarhopperNativeLibProbe.kt` 在任何一次解码调用之前真 load 一次定结论。
+> ② 降级档位比这里写的更窄：相册识别送进的是**同一个** `scanner.process()`，
+> 缺库时它一样解不出东西，那一页真正剩下的只有手输签到码。
+
 ## 2. 依赖改动
 
 `gradle/libs.versions.toml` 新增：

@@ -71,8 +71,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * 只做类加载 / `dlopen` / `ProcessCameraProvider.getInstance()` 这类**不弹框**的准备：
  * 绝不申请 `CAMERA` 权限（授权归 [SpocScanScreen] 自己现取现用）、绝不打开相机、
- * 绝不做 `bindToLifecycle`。预热失败一律静默：这台设备用不了相机扫码时的降级路径
- * （相册识别 / 手输签到码）由那一页自己负责，这里没有资格替它决定。
+ * 绝不做 `bindToLifecycle`。预热失败一律静默：解码器能不能用由 [BarhopperNativeLibProbe]
+ * 判、由那一页自己收口，这里没有资格替它决定 —— 但注意那一页剩下的入口有多窄：
+ * 相册识别用的就是同一个 `scanner`，所以缺库的设备上它同样解不出东西，真正还能走的
+ * 只有手输签到码（口径见 [SpocScanScreen] 的类注释）。
  */
 internal object ScanChainWarmUp {
 
@@ -119,8 +121,15 @@ internal object ScanChainWarmUp {
      * 本体。**任何异常都不许逃出这个函数**：[scheduleAfterFirstFrame] 用的是
      * `SupervisorJob` 且没有 `CoroutineExceptionHandler` 的进程级作用域，
      * 逃出这里等于顺着线程的默认处理器把整个进程打死（同 `BUAAApplication.onCreate` 那条链的口径）。
-     * 用 `catch (Throwable)` 而不是 `runCatching`：`UnsatisfiedLinkError` 是 Error，
-     * 非 arm64 设备上就是它（[SpocScanScreen] 里那条降级走的也是同一个 catch）。
+     * 用 `catch (Throwable)` 而不是 `runCatching`：接的是解码超时、`close()` 失败、
+     * CameraX 各种异常这类**发生在调用线程上**的失败。
+     *
+     * ⚠️ 这个 catch **接不住缺库那一下**（T24 订正）：非 arm64 的 release 包里
+     * `System.loadLibrary("barhopper_v3")` 是 ML Kit 在**自己的工作线程**上调的，
+     * `UnsatisfiedLinkError` 落在那个线程的默认处理器上，进程当场就没了（实测
+     * `FATAL EXCEPTION: pool-6-thread-2`）。缺库这一 case 由 [BarhopperNativeLibProbe]
+     * 在 [warmUpBarcodeDecoder] 的第一行挡掉 —— 判定不可用时那段 ML Kit 调用压根不发，
+     * 也就没有哪个线程去 load。
      */
     internal suspend fun warmUp(appContext: Context) {
         withContext(Dispatchers.IO) {
@@ -177,8 +186,23 @@ internal object ScanChainWarmUp {
      *
      * `close()` 照旧调用：这张卡要留在进程里的只有 `.so` 的映射与类，
      * 不是一颗常驻的检测器。
+     *
+     * `internal` 只为一条守卫测试（ScanChainWarmUpTest ⑨ 要在 JVM 里把这一档单独跑一遍，
+     * 断言"探针判定不可用时这一档零 ML Kit 调用"）；生产侧的调用点仍然只有 [warmUp] 那一个。
      */
-    private suspend fun warmUpBarcodeDecoder() {
+    internal suspend fun warmUpBarcodeDecoder() {
+        // 探针闸门（T24）：判定为不可用时，下面这一整段一次 ML Kit 调用都不发 ——
+        // 不 getClient、不 process、不 Tasks.await，于是 ML Kit 自己那条
+        // pool-N-thread 上也没有人去 System.loadLibrary。
+        //
+        // 为什么必须在**这里**挡、而不是靠下面那个 catch：那颗 .so 缺失抛的
+        // UnsatisfiedLinkError 是在 ML Kit 的工作线程上炸的（release x86_64 模拟器实测
+        // FATAL EXCEPTION: pool-6-thread-2），本函数的 catch (Throwable) 接不到它 ——
+        // 接住的位置与抛出的位置不是同一个线程。判据与三态口径见 BarhopperNativeLibProbe。
+        //
+        // 判定这一步顺路就在这里做完：本函数跑在 Dispatchers.IO 上，dlopen 不碰主线程，
+        // 而结论一旦落进探针，扫码页读到的就是现成的答案（一次 volatile 读，不再等）。
+        if (barhopperNativeLib.decideNow() != NativeLibVerdict.Available) return
         var scanner: BarcodeScanner? = null
         try {
             scanner = BarcodeScanning.getClient(

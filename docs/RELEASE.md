@@ -164,10 +164,14 @@ CI 用 `BUAA_KEYSTORE_BASE64` 等环境变量传同一组值（secrets 存不了
   `lib/x86/**` 这类目录通配 —— 两者都会连带裁掉 `libandroidx.graphics.path.so`，
   那个 ABI 目录一旦全空，该档设备装包时命中 `INSTALL_FAILED_NO_MATCHING_ABIS`，
   **整个 App 装不上**，而不只是扫码功能不可用。
-- **MLKit 的解码库只有 arm64-v8a**，这是换取体积的代价：armeabi-v7a 老机与 x86_64
-  模拟器一进扫码页就会 `UnsatisfiedLinkError`。扫码页在构造扫描器处有探测，失败即
-  整页降级为「相册识别 + 手输签到码」。因此**模拟器只能验降级路径**，扫码本身必须在
-  arm64 真机上验，装机自测时别把模拟器绿了当成验过。
+- **MLKit 的解码库只有 arm64-v8a**，这是换取体积的代价。缺库时抛的
+  `UnsatisfiedLinkError` 在 ML Kit **自己的 worker 线程**上（`System.loadLibrary` 写在
+  `BarhopperV3` 的实例构造函数里），应用侧的 catch 接不到 —— T24 之前它就是非 arm64
+  release 包的"启动约 1.5 秒后 FATAL"。现在的机制是 `BarhopperNativeLibProbe`：在任何一次
+  ML Kit 解码调用之前，先在 IO 线程上真去 `loadLibrary("barhopper_v3")` 判一次；判定不可用
+  时预热那一档一次 ML Kit 调用都不发，扫码页把 `scanner` 置 null，于是相机分析器不建、
+  **相册识别也不再承诺**（它送进的是同一个 `process()`），那一页只剩手输签到码。
+  因此**模拟器只能验降级路径**，扫码本身必须在 arm64 真机上验，装机自测时别把模拟器绿了当成验过。
 - 剩余可攻项（已量过、未实施）：包内 `assets/mlkit_barcode_models/` 的两个
   `oned_*.tflite` 合计 **490,432 字节**服务于一维码，本功能只解 QR，理论上可用
   assets exclude 省掉；未做是因为 assets 布局属 MLKit 内部实现、升级即变。

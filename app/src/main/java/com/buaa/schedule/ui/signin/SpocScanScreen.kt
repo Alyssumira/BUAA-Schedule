@@ -80,9 +80,16 @@ import kotlin.coroutines.resume
  * 智学北航扫码签到页。
  *
  * 三条入口指向同一个状态机（[SignInViewModel]）：相机实时解码、相册识图、手输签到码。
- * 相机是主路径，后两条不是装饰 —— MLKit 的 native 库只打进 arm64（见
- * docs/BUAA_SPOC_SIGNIN_PLAN.md §1.2），其余 ABI 上扫码器一加载就会抛
- * [UnsatisfiedLinkError]；另外教室投影反光、摄像头脏了的时候，相册识别是唯一还能用的路子。
+ * 相机是主路径。后两条**不是**在任何设备上都还在：MLKit 的解码库在 release 包里只带
+ * arm64 一档（见 docs/BUAA_SPOC_SIGNIN_PLAN.md §1.2 与 app/build.gradle.kts 末尾的
+ * `androidComponents` 块），而相册识别送进的是**同一个** `scanner.process(...)` ——
+ * 缺库的设备上相册也解不出任何东西，这一页真正剩下的只有手输签到码。
+ *
+ * 这件事由 [BarhopperNativeLibProbe] 在任何一次解码调用之前判掉（T24）：不能等 ML Kit
+ * 自己抛，它是在自己的工作线程上 `System.loadLibrary` 的，那个 `UnsatisfiedLinkError`
+ * 这一页任何一处 catch 都接不住，只会顺着线程默认处理器把进程打死。
+ * 判定为不可用时这里的效果是 `scanner` 直接为 null：相机分析器不建、相册入口不再承诺能用、
+ * 文案指向手输。arm64 上探针只会回答"可用"，这一页的组合与绑定次序和改动前一致。
  *
  * 扫到即提交，没有确认页（已定决策）：他班的码由服务端判定拒绝，界面只回显原因。
  */
@@ -109,8 +116,13 @@ fun SpocScanScreen(
     }
     var provider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
     var cameraError by remember { mutableStateOf<String?>(null) }
-    // MLKit 的 so 只有 arm64：别的架构上这一页要能退化成相册 + 手输，而不是崩
+    // 解码器"跑起来之后"坏了（analyzer 收到 ML Kit 的失败回调）：相机这条先停用，
+    // scanner 还在，所以相册识别仍然承诺得起
     var scannerWorking by remember { mutableStateOf(true) }
+    // 解码器"根本不在包里"（T24）：探针**已判定**不可用才 true —— 未判定不是不可用，
+    // 那样会把 arm64 上预热还没跑到那一档的窗口变成一帧降级页。
+    // 这一档比 scannerWorking 更彻底：相册识别用的是同一个 scanner，所以它一起没。
+    var decoderMissing by remember { mutableStateOf(barhopperNativeLib.verdict == NativeLibVerdict.Missing) }
     var showManualInput by remember { mutableStateOf(false) }
     // 输入态提到外层并 rememberSaveable：弹窗曾把 code 记在 if 分支里，
     // 转一次屏输入框就清空（分支内的 remember 随子树一起没了）
@@ -123,13 +135,28 @@ fun SpocScanScreen(
         if (!granted) permissionLauncher.launch(Manifest.permission.CAMERA)
     }
 
-    val scanner = remember {
-        runCatching {
-            BarcodeScanning.getClient(
-                // 只解 QR：多解一种格式会给每一帧多加一次解码开销
-                BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build(),
-            )
-        }.getOrNull()
+    // 起手就把判定等到手（判定那一下的 dlopen 在 IO 上，主线程只是挂起等结论）。
+    // 常态下这里一次都不等：预热在首帧之后就把结论算好了（ScanChainWarmUp 的闸门顺路做的），
+    // awaitDecided() 直接返回现成的 verdict。
+    LaunchedEffect(Unit) {
+        if (barhopperNativeLib.awaitDecided() == NativeLibVerdict.Missing) decoderMissing = true
+    }
+
+    val scanner = remember(decoderMissing) {
+        // 判定为不可用时不建 scanner：下面的 analyzer 建不出来（相机那一档不绑），
+        // 相册那颗按钮的 enabled = scanner != null 也一起灭掉 —— 它送进的是同一个 process()，
+        // 缺库时同样解不出东西，留着只会把用户指向一条死路。
+        // arm64 上 decoderMissing 恒为 false（探针只会回答可用），这一句等价于原来的 remember {}。
+        if (decoderMissing) {
+            null
+        } else {
+            runCatching {
+                BarcodeScanning.getClient(
+                    // 只解 QR：多解一种格式会给每一帧多加一次解码开销
+                    BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build(),
+                )
+            }.getOrNull()
+        }
     }
     DisposableEffect(scanner) {
         onDispose { scanner?.close() }
@@ -162,6 +189,10 @@ fun SpocScanScreen(
     val cameraLive = scanner != null && scannerWorking && granted && cameraError == null
 
     LaunchedEffect(granted, provider, scannerWorking, analyzer) {
+        // 纪律（T24）：真正要用解码器之前先把判定做完 —— 绑上分析流就是第一帧解码的
+        // 唯一入口，所以它必须排在判定之后，未判定的 scanner 一次也不许开帧。
+        // 已判定可用时 awaitDecided() 不换线程、不挂起，这一次调用相对改动前不多出任何一帧。
+        if (barhopperNativeLib.awaitDecided() != NativeLibVerdict.Available) return@LaunchedEffect
         val cameraProvider = provider ?: return@LaunchedEffect
         val activeAnalyzer = analyzer ?: return@LaunchedEffect
         if (!granted || !scannerWorking) return@LaunchedEffect
@@ -196,7 +227,11 @@ fun SpocScanScreen(
     val galleryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
     ) { uri: Uri? ->
-        if (uri != null && scanner != null) {
+        // isAvailable() 是一次 volatile 读（不 dlopen、不挂起）：相册这条走的是同一个
+        // scanner.process()，所以"已判定可用"才放行 —— 未判定也挡在外面，宁可这次选择不发生，
+        // 也不把一帧递给一个还没验过库的解码器（起手那颗 LaunchedEffect 早就把判定做完了，
+        // 用户从选图回到这里之间不可能还没判完，这道判断只是把纪律写成代码）。
+        if (uri != null && scanner != null && barhopperNativeLib.isAvailable()) {
             runCatching { InputImage.fromFilePath(context, uri) }
                 .onSuccess { image ->
                     // 解不出来必须说话：以前空结果什么都不发生，用户只会以为"按了没反应"，
@@ -253,6 +288,9 @@ fun SpocScanScreen(
                 verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
             ) {
                 val hintText = when {
+                    // 解码器整条链都不在（T24）：相机与相册用的是同一个 scanner，
+                    // 再提"从相册选那张二维码"就是把用户往死路上引 —— 只剩手输
+                    decoderMissing -> "这份安装包没带这台设备那一档的扫码解码库，相机和相册都解不出二维码，只能手输签到码。"
                     scanner == null || !scannerWorking -> "这台设备用不了相机扫码，请从相册选那张二维码，或直接输入签到码。"
                     !granted -> "没有相机权限，无法扫码。请在系统设置里放行，或改用下面两个入口。"
                     cameraError != null -> "相机不可用（$cameraError），请改用下面两个入口。"
@@ -503,7 +541,12 @@ private class QrCodeAnalyzer(
                 }
                 .addOnCompleteListener { image.close() }
         } catch (e: Throwable) {
-            // UnsatisfiedLinkError 会从 process() 里抛出来：这台设备的 ABI 没带扫码库
+            // 只盖得住 process() 的**同步**部分：烂 InputImage、Image 已 close 这类。
+            // ⚠️ 缺库那种 UnsatisfiedLinkError 这里盖不住（T24 订正）—— 它是 ML Kit 在
+            // 自己的 worker 上调 System.loadLibrary 时抛的，本方法早就返回了。
+            // 缺库不走到这里：BarhopperNativeLibProbe 判定不可用时 scanner 为 null、
+            // 分析流根本不绑，而绑定之前又必须先 awaitDecided()（见 SpocScanScreen）。
+            // 所以能拿到回调的 scanner 一定是"已判定可用"的那一颗，这里只剩运行期故障。
             image.close()
             consumed = true
             onFailure()
