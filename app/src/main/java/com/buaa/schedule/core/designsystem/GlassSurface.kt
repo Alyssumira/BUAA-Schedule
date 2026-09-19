@@ -288,7 +288,7 @@ val LocalSemanticPlate = staticCompositionLocalOf<SemanticPlate?> { null }
  *    深浅两套主题同构，底板与文字都是主题成员，观感由色板作者负责。
  * 2. **不带**（`success` 这类项目自己补的槽位，`SemanticColors` 里只有色相没有配套前景）：
  *    底板保留意图色，文字按**这块板实际画出来有多亮/多暗**解 —— 交给 [legibleTintPlate]
- *    （选黑/白 → 不够再压实 → 最后才压 tint），它是这套数值口径的唯一入口。
+ *    （选墨与压实同解 → 两支墨都读不出才压 tint），它是这套数值口径的唯一入口。
  *
  * 第 2 条里 [alpha] 是**未夹取**的材质档位浓度（[glassRawAlpha]）：alpha 要按文字色反解下限，
  * 文字色又要按 alpha 合成后的亮度来挑，所以这里从不夹取的那一档起步，
@@ -314,8 +314,9 @@ internal fun semanticGlassPlateOf(
  * 一块玻璃底下同时压着亮斑与暗斑，而"该怕哪一头"取决于文字是浅是深——先有墨才有怕，
  * 先有场景极值才挑得准墨。所以两个极端各解一次，留**两头都读得清**的那一支：
  * 只喂一头的说法（按 tint 自身亮度判深浅）在淡染档上是错的，深色主题的
- * `success` #7BD69B 自身亮度 0.5467 看着像"亮板配深字"，可它以 0.18 叠在深色渐变上
- * 合成出来只有 0.164，这时候深字反而只有 2.6:1。
+ * `success` #7BD69B 自身亮度 0.5467 看着像"亮板配深字"，可它以 0.18 叠在深色渐变的最暗档
+ * 上合成出来只有 0.040，这时候深字反而只有 1.5:1（旧线性口径给这块板 0.107、深字 2.6:1，
+ * 是一块真机上画不出来的板）。
  */
 private fun legibleSemanticPlate(tint: Color, alpha: Float, darkTheme: Boolean): SemanticPlate {
     // true = 板比字暗、怕亮斑；false = 板比字亮、怕暗斑（与 legibilityAlphaFloor 同一判据）

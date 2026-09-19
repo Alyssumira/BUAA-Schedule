@@ -2120,8 +2120,9 @@ private fun CourseCell(
     // 就是近白，于是"亮底用 onSurface、暗底用 White"两支都是浅色，
     // 一张亮黄色的课在深色模式下变成白字压白底（用户反馈的"黑字看不清"即此）。
     //
-    // 达标路径也交给它：先选对黑/白，不够再把 tint 压实（与 GlassSurface / 分段控件 /
-    // 底栏共用 glassAlphaFloor 这一个解），最后才动课程色本身。
+    // 达标路径也交给它：选墨与压实同解——两支候选墨各解一次"读到 AA 所需的最小 alpha"、
+    // 取便宜的那支（与 GlassSurface / 分段控件 / 底栏共用 glassAlphaFloor 这一个解），
+    // 连不透明都读不出才动课程色本身。
     // 此前这里自己写了个 0.45 的亮度阈值 + 0.78 的次级文字 alpha，两个口径都没校验结果。
     val darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val plate = legibleTintPlate(background, tintAlpha, coursePlateSceneLuma(background, darkTheme))
