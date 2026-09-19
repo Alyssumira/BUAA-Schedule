@@ -141,9 +141,28 @@ internal const val SURFACE_ALPHA_CEILING = 0.96f
 /**
  * [GlassSurface] 的 tint alpha：材质档位 × 用户透明度偏好，下限托到读得清、上限压住通透感。
  *
+ * ## 下限要先对天花板取小，否则区间会翻过来
+ *
+ * 下限是 [legibilityAlphaFloor] 反解出来的，而那条反解**能饱和到 1.0**
+ * （[DesignTokens.glassAlphaFloor] 的值域上界就是 1f）：底板亮度已经站在该文字色对应的
+ * AA 临界点另一侧时——暗玻璃板 0.0081 底下垫着 0.08 的亮块配中灰文字、
+ * DarkError 0.5684 配 0.5681 的浅色正文、浅主题下红底板 0.1125 压在 0.05 的暗斑上——
+ * 解出来的需要 alpha 大于 1，含义是**这块板无论压到多实都读不清**。
+ * 此时下限比 0.96 的天花板还高，`coerceIn(1.0, 0.96f)` 当场抛
+ * `Cannot coerce value to an empty range`，而且是主线程 doFrame 上的 FATAL。
+ *
+ * ## 落到 0.96 是什么语义
+ *
+ * 救不清的板走满天花板：玻璃还剩 4% 透光，**仍然不保证 AA**，只是不再炸。
+ * 真要救回来得改的是文字色或底板色，那是 [legibleTintPlate] 的职责（它连前景一起解，
+ * 必要时压 tint），不是在这里把数字调大的理由。0.96 本身是产品口径——玻璃再实
+ * 也不许变成一块不透明板，别把它抬到 1f 当作修法。
+ *
  * 从 composable 里抽出来只为一个理由：本模块的 JVM 单测没有 Compose 运行时
  * （无 Robolectric、无 ui-test），留在 `@Composable` 体内测不到这条数值口径。
- * 计算逐字不变。
+ * 饱和族与安全基线钉在 GlassSurfaceAlphaTest 的表里。
+ *
+ * @see legibilityAlphaFloor 下限的唯一来源
  */
 internal fun glassSurfaceAlpha(
     variant: GlassVariant,
@@ -158,9 +177,10 @@ internal fun glassSurfaceAlpha(
         GlassVariant.ALERT -> (if (semanticTint != null) 0.45f else material.surfaceAlpha) * alphaScale
         else -> material.surfaceAlpha * alphaScale
     }
+    val ceiling = SURFACE_ALPHA_CEILING
     return rawAlpha.coerceIn(
-        legibilityAlphaFloor(baseTint, text, darkTheme),
-        SURFACE_ALPHA_CEILING,
+        legibilityAlphaFloor(baseTint, text, darkTheme).coerceAtMost(ceiling),
+        ceiling,
     )
 }
 
@@ -171,6 +191,10 @@ internal fun glassSurfaceAlpha(
  * （场景 scrim 刻意不进录制层，见 [SceneBackground]），主题只知道深浅、看不到壁纸。
  * 于是亮斑上的浅色文字、暗斑上的深色文字都会被透上来的壁纸吃掉对比度——
  * 这里按最不利分块亮度反推下限：场景安全时放行通透，场景危险时才压实。
+ *
+ * 值域上界是 **1.0**（不是 0.96，也不是任何天花板）：1.0 的意思是这块板无论压到
+ * 多实都读不清。调用方夹区间时要先跟自己的天花板取小再喂给 `coerceIn`，
+ * 否则下限会翻到天花板上面去（[glassSurfaceAlpha] 是唯一收口点）。
  *
  * 手写玻璃表面（分段控件的选中胶囊、底栏）与 [GlassSurface] 共用这一个口径。
  *
