@@ -1,9 +1,10 @@
 # 冷启动链瘦身（T18）—— WorkManager 按需初始化 / 起手 ContentProvider / 扫码链预热
 
 日期：2026-09-19。分支 `ai/T18`，基线 `fc8c986`。
-本页只记这三件事的**改法、线程账、清单对照与待量的数**；
-门禁计数见 §5。设备上还没有一个数字是本卡量的（不许碰设备），
-§6 是编排者必须量的三个数与命令形态。
+本页只记这三件事的**改法、线程账、清单对照与量出来的数**；门禁计数见 §5。
+本卡自己一条 adb 都没跑（不许碰设备），§6 是交给编排者的三个数与命令形态；
+**设备上量到的读数与口径见 §8**（2026-09-19 由编排者在 buaa36 上量完）——
+其中 §6 ③ 有两条量法被实测证伪、已就地订正，订正前后的差别也记在 §8 里。
 
 ## 0. 一句话
 
@@ -272,9 +273,15 @@ Compose 的组合/测量在 animation 阶段、真正的首帧绘制在同一帧
 
 ## 6. 必须在模拟器上量的三个数（本卡一条 adb 都没跑）
 
+> 2026-09-19 这三个数已由编排者量完，**读数与口径全部在 §8**；本节保留作复量时的命令形态，
+> 其中 ③ 的两条量法（`/proc/maps` 与固定 `sleep`）已被实测证伪并就地订正。
+
 前置：`adb root`；一台 API 28+ 的 AVD（`buaa36`）；改前包从基线 `fc8c986` 另建一份
 `:app:assembleDebug`。**两版都先把 Baseline Profile 的状态对齐**（装机后各跑 3 次冷启动
 让 profile 生效再开始计数），否则量到的是 profile 的账不是这张卡的。
+⚠️ 这半句在 debuggable 包上其实不起作用 —— ART 不对 debuggable 包做 `speed-profile`，
+所以两边都拿 debug 包时 profile 那一笔根本进不了账，实际口径按 §8 ① 末尾写的那样处理
+（两边同档 ⇒ 差值只归这张卡）。
 播种口径沿用 `docs/STATUS.md` T16 那一节：一个学期 + 多门课、`currentWeek` 落在学期中间、
 `onboarding_completed=true` 与 `privacy_consent_at` 两道门都过。
 
@@ -302,6 +309,7 @@ adb logcat -d -v threadtime -s WM-WrkMgrInitializer
 改前：这一行出现，且 `logcat -v threadtime` 的**线程列 == 进程 pid**（主线程）。
 改后：**这一行不该再出现**（按需路径不写它），首帧钱改由 IO 线程付。
 预期方向：`TotalTime` 下降或持平；若上升，先查 §2.2 的 `SystemJobService` 那一行是不是恰好撞在同一次启动上。
+→ **实测为下降**：中位 −593 ms（−11.4%），逐条读数与口径见 §8 ①。
 
 ### ② 「冷进程 + 组件广播」那条路上第一次 `getInstance` 落在哪条线程、多少毫秒
 
@@ -352,6 +360,11 @@ adb shell am broadcast -a android.appwidget.action.APPWIDGET_ENABLED \
 同一组还要顺手验一次**功能没坏**：放一个组件、不动课表、等到（或 `date` 推进）
 12 小时后组件仍刷新；以及 `adb shell dumpsys jobscheduler | grep -A5 com.buaa.schedule`
 里 `WidgetFallbackWorker` 那条 unique work 存在 —— 这是 §1.2 那个"静默不注册"失败形状的唯一实物证据。
+→ **实测：这条已成立**（改后冷启动一次，`dumpsys jobscheduler` 里就出现了
+`SystemJobService` 那条 job，见 §8 里 ① 的辅助判据 c 项）。
+⚠️ 而"第一次 `getInstance` 落在哪条线程、多少毫秒"这半条**没有量**：下面第 1 条那段临时计时
+编排者没插桩跑，只拿到第 2 条（ActivityManager 侧的 dispatch/finish）那一半读数，
+口径限制写在 §8 ② 里 —— 那里同时写明**不为这条再改任何代码**。
 
 ### ③ 预热是否真的把扫码页首帧的 `dlopen` 藏掉了
 
@@ -361,10 +374,11 @@ adb shell am broadcast -a android.appwidget.action.APPWIDGET_ENABLED \
 ```
 adb shell am force-stop com.buaa.schedule
 adb shell am start -W -n com.buaa.schedule/.MainActivity
-sleep 2                                   # 让"首帧之后"那次预热跑完（两档各 ≤5 秒上限）
-PID=$(adb shell pidof com.buaa.schedule)
-# (a) 此刻 `.so` 进来了没有 —— debuggable 包可以用 run-as 读自己进程的 maps
-adb shell "run-as com.buaa.schedule cat /proc/$PID/maps" | grep -c barhopper
+# (a) 此刻 `.so` 进来了没有 —— **读日志，不要读 /proc/maps**（量法已订正，见下面判据 1）
+adb logcat -d -v threadtime | grep -E "nativeloader.*barhopper|OnedDecoderClient|ScanChainWarmUp"
+#     两档各 ≤5 秒上限、在同一个协程里**串行**跑，所以这里不写固定 sleep：
+#     2 秒根本覆盖不住（改前的排法下相机档先跑，实测它把 5 秒整额吃光）。
+#     判据是"(a) 那几行里 `解码器预热完成` 已经出现"，出现了再往下点。
 adb shell dumpsys gfxinfo com.buaa.schedule reset
 adb shell input tap <首页加号菜单坐标>     # 坐标沿用 T16b 那套交互 CUJ
 adb shell input tap <扫码入口坐标>
@@ -375,9 +389,19 @@ adb pull /data/misc/perfetto-traces/scan.pftrace
 ```
 
 判据（三件都要成立）：
-1. **映射时机**：冷启动停在首页 2 秒后 `(a)` 的第一条 grep 计数就应当 > 0（预热已经把
-   `libbarhopper_v3.so` 拉进来了）；关掉预热的那一份在同一时刻应当是 0，
-   且要点进扫码页之后才变 > 0。这一条是本项唯一"直接指着那个 `dlopen`"的读数。
+1. **映射时机**（⚠️ 量法订正：原先写的
+   `adb shell "run-as com.buaa.schedule cat /proc/$PID/maps" | grep -c barhopper`
+   **读不出东西**，照它量到的计数是 0，而同一次运行里 nativeloader 明确报了加载成功。
+   原因是这颗 `.so` 是从 APK 内直接映射的，`/proc/<pid>/maps` 里那一行的路径名是
+   `.../base.apk`（带 offset），字符串 `libbarhopper_v3.so` 压根不会出现在里面）。
+   现在按 `(a)` 那三条读：冷启动停在首页、**没有点开扫码页**的时候，
+   `nativeloader: Load .../base.apk!/lib/<abi>/libbarhopper_v3.so … ok` +
+   `barhopper::deep_learning::OnedDecoderClient is created successfully.` +
+   `ScanChainWarmUp: 解码器预热完成` 三行都出现，才算预热把 `.so` 拉进来了；
+   关掉预热的那一份同一条命令应当三行都没有、点进扫码页之后才出现。
+   **两档顺序也算这条判据**（T18b 换的就是它）：`解码器预热完成` 的时间戳必须早于相机那一档的
+   任何一行（`相机 provider 预热完成` / `相机 provider 预热未成功`）—— 反过来说明有人把
+   `ScanChainWarmUp.warmUp()` 里那两行换回去了，那 340 ms 又被顶到一整段超时之后了。
 2. **帧**：进扫码页那一段的 `framestats` 长帧数不高于对照组；`trace` 里
    `System.loadLibrary` / dlopen 那截挂在后台线程线上、且在首帧之后。
 3. **红线**：停在首页时 `adb shell dumpsys media.camera | grep -c com.buaa.schedule` 为 0
@@ -387,16 +411,147 @@ adb pull /data/misc/perfetto-traces/scan.pftrace
 对照组怎么造：`ScanChainWarmUp.warmUp()` 里那两行调用各删一行就关一档（解码器一档 / 相机一档），
 重新构建一份 APK。这比加开关便宜，也正是"不新增配置项"这条红线的用途。
 如果 ③ 量出来收益接近零，**这张卡的第三件事就该整体删掉**（净代价只有 §4.4 那笔常驻内存），
-删法就是 `MainActivity.kt:210` 那一次调用 + `ScanChainWarmUp.kt` + 它的 7 条守卫用例。
+删法就是 `MainActivity.kt:210` 那一次调用 + `ScanChainWarmUp.kt` + 它的 8 条守卫用例（T18b 之后）。
+→ **实测结论：收益不是零**（`.so` 的 dlopen + 解码器构造约 340 ms，且是在没点开扫码页的情况下
+发生的），所以这一档留着；但改前的两档顺序是错的，由 **T18b** 换序，读数见 §8 ③。
 
 ## 7. 残余风险（复核后认定）
 
 | 风险 | 形状 | 现在的答案 |
 | --- | --- | --- |
-| 库内在 Service 主线程上 `getInstance` | `SystemJobService.onCreate()`（§2.2） | 应用改不动。是"起手主线程"换成"投递现场主线程"，净收益要 §6①② 量出来才算得清。若 ② 显示这一路上建库的钱落在 Service 主线程且不可接受，退路是给 `BUAAApplication.onCreate` 的 IO 链第一步补一次 `WorkManager.getInstance`（那时它已经在 IO 上），把这笔钱稳定抢在 job 投递之前 —— 本卡**没有**这么做，因为它会让每次冷进程都必付这笔（哪怕桌面上一个组件都没有） |
-| 只改一半就静默失效 | 清单与 Application 之间没有编译期联系 | 由 `WorkManagerOnDemandInitTest` ①② 钉住；实物证据仍需 §6② 最后那条 jobscheduler 检查 |
+| 库内在 Service 主线程上 `getInstance` | `SystemJobService.onCreate()`（§2.2） | 应用改不动。是"起手主线程"换成"投递现场主线程"：① 的净收益已量到（中位 −593 ms，§8 ①），② 只拿到同向的一半（dispatch 段 −315 ms，"落在哪条线程"没插桩量，§8 ②）。若 ② 显示这一路上建库的钱落在 Service 主线程且不可接受，退路是给 `BUAAApplication.onCreate` 的 IO 链第一步补一次 `WorkManager.getInstance`（那时它已经在 IO 上），把这笔钱稳定抢在 job 投递之前 —— 本卡**没有**这么做，因为它会让每次冷进程都必付这笔（哪怕桌面上一个组件都没有） |
+| 只改一半就静默失效 | 清单与 Application 之间没有编译期联系 | 由 `WorkManagerOnDemandInitTest` ①② 钉住；实物证据 §6② 最后那条 jobscheduler 检查**已拿到**（§8 ① 的辅助判据 c） |
 | 组件的后台补注册不再续命 | `goAsync()` 的票被别处先取走 → 返回 null，协程照跑但进程可能先被回收 | 沿用 `takeRebindPendingResult` 既有口径：下一次事件或宿主重绑会补上。`onUpdate` 那条本来就自带票 |
-| 预热的常驻内存 | `.so` 映射 + CameraX/ML Kit 类 | 用户不开扫码页时原本是零；§6③ 判定收益后决定留删 |
-| 预热两档各 5 秒上限 | 最坏多占两个 IO 线程共 10 秒 | 不占主线程；`applicationScope` 是 `Dispatchers.IO`（线程预算 64），不会被它饿死 |
+| 预热的常驻内存 | `.so` 映射 + CameraX/ML Kit 类 | 用户不开扫码页时原本是零；§6③ 已量：收益不是零（约 340 ms 的 dlopen + 解码器构造被挪出扫码页首帧），**这一档留着**（§8 ③） |
+| 预热两档各 5 秒上限 | 两档在同一个协程里**串行**，所以最坏是占着**一个** IO 线程到 10 秒（原写"两个 IO 线程共 10 秒"不准） | 不占主线程；`applicationScope` 是 `Dispatchers.IO`（线程预算 64），不会被它饿死。⚠️ 实测：相机档在 buaa36 上把 5 秒整额耗光 → 顺序变成要紧的事，T18b 已把解码档换到前面（§8 ③） |
 | `workManagerConfiguration` 在 `sLock` 内执行 | 将来有人往里塞读盘/回头调 WorkManager 会自锁或放大 | getter 只 `Configuration.Builder().build()`，测试逐字比对 + 反向钉住声明行不得出现 `WorkManager.` / `getInstance` |
-| 守卫测试是"形状核对" | 线程/时序在 JVM 里跑不出来 | 与 `ColdStartRebuildWiringTest` 同一局限，明确记在这里：**形状对了不等于设备上对了**，§6 的三个数没量完之前本卡不算收工 |
+| 守卫测试是"形状核对" | 线程/时序在 JVM 里跑不出来 | 与 `ColdStartRebuildWiringTest` 同一局限，明确记在这里：**形状对了不等于设备上对了**，所以 §6 那三个数由编排者在设备上量完、读数在 §8 —— 现在三数量完了，只剩 ② 的"落在哪条线程"那一半没插桩（§8 ②） |
+
+## 8. 编排者设备实测（2026-09-19，buaa36 / API 36 / debug 双版本对照）
+
+本节是 §6 那三个数的**读数**。量的人是编排者（本 worktree 全程不碰设备），命令形态就是 §6 那些；
+`adb root`、一台 API 36 的 AVD（`buaa36`，x86_64）。原始逐条读数留在
+`/d/schedule/.tmp/t18-ab-before.txt` 与 `t18-ab-after.txt`（①）、`t18-after-manifest.txt`
+（① 的辅助判据 b 那份 `aapt2 dump xmltree`）、`t18-providers-before.txt` /
+`t18-providers-after.txt`（同一段落改前/改后的 provider 与 meta-data 清单），下面抄的是里面全部有效数字。
+
+### ① 冷启动 `TotalTime`：中位 **−593 ms（−11.4%）**
+
+同一种子前态：22 门课、学期 `startDate=2026-08-31`、`onboarding_completed=true`。
+改前包 = 基线 `fc8c986` 的 `:app:assembleDebug`；改后包 = `ai/T18` 的 `:app:assembleDebug`。
+两版各自 force-stop → `am start -W` 连打 12 轮（改后有一轮 grep 漏采，剩 11 条），取中位数：
+
+| | 条数 | 中位 | 最低 | 离群处理 | 去离群中位 | 去离群均值 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 改前 | 12 | **5201 ms** | 4670 ms | 剔掉 11572 / 11892 两条 >9 s → 10 | 5121 ms | 5186 ms |
+| 改后 | 11 | **4608 ms** | 4274 ms | 剔掉 10418 一条 >9 s → 10 | 4605 ms | 4624 ms |
+
+- **中位 −593 ms（−11.4%）**；最低对最低 −396 ms（4670 → 4274）；去离群均值 −562 ms（−10.8%）。
+- 逐条读数（原样、按轮次顺序，单位 ms）：
+  - 改前：`11892 11572 5391 4914 5107 5012 5266 5024 4670 5638 5706 5136`
+  - 改后：`4274 4277 4414 4833 4681 10418 4882 5073 4608 4602 4595`
+- **口径必须这样读**：两版都是 **debuggable**，ART 不会对 debuggable 包做 `speed-profile`，
+  所以这一组数里**不含 Baseline Profile 的收益** —— 那笔账是 T16 用 release 包量的
+  （编排者给的口径：中位 −18%。**这个数没有落进仓库里任何一份文档或提交说明**，别去
+  `docs/STATUS.md` 找它），而且它在一档、这里在另一档，**两个数不能相加**。
+  两边同档 ⇒ 这一组差值只归这张卡。§6 前言里"两版都先对齐 Baseline Profile 状态"那句
+  在 debuggable 包上不起作用，已就地标注。
+- 模拟器噪声大：改前那两条 >9 s 恰好是连打的头两轮（原始文件里就在头两行），改后那条在第 6 轮。
+  所以给**中位**与**去离群均值**两个口径，两个口径同向（−11.4% / −10.8%）。
+
+### ① 的三条辅助判据（全部成立）
+
+**a. 起手那次 WorkManager 主线程初始化真的消失了。** 改前那一份 `adb logcat -v threadtime` 里有：
+
+```
+09-19 08:24:54.348 23450 23450 D WM-WrkMgrInitializer: Initializing WorkManager with default configuration.
+```
+
+后两列是 pid 与 tid，**tid == pid 即主线程** —— 与 §1.3 那句静态分析（provider 在
+`Application.onCreate` 之前、在主线程上就地建库）对上了。改后这一行**完全不出现**
+（按需路径不打这条日志，§6 ① 预期的正是这个），且进程没崩、`Configuration.Provider` 那半边接上了。
+
+**b. 改后产物里 Baseline Profile 的落盘路径没被拆掉**（这条最重要，它保的是上一张卡的成果）。
+`aapt2 dump xmltree` 读**装到机上那一份 APK 的 merged manifest**，
+`androidx.startup.InitializationProvider`（line=185）下面剩**三条** meta-data：
+
+```
+line=189  androidx.emoji2.text.EmojiCompatInitializer            value=androidx.startup
+line=192  androidx.lifecycle.ProcessLifecycleInitializer         value=androidx.startup
+line=195  androidx.profileinstaller.ProfileInstallerInitializer  value=androidx.startup
+```
+
+`androidx.work.WorkManagerInitializer` 已摘除（改前那一份同一段落里是四条，§3 的表）。
+也就是 §1.1 那句"**只摘那一条、provider 留着**"在产物层面成立：profileinstaller 仍挂在同一个
+provider 上，T16 的落盘路径没被动过。
+
+**c. 按需初始化之后功能没坏。** 改后冷启动一次，`dumpsys jobscheduler` 出现
+
+```
+JOB #u0a220/1: com.buaa.schedule/androidx.work.impl.background.systemjob.SystemJobService
+```
+
+—— 兜底轮询经"第一次真正使用时才初始化"的 WorkManager 注册成功了。这就是 §1.2 那个
+"调用点外面套着 `runCatching`，所以只掉一行 WARN"失败形状的唯一实物证据：它**没有**发生。
+
+### ② 组件广播那条路：**这条读数不够硬**
+
+命令同 §6 ②：`am broadcast -a android.appwidget.action.APPWIDGET_ENABLED
+-n com.buaa.schedule/.widget.TodayWidgetProvider --receiver-foreground` 打进冷进程，
+读 `dumpsys activity broadcasts`：
+
+| | dispatch | finish |
+| --- | --- | --- |
+| 改前 | `+1s253ms` | `+144ms` |
+| 改后 | `+938ms` | `+266ms` |
+
+订正口径（这张表容易被读歪，所以写死）：
+
+- **改后的 `finish` 里含 `goAsync()` 续命那段异步活**，`144 → 266 ms` **不能**读成
+  "主线程变贵了"。恰恰相反：这笔钱原本在起手的主线程上（① 的 a 项已经指着它），
+  现在在广播的后台协程里。`dispatch` 段 `+1s253ms → +938ms`（**−315 ms**）与 ① 同向 ——
+  冷进程拉起时主线程少做了建库那一段。
+- ⚠️ 真正判"第一次 `getInstance` 落在哪条线程"要用 §6 ② 第 1 条那条**临时计时**的路，
+  编排者没有插桩跑。所以 ② 只算"与 ① 同向的辅助证据"，不是独立读数。
+  **T18b 不为这条改任何代码**（插桩写法与"跑完删掉"的口径 §6 ② 已经写清了，那是下一张卡的事）。
+
+### ③ 扫码预热：解码档确实成功了，但被相机档那 5 秒顶到了后面 → T18b 换序
+
+改后包冷启动后停在首页、**全程没有点开扫码页**的时间戳（`logcat -v threadtime`，同一秒内）：
+
+```
+08:32:41.476  D ScanChainWarmUp: 相机 provider 预热未成功（忽略）
+              java.util.concurrent.TimeoutException: Waited 5000000000 nanoseconds ...
+              [tag=[ProcessCameraProvider-initializeCameraX]] status=PENDING
+08:32:41.653  D nativeloader: Load .../base.apk!/lib/x86_64/libbarhopper_v3.so ... ok
+08:32:41.733  barhopper::deep_learning::OnedDecoderClient is created successfully.
+08:32:41.991  D ScanChainWarmUp: 解码器预热完成
+```
+
+三件事同时成立：
+
+1. **预热有效**：那颗 `.so` 的 dlopen 与 `OnedDecoderClient` 的构造都在没点开扫码页的时候
+   发生了（新判据的读法，§6 ③ 已订正），从 `.653` 到 `.991`、合计约 **340 ms**。
+   §4.4 那笔常驻内存买对了，这一档留下。
+2. **但两档顺序排反了**：两档串行跑在同一个协程里，相机那一档排在前面、在这台 AVD 上把
+   `CAMERA_TIMEOUT_SECONDS` = 5 秒**整额耗光**（相机枚举慢的设备就是如此，`status=PENDING` 到点），
+   于是真正有价值的那 340 ms 要到 `41.476` 之后才开始排。一个"打开应用就是为了签到"的用户
+   从首帧到点开扫码页通常用不了 5 秒 —— 换序之前这次预热对他等于没跑。
+   两档之间确实没有依赖，但它们**共享同一段"用户还没点进扫码页"的窗口**，所以顺序就是要紧的。
+3. → **T18b 换序**：`ScanChainWarmUp.warmUp()` 里改成解码档先、相机档后。两档各自独立、
+   各自 `catch (Throwable)`、进程内一次的那颗门闩都不变；相机档那 5 秒上限以及它排到后面之后
+   仍然占着一个 IO 线程的代价**保留不动**（不改数值、不加开关）。
+   顺序由 `ScanChainWarmUpTest` ⑧ 钉住，换回去会红。换序之后同一条命令下
+   `解码器预热完成` 的时间戳应当排在相机那一档任何一行**之前** —— 这条已并回 §6 ③ 判据 1。
+   ⚠️ 但这最后一步**是预期、不是复量**：T18b 只改了顺序、没有在设备上重跑 ③
+   （本 worktree 不碰设备）。下一次量 ③ 时按新判据读那两行的先后即可。
+
+### 本节改动（T18b）的门禁复跑
+
+`--offline` + `--rerun`、JDK 21 / Gradle 8.14.3，日志 `/d/schedule/.tmp/t18b-gate.log`：
+
+| 项 | 结果 |
+| --- | --- |
+| `:app:testDebugUnitTest` | **781 tests / 0 failures / 0 errors / 0 skipped**（§5 的 780 + 换序守卫 1 条） |
+| `:app:lintDebug` | **0 errors / 14 warnings** |
+| `.kt` 口径 lint 条目集合 | `IDENTICAL`（9 条，对 `t11-lint-kt-baseline.txt`） |

@@ -103,11 +103,19 @@
       落到下一帧，两档各 ≤5 秒上限、进程内 `AtomicBoolean` 只付一次、失败静默、
       不申请权限不开相机），为的是把 `libbarhopper_v3.so` 的 `dlopen` 从扫码页首帧挪走。
       改前/改后的 provider 逐项对照、调用点线程表与静态账见
-      **`docs/PERF-STARTUP-2026-09-19.md`**；门禁：780 单测 0 失败、lint 0 error / 14 warning。
-      ⚠️ **设备上那三个数还没量**（本卡不碰设备）：① 冷启动 `am start -W` 的 `TotalTime`
-      改前/改后，② 「冷进程 + 组件广播」第一次 `getInstance` 落在哪条线程、多少毫秒，
-      ③ 预热是否真的把扫码页首帧的 `dlopen` 藏掉了。命令形态与判据在那份文档 §6；
-      ③ 若量出来收益接近零，这第三件事应当整体删掉（它唯一的净代价是常驻映射）
+      **`docs/PERF-STARTUP-2026-09-19.md`**；门禁：780 单测 0 失败、lint 0 error / 14 warning
+      （T18b 换序之后复跑 **781** 条，仍是 0 失败 / 0 error / 14 warning、`.kt` 告警集 IDENTICAL）。
+      ✅ **设备上那三个数已量完**（2026-09-19，buaa36 / API 36 / debug 双版本对照，
+      逐条读数与口径都在 **`docs/PERF-STARTUP-2026-09-19.md` §8**）：① 冷启动 `TotalTime`
+      中位 **−593 ms（−11.4%）**（两版同为 debuggable ⇒ 不含 T16 那笔 profile 收益）、
+      起手那条 `WM-WrkMgrInitializer` 在 `tid == pid` 的主线程上**已消失**，且装到机上那份
+      APK 的 merged manifest 里 `ProfileInstallerInitializer` 仍在（只摘了 WorkManager 那一条）、
+      `dumpsys jobscheduler` 里兜底 job 仍在 ⇒ 按需初始化没把功能弄坏；
+      ② 组件广播那条路**只量到同向的一半**（`dispatch` −315 ms；`finish` 里含 `goAsync()`
+      的异步段、不能读成"主线程变贵"，而"第一次 `getInstance` 落在哪条线程"要插桩才看得见，
+      没跑）；③ 扫码预热**有效但当时顺序排反了** —— 解码档那约 340 ms 确实成功落地，
+      却被前面相机档整额耗光的 5 秒顶到后面，已由 **T18b 换序**（`warmUp` 里解码档先、
+      相机档后，顺序由 `ScanChainWarmUpTest` ⑧ 钉住），§6 ③ 那两条被证伪的量法一并订正
 
 ## 不做的内容
 
