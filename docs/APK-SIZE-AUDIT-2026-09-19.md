@@ -408,6 +408,10 @@ ANDROID_HOME="D:\\AndroidSDK" PATH="/d/AndroidSDK/jdk-21/bin:$PATH" \
 1. **Q1/Q3 的运行时结论全部靠静态证据**（usage.txt 差集、mapping.txt、arsc 引用图），
    没有任何真机/模拟器证据 —— minify 只在 release 生效，769 个单测对这条路径完全无感。
    第 1、3 节各写了"运行期待验证项"，Q3 那节优先级更高（RemoteViews 跨进程 inflate）。
+   > T21 追记（同日）：**"769 个单测对这条路径完全无感"这一句现在只对了一半** ——
+   > 取证日志那一族（`WakeLocks` / `ColdStartRebuild` / `ClassProgress*` 的中文判据行）
+   > 已经补上产物级证据与能跑的守卫，见第 9 节；Q1 的实体 keep 与 Q3 的 RemoteViews inflate
+   > 仍然欠着运行时装机验收，本追记不把那一半一起销掉。
 2. **Q4 的"压缩后 ≈17.6KB"是按整包 dex 压缩比折算的估算**，不是实测：apkanalyzer 的
    `dex packages` 只给未压缩字节，逐类的压缩后归属要 dexlib 级别的重打包，本轮没做。
    未压缩的 36,974 / 124,823 是实测。
@@ -426,3 +430,164 @@ ANDROID_HOME="D:\\AndroidSDK" PATH="/d/AndroidSDK/jdk-21/bin:$PATH" \
    169 条 attr，而 lint 的资源检查是**按源文件**看的，看不见 arsc 收缩的后果，
    所以就算跑也不构成额外证据 —— 但如果以后要加一道自动闸门，
    真正该做的是第 3 节那套 aapt2+引用差集脚本化。
+
+---
+
+## 9. T21：那几行取证 logcat 在 release 包里到底还在不在（追加，2026-09-19）
+
+问题就是 §8 第 1 条欠的那笔账里最要命的一支：省电审计读的全是 logcat
+（`docs/AUDIT-BATTERY-2026-09-18.md` §4.3 数**持锁次数**、§4.4 的过滤条件是中文判据句、
+T11/T12/T13 的设备侧证据各读一句），而这些行只有 release 才会被 R8 动刀。
+基线 `ai/T21` = `2880a71`（守卫测试）叠在 `8dec38b` 上，工作树干净。
+
+**结论：一行没死。** 12 处取证调用点 + 5 条闸门判据在最终 minified dex 里全部活着；
+本轮**没有改任何生产代码**（`WakeLocks.kt` 与 `proguard-rules.pro` 保持原样），
+交付物是守卫测试 `app/src/test/java/com/buaa/schedule/reminder/ReleaseForensicLogSurvivalTest.kt`
+加这一节文档。
+
+### 9.1 逐行判定（源码行 → 产物里的归宿）
+
+| 取证行 | 级别 | 最终宿主方法（`dexdump -d` 逐调用点） | 消息常量所在 dex | 判定 |
+|---|---|---|---|---|
+| `reminder/WakeLocks.kt:89` `唤醒锁跑完 tag=` | `d` | `c8.f.f`（levels=`dw`） | classes.dex | **活** |
+| `reminder/WakeLocks.kt:94-98` `唤醒锁没跑赢超时 tag=` | `w` | `c8.f.f` 同方法 | classes.dex | **活** |
+| `reminder/ClassProgressScheduler.kt:50` `下课后续排课堂窗口失败` | `w` | `b8.d.g` | classes2.dex | **活** |
+| `widget/ColdStartRebuild.kt:24` `冷启动后台重建：` | `d` | `d4.a0.g`（levels=`dw`） | classes.dex | **活** |
+| `widget/ColdStartRebuild.kt:20` `后台链路初始化失败：` | `w` | `bc.o.g` / `d4.b0.f` | classes.dex | **活** |
+| `reminder/ClassProgressDnd.kt:135` `勿扰已过恢复期限仍未收到下课铃` | `w` | `c8.f.r` | classes.dex | **活** |
+| `reminder/ReminderScheduler.kt:133` `正处在课堂窗口内…交给续排链` | `d` | `c8.f.i`（levels=`dw`） | classes.dex | **活** |
+| `reminder/LiveClassResyncer.kt:83` `课堂窗口内补起课程实况：` | `d` | `c8.f.o`（levels=`dw`） | classes.dex | **活** |
+| `reminder/CourseFluidService.kt:112` `上课铃未在窗口内落地，补排课堂窗口：` | `d` | `a1.g.n` | classes2.dex | **活** |
+| `reminder/TomorrowPreviewReceiver.kt:87` `往后没有可推的明日预告…重新对齐` | `d` | `TomorrowPreviewReceiver.a`（levels=`dw`） | classes.dex | **活** |
+| `reminder/BootReceiver.kt:88` `开机/升级后台重建失败` | `w` | `c8.e.p` / `c8.e.n` | classes.dex | **活** |
+| `reminder/ClassProgressReceiver.kt:109` `续排下一节课堂窗口失败` | `w` | `ClassProgressReceiver.a` / `c8.h.n` | classes.dex | **活** |
+| `widget/ColdStartRebuild.kt:278/281/283/287/288` 五条 `Decision.reason` 判据 | 随 `:24` 落地 | 同 `d4.a0.g` | classes.dex | **活** |
+
+`c8.f` 是 R8 合并出来的宿主类（`mapping.txt:308708`：`com.buaa.schedule.reminder.ClassProgressDnd -> c8.f:`），
+`WakeLocks` 的成员被并进去 —— **类名合并正是"grep dex 类名什么都查不到"的原因**，
+别把那个当成"类被删了"。
+
+### 9.2 全仓普查：死的只有 `BuildConfig.DEBUG` 门后那几条
+
+脚本 `D:\schedule\.tmp\t21_census.py`，口径 = 按字面量的静态片段查 dex 常量池
+（`$x` / `${…}` 切开，模板部分本就不进常量池）：
+
+- `app/src/main` 下 `android.util.Log` 调用点 **115 处**：`d` 16 / `i` 17 / `w` 82。
+- **82 条 `w` 级全部在**（`w` 恰好是失败痕迹的级别，也就是账本最依赖的那一批）。
+- 查无的 5 处：`core/designsystem/GlassJankMonitor.kt:70`（`val debug = BuildConfig.DEBUG` 之后）、
+  `MainActivity.kt:148`、`ui/importing/BuaaLoginScreen.kt:600`、`ui/signin/SpocLoginScreen.kt:369`
+  —— 4 条逐条点开源码都在 `BuildConfig.DEBUG` 门后，属常量折叠 + 整程序死代码消除，**设计如此**；
+  第 5 条 `data/import/SpocSession.kt:112` 是脚本切分假阳性（`${if (… "(空)" …)}` 里的引号把字面量截断），
+  其静态前缀 `SPOC 会话已保存` 手工按字节查是 ALIVE。
+- 反向对照（同一脚本 B 段，只认代码字面量、注释里的假字面量不算）：1,917 条字面量里
+  **106 条查无（5.5%）** ⇒ 常量池确实被 R8 重建过，"字面量在 dex 里"不是恒真命题。
+
+### 9.3 为什么没死（机制，四条各查一遍）
+
+1. **默认规则文件里没有删 `Log` 的那一段。** `app/build/intermediates/default_proguard_files/global/proguard-android-optimize.txt-8.13.0`
+   共 89 行，`grep -c assumenosideeffects` = **0**（`proguard-android.txt` / `proguard-defaults.txt` 同样 0）。
+   "release 里 `Log.d` 全灭"是**老版本 AGP** 的事，本工程这次的默认规则文件不含那条。
+2. **仓库自己的规则没有。** `app/proguard-rules.pro` 共 11 条规则（serialization 六条 keep/dontnote、Room 三条、`-keepattributes`、`-dontwarn kotlin.Metadata`），无 assume 类。
+3. **依赖的 consumer rules 也没有。** R8 dump 出的生效规则集
+   `app/build/outputs/mapping/release/configuration.txt`（70,406 字节 / 1,226 行）里共
+   **13 条 assume 规则**（10 `assumenosideeffects` + 3 `assumevalues`，Compose 8 条、kotlinx.coroutines 4 条、
+   `androidx.startup.StartupLogger` 1 条），逐条把目标类模式按 R8 语义解释（单 `*` 不跨包、`**` 才跨），
+   **能盖住 `android.util.Log` 的：0 条**。最像的 `-assumenosideeffects class * { static androidx.compose.animation.LookaheadAnimationVisualDebugConfig *(...) return null; }`
+   的 `*` 只覆盖默认包。
+4. **资源收缩是另一条独立的删除路径，但它碰不到这些行。** 12 处取证文案在 `res/values/*.xml` 里
+   **查无一句**（守卫里 `forensicSitesAreStillLogCalls` 就是钉这一条）—— 它们是 dex 常量，
+   走的是代码删除那条路。旁证：本产物 `resources.arsc` = 67,712 字节，与 §0 最后一行一致，
+   说明 Q3 的资源收缩确实开着，可它没能力删 dex 里的字符串。
+
+### 9.4 四路互相独立的产物证据（同一份 `app-release-unsigned.apk`，6,357,067 字节，sha256 `e1950806…428abe`）
+
+```
+# 0) 建产物（worktree 无 local.properties ⇒ unsigned，不影响 minify 与资源收缩）
+cd /d/schedule/BUAA-Schedule/.worktrees/T21 && \
+JAVA_HOME="D:\AndroidSDK\jdk-21" ANDROID_HOME="D:\AndroidSDK" PATH="/d/AndroidSDK/jdk-21/bin:$PATH" \
+/d/AndroidSDK/gradle-8.14.3/bin/gradle.bat --offline :app:assembleRelease
+
+# 1) mapping / usage：方法级存活
+grep -n "WakeLocks.logHold" app/build/outputs/mapping/release/mapping.txt   # :308867-:308870 四段帧行 -> f
+grep -n -A 8 "^com.buaa.schedule.reminder.WakeLocks:" app/build/outputs/mapping/release/usage.txt
+#   被删成员只有 $stable / LOG_TAG(字段) / withPartialWakeLock / withPartialWakeLock$default —— 没有 logHold
+
+# 2) apkanalyzer 反汇编合并后的宿主类
+/d/AndroidSDK/cmdline-tools/latest/bin/apkanalyzer.bat dex code --class c8.f app/build/outputs/apk/release/app-release-unsigned.apk
+#   看到 const-string "WakeLocks" + invoke-static Landroid/util/Log;->d / ->w
+
+# 3) dexdump 逐方法走调用点（脚本 D:\schedule\.tmp\t21_callsites.py，24,889 个方法）
+JAVA_HOME="D:\AndroidSDK\jdk-21" /d/AndroidSDK/build-tools/36.0.0/dexdump.exe -d <classes*.dex>
+
+# 4) 常量池字节查（脚本 D:\schedule\.tmp\t21_census.py，含反向对照）
+python D:/schedule/.tmp/t21_census.py app/build/outputs/apk/release/app-release-unsigned.apk
+```
+
+`usage.txt` 那条"字段 `LOG_TAG` 被删"值得说明白：删的是**字段**，值 `"WakeLocks"` 作为编译期常量
+被内联进了调用点，所以 `const-string` 仍在池里（证据 2 与 4 都查到了）。**别把"字段被删"读成"tag 没了"**。
+
+### 9.5 改前 / 改后两个读数：变异实验（都已在提交前撤销）
+
+门禁里没有任何一条断言能自己证明自己在干活，所以拿两次变异量出"改前/改后"：
+
+| 变异 | 动的层 | 改前 | 改后 |
+|---|---|---|---|
+| **A**：`WakeLocks.kt:89` 的 `Log.d` 改成 `Log.v` | 源码 | 守卫 5/5 绿 | 源码层那条红：`expected:<[d]> but was:<[v]>` |
+| **B**：把老 AGP 那条 `-assumenosideeffects class android.util.Log { v/d/i }` 加进 `app/proguard-rules.pro` 后重跑 release | 规则 + 产物 | 缺失片段 **0**，守卫 **5/5 绿** | 缺失片段 **7（守护口径）/ 9（普查口径）**，守卫 **3 条同时红**（规则层 / 产物层 / 生效配置层）。整包 APK 随之变小，但**那个字节数已不可复算** —— 变异产物被撤销后的重建覆盖掉了，当时也没留大小日志，而本轮不重跑 `:app:assembleRelease`；还能核对的只剩未压缩的两段 dex：`classes.dex` 2,188,292 → 2,181,552、`classes2.dex` 3,297,936 → 3,276,724（合计 **−27,952**，改后数字见 `D:\schedule\.tmp\t21-mutationB-strings.txt` 首行） |
+
+变异 B 真正吃掉的是 6 行取证消息，全是 `d` 级：`WakeLocks.kt:89`（§4.3 的持锁次数账本身）、
+`ColdStartRebuild.kt:24`、`ReminderScheduler.kt:133`、`LiveClassResyncer.kt:83`、
+`CourseFluidService.kt:112`、`TomorrowPreviewReceiver.kt:87`；`w` 级一行没伤到（那条规则没列 `w`），
+而 §4.4 的过滤条件 `下课后续排课堂窗口失败` 恰好是 `w` 级 —— 也就是说**老规则能杀掉"次数账"，
+却杀不掉"失败痕迹"**，这种偏食正是只看"有没有 Log 规则"看不出来的部分。
+
+两个附带结论：① 老规则真能吃掉本卡的靶子行，所以"这次没死"不等于"机制上不会死"，守卫有钉子可钉；
+② 变异 B 下 `WakeLocks.kt:89` 的 `elapsed=` / `ms timeout=` 两个片段**仍然在池里** —— 它们与幸存的
+`w` 级那行共用。**只看"字面量在不在 dex 里"会低估伤害**，所以守卫的判据是"整条消息的全部静态片段都要在"。
+撤销 B 后重跑 `:app:assembleRelease`，读数回到缺失片段 0、守卫 `tests=5 failures=0 errors=0 skipped=0`
+（`skipped=0` 就是产物层真的跑过、没走 `assumeTrue` 跳过的证明）。
+
+### 9.6 守卫的分层与它证明不到什么
+
+`ReleaseForensicLogSurvivalTest`（5 个方法，`tests=5 failures=0 errors=0 skipped=0`）：
+
+- `noRuleFileStripsAndroidUtilLog`、`releaseStillUsesTheAuditedShrinkingConfig` —— **恒跑**，
+  钉规则文件与构建脚本形状（默认规则文件没换、`isMinifyEnabled` / `isShrinkResources` 还开着）。
+  只证明"没人写过删 Log 的规则"，**不证明产物里真的有**。
+- `forensicSitesAreStillLogCalls` —— **恒跑**，钉源码层：字面量还是那句、`Log.` 级别没换、
+  tag 是显式字面量、而且**不是 res/values 条目**。同样**不证明产物**。
+- `minifiedDexStillCarriesEveryForensicLine`、`effectiveR8ConfigCarriesNoLogStrippingRule` —— **产物层**，
+  读上面那份 APK 与 `configuration.txt`，产物不在时 `assumeTrue` 跳过。
+  所以门禁必须连着跑 `:app:assembleRelease :app:testDebugUnitTest` 才吃到这两条；
+  两条都自带反向对照（产物层那条判 `present>20` 的片段计数下限、配置层那条判"生效配置里解析出的 assume 规则非空"——本轮实际是 13 条），
+  解析器什么都没看见时不会伪装成绿灯。
+- 卡片里点名的两个坑都绕开了：不做"整份文件先抹注释再找字面量"（字面量里的 `[*]/` 会让那种写法吞掉后文），
+  只扫字面量本身；测试里不复刻任何生产分支，断言全打在产物与规则文件上。
+
+### 9.7 还欠着的（交回设备侧）
+
+JVM 里给不出的最后一层：**release 装机后 `logcat -d -s WakeLocks` 真吐得出那一行**。
+产物里有常量、有 `invoke-static`、方法没被删，都不等于运行时那条 `withPartialWakeLock` 路径被走到过
+（§4.3 那本持锁次数账要在真机上跑一轮才有数）。本轮不许 `adb`、不许起模拟器，这一条按卡交回编排者。
+
+### 9.8 门禁（真跑，判定读报告文件不看退出码）
+
+```
+cd /d/schedule/BUAA-Schedule/.worktrees/T21 && \
+JAVA_HOME="D:\AndroidSDK\jdk-21" ANDROID_HOME="D:\AndroidSDK" PATH="/d/AndroidSDK/jdk-21/bin:$PATH" \
+/d/AndroidSDK/gradle-8.14.3/bin/gradle.bat --offline :app:testDebugUnitTest :app:lintDebug --rerun -q \
+  > /d/schedule/.tmp/t21-gate.log 2>&1
+```
+
+- `app/build/test-results/testDebugUnitTest/*.xml`：104 个 XML，**tests=786 failures=0 errors=0 skipped=0**
+  （§8 写作时的基线是 769，本轮净 +5 是本卡那个守卫类，其余 12 个来自 T18/T20 之后合进来的类）
+- `app/build/reports/lint-results-debug.txt`：末行 **`0 errors, 14 warnings`**
+- `.kt` 告警集合与 T11 基线逐条比对：`python D:/schedule/.tmp/lint_kt_compare.py` 读那份 **txt**
+  （脚本按 `路径:行: Warning:` 行格式解析，喂 XML 会一条都匹配不上）⇒ **new 9 old 9 / IDENTICAL**
+
+一个 Windows 专属的坑记在这里省后人时间：**同一个 worktree 里不要并发跑两次 gradle 构建**。
+本轮一次 `:app:assembleRelease` 被后台占着时，第二次在 `:app:minifyReleaseWithR8` 上报
+`Compilation failed to complete, origin: .../dex/release/minifyReleaseWithR8/classes.dex` —— 是文件锁，
+不是收缩出了问题；`gradle --stop` 清掉残留 daemon 之后再跑就过了（BUILD SUCCESSFUL，产物未受影响）。
+本节每一个读数都是对着同一份产物取的：`app-release-unsigned.apk` 6,357,067 字节，
+sha256 `e19508063624301a72f1a66cefbefc9e422d2234ae591d5f606f1f3966428abe`。
