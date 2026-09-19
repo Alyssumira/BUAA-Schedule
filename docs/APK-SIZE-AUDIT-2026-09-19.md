@@ -438,7 +438,7 @@ ANDROID_HOME="D:\\AndroidSDK" PATH="/d/AndroidSDK/jdk-21/bin:$PATH" \
 问题就是 §8 第 1 条欠的那笔账里最要命的一支：省电审计读的全是 logcat
 （`docs/AUDIT-BATTERY-2026-09-18.md` §4.3 数**持锁次数**、§4.4 的过滤条件是中文判据句、
 T11/T12/T13 的设备侧证据各读一句），而这些行只有 release 才会被 R8 动刀。
-基线 `ai/T21` = `2880a71`（守卫测试）叠在 `8dec38b` 上，工作树干净。
+基线 `ai/T21` = 守卫测试 `c996bb6` + 本节文档，落在 master 的 `c34a086` 之上（首轮取数时底还是 `8dec38b`，ff-only 前把这两枚 rebase 到 T22 之后，两个文件与 T22 完全不相交），工作树干净。
 
 **结论：一行没死。** 12 处取证调用点 + 5 条闸门判据在最终 minified dex 里全部活着；
 本轮**没有改任何生产代码**（`WakeLocks.kt` 与 `proguard-rules.pro` 保持原样），
@@ -579,8 +579,9 @@ JAVA_HOME="D:\AndroidSDK\jdk-21" ANDROID_HOME="D:\AndroidSDK" PATH="/d/AndroidSD
   > /d/schedule/.tmp/t21-gate.log 2>&1
 ```
 
-- `app/build/test-results/testDebugUnitTest/*.xml`：104 个 XML，**tests=786 failures=0 errors=0 skipped=0**
-  （§8 写作时的基线是 769，本轮净 +5 是本卡那个守卫类，其余 12 个来自 T18/T20 之后合进来的类）
+- `app/build/test-results/testDebugUnitTest/*.xml`：首轮（底 `8dec38b`）**104 个 XML，tests=786 failures=0 errors=0 skipped=0**；
+  ff-only 前换到 `c34a086` 之上重跑 = **105 个 XML，tests=789 failures=0 errors=0 skipped=0**
+  （§8 写作时的基线是 769：净 +5 是本卡那个守卫类，其余 12 个来自 T18/T20 之后合进来的类，再 +3 是 T22 的 `GlassSurfaceAlphaTest`）
 - `app/build/reports/lint-results-debug.txt`：末行 **`0 errors, 14 warnings`**
 - `.kt` 告警集合与 T11 基线逐条比对：`python D:/schedule/.tmp/lint_kt_compare.py` 读那份 **txt**
   （脚本按 `路径:行: Warning:` 行格式解析，喂 XML 会一条都匹配不上）⇒ **new 9 old 9 / IDENTICAL**
