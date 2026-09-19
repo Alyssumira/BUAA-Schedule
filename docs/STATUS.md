@@ -134,6 +134,13 @@
          → `:app:mergeReleaseBaselineProfile` → `:app:copyReleaseBaselineProfileIntoSrc`。
       3. 产物落在 **`app/src/main/baselineProfiles/`**（当前只有占位 `.gitkeep`）：
          常规 profile 与 startup profile 是两份并列的文件，都要 commit 入库，不要加进 .gitignore。
+         这条链路已实测通：往该目录手写一行合法方法规则，`assembleRelease` 后包内
+         `assets/dexopt/baseline.prof` 从 6,500 变 6,508 字节 —— 也就是文件放进这个目录就会进包。
+         ⚠️ 但格式很硬：`.txt` 里一条方法规则行**少了 H/S/P 任一标志位**（比如只写
+         `Lcom/...;->foo()V`），`:app:expandReleaseArtProfileWildcards` 会直接让整条
+         assembleRelease 失败，且报的行号是在全部依赖库 profile 拼接**之后**才数出来的
+         （实测报 `baseline-prof.txt:3949:1`，而那个文件只有 1 行）—— 看着像不存在的行，
+         别被误导去找依赖库。
       4. `./gradlew :app:assembleRelease` 重装到机上，然后
          `adb shell dumpsys package com.buaa.schedule | grep -i profile`：
          预期看到 `primaryProfile=` / `secondaryProfile=` 指向 `/data/misc/profiles/cur/<uid>/com.buaa.schedule/primary.prof`
