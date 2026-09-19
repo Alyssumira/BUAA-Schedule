@@ -6,6 +6,7 @@ import com.buaa.schedule.core.designsystem.Personalization
 import com.buaa.schedule.data.local.AppDatabase
 import com.buaa.schedule.data.repository.ScheduleRepository
 import com.buaa.schedule.widget.BackgroundSync
+import com.buaa.schedule.widget.ColdStartRebuild
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -55,14 +56,14 @@ class BUAAApplication : Application() {
             step("dndSelfCheck") {
                 com.buaa.schedule.reminder.ClassProgressDnd.selfCheck(this@BUAAApplication)
             }
-            step("rescheduleReminders") {
-                BackgroundSync.rescheduleRemindersAndBells(this@BUAAApplication)
-            }
-            // 刷组件 + 零点闹钟 + 明日预告 + 兜底任务登记：这四步原先各自探测一次
-            // "桌面上有没有组件"（最多 6 趟 getAppWidgetIds × 3 次），改由被调方问一遍、
-            // 结论传给三个下游共用（审计 §2.1）。步骤顺序就是原来的顺序。
-            step("coldStartWidgetSteps") {
-                BackgroundSync.runColdStartWidgetSteps(this@BUAAApplication)
+            // 重建整链（重排提醒 + 课堂铃兜底 → 组件那四步）：三把钥匙都说"无事可做"时才跳过。
+            // 绝大多数冷启动是"某条闹钟把进程从零拉起来投递广播"，那一刻课表一个字都没变，
+            // 而这套动作原先每一次冷进程启动都跑全套（审计 §2.1）。判据、按人群探测哪一头闹钟、
+            // 24 小时硬上限，以及"只有整链干净跑完才记一次成功"写在 ColdStartRebuild 的类注释里。
+            // 步骤顺序就是原来的顺序：提醒链 → 组件四步（刷组件 + 零点闹钟 + 明日预告 +
+            // 兜底任务登记，四步共一次组件探测，口径见 BackgroundSync.runColdStartWidgetSteps）。
+            step("coldStartRebuild") {
+                ColdStartRebuild.run(this@BUAAApplication)
             }
         }
     }

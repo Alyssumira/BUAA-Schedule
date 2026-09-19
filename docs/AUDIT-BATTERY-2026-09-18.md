@@ -130,6 +130,58 @@ WeekGrid / NextClass / TwoDay，`any { }` 短路时最少 1 趟、最坏 6 趟�
 > 用 §4.3 的 `wakelock` 归因（持锁时长）+ §4.4 的本包冷进程启动次数与 `procstats` CPU 累计，
 > 对改动前后各测同一待机窗口即可定量。
 
+> **已落地（ai/T13，`177ac08` + 本枚 fix(app)）**：上面那句"**没有任何触发条件判断**"现在有了判据。
+> `BUAAApplication` 那条链里的 `rescheduleReminders` 与组件四步两步合成一步
+> `step("coldStartRebuild")`，整条交给 `ColdStartRebuild.run(context)`（`BUAAApplication.kt:65-67`）。
+> **三把钥匙是与关系**，任何一把不确定就照旧全跑（判据本体 `ColdStartRebuild.kt:263-282`）：
+> ① `versionCode` 与上次"整链成功"记下的那个不同 ⇒ 重跑 —— 这才是 `BUAAApplication.kt:33`
+> 那句注释（"升级会清掉已注册闹钟"）的原始意图，实现从"每次进程创建"被拉回"启动/升级"；
+> ② 我们自己的闹钟确实还挂着 —— `PendingIntent.FLAG_NO_CREATE` **只查不造**，探到"不在"⇒ 重跑；
+> ③ 距上次成功 ≥ 24 小时 ⇒ 无条件重跑，前两条都不再评估（`RERUN_AFTER_MILLIS`，
+> `ColdStartRebuild.kt:157`），这条同时给"跳过"一个硬上限，兜住"整链被掐死、不再自我传播"。
+>
+> 钥匙 2 的探测对象**按人群分别选**（`ColdStartRebuild.kt:301-313`），人群不查库，
+> 用的是上一次成功重排留下的结论 —— `rescheduleReminders` 那个早已存在的布尔恒等于
+> "本轮排上了一条课前提醒闹钟"（`BackgroundSync.kt:84-118`，`rescheduleRemindersAndBells`
+> `:137-148` 把它透出来）。三类人逐个回读过自愈链：开着课前提醒的人探课前提醒那头
+> （`ReminderScheduler.hasPendingReminder` `ReminderScheduler.kt:315-324`），因为
+> `ReminderReceiver.kt:56-63` 每次投递都重跑 `rescheduleAll` ⇒ 链自我传播，自愈窗口 = 下一条提醒；
+> 课前提醒全关的人**必须**探到课堂铃在排（`ClassProgressScheduler.hasPendingClassBells`
+> `ClassProgressScheduler.kt:399-405`）—— 这类人下课铃 `ACTION_END` 必定续排下一个窗口
+> （`ClassProgressReceiver.kt:71-78` → `:98-110`），那条也断了就只剩 `widget_fallback_refresh`，
+> 周期**实测 12 小时**（`WidgetFallbackWorker.kt:85`，登记条件"有组件 **或** 提醒走应用内闹钟"
+> 在 `:81`，所以这类人确实在册），窗口长到这个量级，因此不接受"另一头还挂着"当替代；
+> 切到「系统日历提醒」的人应用内一个闹钟都不排（`BackgroundSync.rescheduleReminders` 的清理分支），
+> 钥匙 2 恒判"不在" ⇒ 每一次冷启动照旧全跑，**与改动前逐字一致，没有为这类用户开例外**。
+>
+> 钥匙 2 的口径缺口写进 `ColdStartRebuild` 的类注释（`ColdStartRebuild.kt:50-76`）：
+> `ClassProgressScheduler.kt:409-413` 记着一条真机实测的反向事实 —— 只 `alarmManager.cancel()`
+> 之后那条 PI 记录**仍可被 `FLAG_NO_CREATE` 查得到**（PI 被应用侧引用钉住），所以"探得到 PI"
+> 逻辑上不等于"闹钟还在排"。在冷启动这个时点可以接受：判据跑在 `Application.onCreate`，
+> 那个方法只在**进程创建**时运行一次，钉住记录的那次 `getBroadcast` 发生在已死的上一个进程里。
+> 顺带订正本仓库自己的一处形状：`ReminderScheduler.cancelAll`（`ReminderScheduler.kt:307-313`）
+> 就是"只 `alarmManager.cancel()`"那一形，课堂铃那条才补了 `PendingIntent.cancel()`
+> （`:414-421`）—— 本卡未越界去改前者。真误判了付的是"白跳过一轮"，24 小时这条上限必然到期，
+> 比它更早到的是那条 12 小时兜底 Worker。**残余（只能真机证伪）**：通知栏里仍挂着的课前倒计时
+> 通知同样持有那条 PI 记录，是"探得到而闹钟不在排"唯一看得见的具体形态。
+>
+> 指纹（versionCode + 上次成功时刻 + 那轮排上的闹钟头）落 `schedule_settings`，
+> **不开 Room 表、不加迁移**（这条链本来就在读那个文件，零次额外磁盘打开）；
+> 只有整链干净跑完才写，任一步抛了不写，**跳过的那一轮同样不写**（否则 24 小时上限永不到期，
+> `ColdStartRebuild.kt:245-250`）。留在闸门**外面**照旧每次跑：`cancelLegacyPeriodicWork`
+> （它一被跳过，被退役的 legacy 轮询下一次唤醒仍会被判成"无事可做"，是个自我闭合的死循环）、
+> `dndSelfCheck`（勿扰的唯一自愈入口，ai/T12 刚把开机那条改走它），
+> 以及本来就在 `launch` 之前的 `Personalization.load` / `ensureChannels`。
+>
+> §2.2 那半按本审计自己的话办：**没有给 `rescheduleWindows` 的清理分支加一个字、加一条判据**，
+> 而是把"onCreate 版 + 广播版"重复执行里属于冷启动的这一份在多数唤醒里直接省掉；
+> 形状由 `ColdStartRebuildWiringTest.coldStartChainHasExactlyOneDriverRepoWide` 钉住
+> （全仓库 `ColdStartRebuild.run(` 恰一处，重建整链的调用点集合仍是广播侧那三处 + 闸门一处）。
+> 交错 2 的概率仍**未取证** —— 跳过只是让它不再常见，不是让它不可能。
+> 门禁：新增 23 条判据单测（三把钥匙各自正反例、24h 边界、任一步抛 ⇒ 不写时间戳、跳过不续期、
+> 四类人群口径、2×2×2 真值表）+ 6 条生产接线形状守卫；§4.4 那笔冷启动账要有定量结论，
+> 仍按上面那条对改动前后各测一次同一待机窗口。
+
 ### 2.2 P1-② 并发重复重排 vs 进程内倒计时归属（事故残留面）
 
 `rescheduleWindows` 里这段是唯一会**主动拆实况**的分支：

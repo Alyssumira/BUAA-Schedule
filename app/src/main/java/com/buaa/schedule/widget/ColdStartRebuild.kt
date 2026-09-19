@@ -10,6 +10,21 @@ import com.buaa.schedule.reminder.ClassProgressScheduler
 import com.buaa.schedule.reminder.ReminderScheduler
 
 /**
+ * [ColdStartRebuild.run] 两个留痕口的默认值。
+ *
+ * 写成顶层属性而不是签名里的 lambda：本仓库的源码形状守卫按"函数体第一个 `{`"切函数体，
+ * 默认值写成 `{ label, error -> ... }` 它会切到默认值上去（同 `BackgroundSync.NO_STEP_FAILURE`
+ * 与 `LOG_COLD_START_STEP_FAILURE` 的那条理由）。
+ */
+private val LOG_REBUILD_STEP_FAILURE: (label: String, error: Throwable) -> Unit = { label, error ->
+    Log.w("ColdStartRebuild", "后台链路初始化失败：$label", error)
+}
+
+private val LOG_REBUILD_DECISION: (ColdStartRebuild.Decision) -> Unit = { decision ->
+    Log.d("ColdStartRebuild", "冷启动后台重建：${decision.reason}")
+}
+
+/**
  * 冷启动那条后台重建链的"三把钥匙"闸门（审计 §2.1 P1-①剩余 + §2.2 P1-②）。
  *
  * ## 要修的是什么
@@ -28,7 +43,7 @@ import com.buaa.schedule.reminder.ReminderScheduler
  *    （口径同 [ClassProgressScheduler.hasPendingClassBells]、
  *    [BackgroundSync.existingMidnightPendingIntent]、`TomorrowPreviewScheduler.cancel`、
  *    [ReminderScheduler.cancelAll]）。探测目标**按人群分别选**，见 [alarmsStillArmed]。
- * 3. **距上次成功 > 24h** —— 无条件重跑，连前两条都不判（[RERUN_AFTER_MILLIS]）。
+ * 3. **距上次成功 ≥ 24h** —— 无条件重跑，连前两条都不判（[RERUN_AFTER_MILLIS]）。
  *    这条给"跳过"一个硬上限，兜住"整条重建链被掐死、不再自我传播"这种最坏情况，
  *    同时也是下面那条 PI 误判的封顶。
  *
@@ -195,10 +210,8 @@ internal object ColdStartRebuild {
         rebuildRemindersAndBells: suspend (report: (String, Throwable) -> Unit) -> AlarmHead?,
         runWidgetSteps: suspend (report: (String, Throwable) -> Unit) -> Unit,
         rerunAfterMillis: Long = RERUN_AFTER_MILLIS,
-        reportStepFailure: (String, Throwable) -> Unit = { label, error ->
-            Log.w(TAG, "后台链路初始化失败：$label", error)
-        },
-        logDecision: (Decision) -> Unit = { decision -> Log.d(TAG, "冷启动后台重建：${decision.reason}") },
+        reportStepFailure: (String, Throwable) -> Unit = LOG_REBUILD_STEP_FAILURE,
+        logDecision: (Decision) -> Unit = LOG_REBUILD_DECISION,
     ): Outcome {
         val stored = runCatching { readFingerprint() }
             .onFailure { reportStepFailure("readRebuildFingerprint", it) }
@@ -281,7 +294,9 @@ internal object ColdStartRebuild {
      * - `head == null`（上次什么都没排上）→ 同样判"不在"，永远重跑。
      *   宁可让"提醒全关 + 两个课堂开关都关"的这类用户白付一次重建，
      *   也不能在没有正向证据时跳过。
-     * - 两头都用 `FLAG_NO_CREATE` **只查不造**，且只查被点名的那一头（一次 binder）。
+     * - 两头都用 `FLAG_NO_CREATE` **只查不造**，且只查被点名的那一头：课前提醒一头查一条，
+     *   课堂铃那一头沿用 [ClassProgressScheduler.hasPendingClassBells] 的既有口径
+     *   （上/下课铃各查一次，都在同一次 `getSystemService` 的往来里）。
      */
     internal fun alarmsStillArmed(
         usesInAppReminders: Boolean,
