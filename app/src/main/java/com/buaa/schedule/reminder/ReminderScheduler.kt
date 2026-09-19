@@ -36,6 +36,13 @@ object ReminderScheduler {
     private const val TAG = "ReminderScheduler"
     private const val DEFAULT_ADVANCE_MINUTES = 10
 
+    /**
+     * 课前提醒闹钟的 requestCode（全仓库唯一一条，排与查共用它）。
+     * 写成常量而不是两处各写一个 `0`：判等靠的是 requestCode + Intent.filterEquals，
+     * 两边对不上就是"查得到一条永远不存在的闹钟"这种查不出来的错。
+     */
+    private const val REQUEST_CODE_REMINDER = 0
+
     data class ReminderPlan(
         val course: Course,
         /** 本次提醒对应的那个**连续节次段**（跨午休的课一段一次），不是整门课的节次 */
@@ -302,14 +309,26 @@ object ReminderScheduler {
         // FLAG_NO_CREATE：只取"已存在"的那个来撤销。
         // 之前用 FLAG_UPDATE_CURRENT，等于每次取消都新建一个永不使用的 PendingIntent。
         // （PendingIntent 判等基于 Intent.filterEquals，不含 extras，因此这里不需要拼 extras）
-        val existing = PendingIntent.getBroadcast(
-            context,
-            0,
-            baseIntent(context),
-            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
-        ) ?: return
-        alarmManager.cancel(existing)
+        existingPendingIntent(context)?.let { alarmManager.cancel(it) }
     }
+
+    /**
+     * 课前提醒那条闹钟是否还挂着。用 [PendingIntent.FLAG_NO_CREATE] **只查不造**，
+     * 与 [cancelAll] 共用同一个 builder（同一份 requestCode + 同一个 Intent ——
+     * 判等靠 `Intent.filterEquals`，所以不必拼 extras）。
+     *
+     * 供冷启动判据的钥匙 2 用（`com.buaa.schedule.widget.ColdStartRebuild`）：
+     * 那里写着"探得到 PI 逻辑上不等于闹钟还在排"这条实测反向事实，以及为什么
+     * 在冷启动这个时点可以接受 —— 别在这里再写一遍。
+     */
+    internal fun hasPendingReminder(context: Context): Boolean = existingPendingIntent(context) != null
+
+    private fun existingPendingIntent(context: Context): PendingIntent? = PendingIntent.getBroadcast(
+        context,
+        REQUEST_CODE_REMINDER,
+        baseIntent(context),
+        PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+    )
 
     private fun baseIntent(context: Context): Intent = Intent(context, ReminderReceiver::class.java)
 
@@ -335,7 +354,7 @@ object ReminderScheduler {
         val intent = baseIntent(context).apply { putExtras(window.toExtras()) }
         return PendingIntent.getBroadcast(
             context,
-            0,
+            REQUEST_CODE_REMINDER,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )

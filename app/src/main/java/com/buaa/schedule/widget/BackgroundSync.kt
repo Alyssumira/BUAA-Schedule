@@ -19,6 +19,28 @@ import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.ZoneId
 
+private const val LOG_TAG = "BackgroundSync"
+
+/**
+ * "哪一步抛了"的默认留痕口：什么都不做。
+ *
+ * 存在只为服务冷启动判据（[ColdStartRebuild]）：它要区分"整链干净地跑完"与
+ * "里面某一步抛了"，因为前者才配写"上次成功"的时间戳。
+ * 各步骤自己那句 `Log.w` 原地保留（审计 §4.4 的取证过滤条件不许变），所以默认值是无操作。
+ * 写成顶层属性而不是签名里的 lambda：本仓库的源码形状守卫按"函数体第一个 `{`"切函数体，
+ * 签名里出现 `{ _, _ -> }` 它会切到默认值上去。
+ */
+internal val NO_STEP_FAILURE: (label: String, error: Throwable) -> Unit = { _, _ -> }
+
+/**
+ * 冷启动组件那四步的留痕口：与它们改动前各自那句 `Log.w` 一字不差
+ * （四步收进 [BackgroundSync.runColdStartWidgetSteps] 时就是这样，日志文案是
+ * 老过滤条件继续能用的前提）。同样收成顶层属性，理由同 [NO_STEP_FAILURE]。
+ */
+internal val LOG_COLD_START_STEP_FAILURE: (label: String, error: Throwable) -> Unit = { label, error ->
+    Log.w(LOG_TAG, "后台链路初始化失败：$label", error)
+}
+
 /**
  * 后台任务统一入口：提醒重排、Widget 刷新与零点刷新调度。
  *
@@ -27,10 +49,13 @@ import java.time.ZoneId
  * - Widget：数据/设置变化即时刷新，每日零点刷一次“今天/明天”，
  *   无 Widget 实例时取消全部后台任务；
  * - 只有事件（数据变化、开机、时间/时区变化、应用升级、闹钟权限变化）才重算。
+ *
+ * 例外中的例外：`Application.onCreate` 那条**冷启动**链现在会按三把钥匙跳过
+ * （[ColdStartRebuild]）—— 跳过的前提与它买到的东西写在那里的类注释里。
  */
 object BackgroundSync {
 
-    private const val TAG = "BackgroundSync"
+    private const val TAG = LOG_TAG
     private const val MIDNIGHT_REQUEST_CODE = 10_001
     private const val LEGACY_PERIODIC_WORK = "widget_refresh"
 
@@ -46,8 +71,20 @@ object BackgroundSync {
      *     [com.buaa.schedule.reminder.ReminderScheduler.shouldTakeDownClassProgress]），
      *     清理留给这条兜底链 —— R5 F-12 要的续排一步都不能少。
      *   读库失败也返回 true：那种情况下调用方不该再补一遍同样的查询。
+     *
+     * 这个返回值同时回答另一个问题（[ColdStartRebuild] 的钥匙 2 要的就是它）：
+     * **true ⟺ 本轮排上了一条课前提醒闹钟**。`rescheduleAll` 只有在挑出 plan 时才返回非空，
+     * 而挑出 plan 就意味着它把那条闹钟排了（唯一的不一致是 AlarmManager 拿不到那条路：
+     * 那种情况下仍然返回 true，于是钥匙 2 探不到闹钟、下一次冷启动照跑 —— 方向是安全的）。
+     *
+     * @param onStepFailed "哪一步抛了"的留痕口，默认 [NO_STEP_FAILURE] 等于无操作：
+     *   各步自己那句 `Log.w` 原地保留（审计 §4.4 的取证过滤条件不许变），
+     *   多出来的这个口只服务一件事 —— [ColdStartRebuild] 决定要不要写下"上次成功"的时间戳。
      */
-    suspend fun rescheduleReminders(context: Context): Boolean {
+    suspend fun rescheduleReminders(
+        context: Context,
+        onStepFailed: (label: String, error: Throwable) -> Unit = NO_STEP_FAILURE,
+    ): Boolean {
         if (!usesInAppReminders(context)) {
             // 日历模式：应用内闹钟与上下课铃一起清干净（口径同
             // ScheduleViewModel.afterDataChangedInternal），只清课前提醒会留下
@@ -55,7 +92,10 @@ object BackgroundSync {
             runCatching {
                 ReminderScheduler.cancelAll(context)
                 ClassProgressScheduler.cancelAll(context)
-            }.onFailure { Log.w(TAG, "日历模式下清理应用内闹钟失败", it) }
+            }.onFailure {
+                Log.w(TAG, "日历模式下清理应用内闹钟失败", it)
+                onStepFailed("cleanUpInCalendarMode", it)
+            }
             return false
         }
         return runCatching {
@@ -67,7 +107,10 @@ object BackgroundSync {
             // rescheduleAll 的返回值就是本轮那一次全量搜索的结论：
             // 再搜一遍既白跑上千次窗口构造，又要多读一次时钟（同源约束见 ReminderScheduler）
             ReminderScheduler.rescheduleAll(context, courses, semester, timeSlots, reminders) != null
-        }.onFailure { Log.w(TAG, "重排提醒失败", it) }.getOrDefault(true)
+        }.onFailure {
+            Log.w(TAG, "重排提醒失败", it)
+            onStepFailed("rescheduleReminders", it)
+        }.getOrDefault(true)
     }
 
     /**
@@ -82,13 +125,26 @@ object BackgroundSync {
      * 丢弃的后果不是少一行日志，而是这两类用户此后再也不会有「课程进行中」实况与
      * 上课自动勿扰（R5 F-12 的兜底链断在调用点）。把补排收进同一个函数，
      * 新调用点忘接返回值也不会再出错。
+     *
+     * 返回值原样转达 [rescheduleReminders] 的那个结论（"本轮排上了课前提醒闹钟"），
+     * 是给 [ColdStartRebuild] 用的：钥匙 2 下一次该探哪一头闹钟由它决定。
+     * 其余调用点照旧丢弃它。
+     *
+     * ⚠️ 已知残余：兜底续排那一步（[ClassProgressScheduler.rescheduleNextWindow]）自己吞异常，
+     * 这道失败出不了它那个 `runCatching`，闸门看不见。方向上是安全的 ——
+     * 它没跑成功就是没排出闹钟，下一次冷启动钥匙 2 当场探"不在"→ 整链重跑。
      */
-    suspend fun rescheduleRemindersAndBells(context: Context) {
-        if (!rescheduleReminders(context)) {
+    suspend fun rescheduleRemindersAndBells(
+        context: Context,
+        onStepFailed: (label: String, error: Throwable) -> Unit = NO_STEP_FAILURE,
+    ): Boolean {
+        val reminderArmed = rescheduleReminders(context, onStepFailed)
+        if (!reminderArmed) {
             // 与 WidgetFallbackWorker 同一口径：只在提醒那条链没接手课堂铃时才补排，
             // 无条件再排一遍等于把刚排上的上课铃撤了重排。
             ClassProgressScheduler.rescheduleNextWindow(context)
         }
+        return reminderArmed
     }
 
     /**
@@ -245,7 +301,10 @@ object BackgroundSync {
      *
      * @return 这一次探测的结论（给调用方留痕用）
      */
-    suspend fun runColdStartWidgetSteps(context: Context): Boolean = runColdStartWidgetSteps(
+    suspend fun runColdStartWidgetSteps(
+        context: Context,
+        reportStepFailure: (label: String, error: Throwable) -> Unit = LOG_COLD_START_STEP_FAILURE,
+    ): Boolean = runColdStartWidgetSteps(
         probeHasWidgets = { hasAnyWidgetSafely(context) },
         invalidateWidgetCache = { WidgetDataCache.invalidate() },
         refreshWidgetData = { syncAndRedrawAllWidgets(context) },
@@ -253,6 +312,7 @@ object BackgroundSync {
         cancelMidnightAlarm = { cancelWidgetMidnight(context) },
         scheduleTomorrowPreview = { scheduleTomorrowPreview(context) },
         ensureFallbackWorker = { hasWidgets -> WidgetFallbackWorker.ensure(context, hasAnyWidget = hasWidgets) },
+        reportStepFailure = reportStepFailure,
     )
 
     /**
@@ -278,14 +338,12 @@ object BackgroundSync {
         /** 两条分支都要跑：没有组件不等于没有提醒（R5 F-16），登记还是注销由它自己按结论判断 */
         ensureFallbackWorker: suspend (hasWidgets: Boolean) -> Unit,
         /**
-         * 失败留痕口，默认就是原来那行 `Log.w`。
+         * 失败留痕口，默认 [LOG_COLD_START_STEP_FAILURE]（= 原来那行 `Log.w`，一字不差）。
          * 之所以也收成一个参数：本模块 JVM 单测里 `android.util.Log` 是抛 "not mocked" 的桩，
          * 不把它隔开的代价是"某一步抛了后面的照跑"这条断言根本测不了
          * （一测就被桩自己的异常带偏，红得看不出原因）。
          */
-        reportStepFailure: (label: String, error: Throwable) -> Unit = { label, error ->
-            Log.w(TAG, "后台链路初始化失败：$label", error)
-        },
+        reportStepFailure: (label: String, error: Throwable) -> Unit = LOG_COLD_START_STEP_FAILURE,
     ): Boolean {
         // 注入的探测若抛（生产接线给的是 hasAnyWidgetSafely，正常不会走到这里），
         // 按"有组件"处理：方向只能是多刷一次，不能是少刷一次

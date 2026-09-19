@@ -157,7 +157,7 @@ class ColdStartWidgetStepsTest {
     @Test
     fun `冷启动那四步的接线只留一次探测`() {
         val source = readMainSource(BACKGROUND_SYNC_FILE)
-        val wiring = declarationBlock(source, "suspend fun runColdStartWidgetSteps(context: Context)")
+        val wiring = declarationBlock(source, "suspend fun runColdStartWidgetSteps(")
         val flat = normalize(wiring)
 
         assertEquals(

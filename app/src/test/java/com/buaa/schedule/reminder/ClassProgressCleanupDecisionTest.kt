@@ -327,7 +327,7 @@ class ClassProgressCleanupDecisionTest {
     @Test
     fun bellFallbackStillRunsWhenReminderChainBailsOut() {
         val source = withoutComments(readMainSource(BACKGROUND_SYNC_FILE))
-        val wrapper = balancedBlock(source, "suspend fun rescheduleRemindersAndBells(context: Context)")
+        val wrapper = balancedBlock(source, "suspend fun rescheduleRemindersAndBells(")
 
         assertTrue(
             "rescheduleRemindersAndBells 不再补排课堂铃：课前提醒全关的用户第一节课之后再没有实况与勿扰：\n$wrapper",
