@@ -99,11 +99,51 @@
       `WidgetBackgroundRenderer`；受同样的 Android 14 壁纸限制，该版本上回退纯色圆角底）
 - [ ] 图片 / PDF 导入
 - [ ] 完整个性化外观（壁纸取景 / 横竖屏独立配置；模糊/亮度/缩放/面板磨砂半径已完成）
-- [ ] Baseline Profile：**目前完全没接入，`:benchmark` 里的三个类都是跑不起来的死代码**。
-      release 产物只含 **AGP 自动合并的依赖库 profile**（`app/build/outputs/apk/release/baselineProfiles/`），
-      `app` 自身的热点方法一条都没采集。补齐需要 5 步，缺一不可：
-      ① `:app` 应用 `androidx.baselineprofile` 插件；② `:app` 加 `baselineProfile(project(":benchmark"))`；
-      ③ `:app` 加 `androidx.profileinstaller` 运行时依赖（否则生成的 profile 装了也不会生效）；
-      ④ `:benchmark` 配 non-debuggable target variant（宏基准与 profile 采集不接受 debuggable 目标）；
-      ⑤ 加一条 CI job 生成并把 `baseline-prof.txt` 提交到 `app/src/main/baselineProfiles/`。
-      **在此之前不要引用任何冷启动数字**：debuggable 目标上量出来的启动时间不能代表 release。
+- [x] Baseline Profile 接线（T16）：`:app` 与 `:benchmark` 各应用 `androidx.baselineprofile` 1.4.1，
+      `:app` 侧补 `baselineProfile(project(":benchmark"))` 与显式 `implementation(libs.androidx.profileinstaller)`。
+      这枚插件不是独立产品线，它就是 androidx.benchmark 那次发布里的
+      benchmark-baseline-profile-gradle-plugin，所以版本号必须与 `benchmarkMacro` 同代际一起动。
+      为什么值得接：本应用 Gitee 自分发 + 应用内自更新，每次自更新后系统的安装过滤会退回 verify，
+      而"云端 ART profile"是 Google Play 专属通道、我们自己发的包结构上拿不到，profile 是唯一补偿。
+      原先列的 5 步：①②③ 已做完。④「配 non-debuggable target variant」**不用手写** ——
+      这个版本的插件已是 "wrapper + producer / consumer / apptarget" 四件套，wrapper 按模块应用的
+      Android 插件类型分发：`:app`（com.android.application）拿 apptarget+consumer，
+      `:benchmark`（com.android.test）拿 producer，producer 自己造出 `nonMinifiedRelease` /
+      `benchmarkRelease` 两个 build type，采集走 nonMinifiedRelease（不混淆、可装机）。
+      由此 `useConnectedDevices = true` 只能写在 **:benchmark** 的 producer 扩展里，
+      写进 `:app` 是 unresolved reference（实测）。⑤「加一条 CI job 生成」**不做** ——
+      生成要连一台 API 28+ 的设备，`android.yml` 里没有机子；产物入库靠人工。
+      `automaticGenerationDuringBuild` 保持默认 false：打开后每次 assembleRelease 都会去抢设备。
+      采集场景 = `BaselineProfileGenerator`（冷启动 → 另出一份 startup profile，全工程唯一带
+      `includeInStartupProfile` 的）+ `InteractionBaselineProfileGenerator` 四条日常交互
+      （周表滚动+翻周 / 课次行↔24 小时时间轴来回切 / 今日视图 / 设置页滚动）。
+      **扫码页与 WebView 导入页刻意不进 profile**：前者会让每次冷启动为走不到的 CameraX+MLKit
+      帧回调付编译成本，后者是系统组件在编译、ART 管不着。
+      ⚠️ 这六个场景**没有连过设备**，锚点全部取自源码（本工程无 `testTagsAsResourceId`，
+      只有 `By.desc` / `By.text` 可用；核不到的分组标题退化成坐标级 swipe），
+      在已播种库上的实际可跑性靠下面这一次生成来验。
+
+      **生成与验收步骤（要连设备，由编排者按序执行）**：
+      1. **先播种**，条件是：库里有一个学期 + 多门课，且 `currentWeek` 落在学期**中间**
+         （第 1 周和最后一周都不行：「下一周」/「上一周」有一侧是禁用态，翻周那步会空跑）；
+         `schedule_settings` 里 `privacy_consent_at` 与 `onboarding_completed=true` 两个门都要过，
+         否则冷启动落在引导页、采到的是引导页的方法；时间轴模式保持默认（课次行），
+         切换场景要从默认态起步。**生成前不要 `pm clear`**，那会把播种一起清掉。
+      2. `./gradlew :app:generateBaselineProfile`（可加 `--stacktrace`）。它驱动
+         `:benchmark:connectedNonMinifiedReleaseAndroidTest` → `:collectNonMinifiedReleaseBaselineProfile`
+         → `:app:mergeReleaseBaselineProfile` → `:app:copyReleaseBaselineProfileIntoSrc`。
+      3. 产物落在 **`app/src/main/baselineProfiles/`**（当前只有占位 `.gitkeep`）：
+         常规 profile 与 startup profile 是两份并列的文件，都要 commit 入库，不要加进 .gitignore。
+      4. `./gradlew :app:assembleRelease` 重装到机上，然后
+         `adb shell dumpsys package com.buaa.schedule | grep -i profile`：
+         预期看到 `primaryProfile=` / `secondaryProfile=` 指向 `/data/misc/profiles/cur/<uid>/com.buaa.schedule/primary.prof`
+         一类的路径，且 `profileVersion=` 不再是空；安装后状态里 `Verify` 之后会走一次
+         `speed-profile`。API 26–30 上没有 `ProfileInstallerInitializer` 就没有这一行，
+         这也是为什么那枚依赖要显式钉住。
+      5. **验收对照**（这步才是收益本身，用 `HomeStartupBenchmark` 现成的 None vs Partial）：
+         `./gradlew :benchmark:connectedNonMinifiedReleaseAndroidTest`
+         跑 `HomeStartupBenchmark#startupWithoutCompilation` 与 `#startupWithBaselineProfile`，
+         比 `TotalTime` 的分布。注意：插件侧我没找到任何按类过滤的机制，
+         所以 `generateBaselineProfile` 很可能把 `HomeStartupBenchmark`（5 轮 × 2 组）一起跑掉，
+         多花十几分钟不算错；只想跑采集就补
+         `-Pandroid.testInstrumentationRunnerArguments.class=com.buaa.schedule.benchmark.InteractionBaselineProfileGenerator`。

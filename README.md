@@ -132,7 +132,7 @@
 - 不做 AI 导入、AI 助手、智能推荐；也没有国际化，界面文案是中文。
 - 图片和 PDF 导入还没做。
 - 桌面小组件的背景是"缩放得到的廉价模糊"，不是真正的高斯模糊。
-- 冷启动还没做 Baseline Profile 优化。
+- 冷启动的 Baseline Profile 优化要在打包前连设备生成一次；没生成过的那版包里没有这项优化。
 - 实况的具体样式由各厂商系统决定，同一份通知在澎湃 / ColorOS / 原生上的呈现可能不同。
 
 ## 反馈
@@ -156,7 +156,8 @@ JAVA_HOME=/path/to/jdk-21 ./gradlew assembleDebug
 CI 里的任务一律写成 `:app:` 前缀 —— 裸任务名会被 Gradle 匹配到所有子工程，把 `:benchmark` 一起拉进来。
 
 子模块：`:app`（应用）、`:kyant-backdrop`（vendored 液态玻璃库）、`:benchmark`（宏基准 /
-Baseline Profile 生成，**尚未接入 `:app`**，其用例目前不在任何 CI 或本地任务里执行）。
+Baseline Profile 生成，已接入 `:app`；采集要连一台 API 28+ 的设备，所以仍不在任何 CI
+或本地常规任务里跑，生成命令与步骤见 [`docs/STATUS.md`](docs/STATUS.md)）。
 
 ### 测试
 
