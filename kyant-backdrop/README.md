@@ -10,10 +10,11 @@
   SleepDown 与本项目一样只是上述 Kyant 库的使用者，补丁写在保留 Apache-2.0 声明的原文件里，
   因此这批代码整体仍按 Apache-2.0 使用；取用位置是它仓库的 `third-party/kyant-backdrop`。
 - `com/kyant/shapes/` 目录内嵌自 [Kyant0/Shapes](https://github.com/Kyant0/Shapes)（G2 连续曲率形状），Apache-2.0。
-  Maven 上的 io.github.kyant0:shapes 全部版本均以 Kotlin 2.3 编译，与本项目
-  Kotlin 2.0 不兼容，故直接内嵌源码。
+  早先此处写的「Maven 制品与本项目 Kotlin 2.0 不兼容」系不实，已更正：本项目一直是 Kotlin 2.3.10，
+  而 `io.github.kyant0:shapes:1.2.0` 的清单就是按 stdlib 2.3.10 编译、依赖 Compose ui 1.10.1，
+  与本项目的钉版本组合兼容。内嵌源码只是引入时沿用的形态，随时可换回 Maven 依赖。
 - 本目录为 **纯 Android 库移植版**：将上游 KMP 结构（commonMain/androidMain）拍平，
-  并把 Compose 1.11 / Kotlin 2.3 的 API 适配到本项目的 Compose 1.7 / Kotlin 2.0：
+  并对齐到本项目的组合（Compose ui / foundation 钉 1.11.3，Kotlin 2.3.10）：
   - `GraphicsLayer.record(size)` → `record(density, layoutDirection, size)`；
   - `LayerRecorder` 的 context parameter 改为显式 `DrawScope` 接收者；
   - `expect/actual`（Platform / RuntimeShader / Paint / RenderEffect）合并为 Android 单实现。

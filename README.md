@@ -7,7 +7,7 @@
 > 给北航写的课程表 App：登录教务抓课表、课前提醒、上课铃、桌面小组件，
 > 在支持的机型上还会把课堂进度送到状态栏的实况里。课表数据只存在你自己的手机上。
 
-[![下载 v0.1.0](https://img.shields.io/badge/下载-v0.1.0-2f6fed)](https://gitee.com/alyssumira/buaa-schedule/releases)
+[![下载 v0.1.1](https://img.shields.io/badge/下载-v0.1.1-2f6fed)](https://gitee.com/alyssumira/buaa-schedule/releases)
 ![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B-3ddc84)
 ![MIT](https://img.shields.io/badge/License-MIT-lightgrey)
 
@@ -17,9 +17,9 @@
 
 ## 安装
 
-1. 到 [Releases 页面](https://gitee.com/alyssumira/buaa-schedule/releases) 下载
-   `buaa-schedule-0.1.0.apk`。**只下这一个**：同一页还有一个 `-debug.apk`，那是作者装机自测用的
-   调试签名包，和正式包签名不同，装了它之后正式包就无法直接覆盖安装。
+1. 到 [Releases 页面](https://gitee.com/alyssumira/buaa-schedule/releases) 下载列表里最新的
+   `buaa-schedule-<版本号>.apk`（写这段时是 `buaa-schedule-0.1.1.apk`）。**只下这一个**：同一页还有一个
+   `-debug.apk`，那是作者装机自测用的调试签名包，和正式包签名不同，装了它之后正式包就无法直接覆盖安装。
 2. 安装并打开。以后不用再来这个页面 —— 设置里的「检查更新」会自己发现新版本。
 3. 第一次打开会走一段引导。**建议照着点完**，尤其是「提醒可靠性」那一页里的
    「自启动与后台管理」「省电策略：无限制」「后台弹出界面」三项，
@@ -168,8 +168,8 @@ Baseline Profile 生成，已接入 `:app`；采集要连一台 API 28+ 的设�
 
 | 类型 | 用例数 | 文件数 | 覆盖范围 |
 | --- | --- | --- | --- |
-| 单元测试 | 527 | 79 | 周次解析 / 教学周计算 / 冲突检测 / 导入规划 / 备份 schema / ICS 与文本解析与往返 / 节次分段与连堂判定 / 教务抓取脚本契约 / 日历投影选择 / 提醒排程与明日预告推送集合 / 分享编解码 / Widget 外观与短名与显示字段与翻周 / 课程管理页归并与别名口径 / 课程色板色差与主题槽位全覆盖 / Gitee 发布解析与安装包完整性与附件选择 / 实况卡片文案与倒计时口径 / 学期学分与逐周课负载统计 / 迁移链与导出 schema 对齐 / 逐周密度与日时间轴分段口径 / 学分在教务解析、备份与分享口令三条链路上的往返 / 签到二维码三形态解析 / JWT 过期判定 / 签到响应的字段大小写与解壳形态 |
-| 仪器测试 | 55 | 12 | Room 迁移 / Repository 提醒写入与事务 / Widget 刷新新鲜度与渲染契约 / WebView 会话保留与隐藏宿主 / 课堂铃生命周期 / 日历同步部分失败 |
+| 单元测试 | 548 | 75 | 周次解析 / 教学周计算 / 冲突检测 / 导入规划 / 备份 schema / ICS 与文本解析与往返 / 节次分段与连堂判定 / 教务抓取脚本契约 / 日历投影选择 / 提醒排程与明日预告推送集合 / 分享编解码 / Widget 外观与短名与显示字段与翻周 / 课程管理页归并与别名口径 / 课程色板色差与主题槽位全覆盖 / Gitee 发布解析与安装包完整性与附件选择 / 实况卡片文案与倒计时口径 / 学期学分与逐周课负载统计 / 迁移链与导出 schema 对齐 / 逐周密度与日时间轴分段口径 / 学分在教务解析、备份与分享口令三条链路上的往返 / 签到二维码三形态解析 / JWT 过期判定 / 签到响应的字段大小写与解壳形态 |
+| 仪器测试 | 65 | 14 | Room 迁移 / Repository 提醒写入与事务 / Widget 刷新新鲜度与渲染契约与外观存档与数据缓存 / WebView 会话保留与 evaluateJavascript 契约 / 教务 cookie 与签到 token 落盘 / 课堂铃生命周期 / 壁纸解码 / 日历同步部分失败 |
 
 仪器测试跑在 API 29 + API 34 模拟器上（CI 同配置）：Room 迁移与 WebView 相关用例需要真实
 Framework 环境，API 34 一档用于覆盖 Android 14 的行为收紧（壁纸读取、精确闹钟等）。
@@ -202,56 +202,37 @@ powershell -ExecutionPolicy Bypass -File release.ps1 0.2.0
 | [`docs/STATUS.md`](docs/STATUS.md) | 功能状态清单：已落地 / 不做 / 待实现 |
 | [`docs/BUAA_API.md`](docs/BUAA_API.md) | 北航教务与智学北航接口参考（改导入 / 签到链路时看） |
 | [`docs/BUAA_SPOC_SIGNIN_PLAN.md`](docs/BUAA_SPOC_SIGNIN_PLAN.md) | 扫码签到的取证、方案与**落地偏差**（§11，改这块先看它） |
+| [`docs/THIRD_PARTY_NOTICES.md`](docs/THIRD_PARTY_NOTICES.md) | 第三方代码逐条许可证、取用位置与署名全文 |
 
-## 第三方与参考项目
+## 第三方与致谢
 
-本项目不是从零堆出来的：液态玻璃那一层渲染、以及几个交互控件的手感，直接用到了别人的成果。
-下面逐条写清**用了谁的什么、按什么许可证用**。
+本项目不是从零堆出来的，液态玻璃那一层尤其站在别人的成果上。这里只列名单 ——
+用到哪里、按什么许可证、以及那些文件头的完整解释，都写在
+[`docs/THIRD_PARTY_NOTICES.md`](docs/THIRD_PARTY_NOTICES.md) 里。
 
-### 随安装包分发的代码
+**随安装包分发**
 
-| 项目 | 许可证 | 用到哪里 |
-| --- | --- | --- |
-| [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)（tag 2.0.0） | Apache-2.0 | 液态玻璃的全部底子：`:kyant-backdrop` 子工程（背景采样与 AGSL 折射 / 高光 / 阴影），以及 `core/designsystem/liquid/` 的 `DampedDragAnimation`、`DragGestureInspector`、`InteractiveHighlight`、`LiquidBottomTab`（上游 catalog 里的同名组件）。本地改动：把上游的 KMP 结构（commonMain / androidMain）拍平成纯 Android 库，并把 Compose 1.11 / Kotlin 2.3 的 API 适配到本项目的组合 |
-| 同一份库的 SleepDown 补丁 | Apache-2.0（沿用各文件头的声明） | `:kyant-backdrop` 里 14 个文件带着 `Modified for SleepDown …; upstream 2.0.0, Apache-2.0` 的头（共享模糊 `SharedBlurBackdrop`、取景录制缓存等）—— 我们是经 [SleepDown课程表](https://github.com/xiaomanjun233/SleepDown-Schedule) 仓库里的 `third-party/kyant-backdrop` 取得这份副本的，取用位置与致谢见下一节 |
-| [Kyant0/Shapes](https://github.com/Kyant0/Shapes) | Apache-2.0 | G2 连续曲率圆角形状，内嵌在 `kyant-backdrop/…/com/kyant/shapes/`。Maven 上各版本都以 Kotlin 2.3 编译、与本项目 Kotlin 2.0 不兼容，故只能内嵌源码 |
-| AndroidX / Jetpack：Compose BOM 2024.12.01（ui / foundation 1.11.3、material3 1.3.1）、Room 2.8.3、Navigation 2.8.5、WorkManager 2.9.1、Lifecycle 2.8.7、Core KTX 1.18.0 | Apache-2.0 | 常规运行库 |
-| AndroidX CameraX 1.4.2（core / camera2 / lifecycle / view） | Apache-2.0 | 扫码页的取景与逐帧分析 |
-| [Google ML Kit `barcode-scanning` 17.3.0（bundled）](https://developers.google.com/ml-kit/vision/barcode-scanning) | Apache-2.0 | 二维码解码。模型打进安装包，**不依赖 GMS**；解码库只保留 arm64-v8a，见 `docs/RELEASE.md`「包体与 ABI」 |
-| Kotlin 运行时与 kotlinx-coroutines 1.9.0、kotlinx-serialization-json 1.8.1 | Apache-2.0 | 常规运行库 |
-| JUnit 4.13.2、androidx.test / Espresso / UiAutomator / benchmark | EPL-1.0 / Apache-2.0 | 只在测试里，不进 APK |
+- [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)（tag 2.0.0）· Apache-2.0 —— 液态玻璃的全部底子
+- [Kyant0/Shapes](https://github.com/Kyant0/Shapes) · Apache-2.0 —— G2 连续曲率圆角，以源码内嵌
+- [SleepDown课程表](https://github.com/xiaomanjun233/SleepDown-Schedule) —— 上述玻璃库副本的取用位置
+- [Google ML Kit barcode-scanning](https://developers.google.com/ml-kit/vision/barcode-scanning) · Apache-2.0 —— 二维码解码，模型打进安装包、不依赖 GMS
+- AndroidX（Compose / Room / CameraX / WorkManager 等）、Kotlin 生态、JUnit 与测试族 —— 常规运行与测试库
 
-### 只参考过、没有取代码的项目
+**参考过、没有取代码**
 
-- [xingheyuzhuan/shiguang_warehouse](https://github.com/xingheyuzhuan/shiguang_warehouse)（拾光，MIT）：
-  24 小时连续时间轴与"多个组件共用水源"的目标形态。
-- [lingion/sleepy](https://github.com/lingion/sleepy)（GPL-3.0）：只借了「一键外观预设」的思路。
-  已按文件名 + 相似度逐一比对过，**没有任何重合代码**；特此写明以免误会。
-- [1812z/HyperIsland](https://github.com/1812z/HyperIsland)（MIT）：只读源码取证澎湃超级岛的
-  载荷键名与白名单（结论与证据记在 `docs/VENDOR_NOTES.md`），未取代码。
-- **WakeUp 课程表**：只提供「导出 WakeUp 兼容 JSON」这一条格式兼容，无代码依赖。
+- [拾光 shiguang_warehouse](https://github.com/xingheyuzhuan/shiguang_warehouse)（MIT）—— 24 小时时间轴与组件"共用水源"的目标形态
+- [lingion/sleepy](https://github.com/lingion/sleepy)（GPL-3.0）—— 只借了「一键外观预设」的思路，无重合代码
+- [1812z/HyperIsland](https://github.com/1812z/HyperIsland)（MIT）—— 澎湃超级岛载荷键名与白名单的取证来源
+- WakeUp 课程表 —— 只提供导出格式兼容
 
-### 致谢与取用位置
-
-`:kyant-backdrop` 这批文件里，有 14 个带着 `Modified for SleepDown` 的头部注释，很容易读成
-"这些代码属于 SleepDown"。实际情况是：**Kyant0/AndroidLiquidGlass 是一个独立的开源库（Apache-2.0），
-SleepDown课程表 和我们一样是它的使用者**。它对该库的改动也写在这些保留 `com.kyant.*` 包名、
-保留上游 Apache-2.0 声明的文件里（SleepDown 自己的 `THIRD_PARTY_NOTICES.md` 同样这么标注），
-所以我们带出去的这一层始终在 Apache-2.0 之下，只需像现在这样保留来源注释。
-
-SleepDown课程表 另有其自研的应用代码，那份许可（「署名-非商业、源码可见 1.1」）约束的是它。
-把 `:app` 与 `:kyant-backdrop` 的每个 Kotlin 文件与它的仓库逐一比对过：重合的只有上面那批
-`com.kyant.*` 文件，**没有一行来自它自研的业务代码**，因此本应用不是"基于 SleepDown 修改的版本"。
-按它许可的精神，这里仍然显著注明取用位置并致谢：
-
-> 液态玻璃库取自 <https://github.com/xiaomanjun233/SleepDown-Schedule> 的
-> `third-party/kyant-backdrop`（其上游为 Kyant0/AndroidLiquidGlass，Apache-2.0）。
-
-另外，澎湃超级岛的实况通知形状（哪些 extras 必填、chip 要多短、为什么不能用系统 chronometer）
-是逐条对照 SleepDown 的真机做法定下来的，证据链记在 [`docs/VENDOR_NOTES.md`](docs/VENDOR_NOTES.md)。
+玻璃文件里那批 `Modified for SleepDown` 头只说明**从哪儿取的**：库本身属于
+Kyant0/AndroidLiquidGlass（Apache-2.0），SleepDown 和我们一样只是它的使用者，本应用没有一行
+代码来自它的自研业务。谢谢 Kyant0 写出这套渲染，也谢谢 SleepDown 作者 —— 超级岛"为什么要
+这样排布"的答案，大半是从其真机行为里抠出来的（证据在 `docs/VENDOR_NOTES.md`）。
 本应用与 SleepDown 无关，不由其作者维护，也不代表其官方版本。
 
 ## 许可证
 
 本项目源码以 MIT 许可发布，见 [LICENSE](LICENSE)。第三方代码与资源遵循各自许可证 ——
-具体谁贡献了什么、按哪份许可，见上一节「第三方与参考项目」。
+具体谁贡献了什么、按哪份许可，见「第三方与致谢」及其指向的
+[`docs/THIRD_PARTY_NOTICES.md`](docs/THIRD_PARTY_NOTICES.md)。
