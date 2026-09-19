@@ -43,8 +43,9 @@ import java.io.File
  *
  * 本模块的 JVM 单测没有 Compose 运行时（无 Robolectric、无 ui-test），`@Composable` 体内的
  * 取值测不到——与 `BottomBarSurfaceAlphaTest` 同一处境。接线形状（CompositionLocal →
- * `tabContent` → `NavItemContent`）只能按源码核对，见
- * [legacyNavigationPathsDoNotAskTheBottomBarForInk]，口径同 `SemanticGlassPlateTest`。
+ * `tabContent` → `NavItemContent`）与"场景亮度只读一次"（第 4 条契约）只能按源码核对，见
+ * [legacyNavigationPathsDoNotAskTheBottomBarForInk] 与 [theSceneLumaIsReadOnceAndTheInkNeverReadsItAlone]，
+ * 口径同 `SemanticGlassPlateTest`。
  *
  * 场景亮度靠 [SceneLuma] 驱动（风格同 `BottomBarSurfaceAlphaTest`）。
  */
@@ -171,11 +172,11 @@ class BottomBarInkTest {
      *
      * 1. 品牌墨达标 ⇒ 原样保留它（不许无条件换成黑白）；
      * 2. 品牌墨不达标 ⇒ 交出来的必须是黑/白两候选之一（不许留着那支读不清的）；
-     * 3. 交出来的比值 ≥ AA，除非黑白两支**都**不到 AA（那是这块板在 0.60 天花板下无解，
-     *    不是墨色偷懒）。
+     * 3. 只要三支候选里还有能到 AA 的（有解），交出来的就必须到 AA（留一格浮点容差）；
+     *    三支都不到 AA 的无解格单独计数，格数与所属族一起钉死。
      *
      * 第 3 条带着"有解却交不出"的比值回显，所以判据写坏成恒真时它会当场报数；
-     * 三条计数器（含无解格数）钉住参数化没退化、两个分支都不是空转。
+     * 计数器（含无解格数与归属）钉住参数化没退化、两个分支都不是空转。
      */
     @Test
     fun inkStaysLegibleAcrossTheWholeFamily() {
@@ -186,7 +187,9 @@ class BottomBarInkTest {
         var checked = 0
         var keptBrand = 0
         var switched = 0
-        var unresolvable = 0
+        var dead = 0
+        val deadWhere = mutableListOf<String>()
+        val deadKinds = mutableSetOf<String>()
         for (scene in scenes) {
             SceneLuma.wallpaper = scene
             for (cardAlpha in cardAlphas) {
@@ -198,11 +201,12 @@ class BottomBarInkTest {
                         val ink = bottomBarInk(plate, alpha, text, dark, luma)
                         val ratio = contrastRatio(composite, ink.readableLuminance())
                         val brand = contrastRatio(composite, text.readableLuminance())
-                        val where = "壁纸=$scene cardAlpha=$cardAlpha 暗档=$dark 字=$text → 复合 $composite"
                         val bestOfTwo = maxOf(
                             contrastRatio(composite, ContentLight.readableLuminance()),
                             contrastRatio(composite, ContentDark.readableLuminance()),
                         )
+                        val where = "壁纸=${sceneLabel(scene)} cardAlpha=$cardAlpha ${if (dark) "暗" else "浅"}档 " +
+                            "字=${lumaOf(text)} α=$alpha 复合=$composite"
                         if (brand >= DesignTokens.WCAG_AA_RATIO) {
                             assertEquals("$where：品牌墨本来就达标（$brand:1）却被换掉了", text, ink)
                             keptBrand++
@@ -213,12 +217,22 @@ class BottomBarInkTest {
                             )
                             switched++
                         }
-                        if (bestOfTwo < DesignTokens.WCAG_AA_RATIO) {
-                            unresolvable++
+                        // 「无解」必须按容差判：反解 alpha 会把复合底色正好推到 AA 线上，那几格
+                        // 品牌墨实测就是 4.4999995（差浮点最后一位），退到黑/白那支又落到 4.44:1。
+                        // 这是舍入不是救不回来——真无解的那一族比 AA 低 0.38 档，容差吞不掉。
+                        val slack = DesignTokens.WCAG_AA_RATIO - AA_SLACK
+                        if (maxOf(brand, bestOfTwo) < slack) {
+                            dead++
+                            deadKinds += "${sceneLabel(scene)}×${if (dark) "暗" else "浅"}"
+                            deadWhere += "$where 品牌=$brand → 黑白较优也只剩 $bestOfTwo:1，交出的 $ink 是 $ratio:1"
+                            assertTrue(
+                                "$where：三支候选都不到 AA，交出来的比值却反超了 AA（判据大概被改松了）",
+                                ratio < DesignTokens.WCAG_AA_RATIO,
+                            )
                         } else {
                             assertTrue(
-                                "$where：黑白较优能到 $bestOfTwo:1，交出来的却是 $ratio:1",
-                                ratio >= DesignTokens.WCAG_AA_RATIO,
+                                "$where：明明有解（品牌 $brand:1 / 黑白较优 $bestOfTwo:1），交出来的却只有 $ratio:1",
+                                ratio >= slack,
                             )
                         }
                         checked++
@@ -227,17 +241,24 @@ class BottomBarInkTest {
             }
         }
         assertEquals("参数化测试退化：组合数没对上", 5 * 3 * 2 * 13, checked)
-        // keptBrand / switched 不钉死数字：下限反解出来的那几格复合底色比值正好停在 4.500，
-        // 落在哪一侧对浮点舍入敏感。这里只要求两个分支都非空（0 就是守卫空转），
-        // 参数化退化由 checked 与下面那条无解格数把住。
+        // keptBrand / switched 不钉死数字：上面那格 AA 容差里的浮点噪声就能让它们挪几格。
+        // 这里只要求两个分支都非空（0 就是守卫空转），参数化退化由 checked 与死带那两条把住。
         assertTrue("保留品牌墨的格数是 0：这条扫描没测到「达标就留着」那一支", keptBrand > 0)
         assertTrue("换成黑白的格数是 0：这条扫描没测到「不达标才退」那一支", switched > 0)
         assertEquals("两个分支之外还多出了一格", checked, keptBrand + switched)
+        // 全族救不回来的只有「均匀中灰壁纸 × 深色板」这一族：#14161C 推到 0.60 天花板后复合
+        // 0.205，正落在 contentOnLuma 文档里那个 0.183~0.225 无解带中，黑白两支都只剩 4.17:1。
+        // 12 档字色 × 3 档 cardAlpha = 36 格。格数与归属一起钉：少一格或多一格、或者死带跑到
+        // 别的族上，都说明有人动了天花板、板色或那两条壁纸常数。
         assertEquals(
-            "0.60 天花板下黑白都救不回来的格数被改了：这些格是全族已知的无解残账，" +
-                "少一格说明有人动了天花板、板色或那两条壁纸常数",
-            36,
-            unresolvable,
+            "0.60 天花板下无解的格数被改了：${deadWhere.joinToString(" | ")}",
+            12 * 3,
+            dead,
+        )
+        assertEquals(
+            "无解格跑到了已知的死带族之外：$deadKinds",
+            setOf("均匀中灰×暗"),
+            deadKinds,
         )
     }
 
@@ -328,6 +349,64 @@ class BottomBarInkTest {
         )
     }
 
+    /**
+     * 第 4 条契约：栏体 alpha 与 tab 的墨色读的是**同一档**场景亮度，而且这档亮度一帧里
+     * 只许读一次。JVM 测试没有 Compose 运行时，只能按源码核对（口径同上一条守卫）：
+     *
+     * - 整份文件里 [com.buaa.schedule.core.designsystem.worstGlassSceneLuma] 只许出现一次，
+     *   且就在 [com.buaa.schedule.core.designsystem.liquid.bottomBarSceneLuma] 内部；
+     *   `bottomBarSceneLuma` 只许"定义 + 唯一调用点"两处。
+     *   多一处读取就是"一处读现在、另一处读别的"——换壁纸时两次读落在不同帧上，
+     *   解出来的墨对的是块并不存在的板。
+     * - [com.buaa.schedule.core.designsystem.liquid.bottomBarInk] 的亮度必须是**入参**，
+     *   函数体里不许自己碰 `SceneLuma` 全局。
+     * - 那次调用必须把画板真正用的 `effectiveContainerAlpha`（= [bottomBarSurfaceAlpha] 的
+     *   返回值，`containerColor.copy(alpha = ...)` 用的就是它）交进去，不许另算一份 alpha。
+     */
+    @Test
+    fun theSceneLumaIsReadOnceAndTheInkNeverReadsItAlone() {
+        val tabs = File(rootMainJava(), "com/buaa/schedule/core/designsystem/liquid/LiquidBottomTabs.kt")
+        val code = normalized(tabs.readText())
+
+        assertEquals(
+            "场景亮度被读了不止一处（栏体 alpha 与墨色就会各读一次全局）",
+            1,
+            Regex("worstGlassSceneLuma\\(").findAll(code).count(),
+        )
+        assertEquals(
+            "bottomBarSceneLuma 只许「定义 + 唯一调用点」两处",
+            2,
+            Regex("bottomBarSceneLuma\\(").findAll(code).count(),
+        )
+
+        val ink = INK_DEFINITION.find(code)
+        assertTrue("bottomBarInk 的定义没扫到（签名形如 `internal fun bottomBarInk(` 变了），守卫是空的", ink != null)
+        assertTrue(
+            "那档场景亮度必须是入参，而不是函数自己回头去读全局：${ink!!.groupValues[1]}",
+            "sceneLuma:Float" in ink.groupValues[1].replace(Regex("\\s+"), ""),
+        )
+        assertTrue(
+            "bottomBarInk 自己读了场景全局/最差亮度，与栏体那次读不同源",
+            "SceneLuma" !in ink.groupValues[2] && "worstGlassSceneLuma" !in ink.groupValues[2],
+        )
+
+        val calls = Regex("bottomBarInk\\(([^)]*)\\)", RegexOption.DOT_MATCHES_ALL)
+            .findAll(code)
+            .map { it.groupValues[1] }
+            .filter { " = " in it }
+            .toList()
+        assertEquals("bottomBarInk 只许有一个调用点：$calls", 1, calls.size)
+        assertTrue(
+            "墨色没用画板那一份 alpha，而是另算了一份（一块板两个口径）：${calls[0]}",
+            "effectiveAlpha = effectiveContainerAlpha" in calls[0],
+        )
+        assertTrue("墨色没接那次唯一的场景亮度读：${calls[0]}", "sceneLuma = sceneLuma" in calls[0])
+        assertTrue(
+            "底板必须钉在 bottomBarSurfaceAlpha 解出的那一份 alpha 上（与墨色同一格）",
+            "containerColor.copy(alpha = effectiveContainerAlpha)" in code,
+        )
+    }
+
     // ---- 取值 --------------------------------------------------------------
 
     private fun barAlpha(darkTheme: Boolean, cardAlpha: Float, plate: Color, text: Color): Float =
@@ -370,6 +449,13 @@ class BottomBarInkTest {
     )
 
     private companion object {
+        /**
+         * 全族扫描判可读性的松弛量：反解出来的 alpha 把复合底色正好推到 AA 线上，品牌墨实测
+         * 落在 4.4999995（浮点最后一位），此时退给黑/白会是 4.44:1 —— 那是舍入不是判据写坏。
+         * 真救不回来的那一族（均匀中灰 × 深色板）只有 4.17:1，差着 0.38 档，松 0.1 挡不住它。
+         */
+        const val AA_SLACK = 0.1f
+
         val WHITE_BLOCK = SceneLuma.Stats(mean = 0.45f, darkest = 0.02f, brightest = 1.0f)
         val BLACK_BLOCK = SceneLuma.Stats(mean = 0.35f, darkest = 0.0f, brightest = 0.20f)
         val MID_GRAY = SceneLuma.Stats(mean = 0.50f, darkest = 0.50f, brightest = 0.50f)
@@ -381,6 +467,21 @@ class BottomBarInkTest {
         )
         val NAV_CALL = Regex("^[ \\t]*NavItemContent\\(([^)]*)\\)", setOf(RegexOption.MULTILINE))
         val NAV_INK_ARG = Regex("\\bink\\s*=")
+        val INK_DEFINITION = Regex(
+            "internal fun bottomBarInk\\(([^)]*)\\)\\s*:\\s*Color\\s*\\{(.*?)\\n\\}",
+            setOf(RegexOption.DOT_MATCHES_ALL),
+        )
+
+        fun sceneLabel(scene: SceneLuma.Stats): String = when (scene) {
+            SceneLuma.Stats.Unknown -> "内置渐变"
+            WHITE_BLOCK -> "极白块"
+            BLACK_BLOCK -> "极黑块"
+            MID_GRAY -> "均匀中灰"
+            MID_BRIGHT -> "中等亮块"
+            else -> "其他"
+        }
+
+        fun lumaOf(color: Color): String = "%.3f".format(color.luminance())
 
         /** 仓库里是 CRLF：先把行尾归一，`$` 与 `\n` 才按 Kotlin 里写的那样工作 */
         fun normalized(src: String): String = blankComments(src).replace("\r\n", "\n")
