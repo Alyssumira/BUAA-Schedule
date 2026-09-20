@@ -241,7 +241,7 @@ dimen:tooltip_vertical_padding:2131099765 reachable from res/layout/abc_tooltip.
 `isShrinkResources=true` 已经开着，非优化版收缩器早就在删资源；这一行只是把收缩器换成
 R8 驱动的（能看静态字段引用，而不是只看 XML）。风险只有一条：**按名字取资源**。
 全仓 `getIdentifier` 为 0（见第 1 节的 grep），资源都经 `R.*` 或 XML 引用。
-`app/build.gradle.kts` 第 150-152 行那段注释已经写了这个判断，这一轮把它量化了。
+`app/build.gradle.kts` 里 `isShrinkResources` 上面那两行注释（R5 F-C6）已经写了这个判断，这一轮把它量化了。
 
 提交：`9069915`。
 
