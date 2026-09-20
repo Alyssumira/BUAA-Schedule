@@ -19882,9 +19882,9 @@ SPLcom/buaa/schedule/widget/WidgetCommonKt;->access$getDAY_NAMES$p()Ljava/util/L
 Lcom/buaa/schedule/widget/WidgetCornerRadii;
 SPLcom/buaa/schedule/widget/WidgetCornerRadii;-><clinit>()V
 SPLcom/buaa/schedule/widget/WidgetCornerRadii;-><init>()V
-SPLcom/buaa/schedule/widget/WidgetCornerRadii;->axisPx(IIIF)Ljava/lang/Float;
+SPLcom/buaa/schedule/widget/WidgetCornerRadii;->axisPx(FFIIF)Ljava/lang/Float;
 SPLcom/buaa/schedule/widget/WidgetCornerRadii;->bake(IFIILcom/buaa/schedule/widget/WidgetSizePx;)Lcom/buaa/schedule/widget/BakedCornerRadius;
-SPLcom/buaa/schedule/widget/WidgetCornerRadii;->resolveSizePx(IIIIF)Lcom/buaa/schedule/widget/WidgetSizePx;
+SPLcom/buaa/schedule/widget/WidgetCornerRadii;->resolveSizePx(IIIIIIFFF)Lcom/buaa/schedule/widget/WidgetSizePx;
 SPLcom/buaa/schedule/widget/WidgetCornerRadii;->stretchFactors(Lcom/buaa/schedule/widget/WidgetSizePx;II)Lkotlin/Pair;
 Lcom/buaa/schedule/widget/WidgetData;
 SPLcom/buaa/schedule/widget/WidgetData;-><clinit>()V

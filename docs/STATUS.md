@@ -212,6 +212,12 @@
          assembleRelease 失败，且报的行号是在全部依赖库 profile 拼接**之后**才数出来的
          （实测报 `baseline-prof.txt:3949:1`，而那个文件只有 1 行）—— 看着像不存在的行，
          别被误导去找依赖库。
+         ⚠️ `WidgetCornerRadii` 的两条规则（`axisPx`、`resolveSizePx`）在 T38/T39 两轮改签名后
+         两份文件里共 4 行失配（ART 对这种规则是静默丢弃），已**手工同步**到当前描述符 ——
+         不是重新生成的，下次连设备重生成会自然覆盖；手工同步的边界是只改描述符、**不新增**
+         规则（T39 新加的 `displaySizeDp`/`capToDisplay` 没有规则是正常状态，产物只反映被 trace
+         到的路径）。判据来自 `javap -p -s` 打在 `app/build/tmp/kotlin-classes/debug/` 下那一份
+         class（⚠️ release 目录那份可能滞后于源码，是旧编译产物，别拿它当依据）。
       4. `./gradlew :app:assembleRelease` 重装到机上，验收看**这两处**（订正：先前写的
          `dumpsys package com.buaa.schedule | grep -i profile` 在这台设备上**不成立** —— 那条 grep
          打不出 `primaryProfile=`，而 `cur/0/com.buaa.schedule/` 在只有静态 profile、还没做过运行期
