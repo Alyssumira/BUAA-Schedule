@@ -9,7 +9,9 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.os.Build
+import android.util.DisplayMetrics
 import android.util.Log
+import android.view.WindowManager
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.scale
 import androidx.core.graphics.withClip
@@ -159,6 +161,12 @@ object WidgetBackgroundRenderer {
      * options 的 MIN/MAX 四枚都要读：真实绘制尺寸落在 `[MIN, MAX]` 区间里，只读 MIN
      * 会把纵轴的拉伸倍数低估（真机 id=8 实测 MIN_HEIGHT=137dp 而真实高 224dp，
      * 20dp 那一档烘出来纵轴 32.4dp），判据那边取 MAX 优先就是为这个。
+     *
+     * 同一份 options 还得配一个**屏幕上限**：装机反推（同那一格）launcher 报的
+     * `MAX_WIDTH` ≥ 509dp，而整块屏只有 411.4dp 宽，组件不可能比屏幕还大 ——
+     * 那是"能拖到多大"而不是"现在多大"。为什么要这道闸、以及它为什么不会把方向
+     * 从"偏方"推成"偏圆"，判据全在 [WidgetCornerRadii.resolveSizePx] 那边；
+     * 这里只负责交出一个**物理屏幕**的 dp（拿不到就交 0，那一轴等于不夹）。
      */
     private fun widgetSizePx(
         context: Context,
@@ -185,6 +193,7 @@ object WidgetBackgroundRenderer {
                 infoHeightDp = info.minHeight
             }
         }
+        val (displayWidthDp, displayHeightDp) = displaySizeDp(context)
         return WidgetCornerRadii.resolveSizePx(
             optionsMaxWidthDp = optionsMaxWidthDp,
             optionsMaxHeightDp = optionsMaxHeightDp,
@@ -193,7 +202,43 @@ object WidgetBackgroundRenderer {
             infoWidthDp = infoWidthDp,
             infoHeightDp = infoHeightDp,
             density = context.resources.displayMetrics.density,
+            displayWidthDp = displayWidthDp,
+            displayHeightDp = displayHeightDp,
         )
+    }
+
+    /**
+     * 这块屏幕的物理尺寸（dp），给 options 上报的尺寸当上限。
+     *
+     * 刻意取**整个物理屏幕**，不是本 app 的窗口：分屏/小窗下
+     * `resources.displayMetrics.widthPixels` 与 `currentWindowMetrics` 都会缩成窗口尺寸，
+     * 那时上限可能掉到组件真实尺寸以下 —— 那就会低估拉伸倍数、把圆角烘得偏**圆**，
+     * 正是唯一不许出现的那一侧（判据见 [WidgetCornerRadii.resolveSizePx]）。
+     * API 30+ 用 `maximumWindowMetrics`：它给的是"这块屏在最大窗口态下的边界"，
+     * 与当前是不是分屏无关；30 以下退回 `defaultDisplay.getRealMetrics`，那是那条版本线上
+     * 唯一读得到整块屏（含系统栏那圈）的口径。px -> dp 用 `resources.displayMetrics.density`，
+     * 与 options 报 dp 用的、以及 `bake` 里 `cornerDp -> px` 用的都是同一个 density。
+     *
+     * 任何一步拿不到（服务为 null、值 ≤0、抛异常）就交 0f：那一轴不做这道夹取。
+     */
+    private fun displaySizeDp(context: Context): Pair<Float, Float> {
+        val density = context.resources.displayMetrics.density
+        if (density <= 0f) return 0f to 0f
+        val sizePx = runCatching {
+            val manager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+                ?: return@runCatching 0 to 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val bounds = manager.maximumWindowMetrics.bounds
+                bounds.width() to bounds.height()
+            } else {
+                @Suppress("DEPRECATION")
+                DisplayMetrics().also { manager.defaultDisplay.getRealMetrics(it) }
+                    .let { it.widthPixels to it.heightPixels }
+            }
+        }.getOrDefault(0 to 0)
+        val (widthPx, heightPx) = sizePx
+        if (widthPx <= 0 || heightPx <= 0) return 0f to 0f
+        return widthPx / density to heightPx / density
     }
 
     /** 一张壁纸位图 + 它是不是我们新建的（新建的才归 [render] 回收） */

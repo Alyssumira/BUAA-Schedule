@@ -29,8 +29,9 @@ internal object WidgetCornerRadii {
      * 把用户选的 `cornerDp` 换算成要画进 `canvasWidthPx x canvasHeightPx` 位图的半径。
      *
      * [size] 的来源档（取数口径与每一档的方向性见 [resolveSizePx]）：
-     * 1. 宿主上报的组件真实尺寸（options 的 MAX_*，缺则 MIN_*）→ 显示出来的半径**正好**
-     *    是 `cornerDp` dp（MAX 略大于真实尺寸时只会略偏方），两轴等长；
+     * 1. 宿主上报的组件真实尺寸（options 的 MAX_*，缺则 MIN_*，两轴各被物理屏幕夹过
+     *    一道上限）→ 显示出来的半径**正好**是 `cornerDp` dp
+     *    （MAX 大于真实尺寸时只会偏方，见 [resolveSizePx]），两轴等长；
      * 2. provider 声明的 minWidth/minHeight → 声明值偏小，于是烘焙值偏大，
      *    但被"不小于画布"这条下限托住（见 [resolveSizePx]）；
      * 3. 一个都取不到 → 假设 Launcher **不缩放**这张图（scale = 1），
@@ -77,6 +78,7 @@ internal object WidgetCornerRadii {
      *
      * 1. `getAppWidgetOptions()` 的 `OPTION_APPWIDGET_MAX_WIDTH/MAX_HEIGHT`（dp）；
      * 2. 同一份 options 的 `OPTION_APPWIDGET_MIN_WIDTH/MIN_HEIGHT`（dp）；
+     *    （第 1、2 档这四枚都先被**物理屏幕**两轴的 dp 上限夹一道再进表，见下面的 [displayWidthDp]）
      * 3. `getAppWidgetInfo()` 的 `minWidth/minHeight`（dp）—— provider 声明值；
      * 4. 都没有 -> 该轴 null，交给 [bake] 的"不缩放"兜底口径。
      *
@@ -99,6 +101,29 @@ internal object WidgetCornerRadii {
      * 一整条短边、显示出来就是一块胶囊，比要修的这个 bug 还夸张。所以这一档只当**下限**用：
      * 假定"绘制尺寸不小于我们这张画布本身"，即半径不超过 `cornerDp * density`。
      * 方向同样是可控的——只会把圆角画得偏方，不会再偏圆。
+     *
+     * [displayWidthDp]/[displayHeightDp] 是**整块物理屏幕**两轴的尺寸（dp，已按 density 换算），
+     * 只用来给第 1、2 档那四枚 options dp 各加一道上限，传 0 或负数（= 拿不到屏幕度量）
+     * 就整个不夹、原样交给上面那张档位表。第 3 档的 provider 声明值**不过**这道闸，
+     * 它自带的是上一条那个 `coerceAtLeast(画布)` 托底，两道闸的方向不能混。
+     *
+     * 为什么非要有这道上限，以及为什么它**不破坏上面那条方向性**（这段是全卡的立论）：
+     * `ai/T38` 改读 MAX 之后，装机反推出这台 launcher 报的 `MAX_WIDTH` ≥ 509dp，
+     * 而整块屏只有 411.4dp 宽 —— 组件物理上不可能比屏幕更宽，那个数的语义是
+     * "用户能把它拖到多大"而不是"它现在多大"。横轴因此被高估 1.41 倍，28dp 那一档
+     * 显示成 52px=19.8dp，与纵轴的 72px 拼成一个扁椭圆（比值 1.385）。
+     *
+     * 夹完之后方向不变，理由是三句话：真实绘制尺寸 ≤ 屏幕尺寸（组件画在屏内），
+     * 且 `MAX` ≥ 真实尺寸（取 MAX 的既有论证），两个数都 ≥ 真实尺寸
+     * ⟹ `min(MAX, 屏)` 也 ≥ 真实尺寸 ⟹ 拉伸倍数仍然是**高估**的 ⟹ 烘出来的半径
+     * 仍然不超过用户选的那一档 ⟹ 仍然只会偏方、不会偏圆。变的只是估得更准：
+     * 那一格横轴从 52px 抬到 28x946/411.4≈64.4px，与不动的纵轴 71.9px 比值 1.117。
+     *
+     * 反过来，万一哪天 `min(MAX, 屏)` 真的掉到了真实尺寸以下，那只能是两种情况：
+     * launcher 在报 `[MIN, MAX]` 区间时报错了，或者调用方传进来的不是物理屏幕而是
+     * 窗口尺寸（分屏/小窗，见 `WidgetBackgroundRenderer.displaySizeDp` 的取舍）。
+     * 判据统一写成"**宁可更小**"：宁可烘焙值偏小（显示偏方），也不许偏大（显示偏圆），
+     * 所以这两种情况都**不许**用这道上限去"修正"，宁可让哪一轴缺数就落到下几档。
      */
     fun resolveSizePx(
         optionsMaxWidthDp: Int,
@@ -108,18 +133,20 @@ internal object WidgetCornerRadii {
         infoWidthDp: Int,
         infoHeightDp: Int,
         density: Float,
+        displayWidthDp: Float,
+        displayHeightDp: Float,
     ): WidgetSizePx? {
         if (density <= 0f) return null
         val widthPx = axisPx(
-            optionsMaxWidthDp,
-            optionsMinWidthDp,
+            capToDisplay(optionsMaxWidthDp, displayWidthDp),
+            capToDisplay(optionsMinWidthDp, displayWidthDp),
             infoWidthDp,
             WidgetBackgroundRenderer.TARGET_WIDTH,
             density,
         ) ?: return null
         val heightPx = axisPx(
-            optionsMaxHeightDp,
-            optionsMinHeightDp,
+            capToDisplay(optionsMaxHeightDp, displayHeightDp),
+            capToDisplay(optionsMinHeightDp, displayHeightDp),
             infoHeightDp,
             WidgetBackgroundRenderer.TARGET_HEIGHT,
             density,
@@ -127,9 +154,22 @@ internal object WidgetCornerRadii {
         return WidgetSizePx(widthPx, heightPx)
     }
 
+    /**
+     * 把一轴上 options 报的 dp 夹到该轴的屏幕 dp 以下。
+     *
+     * 只在 [displayDp] 是个正数时生效（拿不到物理屏幕度量就不夹，见 [resolveSizePx] 的
+     * 「宁可更小」判据）；缺数的 0 与手滑传进来的负数都原样过去，档位表自己会把它们当缺数。
+     * 返回 Float 而不是 Int：屏宽是 411.4 这种带小数的数，取整会在高 density 的机上
+     * 又给横轴引入一档新的误差。
+     */
+    private fun capToDisplay(optionsDp: Int, displayDp: Float): Float {
+        val dp = optionsDp.toFloat()
+        return if (displayDp > 0f) dp.coerceAtMost(displayDp) else dp
+    }
+
     private fun axisPx(
-        optionsMaxDp: Int,
-        optionsMinDp: Int,
+        optionsMaxDp: Float,
+        optionsMinDp: Float,
         infoDp: Int,
         canvasPx: Int,
         density: Float,

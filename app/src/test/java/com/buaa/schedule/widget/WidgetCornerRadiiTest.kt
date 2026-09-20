@@ -95,6 +95,8 @@ class WidgetCornerRadiiTest {
                 infoWidthDp = 0,
                 infoHeightDp = 0,
                 density = cell.density,
+            displayWidthDp = 0f,
+            displayHeightDp = 0f,
             ),
         ) { "$cell 的尺寸按 options 上报了却解不出来" },
     )
@@ -225,6 +227,8 @@ class WidgetCornerRadiiTest {
                 infoWidthDp = infoWidthDp,
                 infoHeightDp = infoHeightDp,
                 density = cell.density,
+            displayWidthDp = 0f,
+            displayHeightDp = 0f,
             )
             assertTrue("${cell}：provider 声明还在时不该退到 null", size != null)
             val (x, y) = displayedDp(cell, bake(cell, size))
@@ -239,7 +243,7 @@ class WidgetCornerRadiiTest {
         // 连 provider 都取不到：只能按"位图不缩放"这个明写的假设算（见 [WidgetCornerRadii.bake]）。
         // 于是残余误差正好等于 Launcher 实际的拉伸倍数——手机尺寸上不到 2.4x，
         // 而旧口径是**不管什么尺寸都 4x**。这条兜底不是精确，是"绝不比要修的 bug 更糟"。
-        assertNull(WidgetCornerRadii.resolveSizePx(0, 0, 0, 0, 0, 0, 2.75f))
+        assertNull(WidgetCornerRadii.resolveSizePx(0, 0, 0, 0, 0, 0, 2.75f, 0f, 0f))
         cells.filter { it.drawable }.forEach { cell ->
             val baked = requireNotNull(runCatching { bake(cell, null) }.getOrNull()) {
                 "$cell 的兜底路径抛了"
@@ -280,6 +284,8 @@ class WidgetCornerRadiiTest {
                 infoWidthDp = cell.widgetWidthDp / 2,
                 infoHeightDp = cell.widgetHeightDp / 4,
                 density = cell.density,
+            displayWidthDp = 0f,
+            displayHeightDp = 0f,
             )
             val (x, y) = displayedDp(cell, bake(cell, size))
             val (legacyX, legacyY) = legacyDisplayedDp(cell)
@@ -300,6 +306,8 @@ class WidgetCornerRadiiTest {
                 infoWidthDp = 180,
                 infoHeightDp = 40,
                 density = density,
+            displayWidthDp = 0f,
+            displayHeightDp = 0f,
             ),
         )
         assertEquals(320f * density, fromOptions.widthPx, 0.001f)
@@ -316,15 +324,17 @@ class WidgetCornerRadiiTest {
                 infoWidthDp = 180,
                 infoHeightDp = 40,
                 density = density,
+            displayWidthDp = 0f,
+            displayHeightDp = 0f,
             ),
         )
         assertEquals(320f * density, mixed.widthPx, 0.001f)
         assertEquals(CANVAS_HEIGHT.toFloat(), mixed.heightPx, 0.001f)
 
         // 两轴全无 → null，由 bake 走"不缩放"兜底
-        assertNull(WidgetCornerRadii.resolveSizePx(0, 0, 0, 0, 0, 0, density))
+        assertNull(WidgetCornerRadii.resolveSizePx(0, 0, 0, 0, 0, 0, density, 0f, 0f))
         // density 都不合法（未初始化）时不硬算
-        assertNull(WidgetCornerRadii.resolveSizePx(0, 0, 320, 200, 180, 40, 0f))
+        assertNull(WidgetCornerRadii.resolveSizePx(0, 0, 320, 200, 180, 40, 0f, 0f, 0f))
     }
 
     // ---- T38：取数口径的档位表（MAX -> MIN -> provider info -> null，两轴各取各的）----
@@ -344,6 +354,8 @@ class WidgetCornerRadiiTest {
                     infoWidthDp = 180,
                     infoHeightDp = 40,
                     density = tierDensity,
+                displayWidthDp = 0f,
+                displayHeightDp = 0f,
                 ),
             )
             assertEquals("横轴该取 MAX 的 $maxDp", maxDp * tierDensity, size.widthPx, 0.001f)
@@ -363,6 +375,8 @@ class WidgetCornerRadiiTest {
                 infoWidthDp = 180,
                 infoHeightDp = 110,
                 density = tierDensity,
+            displayWidthDp = 0f,
+            displayHeightDp = 0f,
             ),
         )
         assertEquals(320f * tierDensity, size.widthPx, 0.001f)
@@ -383,23 +397,25 @@ class WidgetCornerRadiiTest {
                 infoWidthDp = 180,
                 infoHeightDp = 40,
                 density = tierDensity,
+            displayWidthDp = 0f,
+            displayHeightDp = 0f,
             ),
         )
         assertEquals(180f * tierDensity, fromInfo.widthPx, 0.001f)
         assertEquals(CANVAS_HEIGHT.toFloat(), fromInfo.heightPx, 0.001f)
         // 声明值大于画布时不许被"托底"反向削小
         val bigInfo = requireNotNull(
-            WidgetCornerRadii.resolveSizePx(0, 0, 0, 0, 300, 200, tierDensity),
+            WidgetCornerRadii.resolveSizePx(0, 0, 0, 0, 300, 200, tierDensity, 0f, 0f),
         )
         assertEquals(300f * tierDensity, bigInfo.widthPx, 0.001f)
         assertEquals(200f * tierDensity, bigInfo.heightPx, 0.001f)
 
         // 第 4 档：四枚全缺 -> null，交给 bake 的"不缩放"兜底
         assertNull(
-            WidgetCornerRadii.resolveSizePx(0, 0, 0, 0, 0, 0, tierDensity),
+            WidgetCornerRadii.resolveSizePx(0, 0, 0, 0, 0, 0, tierDensity, 0f, 0f),
         )
         // 负数（Bundle 没这个键时 getInt 给 0，手滑传负数按缺数算）也不算尺寸
-        assertNull(WidgetCornerRadii.resolveSizePx(-1, -1, -1, -1, -1, -1, tierDensity))
+        assertNull(WidgetCornerRadii.resolveSizePx(-1, -1, -1, -1, -1, -1, tierDensity, 0f, 0f))
     }
 
     @Test
@@ -415,6 +431,8 @@ class WidgetCornerRadiiTest {
                 infoWidthDp = 180,
                 infoHeightDp = 40,
                 density = tierDensity,
+            displayWidthDp = 0f,
+            displayHeightDp = 0f,
             ),
         )
         assertEquals(400f * tierDensity, size.widthPx, 0.001f)
@@ -430,6 +448,8 @@ class WidgetCornerRadiiTest {
                 infoWidthDp = 180,
                 infoHeightDp = 40,
                 density = tierDensity,
+            displayWidthDp = 0f,
+            displayHeightDp = 0f,
             ),
         )
         assertEquals(360f * tierDensity, swapped.widthPx, 0.001f)
@@ -445,6 +465,8 @@ class WidgetCornerRadiiTest {
                 infoWidthDp = 180,
                 infoHeightDp = 40,
                 density = tierDensity,
+            displayWidthDp = 0f,
+            displayHeightDp = 0f,
             ),
         )
         assertEquals(500f * tierDensity, mixedTiers.widthPx, 0.001f)
@@ -474,6 +496,8 @@ class WidgetCornerRadiiTest {
                 infoWidthDp = 180,
                 infoHeightDp = 40,
                 density = density,
+            displayWidthDp = 0f,
+            displayHeightDp = 0f,
             ),
         )
         val baked = bake(cell, size)
@@ -488,7 +512,7 @@ class WidgetCornerRadiiTest {
         assertTrue("两轴之比 $ratio，还是个椭圆", ratio <= 1.15f)
         // 对照：改口径前用的是 MIN 的 (360, 137)，纵轴倍数被低估 -> 显示值 32.4dp
         val beforeSize = requireNotNull(
-            WidgetCornerRadii.resolveSizePx(0, 0, 360, 137, 180, 40, density),
+            WidgetCornerRadii.resolveSizePx(0, 0, 360, 137, 180, 40, density, 0f, 0f),
         )
         val before = bake(cell, beforeSize)
         val beforeY = before.radiusY * (realHeightPx / CANVAS_HEIGHT)
