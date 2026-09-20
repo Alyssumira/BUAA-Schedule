@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -76,6 +77,7 @@ import com.kyant.backdrop.shadow.Shadow
 import com.kyant.shapes.Capsule
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.sign
 
 /**
@@ -165,6 +167,17 @@ fun LiquidBottomTabs(
         containerColor = containerColor,
         effectiveAlpha = effectiveContainerAlpha,
         text = scheme.onSurfaceVariant,
+        darkTheme = !isLightTheme,
+        sceneLuma = sceneLuma,
+    )
+    // 选中态那一族（primary 的图标/文字）以前恒吃主题 primary，ai/T25b 只解了中性墨。
+    // 同一块 0.60 的板：深色档 × 极白壁纸块上 primary 只有 2.42:1（浅色档最差那格 1.42:1），
+    // 比它旁边刚被解过的中性墨还糊。这里按**同一份** effectiveContainerAlpha 与**同一档**
+    // sceneLuma 再解一次（多读一次全局就是一块板两个口径，见 bottomBarSceneLuma 的文档）。
+    val tabAccentInk = bottomBarAccentInk(
+        containerColor = containerColor,
+        effectiveAlpha = effectiveContainerAlpha,
+        accent = scheme.primary,
         darkTheme = !isLightTheme,
         sceneLuma = sceneLuma,
     )
@@ -319,8 +332,11 @@ fun LiquidBottomTabs(
                     onClick = { onTabSelected(index) }
                 ) {
                     // 与下面隐藏层提供的是同一个值：指示器折射出来的那一份鬼影必须与
-                    // 看得见的这一排同墨，否则切换的瞬间文字会跳色。
-                    CompositionLocalProvider(LocalLiquidBottomTabInk provides tabInk) {
+                    // 看得见的这一排同墨，否则切换的瞬间文字会跳色。选中墨同理，只多一根线。
+                    CompositionLocalProvider(
+                        LocalLiquidBottomTabInk provides tabInk,
+                        LocalLiquidBottomTabAccentInk provides tabAccentInk,
+                    ) {
                         tabContent(index)
                     }
                 }
@@ -336,6 +352,7 @@ fun LiquidBottomTabs(
             },
             LocalLiquidBottomTabAccentTint provides true,
             LocalLiquidBottomTabInk provides tabInk,
+            LocalLiquidBottomTabAccentInk provides tabAccentInk,
         ) {
             Row(
                 Modifier
@@ -429,12 +446,16 @@ fun LiquidBottomTabs(
                     },
                     onDrawSurface = {
                         val progress = dampedDragAnimation.pressProgress
+                        // 这两支 wash 与浓度同时是 bottomBarAccentInk 的输入：画的那层与解墨
+                        // 算的那层分两处写，选中墨就解在了一块并不存在的板上
                         drawRect(
-                            Color.White.copy(alpha = 0.1f),
+                            bottomBarIndicatorWash(darkTheme = true)
+                                .copy(alpha = BOTTOM_BAR_INDICATOR_WASH_ALPHA),
                             alpha = (1f - themeBlend) * (1f - progress)
                         )
                         drawRect(
-                            Color.Black.copy(alpha = 0.1f),
+                            bottomBarIndicatorWash(darkTheme = false)
+                                .copy(alpha = BOTTOM_BAR_INDICATOR_WASH_ALPHA),
                             alpha = themeBlend * (1f - progress)
                         )
                         drawRect(Color.Black.copy(alpha = 0.03f * progress))
@@ -563,10 +584,176 @@ internal fun bottomBarInk(
     darkTheme: Boolean,
     sceneLuma: Float,
 ): Color {
-    val composite = compositeLuma(containerColor.readableLuminance(), sceneLuma, effectiveAlpha)
+    val composite = bottomBarPlateLuma(containerColor, effectiveAlpha, sceneLuma)
     if (contrastRatio(composite, text.readableLuminance()) >= DesignTokens.WCAG_AA_RATIO) return text
     val best = contentOnLuma(composite) // 该函数的判据就是"黑白里较优的那支"，交点已实测校准
     if (contrastRatio(composite, best.readableLuminance()) >= DesignTokens.WCAG_AA_RATIO) return best
     // 走到这里两支都不到 AA：那 0.05~0.7 档的差距换不来可读性，跟着主题走
     return if (darkTheme) ContentLight else ContentDark
 }
+
+
+/**
+ * 栏体那块板（`containerColor.copy(alpha = effectiveAlpha)` 叠在场景上）复合出来的亮度。
+ *
+ * 抽出来只为一件事：中性墨（[bottomBarInk]）与选中墨（[bottomBarAccentInk]）必须解在同
+ * 一块板上，而那块板由"夹完的 alpha × 那档最不利场景亮度"两样决定。两处各写一遍
+ * [compositeLuma] 就是两块板，改一处另一处静默不动（ai/T25b 第 4 条契约的同族形状）。
+ */
+internal fun bottomBarPlateLuma(containerColor: Color, effectiveAlpha: Float, sceneLuma: Float): Float =
+    compositeLuma(containerColor.readableLuminance(), sceneLuma, effectiveAlpha)
+
+/**
+ * 选中指示器静止时叠在采样内容上的那层 wash 用哪一支：深色档提亮（纯白）、浅色档压暗（纯黑）。
+ *
+ * 与 `onDrawSurface` 共用这一个真源：指示器是**盖在 tab 内容之上**画的，选中墨与它底下的板
+ * 一起被这层 wash 罩着，所以它坐在的是一块与栏体不同的板（[bottomBarIndicatorPlateLuma]）。
+ */
+internal fun bottomBarIndicatorWash(darkTheme: Boolean): Color =
+    if (darkTheme) Color.White else Color.Black
+
+/** 那层 wash 的浓度：`onDrawSurface` 与解选中墨共用。 */
+internal const val BOTTOM_BAR_INDICATOR_WASH_ALPHA = 0.10f
+
+/**
+ * 指示器那块板：栏体板再被 [bottomBarIndicatorWash] 罩一层。
+ *
+ * 恒比栏体板**更难读**（两档主题的 wash 都是朝选中墨那一侧推板：深色档把板提亮、浅色档把板
+ * 压暗，两支都把板推向那支 primary），这条量差钉在 BottomBarAccentInkTest 的逐格扫描里。
+ */
+internal fun bottomBarIndicatorPlateLuma(
+    containerColor: Color,
+    effectiveAlpha: Float,
+    sceneLuma: Float,
+    darkTheme: Boolean,
+): Float = compositeLuma(
+    bottomBarIndicatorWash(darkTheme).readableLuminance(),
+    bottomBarPlateLuma(containerColor, effectiveAlpha, sceneLuma),
+    BOTTOM_BAR_INDICATOR_WASH_ALPHA,
+)
+
+/**
+ * 底栏选中态的墨：把 [accent]（= `scheme.primary`）沿**保住色相**的方向推到读清这块板为止。
+ *
+ * ## 为什么中性墨解过了还要再解这一族（ai/T32）
+ *
+ * [bottomBarInk] 那一卡明知故犯地写着"不动选中态与指示器那一族"，于是未选中的图标/文字
+ * 已经按复合底色解过，选中的那一份还是写死的主题 primary。实测（默认档 cardAlpha=0.88，
+ * 深色 #1A73E8… 见 BottomBarAccentInkTest 那张表）：选中墨在它真正坐着的那块板
+ * （[bottomBarIndicatorPlateLuma]）上，**十格全低于 AA**，从深色档内置渐变的 4.50:1 到
+ * 浅色档 × 极黑块的 1.42:1。编排者转来的那个 2.78:1 不是这一族的数——它是**未选中**那支
+ * `onSurfaceVariant` 在栏体板上的读数（[bottomBarInk] 文档里那个 2.78），选中墨在同一块
+ * 栏体板上是 2.77:1（两支亮度只差 0.002，所以数几乎相同，纯属巧合），而那块栏体板并不是
+ * 它画在的那块板。
+ *
+ * ## 抬 alpha 依旧不在选项里
+ *
+ * 与 [bottomBarInk] 同一条理由：这条栏悬浮在整屏滚动的课表之上，[BOTTOM_BAR_SURFACE_ALPHA_CEILING]
+ * 抬到 AA 需要的 ≈0.74 就是把它压成实心横带，本卡一个 number 都不动 alpha。
+ *
+ * ## 为什么是"推"而不是"换"
+ *
+ * 选中态唯一的职责是**一眼可辨**，换成纯黑/纯白就把品牌色身份丢了（未选中那支已经是中性墨，
+ * 两者同色时只剩胶囊与字重在分档）。于是沿 `accent → 可读的那支` 这条直线求**最小**推进量：
+ * 往白推是 RGB 等比抬升，色相一字不变；往近黑 [ContentDark]（#1A1B20，本身带 228° 蓝调）推
+ * 也只掉饱和不掉色相。达标就原样返回 [accent]，与 [bottomBarInk] 的"达标就不许换"同构。
+ *
+ * 方向取 [contentOnLuma] 对这块板的判据（同一把尺子，不另发明），两支候选都不到 AA 的
+ * 那一带跟主题方向走——理由与 [bottomBarInk] 里写着的同一条一样：带内"哪支较优"换不来
+ * 可读性，只换来壁纸亮度扫过 0.203 时选中墨整个翻面的观感事故。
+ *
+ * ## 两块对照物，一次解糊不过去
+ *
+ * 可见层那一排的选中 tab 直接坐在栏体板上，指示器里那份鬼影（以及被指示器盖住的稳态那一帧）
+ * 坐在被 wash 罩过的板上。两行**必须同墨**（否则切换瞬间跳色，见 ai/T25b 第 2 条契约），
+ * 所以这里两块板各解一次，交出让两块都读得清的那一支，并在两个解里挑牺牲色相更小的那个。
+ *
+ * 不 `@Composable`：与 [bottomBarInk] 同一处境，本模块 JVM 单测没有 Compose 运行时。
+ *
+ * @param effectiveAlpha [bottomBarSurfaceAlpha] 夹完的那一个值，别传夹之前的 raw
+ * @param sceneLuma 与 alpha 下限同源的那一档最不利场景亮度，见 [bottomBarSceneLuma]
+ */
+internal fun bottomBarAccentInk(
+    containerColor: Color,
+    effectiveAlpha: Float,
+    accent: Color,
+    darkTheme: Boolean,
+    sceneLuma: Float,
+): Color {
+    val plate = bottomBarPlateLuma(containerColor, effectiveAlpha, sceneLuma)
+    val wash = bottomBarIndicatorWash(darkTheme)
+    val onPlate = legibleAccentOn(plate, accent, darkTheme, wash = null)
+    if (accentReads(onPlate, plate, wash) >= DesignTokens.WCAG_AA_RATIO) return onPlate
+    return legibleAccentOn(plate, accent, darkTheme, wash = wash)
+}
+
+/**
+ * [bottomBarAccentInk] 的两个对照物之一：这支墨最终被看到的比值。
+ *
+ * [wash] 为 null 表示"坐在栏体板上，头上没东西"；非 null 表示坐在指示器底下——那时**墨与板
+ * 一起**被这层 wash 罩着（指示器的 `onDrawSurface` 画在录制好的整张内容之上），只把板算进
+ * wash、墨还算原色，就是拿一块画不出来的板去解墨（这一族第几处了，见 [compositeLuma]）。
+ * 墨先进 [asDrawnColor]：tint 走的是 `Color.toArgb()`，8 bit 取整发生在混合之前。
+ */
+private fun accentReads(ink: Color, plateLuma: Float, wash: Color?): Float {
+    val inkLuma = asDrawnColor(ink).readableLuminance()
+    if (wash == null) return contrastRatio(plateLuma, inkLuma)
+    val washLuma = wash.readableLuminance()
+    return contrastRatio(
+        compositeLuma(washLuma, plateLuma, BOTTOM_BAR_INDICATOR_WASH_ALPHA),
+        compositeLuma(washLuma, inkLuma, BOTTOM_BAR_INDICATOR_WASH_ALPHA),
+    )
+}
+
+/** 这支墨在这块板上读不清时，往哪一侧推：见 [bottomBarAccentInk] 的"方向"一段。 */
+private fun accentRampTarget(plateLuma: Float, wash: Color?, darkTheme: Boolean): Color {
+    val ground = if (wash == null) {
+        plateLuma
+    } else {
+        compositeLuma(wash.readableLuminance(), plateLuma, BOTTOM_BAR_INDICATOR_WASH_ALPHA)
+    }
+    val preferred = contentOnLuma(ground)
+    if (accentReads(preferred, plateLuma, wash) >= DesignTokens.WCAG_AA_RATIO) return preferred
+    // 黑白两支都被这块板判死（0.183~0.225 那条带）：推到哪一支都读不出，跟主题方向
+    return if (darkTheme) ContentLight else ContentDark
+}
+
+/** 沿 accent → [accentRampTarget] 这条保色相的直线，二分出读到 AA 的最小推进量。 */
+private fun legibleAccentOn(plateLuma: Float, accent: Color, darkTheme: Boolean, wash: Color?): Color {
+    if (accentReads(accent, plateLuma, wash) >= DesignTokens.WCAG_AA_RATIO) return accent
+    val target = accentRampTarget(plateLuma, wash, darkTheme)
+    var lo = 0f
+    var hi = 1f
+    repeat(ACCENT_RAMP_BISECTIONS) {
+        val mid = (lo + hi) / 2f
+        if (accentReads(lerp(accent, target, mid), plateLuma, wash) >= DesignTokens.WCAG_AA_RATIO) {
+            hi = mid
+        } else {
+            lo = mid
+        }
+    }
+    // 二分给的是连续解，画出来的是 8 bit 那一份：向上取整到下一档，再按取整后的墨复核一遍
+    var step = ceil(hi * 255f) / 255f
+    var ink = lerp(accent, target, step.coerceAtMost(1f))
+    var guard = 0
+    while (step < 1f && guard < MAX_ACCENT_RAMP_STEPS &&
+        accentReads(ink, plateLuma, wash) < DesignTokens.WCAG_AA_RATIO
+    ) {
+        step += 1f / 255f
+        ink = lerp(accent, target, step.coerceAtMost(1f))
+        guard++
+    }
+    // 交出去的就是画出来那一份：accentReads 量的本来就是量化后的墨，两处同一支才不会
+    // "测得过、画出来差半档"，守卫也能按颜色逐字比而不是比一个区间
+    return asDrawnColor(ink)
+}
+
+/** 一个 Color 交给 `toArgb()` 之后真正画出来的那一份（通道取整到 8 bit，alpha 恒不透明）。 */
+private fun asDrawnColor(color: Color): Color = Color(
+    (color.red * 255f + 0.5f).toInt() / 255f,
+    (color.green * 255f + 0.5f).toInt() / 255f,
+    (color.blue * 255f + 0.5f).toInt() / 255f,
+)
+
+private const val ACCENT_RAMP_BISECTIONS = 10
+private const val MAX_ACCENT_RAMP_STEPS = 256

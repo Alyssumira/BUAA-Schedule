@@ -346,7 +346,9 @@ private val navItems = listOf(
  * @param ink 悬浮玻璃底栏按**这块板实际画出来有多亮**解出来的中性墨（`LocalLiquidBottomTabInk`）。
  *   默认 null = 「底栏没说话」：旧式底栏与宽屏导航栏走 `GlassSurface(CHROME)`，表面 alpha
  *   是 0.96 那一档口径，它们的墨不归底栏管（ai/T25b 明确不许顺带改）。
- *   只接管未选中态那一支——选中态是主题 primary，与本卡无关。
+ * @param accentInk 同一根底栏为**选中态那一族**解出来的墨（`LocalLiquidBottomTabAccentInk`，
+ *   ai/T32）：它坐在的是指示器那块被 wash 罩过的板，与 [ink] 那块栏体板是两个对照物。
+ *   默认 null 时选中态继续逐字用主题 `primary`——旧式底栏与宽屏导航栏就是这一支。
  */
 @Composable
 private fun ColumnScope.NavItemContent(
@@ -354,10 +356,11 @@ private fun ColumnScope.NavItemContent(
     selected: Boolean,
     accentTint: Boolean = false,
     ink: Color? = null,
+    accentInk: Color? = null,
 ) {
     val emphasized = selected || accentTint
     val itemColor = if (emphasized) {
-        MaterialTheme.colorScheme.primary
+        accentInk ?: MaterialTheme.colorScheme.primary
     } else {
         ink ?: MaterialTheme.colorScheme.onSurfaceVariant
     }
@@ -1069,8 +1072,17 @@ private fun FloatingGlassBottomBar(
             // 底栏按"这块板实际画出来有多亮"解出来的墨，读法与上一行同一条线：
             // 颜色由那条栏决定（它才知道 alpha 被夹到了多少、壁纸有多亮），这里只消费。
             val barInk = com.buaa.schedule.core.designsystem.liquid.LocalLiquidBottomTabInk.current
+            // 选中态那一族同一处解，只是对照物换成了指示器那块板（ai/T32）
+            val barAccentInk =
+                com.buaa.schedule.core.designsystem.liquid.LocalLiquidBottomTabAccentInk.current
             val selected = currentRoute?.hierarchy?.any { it.route == item.route } == true
-            NavItemContent(item, selected = selected, accentTint = accentTint, ink = barInk)
+            NavItemContent(
+                item,
+                selected = selected,
+                accentTint = accentTint,
+                ink = barInk,
+                accentInk = barAccentInk,
+            )
         },
     )
 }

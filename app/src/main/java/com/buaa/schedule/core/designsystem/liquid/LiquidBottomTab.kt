@@ -45,6 +45,20 @@ val LocalLiquidBottomTabAccentTint =
 val LocalLiquidBottomTabInk =
     staticCompositionLocalOf<Color?> { null }
 
+/**
+ * 底栏**选中态**那一族该用的墨（图标与文字同一支），由 [LiquidBottomTabs] 按它实际坐在的
+ * 那块板解出来（[bottomBarAccentInk]，ai/T32）。
+ *
+ * 与 [LocalLiquidBottomTabInk] 分成两根线，是因为它们坐在**两块板**上：未选中的中性墨坐在
+ * 栏体板上，选中墨坐在被指示器那层 wash 罩过的板上（同一条 0.60 的栏体，两块对照物）。
+ *
+ * **默认 null = 「底栏没说话」**：旧式底栏与宽屏导航栏走 `GlassSurface(CHROME)`，表面口径
+ * 是 0.96 不是 0.60，那两处的选中态继续逐字用主题 `primary`（与 [LocalLiquidBottomTabInk]
+ * 同一条契约，见 `BottomBarInkTest.legacyNavigationPathsDoNotAskTheBottomBarForInk`）。
+ */
+val LocalLiquidBottomTabAccentInk =
+    staticCompositionLocalOf<Color?> { null }
+
 @Composable
 fun RowScope.LiquidBottomTab(
     selected: Boolean,

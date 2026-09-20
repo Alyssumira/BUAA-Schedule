@@ -343,6 +343,9 @@ class BottomBarInkTest {
      *
      * 这条同时钉住第 3 条契约的形状：local 默认 `null` =「底栏没说话」，且 `NavItemContent`
      * 的中性墨写成 `ink ?: onSurfaceVariant` —— local 为 null 时输出颜色逐字不变。
+     *
+     * 选中态那一族（ai/T32 起也有一根 `accentInk`）判的是同一句话的另一半：**旧式底栏与
+     * 宽屏导航栏仍然不向底栏要选中墨**，所以它逐字回落到主题 `primary`。
      */
     @Test
     fun legacyNavigationPathsDoNotAskTheBottomBarForInk() {
@@ -363,8 +366,13 @@ class BottomBarInkTest {
             "ink?:MaterialTheme.colorScheme.onSurfaceVariant" in flat,
         )
         assertTrue(
-            "选中态仍用 primary（本卡只改中性墨，不动选中态与指示器那一族）",
-            "MaterialTheme.colorScheme.primary" in flat,
+            "选中墨也要能整格交还给主题：accentInk 默认必须是 null（=底栏没说话）：$params",
+            Regex("accentInk\\s*:\\s*Color\\?\\s*=\\s*null") in params,
+        )
+        assertTrue(
+            "旧式底栏/宽屏导航栏仍不向底栏要选中墨——local 为 null 时选中态逐字回落到主题 primary" +
+                "（ai/T32 之后这一族是解出来的，回落写丢了这两条路径就跟着换色）",
+            "accentInk?:MaterialTheme.colorScheme.primary" in flat,
         )
 
         val calls = NAV_CALL.findAll(code).toList()
@@ -521,7 +529,9 @@ class BottomBarInkTest {
             setOf(RegexOption.DOT_MATCHES_ALL),
         )
         val NAV_CALL = Regex("^[ \\t]*NavItemContent\\(([^)]*)\\)", setOf(RegexOption.MULTILINE))
-        val NAV_INK_ARG = Regex("\\bink\\s*=")
+        // 中性墨与选中墨都要管：`\bink` 在 "accentInk" 里根本不成词（也无边界），
+        // 少了 [iI]nk 这一支，旧式底栏哪天开始传 accentInk 就没人报。
+        val NAV_INK_ARG = Regex("[iI]nk\\s*=")
         val INK_DEFINITION = Regex(
             "internal fun bottomBarInk\\(([^)]*)\\)\\s*:\\s*Color\\s*\\{(.*?)\\n\\}",
             setOf(RegexOption.DOT_MATCHES_ALL),
