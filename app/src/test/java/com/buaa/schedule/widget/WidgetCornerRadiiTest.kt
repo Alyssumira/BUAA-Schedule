@@ -495,6 +495,219 @@ class WidgetCornerRadiiTest {
         assertTrue("旧口径的纵轴 $beforeY 本该比新口径 ${displayedY}dp 更圆", beforeY > displayedY)
     }
 
+    // ---- T39：options 上报的 dp 各自夹到「这块屏幕的物理尺寸」这一上限 ----
+    //
+    // 地面真相（emulator-5554 / AVD buaa36 / API 36 / density 2.625 / 1080x2400px，
+    // 组件 id=8「今日课程」4×2，玻璃背景开；由编排者装机量像素得到）：
+    // - tile 真实绘制矩形 946x588px = 360.4x224.0dp，屏幕本身 411.4x914.3dp；
+    // - options 的 `MAX_HEIGHT` ≈ 229dp 恰好贴着真实高（所以 `ai/T38` 把纵轴从 45.7dp 修到 27.4dp），
+    //   但 `MAX_WIDTH` ≥ 509dp —— **比整块屏还宽**，组件物理上不可能有这么大。
+    //   它的语义更像「用户能把它拖到多大」而不是「它现在多大」。
+    // 于是 `ai/T38` 之后 28dp 那一格实测 rx=52px(19.8dp) / ry=72px(27.4dp)，
+    // 两轴之比 1.385，桌面上还是个椭圆，只是歪到了横轴那一侧。
+    //
+    // 上限的立论（为什么加了它方向性仍然是「只会偏方」）：
+    // 真实绘制尺寸 ≤ 屏幕尺寸，且 MAX ≥ 真实尺寸 => `min(MAX, 屏)` 两个入参都 ≥ 真实尺寸
+    // => 夹完仍然 ≥ 真实尺寸 => 拉伸倍数仍被高估 => 烘出来的半径仍**不超过**用户选的那一档。
+    // 只是估得更准，方向一格没变。
+
+    private val measuredDensity = 2.625f
+    private val measuredScreenWidthDp = 411.4f
+    private val measuredScreenHeightDp = 914.3f
+    private val measuredTileWidthPx = 946f
+    private val measuredTileHeightPx = 588f
+
+    /** 实测那一格：宿主只报了 MAX，四枚 provider/MIN 用装机量到的值当陪衬。 */
+    private fun resolveMeasured(
+        maxWDp: Int,
+        maxHDp: Int,
+        minWDp: Int = 360,
+        minHDp: Int = 137,
+        screenWDp: Float = measuredScreenWidthDp,
+        screenHDp: Float = measuredScreenHeightDp,
+    ): WidgetSizePx = requireNotNull(
+        WidgetCornerRadii.resolveSizePx(
+            optionsMaxWidthDp = maxWDp,
+            optionsMaxHeightDp = maxHDp,
+            optionsMinWidthDp = minWDp,
+            optionsMinHeightDp = minHDp,
+            infoWidthDp = 180,
+            infoHeightDp = 40,
+            density = measuredDensity,
+            displayWidthDp = screenWDp,
+            displayHeightDp = screenHDp,
+        ),
+    ) { "max=($maxWDp,$maxHDp) min=($minWDp,$minHDp) 这一格按说该解出尺寸" }
+
+    /** 屏幕上真正看到的两轴半径（px）：烘焙值 x **实测** tile 的 fitXY 倍数（不用 MAX 算倍数） */
+    private fun displayedOnMeasuredTile(size: WidgetSizePx?, cornerDp: Int): Pair<Float, Float> {
+        val baked = WidgetCornerRadii.bake(
+            cornerDp, measuredDensity, CANVAS_WIDTH, CANVAS_HEIGHT, size,
+        )
+        return baked.radiusX * (measuredTileWidthPx / CANVAS_WIDTH) to
+            baked.radiusY * (measuredTileHeightPx / CANVAS_HEIGHT)
+    }
+
+    private fun ratioOf(axes: Pair<Float, Float>): Float =
+        maxOf(axes.first, axes.second) / minOf(axes.first, axes.second)
+
+    @Test
+    fun optionsMaxWidthIsCappedAtThePhysicalScreenNotDroppedToMin() {
+        // 上限生效那一格：MAX_W=509 > 屏宽 411.4 ⇒ 该轴用 411.4。
+        // 关键是「取到的是夹后的 411.4」而不是「夹不动了就退到 MIN 的 360」——
+        // 退到 MIN 会把横轴倍数重新低估，正是 ai/T30 那一版的病。
+        val size = resolveMeasured(maxWDp = 509, maxHDp = 229)
+        assertEquals(
+            "横轴该被夹到屏宽 411.4dp",
+            measuredScreenWidthDp * measuredDensity,
+            size.widthPx,
+            0.05f,
+        )
+        assertTrue(
+            "横轴夹完却掉到了 MIN 的口径 ${size.widthPx / measuredDensity}dp：那不是夹上限，是换了档位",
+            size.widthPx > 360f * measuredDensity,
+        )
+    }
+
+    @Test
+    fun optionsMaxHeightBelowTheScreenIsPassedThroughUntouched() {
+        // 上限不该生效那一轴：MAX_H=229 < 屏高 914.3 ⇒ 原样 229，一个像素都不许动
+        // （ai/T38 刚修好的那 27.4dp 就是靠它）。
+        val size = resolveMeasured(maxWDp = 509, maxHDp = 229)
+        assertEquals(
+            "纵轴本来就在屏高之内，不该被这道上限碰",
+            229f * measuredDensity,
+            size.heightPx,
+            0.05f,
+        )
+        // 横轴同理：MAX_W=250 远小于屏宽，原样 250
+        val small = resolveMeasured(maxWDp = 250, maxHDp = 120)
+        assertEquals(250f * measuredDensity, small.widthPx, 0.05f)
+        assertEquals(120f * measuredDensity, small.heightPx, 0.05f)
+    }
+
+    @Test
+    fun displayCapBoundariesCoverExactlyTheScreenFarBelowItAndNoScreenAtAll() {
+        // 恰好 == 屏宽：coerceAtMost 是闭的，这个数必须原样过去，不能被"夹"成下一档
+        val equal = resolveMeasured(maxWDp = 411, maxHDp = 914)
+        assertEquals(411f * measuredDensity, equal.widthPx, 0.05f)
+        assertEquals(914f * measuredDensity, equal.heightPx, 0.05f)
+
+        // 远小于屏宽：原样
+        val farBelow = resolveMeasured(maxWDp = 100, maxHDp = 60)
+        assertEquals(100f * measuredDensity, farBelow.widthPx, 0.05f)
+        assertEquals(60f * measuredDensity, farBelow.heightPx, 0.05f)
+
+        // 拿不到屏幕度量（0 或负数，未初始化/异常都归到这里）：**不做这道夹取**，
+        // 原样交给档位表。这里 509 必须整个过去（1336px），而不是被夹成 0 或退档。
+        val unknown = resolveMeasured(maxWDp = 509, maxHDp = 1200, screenWDp = 0f, screenHDp = 0f)
+        assertEquals(509f * measuredDensity, unknown.widthPx, 0.05f)
+        assertEquals(1200f * measuredDensity, unknown.heightPx, 0.05f)
+        val negative = resolveMeasured(maxWDp = 509, maxHDp = 1200, screenWDp = -1f, screenHDp = -1f)
+        assertEquals(509f * measuredDensity, negative.widthPx, 0.05f)
+        assertEquals(1200f * measuredDensity, negative.heightPx, 0.05f)
+    }
+
+    @Test
+    fun displayCapsEveryOptionsTierButNeverTheProviderDeclaredTier() {
+        // 四枚 options dp（MAX_W/MAX_H/MIN_W/MIN_H）各自都要过这道闸：
+        // MAX 缺数落到 MIN 时，MIN 同样不可能比屏宽还宽。
+        val minOnly = resolveMeasured(maxWDp = 0, maxHDp = 0, minWDp = 509, minHDp = 1200)
+        assertEquals(measuredScreenWidthDp * measuredDensity, minOnly.widthPx, 0.05f)
+        assertEquals(measuredScreenHeightDp * measuredDensity, minOnly.heightPx, 0.05f)
+
+        // 第 3 档 provider 声明值**不过**这道闸：它自带的是「不小于画布」那条托底
+        // （axisPx 的 coerceAtLeast，ai/T30 的论证，一个字节都不许动），
+        // 给它加上限会把那条托底的方向整个反掉。500dp 的声明值在 411.4dp 屏上原样过去。
+        val fromInfo = requireNotNull(
+            WidgetCornerRadii.resolveSizePx(
+                optionsMaxWidthDp = 0,
+                optionsMaxHeightDp = 0,
+                optionsMinWidthDp = 0,
+                optionsMinHeightDp = 0,
+                infoWidthDp = 500,
+                infoHeightDp = 40,
+                density = measuredDensity,
+                displayWidthDp = measuredScreenWidthDp,
+                displayHeightDp = measuredScreenHeightDp,
+            ),
+        )
+        assertEquals(500f * measuredDensity, fromInfo.widthPx, 0.05f)
+        assertEquals(CANVAS_HEIGHT.toFloat(), fromInfo.heightPx, 0.05f)
+    }
+
+    @Test
+    fun displayCapOnlyMovesTowardSquareNeverTowardRound() {
+        // 方向性不变（这条是全卡的立论落到数上）：夹完之后
+        //   解出的尺寸 ≥ 用 MIN 时解出的尺寸（夹的只是上沿，不会夹到下沿以下）
+        //   显示半径 ≤ 所选档位，且 ≤ 用 MIN 时的显示值（只会更方，不会更圆）
+        val wantPx = 28f * measuredDensity
+        val minOnly = resolveMeasured(maxWDp = 0, maxHDp = 0)
+        val capped = resolveMeasured(maxWDp = 509, maxHDp = 229)
+
+        assertTrue(
+            "夹完的尺寸 ${capped.widthPx} 反倒小于用 MIN 的 ${minOnly.widthPx}：那说明这道上限在往下夹",
+            capped.widthPx >= minOnly.widthPx && capped.heightPx >= minOnly.heightPx,
+        )
+
+        val fromMin = displayedOnMeasuredTile(minOnly, 28)
+        val fromCapped = displayedOnMeasuredTile(capped, 28)
+        assertTrue(
+            "夹过之后横轴显示 ${fromCapped.first}dp 超过了选的 28dp",
+            fromCapped.first <= wantPx + 0.5f && fromCapped.second <= wantPx + 0.5f,
+        )
+        assertTrue(
+            "夹过之后反而比用 MIN 时更圆（${fromCapped.first} vs ${fromMin.first}）",
+            fromCapped.first <= fromMin.first + 0.001f && fromCapped.second <= fromMin.second + 0.001f,
+        )
+    }
+
+    @Test
+    fun displayCapAppliesToEachAxisIndependently() {
+        // 一轴被夹、一轴不被夹，互不牵连：横轴 509->411.4，纵轴 229 原样。
+        val oneClamped = resolveMeasured(maxWDp = 509, maxHDp = 229)
+        assertEquals(measuredScreenWidthDp * measuredDensity, oneClamped.widthPx, 0.05f)
+        assertEquals(229f * measuredDensity, oneClamped.heightPx, 0.05f)
+
+        // 换一轴：横轴 250 原样、纵轴 1200->914.3
+        val otherClamped = resolveMeasured(maxWDp = 250, maxHDp = 1200)
+        assertEquals(250f * measuredDensity, otherClamped.widthPx, 0.05f)
+        assertEquals(measuredScreenHeightDp * measuredDensity, otherClamped.heightPx, 0.05f)
+
+        // 只有一轴拿得到屏幕度量（另一轴传 0）时，有数那轴夹、没数那轴原样
+        val halfKnown = resolveMeasured(maxWDp = 509, maxHDp = 1200, screenWDp = measuredScreenWidthDp, screenHDp = 0f)
+        assertEquals(measuredScreenWidthDp * measuredDensity, halfKnown.widthPx, 0.05f)
+        assertEquals(1200f * measuredDensity, halfKnown.heightPx, 0.05f)
+    }
+
+    @Test
+    fun measuredTileWithTheRealMaxNowDisplaysTheBucketOnBothAxes() {
+        // 装机反推的那一格（28dp 档 = bucket 5，实测 MAX_W≥509、MAX_H≈229、tile 946x588）：
+        // 改之前 rx=52px / ry=72px（比 1.385，还是椭圆）；
+        // 加这道上限之后 rx=28x946/411.4≈**64.4px**(24.5dp)、ry 不动 71.9px(27.4dp)，
+        // 两轴之比收到 1.117（<=1.15），且两轴都仍 <= 所选的 28dp=73.5px。
+        val capped = displayedOnMeasuredTile(resolveMeasured(maxWDp = 509, maxHDp = 229), 28)
+        assertEquals("横轴显示值", 64.4f, capped.first, 0.5f)
+        assertEquals("纵轴显示值（与装机量到的 72px 同一格）", 71.9f, capped.second, 0.5f)
+        assertTrue("两轴都该 <= 所选 28dp：${capped.first}/${capped.second}", capped.second <= 28f * measuredDensity + 0.5f)
+        val ratio = ratioOf(capped)
+        assertTrue("两轴之比 $ratio，桌上还是个椭圆", ratio <= 1.15f)
+
+        // 对照：同一格不做这道夹取（屏幕度量传 0，= ai/T38 那一版），椭圆必须又回来，
+        // 否则就是这道上限根本没在起作用。
+        val uncapped = displayedOnMeasuredTile(
+            resolveMeasured(maxWDp = 509, maxHDp = 229, screenWDp = 0f, screenHDp = 0f),
+            28,
+        )
+        assertEquals("不夹时的横轴就是装机量到的 52px", 52.0f, uncapped.first, 0.5f)
+        assertTrue("不夹时的两轴之比 ${ratioOf(uncapped)} 本该还是椭圆那一形", ratioOf(uncapped) > 1.15f)
+
+        // 20dp 那一格：两轴都被夹到 <=52px，Pixel launcher 自己那层约 52px 的圆角遮罩
+        // 会把它们托成 52/52，屏幕上就是正圆角 —— 也就是"烘得比遮罩小看不出区别"那一侧。
+        val bucket20 = displayedOnMeasuredTile(resolveMeasured(maxWDp = 509, maxHDp = 229), 20)
+        assertTrue("20dp 档两轴都该 <= 遮罩那 52px：${bucket20.first}/${bucket20.second}", bucket20.first <= 52f && bucket20.second <= 52f)
+    }
+
     @Test
     fun infeasibleCellsAskTheImpossibleButNeverGoNegative() {
         // 40dp 高的组件要 28dp 圆角：短边一半才 20dp，Skia 会自己把四角等比缩小。
