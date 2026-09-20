@@ -525,31 +525,6 @@ object WidgetCommon {
         if (!inClass || window == null) NEXT_LABEL_IDLE
         else clockOf(window.endMillis)?.let { "正在上课 · $it 下课" } ?: "正在上课"
 
-    /** 只刷新某一个实例（配置页保存后立即生效） */
-    suspend fun updateSingle(context: Context, appWidgetId: Int, mode: ListWidgetMode) =
-        withContext(Dispatchers.IO) {
-            updateListWidget(context, AppWidgetManager.getInstance(context), appWidgetId, mode)
-        }
-
-    /**
-     * 触发式刷新（不挂调用方生命周期）：配置页保存后要立刻重绘组件，
-     * 但配置页马上 finish，用 lifecycleScope 会被取消。
-     */
-    fun requestUpdate(context: Context, appWidgetId: Int, mode: ListWidgetMode) {
-        val appContext = context.applicationContext
-        launchRefresh(null) {
-            updateListWidget(appContext, AppWidgetManager.getInstance(appContext), appWidgetId, mode)
-        }
-    }
-
-    /** 2x1 下一节组件的触发式刷新（同 [requestUpdate] 的理由） */
-    fun requestUpdateNext(context: Context, appWidgetId: Int) {
-        val appContext = context.applicationContext
-        launchRefresh(null) {
-            updateNextWidget(appContext, AppWidgetManager.getInstance(appContext), appWidgetId)
-        }
-    }
-
     /**
      * 课堂转折点（上课铃 / 下课铃）的轻量重绘：刷「今日课程」「下一节课」「今明课表」。
      *
@@ -800,13 +775,6 @@ object WidgetCommon {
 
         appWidgetManager.updateAppWidget(appWidgetId, views)
         appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.widget_grid)
-    }
-
-    fun requestUpdateWeekGrid(context: Context, appWidgetId: Int) {
-        val appContext = context.applicationContext
-        launchRefresh(null) {
-            updateWeekGridWidget(appContext, AppWidgetManager.getInstance(appContext), appWidgetId)
-        }
     }
 
     /**
