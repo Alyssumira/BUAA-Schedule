@@ -23,28 +23,32 @@ class WidgetGlassSourceWiringTest {
     /** ① 渲染侧不再自己重排取源顺序，改为问那份共用判据 */
     @Test
     fun rendererAsksTheSharedDecisionInsteadOfRepeatingTheOrder() {
-        val body = normalize(
-            balancedBlock(
-                withoutCommentsKeepingLiterals(readMainSource(RENDERER_FILE)),
-                "private fun wallpaperSource(context: Context): Source?",
-            ),
-        )
+        val code = withoutCommentsKeepingLiterals(readMainSource(RENDERER_FILE))
+        val availability = normalize(balancedBlock(code, "internal fun availability(context: Context): GlassSource"))
+        val body = normalize(balancedBlock(code, "private fun wallpaperSource(context: Context): Source?"))
 
         assertEquals(
-            "取源顺序被问了两遍（判据只许有 WidgetGlassSource 那一份）：\n$body",
+            "判据被问了两遍（只许 availability 那一处问，配置页再从它拿答案）：\n$code",
             1,
-            occurrences(body, "WidgetGlassSource.decide("),
+            occurrences(code, "WidgetGlassSource.decide("),
         )
-        // 顺序本身：开关开着时系统源优先、自选兜底；只认自选时不碰系统源；无源时直接 null
-        assertTrue("系统源优先、自选兜底那一条被改掉了：\n$body", body.contains("GlassSource.SystemWallpaperThenPicked -> systemSource(context) ?: picked()"))
+        // 三个入参都要来自真实状态，不许写死
+        assertTrue("API 档次没接进判定：\n$availability", availability.contains("WidgetGlassSource.systemWallpaperReadable(Build.VERSION.SDK_INT)"))
+        assertTrue("「使用桌面壁纸」那枚开关没接进判定：\n$availability", availability.contains("KEY_USE_SYSTEM_WALLPAPER"))
+        assertTrue(
+            "自选 URI「有没有」在这里又自己判了一次（应共用 WidgetGlassSource.hasPickedImage）：\n$availability",
+            availability.contains("WidgetGlassSource.hasPickedImage("),
+        )
+        // 顺序本身：开关开着且读得到时系统源优先、自选兜底；只认自选时不碰系统源；无源时直接 null
+        assertTrue("取源顺序被改掉了：\n$body", body.contains("when (availability(context))"))
+        assertTrue(
+            "系统源优先、自选兜底那一条被改掉了：\n$body",
+            body.contains("GlassSource.SystemWallpaperThenPicked -> systemSource(context) ?: picked()"),
+        )
         assertTrue("只认自选那张那一条被改掉了：\n$body", body.contains("GlassSource.PickedImage -> picked()"))
         assertTrue(
             "判到没有图源时还在试着取图（应当直接返回 null，让 applyAppearance 落到纯色那条分支）：\n$body",
             body.contains("GlassSource.NoSourceWallpaperReadBlocked") && body.contains("-> null"),
-        )
-        assertTrue(
-            "自选 URI「有没有」在这里又自己判了一次（应共用 WidgetGlassSource.hasPickedImage）：\n$body",
-            body.contains("WidgetGlassSource.hasPickedImage("),
         )
     }
 
@@ -95,19 +99,19 @@ class WidgetGlassSourceWiringTest {
     fun configPageOffersTheWayOutNextToTheSwitch() {
         val code = withoutCommentsKeepingLiterals(readMainSource(CONFIG_FILE))
         val panel = balancedBlock(code, PANEL_ANCHOR)
-        val raw = readMainSource(CONFIG_FILE)
 
         assertTrue("无源时没有就地挑图的入口：\n$panel", panel.contains("wallpaperLauncher.launch("))
         assertTrue("挑图入口没挂在 SAF 上：\n$code", code.contains("rememberLauncherForActivityResult"))
         assertTrue(
             "挑图写的是新造的存储格式（必须经 App 内那条既有链路写 Personalization 那两个键）：\n$code",
-            code.contains("applyPickedWallpaper(") && !raw.contains("putString(\"wallpaper_uri\""),
+            code.contains("applyPickedWallpaper(") && !code.contains("putString(\"wallpaper_uri\""),
         )
         // 那段常驻小字的最后一句是"这个开关看起来没反应，是在等你先挑一张图" ——
-        // 它把责任说给了用户，却没有给入口，正是要修的那句话
+        // 它把责任说给用户，却既不分图源判定、也不给入口，正是要修的那句话。
+        // 查的是抹掉注释之后的文本：本卡片的注释里正是拿它当话说的那一句。
         assertTrue(
-            "还在用那段常驻小字代替判定（无源时要说具体原因，有源时不必吓唬人）：\n$raw",
-            !raw.contains("是在等你先挑一张图"),
+            "还在用那段常驻小字代替判定（无源时要说具体原因，有源时不必吓唬人）",
+            !code.contains("是在等你先挑一张图"),
         )
     }
 
@@ -122,9 +126,12 @@ class WidgetGlassSourceWiringTest {
                 "28dp 那档既看不见也点不到：\n$chipRow",
             chipRow.contains("FlowRow("),
         )
-        assertTrue(
+        // "Row(" 这个词在本段里必然出现两次以上：函数名 ChipRow( 和 FlowRow( 各自都含它。
+        // 所以判据只能是"每一次 Row( 都得有个来历"，多出来的那次就是又套了一颗不换行的 Row。
+        assertEquals(
             "FlowRow 外面又套了一层不换行的 Row，等于没换行：\n$chipRow",
-            occurrences(chipRow, "Row(") == occurrences(chipRow, "FlowRow("),
+            occurrences(chipRow, "FlowRow(") + occurrences(chipRow, "ChipRow("),
+            occurrences(chipRow, "Row("),
         )
     }
 

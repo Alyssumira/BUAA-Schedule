@@ -67,13 +67,18 @@ internal object WidgetGlassSource {
         useSystemWallpaper: Boolean,
         hasPickedImage: Boolean,
     ): GlassSource = when {
-        // 旧口径（尚未接线）：只看「使用桌面壁纸」这枚开关开没开，不看它在这台设备上
-        // 兑不兑现得了。Android 14+ 上这里照样答 SystemWallpaperThenPicked，
-        // 而渲染侧的 systemSource() 第一句就返回 null —— 于是配置页开始骗人。
-        // 修法：把 systemWallpaperReadable 接进判据，并让"没有图源"说清是哪一条撞空的。
-        useSystemWallpaper -> GlassSource.SystemWallpaperThenPicked
+        // ① 用户关掉「使用桌面壁纸」→ 只认自选那张。撞空的原因是他自己的选择，与 API 档次无关：
+        //    指回"平台读不到"会让他去反抗一个不用反抗的东西，出路就在这两枚设置里。
+        !useSystemWallpaper ->
+            if (hasPickedImage) GlassSource.PickedImage else GlassSource.NoSourceSystemWallpaperOff
+        // ② 开关开着、这台设备又读得到桌面壁纸 → 系统源优先，自选那张只是兜底。
+        //    这条先后是既有语义，不许反过来（App 内挑图的优先级本来就排在系统源之后）。
+        systemWallpaperReadable -> GlassSource.SystemWallpaperThenPicked
+        // ③ Android 14+ → 系统源那一头已经空了，只剩自选那张；一张都没有就是实测那一格：
+        //    把开关从关拨到开，整块组件 tile 的像素差 0 / 258258。以前这里照样答
+        //    SystemWallpaperThenPicked，于是配置页那句话开始骗人。
         hasPickedImage -> GlassSource.PickedImage
-        else -> GlassSource.NoSourceSystemWallpaperOff
+        else -> GlassSource.NoSourceWallpaperReadBlocked
     }
 
     /**
@@ -90,7 +95,18 @@ internal object WidgetGlassSource {
         currentUri: String?,
         currentUseSystem: Boolean,
     ): Boolean =
-        // 旧口径（尚未接线）：改前 save() 从不重绘组件，所以这个判据恒为 false ——
-        // 用户在 App 内换完壁纸，桌面上那些组件还在糊旧图，直到下一次课表数据刷新才跟上。
-        false
+        savedUseSystem != currentUseSystem || pickedImageChanged(savedUri, currentUri)
+
+    /**
+     * 自选那张换没换。两边都先按"是不是一个图源"归一（与 [hasPickedImage] 同一口径），
+     * 否则 `null` 与空白串会被判成"变了"，白重绘六个组件。
+     *
+     * 认不出的一种：URI 没变、但那张图的内容被外部改过。那条只能靠设置页那颗
+     * 手动「立即刷新」按钮，不在这一格的承诺里。
+     */
+    private fun pickedImageChanged(savedUri: String?, currentUri: String?): Boolean =
+        savedUri.asPickedImage() != currentUri.asPickedImage()
+
+    /** 把 URI 归一成"图源 or 没有" */
+    private fun String?.asPickedImage(): String? = this?.trim()?.takeIf { it.isNotEmpty() }
 }

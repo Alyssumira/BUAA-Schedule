@@ -247,21 +247,9 @@ fun SettingsScreen(
     val wallpaperLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri ->
-        if (uri != null) {
-            // OpenDocument + 持久授权：避免临时 URI 在进程重启后失效
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                )
-            }.onFailure {
-                // 部分选择器（"最近"列表等）返回的 URI 不支持持久授权：
-                // 当场仍能显示，但重启后会失效回退渐变，必须留痕便于诊断
-                android.util.Log.w("SettingsScreen", "壁纸 URI 持久授权失败，重启后可能失效", it)
-            }
-            Personalization.wallpaperUri = uri.toString()
-            Personalization.save(context)
-        }
+        // 授权 + 落盘那一段只有 Personalization 里的一份：组件配置页上那颗「选择壁纸图片」
+        // 走的是同一个入口，两条链才不会一个生效一个不生效。
+        if (uri != null) Personalization.applyPickedWallpaper(context, uri)
     }
 
     // SharedPreferences 的获取是一次跨进程 Binder 调用（结果由框架缓存，但仍有开销），

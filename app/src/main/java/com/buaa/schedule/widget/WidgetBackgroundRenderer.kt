@@ -174,14 +174,36 @@ object WidgetBackgroundRenderer {
     private class Source(val bitmap: Bitmap, val owned: Boolean)
 
     /**
-     * 取一张可糊的壁纸。走哪一条由 [WidgetGlassSource.decide] 定，
-     * 而那个答案与配置页上那句话说的是**同一件事**（判据与理由都写在那儿）：
-     * - 开关开着时优先系统源、读不到再兜底自选；
-     * - 用户关掉「使用桌面壁纸」时**只**认自选那张；
-     * - 两条都没有时返回 null，调用方回退纯色圆角底。
+     * 这一次「玻璃感壁纸背景」到底有没有图源。
      *
-     * 这里只负责把判据落成两次取图，不再自己重排先后 —— 各判一次就会出现
-     * "开关能拨、拨完没反应"（真机实测无源时整块 tile 像素差 0/258258）。
+     * 判据本体在 [WidgetGlassSource]（不 import 任何 android 类型，所以那张表能在 JVM 单测里
+     * 逐格钉住）；这里只把 prefs 与这台设备的 API 档次翻译成它的三个入参。
+     *
+     * 配置页那句说明读的也是这个函数 —— 两边各判一次就会出现"开关能拨、拨完没反应"
+     * （真机实测：无源时整块 tile 的像素差 0 / 258258）。
+     */
+    internal fun availability(context: Context): GlassSource {
+        val prefs = context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
+        return WidgetGlassSource.decide(
+            systemWallpaperReadable = WidgetGlassSource.systemWallpaperReadable(Build.VERSION.SDK_INT),
+            useSystemWallpaper = prefs.getBoolean(
+                KEY_USE_SYSTEM_WALLPAPER,
+                Personalization.DEFAULT_USE_SYSTEM_WALLPAPER,
+            ),
+            hasPickedImage = WidgetGlassSource.hasPickedImage(
+                prefs.getString(KEY_WALLPAPER_URI, null),
+            ),
+        )
+    }
+
+    /**
+     * 取一张可糊的壁纸。走哪一条由 [availability] 定：
+     * - 开关开着且这台设备读得到桌面壁纸时**优先**系统源、自选那张兜底；
+     * - 用户关掉「使用桌面壁纸」时**只**认自选那张 —— 他刚说不想用桌面壁纸，
+     *   组件却还在糊桌面壁纸，两边就对不上了；
+     * - 判到没有图源时直接 null，调用方回退纯色圆角底。
+     *
+     * 这里只负责把判据落成两次取图，不再自己重排先后。
      */
     private fun wallpaperSource(context: Context): Source? {
         val prefs = context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
@@ -190,18 +212,7 @@ object WidgetBackgroundRenderer {
                 decodeSampledWallpaper(context, uri)?.let { Source(it, owned = true) }
             }
         }
-        return when (
-            WidgetGlassSource.decide(
-                systemWallpaperReadable = WidgetGlassSource.systemWallpaperReadable(Build.VERSION.SDK_INT),
-                useSystemWallpaper = prefs.getBoolean(
-                    KEY_USE_SYSTEM_WALLPAPER,
-                    Personalization.DEFAULT_USE_SYSTEM_WALLPAPER,
-                ),
-                hasPickedImage = WidgetGlassSource.hasPickedImage(
-                    prefs.getString(KEY_WALLPAPER_URI, null),
-                ),
-            )
-        ) {
+        return when (availability(context)) {
             GlassSource.SystemWallpaperThenPicked -> systemSource(context) ?: picked()
             GlassSource.PickedImage -> picked()
             GlassSource.NoSourceWallpaperReadBlocked,
@@ -210,9 +221,11 @@ object WidgetBackgroundRenderer {
         }
     }
 
-    @SuppressLint("MissingPermission") // API 34+ 已提前返回；更低版本读取壁纸无需该权限
+    @SuppressLint("MissingPermission") // 版本闸门在 [WidgetGlassSource] 那一头；更低版本读取壁纸无需该权限
     private fun systemSource(context: Context): Source? {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return null
+        // 闸门不在这个文件里再写一遍 34：配置页那句"这台设备读不读得到桌面壁纸"
+        // 与这里必须同进同退，两处各写一个数字迟早对不上。
+        if (!WidgetGlassSource.systemWallpaperReadable(Build.VERSION.SDK_INT)) return null
         val wallpaper = WallpaperManager.getInstance(context).drawable ?: return null
         return if (wallpaper is android.graphics.drawable.BitmapDrawable &&
             wallpaper.bitmap != null &&

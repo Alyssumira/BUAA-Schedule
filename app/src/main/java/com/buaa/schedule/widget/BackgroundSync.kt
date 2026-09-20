@@ -15,7 +15,9 @@ import com.buaa.schedule.reminder.ClassProgressScheduler
 import com.buaa.schedule.reminder.ReminderScheduler
 import com.buaa.schedule.reminder.TomorrowPreviewReceiver
 import com.buaa.schedule.reminder.TomorrowPreviewScheduler
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.ZoneId
@@ -271,6 +273,29 @@ object BackgroundSync {
             ClassProgressScheduler.rescheduleNextWindow(context, onStepFailed)
         }
         return reminderArmed
+    }
+
+    /**
+     * 「App 内改了壁纸」这条路的组件重绘：**即发即忘**，调用线程只付一次 launch。
+     *
+     * 存在的理由只有一个：[com.buaa.schedule.core.designsystem.Personalization.save] 是从
+     * 设置页/首页/组件配置页的点击回调里调的，而 [refreshWidgets] 是挂起函数，整条链
+     * （问 Launcher 有没有组件 + 全学期快照重写 + 六个 Provider 逐个重绘）不能压回主线程。
+     * 收口也只有 save() 那一处 —— 十几个调用点各自复制一段刷新代码，早晚漏一处，
+     * 而且没人复制得到的那几处就是「换完壁纸、桌面还在糊旧图」。
+     *
+     * 覆盖范围是**全部**已绑定的实例（[refreshWidgets] 走六个 Provider 的 `updateAll`），
+     * 包括组件配置页正开着的那一个。
+     */
+    fun refreshWidgetsAsync(context: Context) {
+        val appContext = context.applicationContext
+        // 协程里这一层 runCatching 是最后一道：默认参数那次跨 binder 探测（MIUI 上会抛
+        // DeadObjectException）与协程默认处理器接不住就是杀进程 —— 同 WidgetCommon.launchRefresh
+        // 那笔 R5 F-24 的账，只是这里没有 PendingResult 要 finish。
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching { refreshWidgets(appContext) }
+                .onFailure { Log.w(TAG, "壁纸变更后刷新组件失败", it) }
+        }
     }
 
     /**

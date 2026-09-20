@@ -5,7 +5,9 @@ import android.content.Context
 import android.content.res.Configuration
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -271,6 +273,23 @@ private fun WidgetConfigScreen(
             // 组件本身不需要运行时权限，但这个前置条件坏掉用户只会觉得"组件不准"，
             // 在配置页直接给出诊断 + 跳转，比让用户翻设置页快得多。
             val configContext = androidx.compose.ui.platform.LocalContext.current
+            // 图源判定与渲染侧是同一个函数：这句说明与桌面上画出来的东西必须同一个出处，
+            // 否则配置页就又回到"凭感觉写一段小字、开关照旧静默"那个形状。
+            // 键用 Personalization 那两个全局状态、体内读 prefs（渲染侧读的也是它）：
+            // prefs 自己不会触发重组，而挑完图是"先 save() 再重组"，读到的必然是新键值。
+            val glassSource = remember(
+                configContext,
+                Personalization.wallpaperUri,
+                Personalization.useSystemWallpaper,
+            ) {
+                WidgetBackgroundRenderer.availability(configContext)
+            }
+            // 就地挑图：无源时把用户送去 App 的另一个页面找那个按钮，等于没有出路
+            val wallpaperLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.OpenDocument(),
+            ) { uri ->
+                if (uri != null) Personalization.applyPickedWallpaper(configContext, uri)
+            }
             val exactAlarmOk = remember {
                 com.buaa.schedule.ui.settings.ReminderGuidance.canScheduleExact(configContext)
             }
@@ -509,13 +528,45 @@ private fun WidgetConfigScreen(
                     checked = appearance.blurBackground,
                     onCheckedChange = { appearance = appearance.copy(blurBackground = it) },
                 )
+                // 为什么这句话必须按图源判定分叉，而不是留一段常驻小字：
+                // 实测在这台 Android 14+ 的设备上、用户没有 App 内自选壁纸时，
+                // 开关从关拨到开，整块组件 tile 的像素差是 0 / 258258 —— 彻底静默。
+                // 常驻小字把这件事写成"这个开关看起来没反应，是在等你先挑一张图"，
+                // 既骗了有图源的那一半人（他们本来就有玻璃），也没帮到没图源的那一半
+                // （没有入口，看完还是一头雾水）。
+                // 开关本身照旧能拨：置灰只是把同一件事换成"这里有个坏掉的开关"来说，
+                // 而且这个选择要能存下来 —— 哪天挑了图它就兑现。
                 Text(
-                    text = "把壁纸糊成组件的底图。图来自系统桌面壁纸；Android 14 起系统不再允许" +
-                        "第三方应用读取桌面壁纸，此时改用 App 内「外观 → 选择壁纸图片」自选的那张。" +
-                        "两者都没有就仍是纯色底——这个开关看起来没反应，是在等你先挑一张图。",
+                    text = when (glassSource) {
+                        GlassSource.SystemWallpaperThenPicked ->
+                            "底图糊的是系统桌面壁纸，换壁纸后跟着更新。"
+                        GlassSource.PickedImage ->
+                            "底图糊的是 App 内自选的那张图（Android 14 起系统不再允许第三方应用读桌面壁纸）。"
+                        GlassSource.NoSourceWallpaperReadBlocked ->
+                            "现在没有能糊的图：Android 14 起系统不再允许第三方应用读取桌面壁纸，" +
+                                "而 App 内还没有自选壁纸。所以这个开关拨了不会有任何变化 —— 先挑一张图。"
+                        GlassSource.NoSourceSystemWallpaperOff ->
+                            "现在没有能糊的图：你在 App 内关掉了「使用桌面壁纸」，而自选壁纸还是空的。" +
+                                "所以这个开关拨了不会有任何变化 —— 挑一张图，或重新打开「使用桌面壁纸」。"
+                    },
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (glassSource.usable) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        LocalSemanticColors.current.warning
+                    },
                 )
+                if (!glassSource.usable) {
+                    // 复用 App 内那条既有链路（同一张 SAF 选择器 + 同两个键），不新造存储格式。
+                    // 挑完 save() 会顺手把桌面上所有已绑定的实例重绘一遍，这一个也包括在内，
+                    // 于是"拨开关没反应"当场翻成"有反应"。
+                    OutlinedButton(
+                        onClick = { wallpaperLauncher.launch(arrayOf("image/*")) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
+                    ) { Text("选择壁纸图片") }
+                }
                 SettingsSwitchRow(
                     title = "显示标题行",
                     checked = appearance.showTitle,
@@ -642,15 +693,25 @@ private fun Panel(
     }
 }
 
+/**
+ * 一排档位 chip。
+ *
+ * 名字里的 Row 已经不是形状了（这里要的就是"放不下就换行"），留着是因为它服务的仍是
+ * "一行档位选项"这件事。必须换行的理由是实测：圆角有 6 档，不换行的 `Row` 在 360dp
+ * 宽的屏上只画得出 5 颗（超出的子节点既看不见也点不到），于是 28dp 那一档根本不可达 ——
+ * 而它与另外五档一样有自己的素材、自己的烘焙路径。
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun ChipRow(
     items: List<String>,
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
 ) {
-    Row(
+    FlowRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
+        verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceXS),
     ) {
         items.forEachIndexed { index, label ->
             FilterChip(

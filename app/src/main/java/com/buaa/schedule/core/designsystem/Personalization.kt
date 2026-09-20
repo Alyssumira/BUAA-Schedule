@@ -1,12 +1,17 @@
 package com.buaa.schedule.core.designsystem
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.edit
+import com.buaa.schedule.widget.BackgroundSync
+import com.buaa.schedule.widget.WidgetGlassSource
 
 /**
  * 全局个性化状态（内存态），修改后自动触发 Compose 重组。
@@ -180,6 +185,16 @@ object Personalization {
 
     fun save(context: Context) {
         val prefs = context.getSharedPreferences("schedule_settings", Context.MODE_PRIVATE)
+        // 组件那张玻璃底只读 wallpaper_uri / wallpaper_use_system 这两个键（见
+        // WidgetBackgroundRenderer.availability），所以只有它们真的变了才值得重绘。
+        // 不区分的话这个函数的十几个调用点（透明度、模糊、周视图行高……）每拖一次滑块
+        // 就要把六个组件全重画一遍，而用户换完壁纸却还看不到新图 —— 两头都错了。
+        val wallpaperChanged = WidgetGlassSource.wallpaperKeysChanged(
+            savedUri = prefs.getString("wallpaper_uri", null),
+            savedUseSystem = prefs.getBoolean("wallpaper_use_system", DEFAULT_USE_SYSTEM_WALLPAPER),
+            currentUri = wallpaperUri,
+            currentUseSystem = useSystemWallpaper,
+        )
         prefs.edit {
             putInt("glass_tier", glassTier)
             putFloat("glass_alpha", cardAlpha)
@@ -197,6 +212,34 @@ object Personalization {
             putFloat("wallpaper_zoom", wallpaperZoom)
             putFloat("panel_blur_dp", panelBlurDp)
         }
+        // 必须在落盘之后：组件读的就是这两个键，早一步糊的还是旧图。
+        // 收口只在这一处（调用点不许各自复制一段），而重活整个在 IO 线程上 ——
+        // save() 是从点击回调里调的，探测 Launcher + 全学期快照 + 六个 Provider 重绘
+        // 一笔笔压到主线程上就是新的卡顿。
+        if (wallpaperChanged) BackgroundSync.refreshWidgetsAsync(context.applicationContext)
+    }
+
+    /**
+     * 用户在 App 内挑了一张壁纸：记下来 + 落盘（并经由 [save] 让桌面组件跟上）。
+     *
+     * 设置页与组件配置页共用这一份：持久授权与那两个键只有一处写，两条链才不会
+     * 一个生效一个不生效。配置页那侧需要它，是因为「玻璃感壁纸背景」在 Android 14+
+     * 只有挑了图才兑现得了 —— 说明写在开关旁边，出路也得在开关旁边。
+     */
+    fun applyPickedWallpaper(context: Context, uri: Uri) {
+        // OpenDocument + 持久授权：避免临时 URI 在进程重启后失效
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        }.onFailure {
+            // 部分选择器（"最近"列表等）返回的 URI 不支持持久授权：
+            // 当场仍能显示，但重启后会失效回退渐变，必须留痕便于诊断
+            Log.w("Personalization", "壁纸 URI 持久授权失败，重启后可能失效", it)
+        }
+        wallpaperUri = uri.toString()
+        save(context)
     }
 
     /** 恢复壁纸调参默认值（不动壁纸本身与玻璃设置） */
