@@ -28,8 +28,17 @@ import com.buaa.schedule.core.designsystem.decodeSampledWallpaper
  */
 object WidgetBackgroundRenderer {
 
-    private const val TARGET_WIDTH = 480
-    private const val TARGET_HEIGHT = 320
+    /**
+     * 烘焙画布的尺寸（px）。
+     *
+     * 刻意保持 480x320 不变：这张位图要经 RemoteViews 走 binder 事务，
+     * ARGB_8888 下约 0.6 MB，放大到 900x550 就是 1.9 MB，有 TransactionTooLargeException 的风险；
+     * 模糊的观感本来就来自下面那次「先缩到 1/4 再放回」的廉价模糊。
+     *
+     * internal 是给圆角烘焙（[WidgetCornerRadii]）和它的单测用的：换算必须按**真实**画布算。
+     */
+    internal const val TARGET_WIDTH = 480
+    internal const val TARGET_HEIGHT = 320
 
     /** 应用内背景的 prefs 与自选壁纸的键（与 Personalization.load 同一份） */
     private const val SETTINGS_PREFS = "schedule_settings"
@@ -57,12 +66,28 @@ object WidgetBackgroundRenderer {
                         val canvas = Canvas(output)
                         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
-                        val cornerRadius = appearance.cornerRadiusPx(output.width)
+                        val radii = WidgetCornerRadii.bake(
+                            cornerDp = appearance.cornerRadiusDp(),
+                            density = context.resources.displayMetrics.density,
+                            canvasWidthPx = output.width,
+                            canvasHeightPx = output.height,
+                            // 旧口径本来就不看组件真实尺寸，这里先占位传 null，接线在下一步
+                            size = null,
+                        )
                         val rect = RectF(0f, 0f, output.width.toFloat(), output.height.toFloat())
-                        canvas.drawRoundRect(rect, cornerRadius, cornerRadius, paint)
+                        canvas.drawRoundRect(rect, radii.radiusX, radii.radiusY, paint)
 
                         canvas.withClip(android.graphics.Path().apply {
-                            addRoundRect(rect, cornerRadius, cornerRadius, android.graphics.Path.Direction.CW)
+                            addRoundRect(
+                                rect,
+                                floatArrayOf(
+                                    radii.radiusX, radii.radiusY,
+                                    radii.radiusX, radii.radiusY,
+                                    radii.radiusX, radii.radiusY,
+                                    radii.radiusX, radii.radiusY,
+                                ),
+                                android.graphics.Path.Direction.CW,
+                            )
                         }) {
                             drawBitmap(blurred, 0f, 0f, paint)
 
@@ -141,8 +166,6 @@ object WidgetBackgroundRenderer {
     }
 }
 
-private fun WidgetAppearance.cornerRadiusPx(targetWidth: Int): Float {
-    val cornerDp = WidgetAppearance.CORNER_RADII_DP[cornerBucket.coerceIn(0, WidgetAppearance.CORNER_RADII_DP.lastIndex)]
-    // 粗略按 targetWidth 换算：480dp -> 4x 密度，实际由 Launcher 缩放，够用即可
-    return cornerDp * 4f
-}
+/** 用户选的那一档圆角（dp）。越界下标夹到最近档位，与 `cornerDrawableRes` 同一口径。 */
+private fun WidgetAppearance.cornerRadiusDp(): Int =
+    WidgetAppearance.CORNER_RADII_DP[cornerBucket.coerceIn(0, WidgetAppearance.CORNER_RADII_DP.lastIndex)]
