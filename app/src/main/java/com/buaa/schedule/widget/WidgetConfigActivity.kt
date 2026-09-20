@@ -528,14 +528,9 @@ private fun WidgetConfigScreen(
                     checked = appearance.blurBackground,
                     onCheckedChange = { appearance = appearance.copy(blurBackground = it) },
                 )
-                // 为什么这句话必须按图源判定分叉，而不是留一段常驻小字：
-                // 实测在这台 Android 14+ 的设备上、用户没有 App 内自选壁纸时，
-                // 开关从关拨到开，整块组件 tile 的像素差是 0 / 258258 —— 彻底静默。
-                // 常驻小字把这件事写成"这个开关看起来没反应，是在等你先挑一张图"，
-                // 既骗了有图源的那一半人（他们本来就有玻璃），也没帮到没图源的那一半
-                // （没有入口，看完还是一头雾水）。
-                // 开关本身照旧能拨：置灰只是把同一件事换成"这里有个坏掉的开关"来说，
-                // 而且这个选择要能存下来 —— 哪天挑了图它就兑现。
+                // 说明按图源判定分叉，而判定与渲染侧是同一个函数（availability）：实测在
+                // Android 14+ 且没有自选壁纸时，开关从关拨到开，整块 tile 的像素差 0 / 258258。
+                // 为什么不置灰、也不留一段常驻小字，取舍的理由记在 [GlassSource] 那一头。
                 Text(
                     text = when (glassSource) {
                         GlassSource.SystemWallpaperThenPicked ->

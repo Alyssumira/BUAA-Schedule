@@ -183,12 +183,19 @@ object Personalization {
             .coerceIn(MIN_ZOOM, MAX_ZOOM)
     }
 
+    /**
+     * 把内存态整体落盘（`schedule_settings`）。调用点全在点击/拖动回调里。
+     *
+     * ⚠️ 这里同时是「App 内改了壁纸 → 桌面组件跟上」的**唯一**收口：
+     * 组件那张玻璃底读的就是 `wallpaper_uri` / `wallpaper_use_system` 这两个键，
+     * 而它们只经这个函数落盘，所以重绘挂在这里就够，**调用点不要再各自复制一段刷新代码**
+     * （十几个调用点各抄一份，早晚漏一处，而漏的那几处正是「换完壁纸桌面还在糊旧图」）。
+     * 也正因为调用点里大半是在拖滑块，重绘只挂在 [WidgetGlassSource.wallpaperKeysChanged]
+     * 上，并且整个挪到 IO 线程（见 [BackgroundSync.refreshWidgetsAsync]）。
+     */
     fun save(context: Context) {
         val prefs = context.getSharedPreferences("schedule_settings", Context.MODE_PRIVATE)
-        // 组件那张玻璃底只读 wallpaper_uri / wallpaper_use_system 这两个键（见
-        // WidgetBackgroundRenderer.availability），所以只有它们真的变了才值得重绘。
-        // 不区分的话这个函数的十几个调用点（透明度、模糊、周视图行高……）每拖一次滑块
-        // 就要把六个组件全重画一遍，而用户换完壁纸却还看不到新图 —— 两头都错了。
+        // 判据本体在 WidgetGlassSource：不分键的话，每拖一次滑块就要把六个组件全重画一遍。
         val wallpaperChanged = WidgetGlassSource.wallpaperKeysChanged(
             savedUri = prefs.getString("wallpaper_uri", null),
             savedUseSystem = prefs.getBoolean("wallpaper_use_system", DEFAULT_USE_SYSTEM_WALLPAPER),
@@ -212,10 +219,7 @@ object Personalization {
             putFloat("wallpaper_zoom", wallpaperZoom)
             putFloat("panel_blur_dp", panelBlurDp)
         }
-        // 必须在落盘之后：组件读的就是这两个键，早一步糊的还是旧图。
-        // 收口只在这一处（调用点不许各自复制一段），而重活整个在 IO 线程上 ——
-        // save() 是从点击回调里调的，探测 Launcher + 全学期快照 + 六个 Provider 重绘
-        // 一笔笔压到主线程上就是新的卡顿。
+        // 顺序不许倒过来：组件读的就是 prefs，抢在落盘前面重绘一次糊的还是旧图。
         if (wallpaperChanged) BackgroundSync.refreshWidgetsAsync(context.applicationContext)
     }
 
