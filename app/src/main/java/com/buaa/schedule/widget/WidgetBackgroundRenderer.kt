@@ -174,15 +174,14 @@ object WidgetBackgroundRenderer {
     private class Source(val bitmap: Bitmap, val owned: Boolean)
 
     /**
-     * 取一张可糊的壁纸。两条来源，先后顺序跟着 App 内那项「使用桌面壁纸」：
-     * - 系统桌面壁纸——Android 13 及以下可读；
-     * - Android 14 起（API 34）`WallpaperManager.getDrawable()` 需要 `MANAGE_EXTERNAL_STORAGE`
-     *   或签名级的 `READ_WALLPAPER_INTERNAL`，普通应用不再能读，于是只剩用户在
-     *   App 内「背景」里自己挑的那张图（SAF 授权长期有效）。
+     * 取一张可糊的壁纸。走哪一条由 [WidgetGlassSource.decide] 定，
+     * 而那个答案与配置页上那句话说的是**同一件事**（判据与理由都写在那儿）：
+     * - 开关开着时优先系统源、读不到再兜底自选；
+     * - 用户关掉「使用桌面壁纸」时**只**认自选那张；
+     * - 两条都没有时返回 null，调用方回退纯色圆角底。
      *
-     * 用户关掉「使用桌面壁纸」时**只**认自选那张：他刚说不想用桌面壁纸，
-     * 组件却还在糊桌面壁纸，两边就对不上了。
-     * 两条都拿不到时返回 null，调用方回退纯色圆角底 —— 配置页对此有说明。
+     * 这里只负责把判据落成两次取图，不再自己重排先后 —— 各判一次就会出现
+     * "开关能拨、拨完没反应"（真机实测无源时整块 tile 像素差 0/258258）。
      */
     private fun wallpaperSource(context: Context): Source? {
         val prefs = context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
@@ -191,10 +190,23 @@ object WidgetBackgroundRenderer {
                 decodeSampledWallpaper(context, uri)?.let { Source(it, owned = true) }
             }
         }
-        return if (prefs.getBoolean(KEY_USE_SYSTEM_WALLPAPER, Personalization.DEFAULT_USE_SYSTEM_WALLPAPER)) {
-            systemSource(context) ?: picked()
-        } else {
-            picked()
+        return when (
+            WidgetGlassSource.decide(
+                systemWallpaperReadable = WidgetGlassSource.systemWallpaperReadable(Build.VERSION.SDK_INT),
+                useSystemWallpaper = prefs.getBoolean(
+                    KEY_USE_SYSTEM_WALLPAPER,
+                    Personalization.DEFAULT_USE_SYSTEM_WALLPAPER,
+                ),
+                hasPickedImage = WidgetGlassSource.hasPickedImage(
+                    prefs.getString(KEY_WALLPAPER_URI, null),
+                ),
+            )
+        ) {
+            GlassSource.SystemWallpaperThenPicked -> systemSource(context) ?: picked()
+            GlassSource.PickedImage -> picked()
+            GlassSource.NoSourceWallpaperReadBlocked,
+            GlassSource.NoSourceSystemWallpaperOff,
+            -> null
         }
     }
 
