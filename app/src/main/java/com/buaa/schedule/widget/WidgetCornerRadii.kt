@@ -76,7 +76,7 @@ internal object WidgetCornerRadii {
      *
      * 1. `getAppWidgetOptions()` 的 `OPTION_APPWIDGET_MIN_WIDTH/MIN_HEIGHT`（dp）——
      *    宿主每次调整尺寸都会上报，含用户把组件拉大后的值，与
-     *    [WidgetCommon] 里算行数用的同一份数据（`WidgetCommon.kt:618`）；
+     *    `WidgetCommon.updateTwoDayWidget` 里限行数用的同一份数据；
      * 2. `getAppWidgetInfo()` 的 `minWidth/minHeight`（dp）—— provider 声明值。
      *
      * 第 2 条是**可放置下限**而不是绘制尺寸：`today_widget_info.xml` 给一个 4×2 组件声明的
