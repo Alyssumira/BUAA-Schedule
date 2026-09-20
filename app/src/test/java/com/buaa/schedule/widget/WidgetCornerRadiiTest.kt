@@ -88,8 +88,10 @@ class WidgetCornerRadiiTest {
         cell,
         requireNotNull(
             WidgetCornerRadii.resolveSizePx(
-                optionsWidthDp = cell.widgetWidthDp,
-                optionsHeightDp = cell.widgetHeightDp,
+                optionsMaxWidthDp = 0,
+                optionsMaxHeightDp = 0,
+                optionsMinWidthDp = cell.widgetWidthDp,
+                optionsMinHeightDp = cell.widgetHeightDp,
                 infoWidthDp = 0,
                 infoHeightDp = 0,
                 density = cell.density,
@@ -216,8 +218,10 @@ class WidgetCornerRadiiTest {
         )
         cases.forEach { (infoWidthDp, infoHeightDp, cell) ->
             val size = WidgetCornerRadii.resolveSizePx(
-                optionsWidthDp = 0,
-                optionsHeightDp = 0,
+                optionsMaxWidthDp = 0,
+                optionsMaxHeightDp = 0,
+                optionsMinWidthDp = 0,
+                optionsMinHeightDp = 0,
                 infoWidthDp = infoWidthDp,
                 infoHeightDp = infoHeightDp,
                 density = cell.density,
@@ -235,7 +239,7 @@ class WidgetCornerRadiiTest {
         // 连 provider 都取不到：只能按"位图不缩放"这个明写的假设算（见 [WidgetCornerRadii.bake]）。
         // 于是残余误差正好等于 Launcher 实际的拉伸倍数——手机尺寸上不到 2.4x，
         // 而旧口径是**不管什么尺寸都 4x**。这条兜底不是精确，是"绝不比要修的 bug 更糟"。
-        assertNull(WidgetCornerRadii.resolveSizePx(0, 0, 0, 0, 2.75f))
+        assertNull(WidgetCornerRadii.resolveSizePx(0, 0, 0, 0, 0, 0, 2.75f))
         cells.filter { it.drawable }.forEach { cell ->
             val baked = requireNotNull(runCatching { bake(cell, null) }.getOrNull()) {
                 "$cell 的兜底路径抛了"
@@ -269,8 +273,10 @@ class WidgetCornerRadiiTest {
         // 误差是"偏方"还是"偏圆"取决于声明写得有多保守 —— 所以只能钉住"不比旧的更圆"。
         cells.filter { it.drawable }.forEach { cell ->
             val size = WidgetCornerRadii.resolveSizePx(
-                optionsWidthDp = 0,
-                optionsHeightDp = 0,
+                optionsMaxWidthDp = 0,
+                optionsMaxHeightDp = 0,
+                optionsMinWidthDp = 0,
+                optionsMinHeightDp = 0,
                 infoWidthDp = cell.widgetWidthDp / 2,
                 infoHeightDp = cell.widgetHeightDp / 4,
                 density = cell.density,
@@ -287,8 +293,10 @@ class WidgetCornerRadiiTest {
         val density = 2.75f
         val fromOptions = requireNotNull(
             WidgetCornerRadii.resolveSizePx(
-                optionsWidthDp = 320,
-                optionsHeightDp = 200,
+                optionsMaxWidthDp = 0,
+                optionsMaxHeightDp = 0,
+                optionsMinWidthDp = 320,
+                optionsMinHeightDp = 200,
                 infoWidthDp = 180,
                 infoHeightDp = 40,
                 density = density,
@@ -301,8 +309,10 @@ class WidgetCornerRadiiTest {
         // 并被"绘制尺寸不小于画布"这条下限托住（40dp x 2.75 = 110px < 画布高 320px）
         val mixed = requireNotNull(
             WidgetCornerRadii.resolveSizePx(
-                optionsWidthDp = 320,
-                optionsHeightDp = 0,
+                optionsMaxWidthDp = 0,
+                optionsMaxHeightDp = 0,
+                optionsMinWidthDp = 320,
+                optionsMinHeightDp = 0,
                 infoWidthDp = 180,
                 infoHeightDp = 40,
                 density = density,
@@ -312,9 +322,177 @@ class WidgetCornerRadiiTest {
         assertEquals(CANVAS_HEIGHT.toFloat(), mixed.heightPx, 0.001f)
 
         // 两轴全无 → null，由 bake 走"不缩放"兜底
-        assertNull(WidgetCornerRadii.resolveSizePx(0, 0, 0, 0, density))
+        assertNull(WidgetCornerRadii.resolveSizePx(0, 0, 0, 0, 0, 0, density))
         // density 都不合法（未初始化）时不硬算
-        assertNull(WidgetCornerRadii.resolveSizePx(320, 200, 180, 40, 0f))
+        assertNull(WidgetCornerRadii.resolveSizePx(0, 0, 320, 200, 180, 40, 0f))
+    }
+
+    // ---- T38：取数口径的档位表（MAX -> MIN -> provider info -> null，两轴各取各的）----
+
+    private val tierDensity = 2.75f
+
+    @Test
+    fun tierOneMaxOverridesMinOnBothAxes() {
+        // MAX 盖 MIN：宿主同时上报两档时取 MAX（真实尺寸落在 [MIN, MAX] 里，见判据注释）。
+        listOf(250 to 120, 360 to 224, 600 to 400).forEach { (maxDp, minDp) ->
+            val size = requireNotNull(
+                WidgetCornerRadii.resolveSizePx(
+                    optionsMaxWidthDp = maxDp,
+                    optionsMaxHeightDp = minDp + 40,
+                    optionsMinWidthDp = minDp,
+                    optionsMinHeightDp = minDp,
+                    infoWidthDp = 180,
+                    infoHeightDp = 40,
+                    density = tierDensity,
+                ),
+            )
+            assertEquals("横轴该取 MAX 的 $maxDp", maxDp * tierDensity, size.widthPx, 0.001f)
+            assertEquals("纵轴该取 MAX 的 ${minDp + 40}", (minDp + 40) * tierDensity, size.heightPx, 0.001f)
+        }
+    }
+
+    @Test
+    fun tierTwoMinOverridesProviderInfo() {
+        // MIN 盖 info：MAX 缺数时落到 MIN，仍然不许落到 provider 声明值上。
+        val size = requireNotNull(
+            WidgetCornerRadii.resolveSizePx(
+                optionsMaxWidthDp = 0,
+                optionsMaxHeightDp = 0,
+                optionsMinWidthDp = 320,
+                optionsMinHeightDp = 200,
+                infoWidthDp = 180,
+                infoHeightDp = 110,
+                density = tierDensity,
+            ),
+        )
+        assertEquals(320f * tierDensity, size.widthPx, 0.001f)
+        assertEquals(200f * tierDensity, size.heightPx, 0.001f)
+    }
+
+    @Test
+    fun tierThreeProviderInfoStillFlooredAtTheCanvasAndTierFourIsNull() {
+        // 第 3 档：provider 声明值是可放置下限、不是绘制尺寸，所以仍要被
+        // `coerceAtLeast(画布)` 托住（T30 那条论证一个字节都不能变）：
+        // 180dp x 2.75 = 495px > 画布宽 480 -> 原样；40dp x 2.75 = 110px < 画布高 320 -> 托到 320。
+        val fromInfo = requireNotNull(
+            WidgetCornerRadii.resolveSizePx(
+                optionsMaxWidthDp = 0,
+                optionsMaxHeightDp = 0,
+                optionsMinWidthDp = 0,
+                optionsMinHeightDp = 0,
+                infoWidthDp = 180,
+                infoHeightDp = 40,
+                density = tierDensity,
+            ),
+        )
+        assertEquals(180f * tierDensity, fromInfo.widthPx, 0.001f)
+        assertEquals(CANVAS_HEIGHT.toFloat(), fromInfo.heightPx, 0.001f)
+        // 声明值大于画布时不许被"托底"反向削小
+        val bigInfo = requireNotNull(
+            WidgetCornerRadii.resolveSizePx(0, 0, 0, 0, 300, 200, tierDensity),
+        )
+        assertEquals(300f * tierDensity, bigInfo.widthPx, 0.001f)
+        assertEquals(200f * tierDensity, bigInfo.heightPx, 0.001f)
+
+        // 第 4 档：四枚全缺 -> null，交给 bake 的"不缩放"兜底
+        assertNull(
+            WidgetCornerRadii.resolveSizePx(0, 0, 0, 0, 0, 0, tierDensity),
+        )
+        // 负数（Bundle 没这个键时 getInt 给 0，手滑传负数按缺数算）也不算尺寸
+        assertNull(WidgetCornerRadii.resolveSizePx(-1, -1, -1, -1, -1, -1, tierDensity))
+    }
+
+    @Test
+    fun tiersAreResolvedPerAxisIndependently() {
+        // 两轴各取各的：横轴只有 MAX、纵轴只有 MIN，两轴各自落到自己有数的那一档，
+        // 谁也不把谁拉下来。
+        val size = requireNotNull(
+            WidgetCornerRadii.resolveSizePx(
+                optionsMaxWidthDp = 400,
+                optionsMaxHeightDp = 0,
+                optionsMinWidthDp = 0,
+                optionsMinHeightDp = 150,
+                infoWidthDp = 180,
+                infoHeightDp = 40,
+                density = tierDensity,
+            ),
+        )
+        assertEquals(400f * tierDensity, size.widthPx, 0.001f)
+        assertEquals(150f * tierDensity, size.heightPx, 0.001f)
+
+        // 同一格换一轴：横轴只有 MIN、纵轴只有 MAX
+        val swapped = requireNotNull(
+            WidgetCornerRadii.resolveSizePx(
+                optionsMaxWidthDp = 0,
+                optionsMaxHeightDp = 260,
+                optionsMinWidthDp = 360,
+                optionsMinHeightDp = 0,
+                infoWidthDp = 180,
+                infoHeightDp = 40,
+                density = tierDensity,
+            ),
+        )
+        assertEquals(360f * tierDensity, swapped.widthPx, 0.001f)
+        assertEquals(260f * tierDensity, swapped.heightPx, 0.001f)
+
+        // 一轴落到第 3 档（并被画布托底）、另一轴落到第 1 档
+        val mixedTiers = requireNotNull(
+            WidgetCornerRadii.resolveSizePx(
+                optionsMaxWidthDp = 500,
+                optionsMaxHeightDp = 0,
+                optionsMinWidthDp = 0,
+                optionsMinHeightDp = 0,
+                infoWidthDp = 180,
+                infoHeightDp = 40,
+                density = tierDensity,
+            ),
+        )
+        assertEquals(500f * tierDensity, mixedTiers.widthPx, 0.001f)
+        assertEquals(CANVAS_HEIGHT.toFloat(), mixedTiers.heightPx, 0.001f)
+    }
+
+    @Test
+    fun measuredDeviceShapeNoLongerDisplaysAnEllipseRounderThanTheBucket() {
+        // 真机实测那一形（emulator-5554, API 36, density 2.625, 组件 id=8「今日课程」4×2）：
+        // tile 真实绘制矩形 946x588px = 360.4x224.0dp，而 options 的 MIN_* 只有 (>=360, ~137)dp。
+        // 改口径前纵轴烘出来是 85px=32.4dp（选 20dp 那一档），比横轴的 52px 长了 1.63 倍。
+        val density = 2.625f
+        val realWidthPx = 946f
+        val realHeightPx = 588f
+        val cell = Cell(20, 360, 224, density)
+
+        // MAX 的真实值我没量到过（要等编排者装机反推）。这里只取"比实测 MIN 更大的一档"，
+        // 因为真实尺寸必然落在 [MIN, MAX] 里，MAX 必然 >= 224dp 那条真实高。
+        val maxWdp = 361
+        val maxHdp = 240
+        val size = requireNotNull(
+            WidgetCornerRadii.resolveSizePx(
+                optionsMaxWidthDp = maxWdp,
+                optionsMaxHeightDp = maxHdp,
+                optionsMinWidthDp = 360,
+                optionsMinHeightDp = 137,
+                infoWidthDp = 180,
+                infoHeightDp = 40,
+                density = density,
+            ),
+        )
+        val baked = bake(cell, size)
+        // 屏幕上真正看到的：烘焙值 x 该轴实际的 fitXY 倍数（用实测的 946x588，不用 MAX）
+        val displayedX = baked.radiusX * (realWidthPx / CANVAS_WIDTH)
+        val displayedY = baked.radiusY * (realHeightPx / CANVAS_HEIGHT)
+        val wantPx = cell.cornerDp * density
+
+        assertTrue("纵轴显示 ${displayedY / density}dp，超过选的 ${cell.cornerDp}dp：取数口径又偏圆了", displayedY <= wantPx + 0.5f)
+        assertTrue("横轴显示 ${displayedX / density}dp，超过选的 ${cell.cornerDp}dp", displayedX <= wantPx + 0.5f)
+        val ratio = maxOf(displayedX, displayedY) / minOf(displayedX, displayedY)
+        assertTrue("两轴之比 $ratio，还是个椭圆", ratio <= 1.15f)
+        // 对照：改口径前用的是 MIN 的 (360, 137)，纵轴倍数被低估 -> 显示值 32.4dp
+        val beforeSize = requireNotNull(
+            WidgetCornerRadii.resolveSizePx(0, 0, 360, 137, 180, 40, density),
+        )
+        val before = bake(cell, beforeSize)
+        val beforeY = before.radiusY * (realHeightPx / CANVAS_HEIGHT)
+        assertTrue("旧口径的纵轴 $beforeY 本该比新口径 ${displayedY}dp 更圆", beforeY > displayedY)
     }
 
     @Test

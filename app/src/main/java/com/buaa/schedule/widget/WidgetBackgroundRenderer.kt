@@ -155,18 +155,26 @@ object WidgetBackgroundRenderer {
      * `getAppWidgetInfo` 对失效的 id 直接返回 null —— 那都不是"画不出背景"，
      * 只是少了尺寸信息，落到 [WidgetCornerRadii.resolveSizePx] 的下几档口径。
      * 取数顺序与判据都在那边，这里只负责把它变成两个 Bundle 读取。
+     *
+     * options 的 MIN/MAX 四枚都要读：真实绘制尺寸落在 `[MIN, MAX]` 区间里，只读 MIN
+     * 会把纵轴的拉伸倍数低估（真机 id=8 实测 MIN_HEIGHT=137dp 而真实高 224dp，
+     * 20dp 那一档烘出来纵轴 32.4dp），判据那边取 MAX 优先就是为这个。
      */
     private fun widgetSizePx(
         context: Context,
         appWidgetManager: AppWidgetManager,
         appWidgetId: Int,
     ): WidgetSizePx? {
-        var optionsWidthDp = 0
-        var optionsHeightDp = 0
+        var optionsMaxWidthDp = 0
+        var optionsMaxHeightDp = 0
+        var optionsMinWidthDp = 0
+        var optionsMinHeightDp = 0
         runCatching {
             val options = appWidgetManager.getAppWidgetOptions(appWidgetId)
-            optionsWidthDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH)
-            optionsHeightDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT)
+            optionsMaxWidthDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH)
+            optionsMaxHeightDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT)
+            optionsMinWidthDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH)
+            optionsMinHeightDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT)
         }
         var infoWidthDp = 0
         var infoHeightDp = 0
@@ -178,8 +186,10 @@ object WidgetBackgroundRenderer {
             }
         }
         return WidgetCornerRadii.resolveSizePx(
-            optionsWidthDp = optionsWidthDp,
-            optionsHeightDp = optionsHeightDp,
+            optionsMaxWidthDp = optionsMaxWidthDp,
+            optionsMaxHeightDp = optionsMaxHeightDp,
+            optionsMinWidthDp = optionsMinWidthDp,
+            optionsMinHeightDp = optionsMinHeightDp,
             infoWidthDp = infoWidthDp,
             infoHeightDp = infoHeightDp,
             density = context.resources.displayMetrics.density,
