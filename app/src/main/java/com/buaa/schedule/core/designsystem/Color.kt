@@ -272,6 +272,22 @@ private fun alphaForInk(tintLuma: Float, sceneLuma: Float, requested: Float, ink
  * internal 的理由同 [compositeLuma]：守卫测试要拿同一个量断言"不许选到更贵的那一支"
  * （`DesignSystemTest.legibleTintPlateNeverPicksTheInkThatCostsMoreAlpha`），
  * 在测试里抄第二份解就是下一轮维度搬家的漏改点。
+ *
+ * ## 一条已知等价残余（只写清楚，不改行为）
+ *
+ * "任何 alpha 都读不清"记的 [1f]，与"恰好压实到全不透明才读得清"那支交出的也是 [1f]
+ * ——[alphaForInk] 末尾那个 `coerceAtMost(1f)` 让这两种语义在**价这一维上不可分辨**。
+ * 于是平局时 [legibleTintPlate] 第 1 步（`minByOrNull` 保留排在前面的 [contentOnLuma] 偏好那支）
+ * 可能挑中不可达的那一支，而另一支本可以只靠压实就达标。
+ *
+ * 后果是**观感不是可读性**：选中不可达那支后，第 2 步的 `inkReadsPlate` 照样判不过，
+ * 于是走压 tint（一步 [TINT_PUSH_STEP] = 30% 课程色色差）——文字仍读得清，多付的是课程色。
+ * 上面那条守卫只数了"同档格存在"（`ties > 0`，比的是两支价的差），**没有**数过平局里是否
+ * 混着"一支可达、一支不可达"，所以这条残余目前是没人踩、也没人证的：要钉它得先给价加一位
+ * 可达性，再按那一维重跑一次网格。
+ *
+ * 真要分出这两者，改的是**返回类型**（价 + 一个"可达"位），不是给不可达那支塞一个比 [1f]
+ * 更大的数：那个数没有单位（alpha 顶多 1.0），还会把"1f = 全损"这个锚点弄脏。
  */
 internal fun alphaNeededByInk(tintLuma: Float, sceneLuma: Float, requested: Float, ink: Color): Float {
     val inkLuma = ink.readableLuminance()

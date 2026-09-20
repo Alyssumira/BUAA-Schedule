@@ -18,8 +18,9 @@ import org.junit.Test
  *
  * 改前那段内联实现（`LiquidBottomTabs` 里）的毛病在夹取的**顺序**：
  * `.coerceAtMost(0.60).coerceAtLeast(floor)` 等于"下限比天花板高时天花板不作数"——
- * 深色档在极白壁纸块下能把 [legibilityAlphaFloor] 顶到 0.920，底栏在那种场景里
- * 实际一直以 0.92 上下的实心条绘制，0.60 的天花板在深色场景从来没生效过。
+ * 深色档在极白壁纸块下能把 [legibilityAlphaFloor] 顶到 0.7367（现行 `compositeLuma` 的
+ * sRGB 编码通道口径；旧线性光口径给过 0.920，那是一块画不出来的板），底栏在那种场景里
+ * 实际一直以 0.74 上下的实心条绘制，0.60 的天花板在深色场景从来没生效过。
  * [legibilityAlphaFloor] 自己的文档写着它的值域上界是 1.0、调用方"要先跟自己的
  * 天花板取小再喂给 coerceIn"（与 T22 修过一次的那条 `coerceIn` 空区间崩溃同一族账），
  * `glassSurfaceAlpha` 就照这个约定写。下面的守卫钉的正是这条顺序。
@@ -37,12 +38,12 @@ class BottomBarSurfaceAlphaTest {
 
     /**
      * 钉顺序的本体：下限越过天花板时，结果停在天花板，而不是被下限无声顶穿。
-     * 改前（先 coerceAtMost 再 coerceAtLeast）这里算出 ≈0.920，断言应红；
+     * 改前（先 coerceAtMost 再 coerceAtLeast）这里算出 ≈0.7367，断言应红；
      * 改后（下限先与天花板取小、再 coerceIn）恒等于 0.60。
      */
     @Test
     fun legibilityFloorAboveCeilingStopsAtTheCeilingInsteadOfPunchingThrough() {
-        // 深色档 × 极白壁纸块：暗板 0.0081 配浅色正文 0.5681，反解下限 0.920 > 0.60
+        // 深色档 × 极白壁纸块：暗板 0.0081 配浅色正文 0.5681，反解下限 0.7367 > 0.60
         SceneLuma.wallpaper = SceneLuma.Stats(mean = 0.45f, darkest = 0.02f, brightest = 1.0f)
         val floor = legibilityAlphaFloor(DarkGlassTint, DarkBlueOnSurfaceVariant, darkTheme = true)
         assertTrue(
