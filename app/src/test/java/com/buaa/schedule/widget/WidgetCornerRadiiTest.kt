@@ -78,9 +78,24 @@ class WidgetCornerRadiiTest {
         size = size,
     )
 
-    /** 走正常路径：宿主上报了组件真实尺寸 */
-    private fun bakeAtRealSize(cell: Cell) =
-        bake(cell, WidgetSizePx(cell.widgetWidthPx, cell.widgetHeightPx))
+    /**
+     * 正常路径：宿主上报了组件真实尺寸。
+     *
+     * 走 [WidgetCornerRadii.resolveSizePx] 拿尺寸再烘，与 `widgetSizePx` -> `bake`
+     * 的实际调用链同形（dp -> px 那一步也在覆盖范围内），而不是自己拼一个 WidgetSizePx。
+     */
+    private fun bakeAtRealSize(cell: Cell) = bake(
+        cell,
+        requireNotNull(
+            WidgetCornerRadii.resolveSizePx(
+                optionsWidthDp = cell.widgetWidthDp,
+                optionsHeightDp = cell.widgetHeightDp,
+                infoWidthDp = 0,
+                infoHeightDp = 0,
+                density = cell.density,
+            ),
+        ) { "$cell 的尺寸按 options 上报了却解不出来" },
+    )
 
     /** Launcher 屏幕上真正看到的两轴半径（px）：烘焙值 x 该轴的 fitXY 倍数 */
     private fun displayedPx(cell: Cell, baked: BakedCornerRadius): Pair<Float, Float> =
@@ -218,7 +233,8 @@ class WidgetCornerRadiiTest {
     @Test
     fun noSizeAtAllAssumesNoStretchAndNeverEndsUpRounderThanTheOldFormula() {
         // 连 provider 都取不到：只能按"位图不缩放"这个明写的假设算（见 [WidgetCornerRadii.bake]）。
-        // 它不精确，但一定不炸、不 NaN、不比被它取代的旧口径更圆。
+        // 于是残余误差正好等于 Launcher 实际的拉伸倍数——手机尺寸上不到 2.4x，
+        // 而旧口径是**不管什么尺寸都 4x**。这条兜底不是精确，是"绝不比要修的 bug 更糟"。
         assertNull(WidgetCornerRadii.resolveSizePx(0, 0, 0, 0, 2.75f))
         cells.filter { it.drawable }.forEach { cell ->
             val baked = requireNotNull(runCatching { bake(cell, null) }.getOrNull()) {
@@ -226,13 +242,22 @@ class WidgetCornerRadiiTest {
             }
             assertTrue("$cell 烘焙出了负半径", baked.radiusX >= 0f && baked.radiusY >= 0f)
             assertTrue("$cell 烘焙出了非有限半径", baked.radiusX.isFinite() && baked.radiusY.isFinite())
+            // "不缩放"这个假设落到算术上就是：烘焙值不超过 dp->px 那一步本身
+            val requestedPx = cell.cornerDp * cell.density
+            assertTrue("$cell：兜底烘出了比 dp->px 更大的半径 ${baked.radiusX}", baked.radiusX <= requestedPx + 0.001f)
+            assertTrue("$cell：兜底烘出了比 dp->px 更大的半径 ${baked.radiusY}", baked.radiusY <= requestedPx + 0.001f)
             val (x, y) = displayedDp(cell, baked)
             val (legacyX, legacyY) = legacyDisplayedDp(cell)
             assertTrue("$cell：兜底横轴 $x 比旧口径 $legacyX 还圆", x <= legacyX)
             assertTrue("$cell：兜底纵轴 $y 比旧口径 $legacyY 还圆", y <= legacyY)
+            if (cell.cornerDp > 0) {
+                // 不缩放这个假设不该把圆角整个抹掉：显示出来多扁是一回事（2×1 在 density 1.0
+                // 上会被缩到不到 1px），烘成 0 是另一回事
+                assertTrue("$cell：兜底把 ${cell.cornerDp}dp 烘成了直角", baked.radiusX > 0f && baked.radiusY > 0f)
+            }
             if (cell.phoneSized) {
-                assertTrue("$cell：手机尺寸上兜底横轴看到 ${x}dp，选的才 ${cell.cornerDp}dp", x <= cell.cornerDp * 2f)
-                assertTrue("$cell：手机尺寸上兜底纵轴看到 ${y}dp，选的才 ${cell.cornerDp}dp", y <= cell.cornerDp * 2f)
+                assertTrue("$cell：手机尺寸上兜底横轴看到 ${x}dp，选的才 ${cell.cornerDp}dp", x <= cell.cornerDp * 2.5f)
+                assertTrue("$cell：手机尺寸上兜底纵轴看到 ${y}dp，选的才 ${cell.cornerDp}dp", y <= cell.cornerDp * 2.5f)
             }
         }
     }

@@ -270,7 +270,14 @@ object WidgetCommon {
         val layoutRes = if (mode == ListWidgetMode.WEEK) R.layout.widget_week else R.layout.widget_today
 
         val views = RemoteViews(context.packageName, layoutRes)
-        applyAppearance(context, views, appearance, isListLayout = true)
+        applyAppearance(
+            context,
+            views,
+            appearance,
+            appWidgetId,
+            appWidgetManager,
+            isListLayout = true,
+        )
         views.setTextViewText(R.id.widget_title, title)
         views.setTextViewText(R.id.widget_subtitle, subtitle)
         // 空态只回答"没有课"是不够的，用户真正要问的是"那什么时候又有课"。
@@ -347,6 +354,11 @@ object WidgetCommon {
      * 实色板，于是"玻璃感壁纸背景"开了和不开一模一样（真机反馈的设置不生效）。
      * 两件事收在同一个函数里，调用点也就没有把先后下反的机会。
      *
+     * 圆角在两条分支上必须是同一个数：`setImageResource` 那条由 `<corners radius>` 保证精确，
+     * 位图那条则要按这个实例的真实尺寸把半径反推回去再画（背景层是 fitXY，
+     * 画布会被非等比拉到组件尺寸上），见 [WidgetCornerRadii]。所以 appWidgetId
+     * 与宿主句柄也要一路带到这里。
+     *
      * @param isListLayout 「下一节课」布局没有标题/副标题/空态这几个控件，
      *   对这些 id 下发指令只会产生无效 action（浪费 IPC），因此按布局区分。
      */
@@ -354,12 +366,14 @@ object WidgetCommon {
         context: Context,
         views: RemoteViews,
         appearance: WidgetAppearance,
+        appWidgetId: Int,
+        appWidgetManager: AppWidgetManager,
         isListLayout: Boolean,
     ) {
         val bgViewId = android.R.id.background
         val background = appearance.resolvedBackground(context)
         val bitmap = if (appearance.blurBackground) {
-            WidgetBackgroundRenderer.render(context, appearance)
+            WidgetBackgroundRenderer.render(context, appearance, appWidgetId, appWidgetManager)
         } else {
             null
         }
@@ -461,7 +475,14 @@ object WidgetCommon {
             )
         }
 
-        applyAppearance(context, views, appearance, isListLayout = false)
+        applyAppearance(
+            context,
+            views,
+            appearance,
+            appWidgetId,
+            appWidgetManager,
+            isListLayout = false,
+        )
         val bg = appearance.resolvedBackground(context)
         views.setTextColor(R.id.widget_next_name, appearance.titleColorFor(bg))
         views.setTextColor(R.id.widget_next_label, appearance.bodyColorFor(bg))
@@ -596,7 +617,14 @@ object WidgetCommon {
         val layoutRes = R.layout.widget_two_day
         val views = RemoteViews(context.packageName, layoutRes)
         val appearance = WidgetAppearanceStore.load(context, appWidgetId)
-        applyAppearance(context, views, appearance, isListLayout = false)
+        applyAppearance(
+            context,
+            views,
+            appearance,
+            appWidgetId,
+            appWidgetManager,
+            isListLayout = false,
+        )
         val bg = appearance.resolvedBackground(context)
         val titleColor = appearance.titleColorFor(bg)
         val bodyColor = appearance.bodyColorFor(bg)
@@ -704,7 +732,14 @@ object WidgetCommon {
         val subtitle = weekRangeSubtitle(semester, displayWeek, today, showTitle = appearance.showTitle)
 
         val views = RemoteViews(context.packageName, R.layout.widget_week_grid)
-        applyAppearance(context, views, appearance, isListLayout = true)
+        applyAppearance(
+            context,
+            views,
+            appearance,
+            appWidgetId,
+            appWidgetManager,
+            isListLayout = true,
+        )
         views.setTextViewText(R.id.widget_title, title)
         views.setTextViewText(R.id.widget_subtitle, subtitle)
         views.setTextViewText(

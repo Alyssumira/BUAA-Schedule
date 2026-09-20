@@ -14,6 +14,7 @@
 
     <!-- 必须是 ImageView：着色的 setColorFilter 只存在于 ImageView 上。
          底子是纯白不透明（与 widget_bg_* 同一约定），半透明由工厂 setFloat(setAlpha) 给。 -->
+    <!-- r8 刻意固定、不跟组件的圆角档位走：这是行内小胶囊，且走 setImageResource 不会被 fitXY 拉走 -->
     <ImageView
         android:id="@+id/widget_item_active"
         android:layout_width="match_parent"

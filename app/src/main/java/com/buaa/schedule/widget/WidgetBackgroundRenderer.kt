@@ -2,6 +2,7 @@ package com.buaa.schedule.widget
 
 import android.annotation.SuppressLint
 import android.app.WallpaperManager
+import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -25,6 +26,10 @@ import com.buaa.schedule.core.designsystem.decodeSampledWallpaper
  * 产出的位图**已经把圆角、用户底色与透明度烘进去**，所以调用方（WidgetCommon）
  * 在位图成功时不能再对同一个 ImageView 下纯色 `setColorFilter` —— 那会把这张图
  * 重新糊成一块实色板，开了开关却和纯色底一模一样。
+ *
+ * 圆角是**按实例**烘的：画布是固定的 480x320，而背景层 `scaleType="fitXY"` 会把它
+ * 非等比拉到组件真实尺寸上，所以半径得按两轴各自的倍数反推（[WidgetCornerRadii]），
+ * 否则用户选的 20dp 到桌面上会变成 53dp，并且是个椭圆。
  */
 object WidgetBackgroundRenderer {
 
@@ -45,8 +50,24 @@ object WidgetBackgroundRenderer {
     private const val KEY_WALLPAPER_URI = "wallpaper_uri"
     private const val KEY_USE_SYSTEM_WALLPAPER = "wallpaper_use_system"
 
-    fun render(context: Context, appearance: WidgetAppearance): Bitmap? {
+    /**
+     * 生成一张玻璃背景。
+     *
+     * 圆角要按**这一个实例**的真实尺寸来烘焙，所以得把 appWidgetId 和宿主句柄传进来：
+     * 背景层是 fitXY，画布会被拉到组件尺寸上，半径不除回去就不是用户选的那一档
+     * （详见 [WidgetCornerRadii]）。
+     */
+    fun render(
+        context: Context,
+        appearance: WidgetAppearance,
+        appWidgetId: Int,
+        appWidgetManager: AppWidgetManager,
+    ): Bitmap? {
         if (!appearance.blurBackground) return null
+        // 尺寸在 runCatching 之外取：取不到尺寸不等于取不到壁纸，前者有明写的兜底口径
+        // （[WidgetCornerRadii.bake]），而后者才是"这张背景画不出来"。两步 IPC 各自吞异常，
+        // 见 [widgetSizePx]。
+        val widgetSize = widgetSizePx(context, appWidgetManager, appWidgetId)
         return runCatching {
             // base 可能是系统 WallpaperManager 持有的那张（不归我们），也可能是我们自己
             // 解码新建的。只有后者要回收 —— 一张 1080x1920 = 约 8MB，每次刷新都漏一份，
@@ -71,8 +92,7 @@ object WidgetBackgroundRenderer {
                             density = context.resources.displayMetrics.density,
                             canvasWidthPx = output.width,
                             canvasHeightPx = output.height,
-                            // 旧口径本来就不看组件真实尺寸，这里先占位传 null，接线在下一步
-                            size = null,
+                            size = widgetSize,
                         )
                         val rect = RectF(0f, 0f, output.width.toFloat(), output.height.toFloat())
                         canvas.drawRoundRect(rect, radii.radiusX, radii.radiusY, paint)
@@ -110,6 +130,44 @@ object WidgetBackgroundRenderer {
                 if (source.owned) base.recycle()
             }
         }.getOrNull()
+    }
+
+    /**
+     * 这一个组件实例的真实尺寸（px）。
+     *
+     * 两条来源各自吞异常：`getAppWidgetOptions` 对没绑定的 id 会抛，
+     * `getAppWidgetInfo` 对失效的 id 直接返回 null —— 那都不是"画不出背景"，
+     * 只是少了尺寸信息，落到 [WidgetCornerRadii.resolveSizePx] 的下几档口径。
+     * 取数顺序与判据都在那边，这里只负责把它变成两个 Bundle 读取。
+     */
+    private fun widgetSizePx(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetId: Int,
+    ): WidgetSizePx? {
+        var optionsWidthDp = 0
+        var optionsHeightDp = 0
+        runCatching {
+            val options = appWidgetManager.getAppWidgetOptions(appWidgetId)
+            optionsWidthDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH)
+            optionsHeightDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT)
+        }
+        var infoWidthDp = 0
+        var infoHeightDp = 0
+        runCatching {
+            val info = appWidgetManager.getAppWidgetInfo(appWidgetId)
+            if (info != null) {
+                infoWidthDp = info.minWidth
+                infoHeightDp = info.minHeight
+            }
+        }
+        return WidgetCornerRadii.resolveSizePx(
+            optionsWidthDp = optionsWidthDp,
+            optionsHeightDp = optionsHeightDp,
+            infoWidthDp = infoWidthDp,
+            infoHeightDp = infoHeightDp,
+            density = context.resources.displayMetrics.density,
+        )
     }
 
     /** 一张壁纸位图 + 它是不是我们新建的（新建的才归 [render] 回收） */

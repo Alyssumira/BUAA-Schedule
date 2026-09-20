@@ -1,20 +1,18 @@
 package com.buaa.schedule.widget
 
-/**
+/*
  * 「玻璃背景」那条分支的圆角烘焙算术。
  *
  * 单独成文件、且不 import 任何 android 类型，是为了让这条换算能在 JVM 单测里被
  * 逐格钉住（见 `WidgetCornerRadiiTest`）——它决定的是桌面上看得见的几何形状，
  * 而这个仓库里没有 Robolectric，任何直接调 `Canvas` 的写法都测不了。
  *
- * 背景是这么一件事：位图画布固定 480x320（[WidgetBackgroundRenderer.TARGET_WIDTH]），
+ * 背景是这么一件事：位图画布固定 480x320（WidgetBackgroundRenderer.TARGET_WIDTH），
  * 而布局里那块背景 ImageView 是 `scaleType="fitXY"`（`widget_today.xml:16`），
  * 于是 Launcher 把它**非等比**拉到组件的真实尺寸：
  *
- * ```
- * scaleX = 组件宽(px) / 480      scaleY = 组件高(px) / 320
- * 屏幕上看到的半径 = 画进位图的半径 x 对应轴的 scale
- * ```
+ *     scaleX = 组件宽(px) / 480      scaleY = 组件高(px) / 320
+ *     屏幕上看到的半径 = 画进位图的半径 x 对应轴的 scale
  *
  * 所以想让用户选的 `N` dp 在屏幕上正好是 `N` dp，就得先把两轴各除回去。
  */
@@ -25,20 +23,22 @@ internal data class BakedCornerRadius(val radiusX: Float, val radiusY: Float)
 /** 组件在屏幕上的真实尺寸（px，已按 density 换算完）。 */
 internal data class WidgetSizePx(val widthPx: Float, val heightPx: Float)
 
-/** Launcher 把这张画布拉到组件真实尺寸时，两轴各自的放大倍数。 */
-internal fun stretchFactors(size: WidgetSizePx?, canvasWidthPx: Int, canvasHeightPx: Int): Pair<Float, Float> {
-    // 没有尺寸信息时的兜底口径见 [WidgetCornerRadii.bake]：按"不缩放"算
-    val scaleX = size?.let { it.widthPx / canvasWidthPx } ?: 1f
-    val scaleY = size?.let { it.heightPx / canvasHeightPx } ?: 1f
-    return scaleX to scaleY
-}
-
 internal object WidgetCornerRadii {
 
     /**
      * 把用户选的 `cornerDp` 换算成要画进 `canvasWidthPx x canvasHeightPx` 位图的半径。
      *
-     * @param size 组件真实尺寸；null = 一个都取不到，走 [stretchFactors] 的"不缩放"兜底。
+     * [size] 的三档来源，可信度从高到低（取数口径见 [resolveSizePx]）：
+     * 1. 宿主上报的组件真实尺寸 → 显示出来的半径**正好**是 `cornerDp` dp，两轴等长；
+     * 2. provider 声明的 minWidth/minHeight → 声明值偏小，于是烘焙值偏大，
+     *    但被"不小于画布"这条下限托住（见 [resolveSizePx]）；
+     * 3. 一个都取不到 → 假设 Launcher **不缩放**这张图（scale = 1），
+     *    即按"位图画多大就显示多大"来画。这是没有任何信息时唯一不掺魔法数的假设。
+     *
+     * 后两档共同保有一条方向性：`scaleX/scaleY` 都被托在 `>= 1`，
+     * 所以烘焙值 `<= cornerDp * density`，在任何 density < 4 的设备上都比它取代的旧口径
+     * `cornerDp * 4f` 更接近选的那一档——只会把圆角画得偏**方**，不会再画得偏圆。
+     * 偏圆才是用户投诉的那个样子。
      */
     fun bake(
         cornerDp: Int,
@@ -47,12 +47,28 @@ internal object WidgetCornerRadii {
         canvasHeightPx: Int,
         size: WidgetSizePx?,
     ): BakedCornerRadius {
-        // 旧口径（尚未接线）：整张画布按"480dp 宽 -> 4x 密度"折算，两轴同值。
-        // 它既不随 density 变、也不随组件尺寸变，所以同一档圆角在
-        // 纯色底那条分支（精确 dp）与这条分支之间对不上——单测把它钉成红灯，
-        // 修法是把 requestedPx 按两轴的拉伸倍数各除回去。
-        val legacy = cornerDp * 4f
-        return BakedCornerRadius(legacy, legacy)
+        // 想要的是"屏幕上看到 cornerDp dp"，屏幕上的一个 dp 就是 density 个像素。
+        val requestedPx = cornerDp.coerceAtLeast(0) * density
+        val (scaleX, scaleY) = stretchFactors(size, canvasWidthPx, canvasHeightPx)
+        // 画布会被 fitXY 各向独立地拉大 scaleX/scaleY 倍，所以先各除回去：
+        // 显示出来才正好是 requestedPx（两轴等长 => 屏幕上是个正圆，尽管画进位图的是椭圆）。
+        return BakedCornerRadius(requestedPx / scaleX, requestedPx / scaleY)
+    }
+
+    /**
+     * Launcher 把这张画布拉到组件真实尺寸时，两轴各自的放大倍数。
+     *
+     * 尺寸缺失、或某一轴不是正数（调用方手滑传了 0）时按"该轴不缩放"算：
+     * 除出 Infinity/NaN 再交给 Skia，圆角会直接画不出来。
+     */
+    private fun stretchFactors(
+        size: WidgetSizePx?,
+        canvasWidthPx: Int,
+        canvasHeightPx: Int,
+    ): Pair<Float, Float> {
+        val widthPx = size?.widthPx?.takeIf { it > 0f } ?: canvasWidthPx.toFloat()
+        val heightPx = size?.heightPx?.takeIf { it > 0f } ?: canvasHeightPx.toFloat()
+        return widthPx / canvasWidthPx to heightPx / canvasHeightPx
     }
 
     /**
