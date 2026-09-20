@@ -120,8 +120,9 @@ class BottomBarAccentInkTest {
 
     /**
      * 十格里 **9 格**解到 AA，第 10 格（深色档 × 极白块）是**真的无解**：那块的板上黑白两支
-     * 都不到 AA（白 3.8840 / 近黑 1.2406），交出去的是这条直线能到的最好一份，格数与归属钉在
-     * [theSweepPinsTheUnsolvedCellsAndTheKeptBrandOnes] 里。
+     * 都不到 AA（白 3.8840 / 近黑 3.3027），连整条坡道 8 bit 量化后的最优一档也只有 3.8840:1。
+     * ai/T36 起这一格**一步都不推**，逐字交回主题那一支 `#AAC7FF`（[theUnsolvedCellHandsBackTheBrandAccentVerbatim]）。
+     * 格数与归属钉在 [theSweepPinsTheUnsolvedCellsAndTheKeptBrandOnes] 里。
      *
      * 解出来的墨逐字钉死：换色表/换判据/换二分步长都会让某一格挪一档，那时这里报数、
      * 表跟着更新，而不是靠一个松弛区间糊过去。
@@ -144,51 +145,143 @@ class BottomBarAccentInkTest {
                     row.onIndicator >= DesignTokens.WCAG_AA_RATIO,
                 )
             } else {
-                // 无解那格：不许谎称达标，但仍要交出黑白较优（=这条直线能到的最好一份）
-                assertEquals("${row.cell.label}：无解格的读数漂了", 3.8840f, row.onIndicator, 0.01f)
-                assertEquals("${row.cell.label}：无解格该交纯白那支", ContentLight, row.ink)
+                // 无解那格：不许谎称达标，也不许推到底——逐字交回主题那一支（ai/T36）
+                assertEquals("${row.cell.label}：无解格的读数漂了", 2.4161f, row.onIndicator, 0.01f)
+                assertEquals("${row.cell.label}：无解格该一步不推、交回主题 accent", row.cell.accent, row.ink)
+                assertNotEquals("${row.cell.label}：无解格又推到底交出坡道尽头那支了", ContentLight, row.ink)
             }
             assertEquals("${row.cell.label}：栏体板上的读数不再是 ${expected.onBar}:1", expected.onBar, row.onBar, 0.01f)
         }
     }
 
     /**
-     * 可见层那一排（坐在栏体板上）十格**全部**达标：无解只发生在被 wash 罩过的指示器板上。
+     * 无解那一格**不许推到底**（ai/T36 的唯一行为规则）：整条坡道读不到 AA 时，
+     * [bottomBarAccentInk] 逐字交回传进来的 [accent]，而不是一支"付清色相代价却仍不到 AA"的墨。
      *
-     * 这条是"一次解不能把两块板糊过去"的正向半边：一块墨水要同时伺候两块板，而栏体板那半边
-     * 每一格都真的读得出（最差 4.72:1 就是无解那一格）。
+     * 三段证据，全按实现用的那把尺子（[bottomBarAccentInk] 内部同一口径：[reads] 对指示器那块板）量：
+     *
+     * 1. **确实无解**：把 `accent → 纯白` 与 `accent → #1A1B20` 两条坡道各 256 档全部过一遍
+     *    8 bit 取整，逐档量在指示器板上的读数，最高的一档（`k=254/255`，已经是纯白）只有
+     *    **3.8840:1** < [DesignTokens.WCAG_AA_RATIO]。"端点即最优"不靠单调性声称，靠这里扫出来。
+     * 2. **改前付的是全价**：那一格推到底交出的是纯白，而同一个输入下未选中那支中性墨
+     *    （[bottomBarInk]）也是纯白——两支逐字相同，选中态在那一格只剩胶囊与字重在分档。
+     *    新行为交回的 `#AAC7FF` 与那支中性墨最大通道差 85/255，一眼可辨回来了；
+     *    代价写在 [theSolvedInkAlwaysClearsTheBarPlate] 里（栏体板 2.7725:1）。
+     * 3. **反面**：紧邻的有解格（深色档 × 极黑块，同一支品牌蓝、板亮度 0.1289）仍解到
+     *    4.5034:1，新判据不许把它一起收进"不推"那一族。
+     */
+    @Test
+    fun theUnsolvedCellHandsBackTheBrandAccentVerbatim() {
+        val row = measure(TRIGGER_GRID[1]) // 深色档 × 极白块 × cardAlpha=0.88
+        assertEquals("触发格选错了：这一格才该是无解格", "cardAlpha=0.88 × 极白块 × 深色档", row.cell.label)
+
+        // 1) 整条坡道（含 8 bit 量化后）的最优一档仍读不到 AA —— 与实现同一把尺子
+        val readingsOnRamps = listOf(ContentLight, ContentDark).flatMap { target ->
+            ramp(row.cell.accent, target).map { reads(it, row.indicatorPlate, row.cell.dark) }
+        }
+        val best = readingsOnRamps.max()
+        assertEquals("坡道档数不是 2 × 256：量化扫描退化成一档了", 2 * (RAMP_END + 1), readingsOnRamps.size)
+        assertEquals("无解格的最优那一档不再是 3.8840:1（这条坡道本来有解了，本卡的判据该重新对账）", 3.8840f, best, 0.01f)
+        assertTrue("这块板现在有解了（最优 $best:1 ≥ AA），那这一格就不该再走\"逐字交回\"那条分支", best < DesignTokens.WCAG_AA_RATIO)
+
+        // 2) 交回的必须是 accent 本身：逐字相等，不是"接近"、不是"色相差 < X"
+        assertEquals("无解格该逐字交回传进来的 accent", row.cell.accent, row.ink)
+        assertEquals("无解格交出的就是主题 primary 那一支本身", DarkBluePrimary, row.ink)
+        assertEquals("交回的这支在它自己那块板上仍是 2.4161:1", row.brandOnIndicator, row.onIndicator, 0f)
+        assertNotEquals("无解格又交出坡道尽头那支纯白了（付全价买不到可读性）", ContentLight, row.ink)
+        val neutral = bottomBarInk(row.cell.plate, row.alpha, row.cell.text, row.cell.dark, row.sceneLuma)
+        assertEquals("这一格的未选中中性墨不再是纯白（本卡\"选中==未选中\"的前提变了）", ContentLight, neutral)
+        assertEquals("改前那支纯白与该格未选中墨不再逐字相同", neutral, drawn(ramp(row.cell.accent, ContentLight)[RAMP_END]))
+        assertEquals(
+            "交回的选中墨与未选中中性墨最大通道差不再是 85/255（一眼可辨这条又没了）",
+            85,
+            maxChannelDiff(row.ink, neutral),
+        )
+
+        // 3) 反面：紧邻的有解格不许被"无解"判据误收
+        val solvedNeighbor = measure(TRIGGER_GRID[2]) // 深色档 × 极黑块
+        assertNotEquals("有解格被逐字交回了：无解判据尺子太宽", solvedNeighbor.cell.accent, solvedNeighbor.ink)
+        assertTrue(
+            "有解格交出的墨只有 ${solvedNeighbor.onIndicator}:1",
+            solvedNeighbor.onIndicator >= DesignTokens.WCAG_AA_RATIO,
+        )
+        assertEquals("有解格那一步都不许多推：解出的墨不再是 4.5034:1", 4.5034f, solvedNeighbor.onIndicator, 0.01f)
+    }
+
+    /**
+     * 有解的格子（30 格里的 27 格）在**两块板上都**达标；无解那 3 格逐字交出 accent，
+     * 于是它们在栏体板上读不到 AA —— 这条不变式的边界在 ai/T36 之后收窄到这里。
+     *
+     * 原来这条是"30 格在栏体板上全部 ≥ AA"，成立是因为无解那几格被推到坡道尽头换回一支纯白
+     * （白在栏体板上 4.72:1，在指示器板上仍只有 3.88:1）。ai/T36 判定"付全价却什么都没买到"
+     * 不该付，于是那几格改成交回主题那一支 `#AAC7FF`：栏体板上 2.7725:1、指示器板上 2.4161:1。
+     * **有解格的 AA 下限一个数字都没放宽**（那 27 格两块板都仍逐格 ≥ AA），被挪出这条不变式的
+     * 只有无解那 3 格，而它们被 [theUnsolvedCellHandsBackTheBrandAccentVerbatim] 按另一条规则钉住。
+     *
+     * 无解格的**集合**在这里一起钉死（3 格、全是深色档 × 极白块）：将来某一格挪出这个集合
+     * （板子变好读了），它就必须同时通过上面那条 ≥ AA 的断言，否则这里当场报数。
      */
     @Test
     fun theSolvedInkAlwaysClearsTheBarPlate() {
         val readings = SWEEP.map(::measure)
         assertEquals("参数化测试退化：组合数没对上", 5 * 3 * 2, readings.size)
-        for (row in readings) {
+        val (unsolved, solvable) = readings.partition { it.onIndicator < DesignTokens.WCAG_AA_RATIO }
+        assertEquals(
+            "无解格集合变了：${unsolved.map { "${it.cell.label}=${it.onIndicator}:1" }}",
+            setOf(
+                "cardAlpha=0.3 × 极白块 × 深色档",
+                "cardAlpha=0.88 × 极白块 × 深色档",
+                "cardAlpha=1.0 × 极白块 × 深色档",
+            ),
+            unsolved.map { it.cell.label }.toSet(),
+        )
+        assertEquals("有解格数不再是 27", SWEEP.size - 3, solvable.size)
+        for (row in solvable) {
             assertTrue(
                 "${row.cell.label}：选中墨在栏体板上只有 ${row.onBar}:1（可见层那一排就是这块板）",
                 row.onBar >= DesignTokens.WCAG_AA_RATIO,
             )
+            assertTrue(
+                "${row.cell.label}：选中墨在指示器板上只有 ${row.onIndicator}:1，有解格就该两块板都读清",
+                row.onIndicator >= DesignTokens.WCAG_AA_RATIO,
+            )
+        }
+        for (row in unsolved) {
+            assertEquals("${row.cell.label}：无解格交出的是主题那一支本身", row.cell.accent, row.ink)
+            assertEquals("${row.cell.label}：无解格的栏体板读数不再是品牌色自己的 2.7725", 2.7725f, row.onBar, 0.01f)
         }
     }
 
     /**
-     * 达标就原样留着品牌色：全族 30 格里只有**一格**走到"保留"分支（cardAlpha=1.0 × 内置渐变 ×
-     * 深色档，`#AAC7FF` 在指示器板上 4.5959:1）。
+     * 交出主题那一支的格子分两类，各钉一类：
      *
-     * 这条既不许空转（格数 0 ⇒ 解法无条件换色，品牌色身份丢了），也不许变松（格数变多 ⇒
-     * 判据被改成了"读不清也留着"）。其余 29 格交出的都不是原色那支。
+     * - **本来就达标**：全族 30 格里只有**一格**走到"达标就留着"分支（cardAlpha=1.0 × 内置渐变 ×
+     *   深色档，`#AAC7FF` 在指示器板上 4.5959:1）。这条既不许空转（格数 0 ⇒ 解法无条件换色，
+     *   品牌色身份丢了），也不许变松（格数变多 ⇒ 判据被改成了"读不清也留着"）。
+     * - **无解所以一步不推**（ai/T36）：3 格「深色档 × 极白块」的指示器板上黑白两支都不到 AA
+     *   （较优那支也只有 3.8840:1），交出的墨逐字等于传进来的 accent。
+     *
+     * 两类合起来 4 格，其余 26 格交出的都不是原色那支。
      */
     @Test
     fun theSweepPinsTheUnsolvedCellsAndTheKeptBrandOnes() {
         val readings = SWEEP.map(::measure)
-        val kept = readings.filter { it.ink == it.cell.accent }
-        assertEquals("保留品牌色的格数不再是 1：${kept.map { it.cell.label }}", 1, kept.size)
-        assertEquals("保留的是这一格", "cardAlpha=1.0 × 内置渐变 × 深色档", kept[0].cell.label)
-        assertEquals("那一格保留的就是主题 primary 本身", DarkBluePrimary, kept[0].ink)
-        assertEquals("那一格在指示器板上 4.5959:1", 4.5959f, kept[0].onIndicator, 0.01f)
-        assertTrue("品牌墨本来就达标却没原样交出", kept[0].brandOnIndicator >= DesignTokens.WCAG_AA_RATIO)
-        assertEquals("其余格子该被解而不是留着", SWEEP.size - 1, readings.size - kept.size)
+        val keptBecauseReadable = readings.filter { it.ink == it.cell.accent && it.brandOnIndicator >= DesignTokens.WCAG_AA_RATIO }
+        assertEquals(
+            "达标保留品牌色的格数不再是 1：${keptBecauseReadable.map { it.cell.label }}",
+            1,
+            keptBecauseReadable.size,
+        )
+        assertEquals("保留的是这一格", "cardAlpha=1.0 × 内置渐变 × 深色档", keptBecauseReadable[0].cell.label)
+        assertEquals("那一格保留的就是主题 primary 本身", DarkBluePrimary, keptBecauseReadable[0].ink)
+        assertEquals("那一格在指示器板上 4.5959:1", 4.5959f, keptBecauseReadable[0].onIndicator, 0.01f)
+        assertTrue("品牌墨本来就达标却没原样交出", keptBecauseReadable[0].brandOnIndicator >= DesignTokens.WCAG_AA_RATIO)
 
-        // 无解格：黑白两支都不到 AA，交出去的是较优那支，格数与归属一起钉
+        val kept = readings.filter { it.ink == it.cell.accent }
+        assertEquals("交出主题那一支的格数不再是 4：${kept.map { it.cell.label }}", 4, kept.size)
+        assertEquals("其余格子该被解而不是留着", SWEEP.size - 4, readings.size - kept.size)
+
+        // 无解格：黑白两支都不到 AA，于是整条坡道一步不推、交回 accent；格数与归属一起钉
         val dead = readings.filter { it.onIndicator < DesignTokens.WCAG_AA_RATIO }
         assertEquals("无解格数不再是 3：${dead.map { "${it.cell.label}=${it.onIndicator}:1" }}", 3, dead.size)
         assertEquals(
@@ -202,7 +295,8 @@ class BottomBarAccentInkTest {
         )
         for (row in dead) {
             assertTrue("${row.cell.label}：无解格不该是浅色档", row.cell.dark)
-            assertEquals("${row.cell.label}：无解格该跟主题走到纯白", ContentLight, row.ink)
+            assertEquals("${row.cell.label}：无解格该一步不推、逐字交回 accent", row.cell.accent, row.ink)
+            assertEquals("${row.cell.label}：无解格交出的读数不再是品牌色自己的", row.brandOnIndicator, row.onIndicator, 0f)
             val onWashedPlate = { candidate: Color ->
                 reads(candidate, row.indicatorPlate, row.cell.dark)
             }
@@ -211,7 +305,10 @@ class BottomBarAccentInkTest {
                 "${row.cell.label}：黑白较优也有 $bestOfTwo:1，那这格不再是无解格了（交出的是 ${row.onIndicator}:1）",
                 bestOfTwo < DesignTokens.WCAG_AA_RATIO,
             )
-            assertEquals("${row.cell.label}：交出的不是较优那支", bestOfTwo, row.onIndicator, 0.005f)
+            assertTrue(
+                "${row.cell.label}：交出的这支只有${row.onIndicator}:1，比不推还差，说明推的方向反了",
+                row.onIndicator <= bestOfTwo,
+            )
         }
     }
 
@@ -226,7 +323,8 @@ class BottomBarAccentInkTest {
      * - 深色档 15 格全在 `accent → 纯白` 那一条上，浅色档 15 格全在 `accent → #1A1B20` 那一条上；
      *   往白推是通道等比抬升，色相角只从 219.53° 抖到最多 220.00°；往近黑那支推掉的是饱和
      *   （彩度 0.808 → 最低 0.055），色相角走到最多 222.86°——端点自己就是 228° 的蓝，仍在蓝这一族。
-     * - 有解的格子全部停在坡道中间（最深的一格 k=242/255），只有无解那格才走到尽头交出纯白。
+     * - 有解的格子全部停在坡道中间（最深的一格 k=242/255）；无解那 3 格停在**起点**（k=0，
+     *   逐字就是 accent），ai/T36 收掉的正是"无解还推到尽头交出裸候选"这一条。
      *
      * 判据不许空转：两条坡道各被 15 格命中，交出的墨仍有彩度。
      */
@@ -250,14 +348,22 @@ class BottomBarAccentInkTest {
                 expectedRamp >= 0,
             )
             if (row.cell.dark) towardLight++ else towardDark++
+            val firstK = if (row.cell.dark) lightRamp.indexOf(ink) else darkRamp.indexOf(ink)
             val dead = row.onIndicator < DesignTokens.WCAG_AA_RATIO
             if (dead) {
-                assertTrue("${row.cell.label}：只有无解格才许推到坡道尽头（k=$expectedRamp）", expectedRamp >= RAMP_END)
-                assertEquals("${row.cell.label}：无解格该交纯白那支", ContentLight, row.ink)
+                assertTrue(
+                    "${row.cell.label}：无解格现在停在 k=$expectedRamp（首次命中 k=$firstK），不再是「一步不推」了",
+                    firstK == 0,
+                )
+                assertEquals("${row.cell.label}：无解格该逐字交回 accent", row.cell.accent, row.ink)
             } else {
                 assertTrue(
                     "${row.cell.label}：k=$expectedRamp 已经是坡道尽头，这不是「推」而是「换成裸候选」",
                     expectedRamp < RAMP_END,
+                )
+                assertTrue(
+                    "${row.cell.label}：有解却一步没推（k=$firstK 就是 accent 自己），无解判据把它误收了",
+                    firstK > 0 || row.brandOnIndicator >= DesignTokens.WCAG_AA_RATIO,
                 )
                 assertNotEquals("${row.cell.label}：有解却直接交出裸候选", ContentLight, row.ink)
                 assertNotEquals("${row.cell.label}：有解却直接交出裸候选", ContentDark, row.ink)
@@ -504,6 +610,20 @@ class BottomBarAccentInkTest {
     )
 
     /**
+     * 两支墨画出来之后的**最大通道差**（0..255，取整后逐通道比）：这一族"选中态一眼可辨"
+     * 只有这一个可量的口径——差到 9/255 那一级肉眼就是同一支色（P2 那一格量的就是它）。
+     */
+    private fun maxChannelDiff(a: Color, b: Color): Int {
+        val x = drawn(a)
+        val y = drawn(b)
+        return maxOf(
+            kotlin.math.abs(x.red - y.red),
+            kotlin.math.abs(x.green - y.green),
+            kotlin.math.abs(x.blue - y.blue),
+        ).let { (it * 255f + 0.5f).toInt() }
+    }
+
+    /**
      * `accent → 裸候选` 这条保色相直线上的 256 档坡道，逐档过一遍 8 bit 取整。
      *
      * 与 [legibleAccentOn] 走的是同一条：step 的粒度是 1/255，交出去之前也过 [drawn]，
@@ -639,7 +759,7 @@ class BottomBarAccentInkTest {
          */
         val BEFORE = listOf(
             Expect(4.4953f, 0.20f, "#ABC7FF", 4.5025f, 5.6961f), // 深色 × 内置渐变
-            Expect(2.4161f, 0.60f, "#FFFFFF", -1f, 4.7249f), // 深色 × 极白块：无解那格（负数 = 不许谎称达标）
+            Expect(2.4161f, 0.60f, "#AAC7FF", -1f, 2.7725f), // 深色 × 极白块：无解那格，一步不推交回 accent（负数 = 不许谎称达标）
             Expect(3.6500f, 0.3956857f, "#CEDFFF", 4.5034f, 5.6870f), // 深色 × 极黑块
             Expect(3.4187f, 0.60f, "#D9E7FF", 4.5057f, 5.6776f), // 深色 × 均匀中灰
             Expect(3.6500f, 0.554347f, "#CEDFFF", 4.5034f, 5.6870f), // 深色 × 中等亮块
