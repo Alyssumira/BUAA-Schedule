@@ -668,6 +668,27 @@ internal fun bottomBarIndicatorPlateLuma(
  * 坐在被 wash 罩过的板上。两行**必须同墨**（否则切换瞬间跳色，见 ai/T25b 第 2 条契约），
  * 所以这里两块板各解一次，交出让两块都读得清的那一支，并在两个解里挑牺牲色相更小的那个。
  *
+ * ## 无解那一格不许推到底（ai/T36）
+ *
+ * 深色档 × 极白块这一格，指示器那块板**任何墨都读不清**：坡道推到尽头（`k=255`，纯白
+ * `#FFFFFF`）也只有 **3.8840:1** < [DesignTokens.WCAG_AA_RATIO]。ai/T32 在那一格的实际行为是
+ * **付全价却什么都没买到**——品牌蓝 `#AAC7FF` 被换成纯白，色相代价全部付清，可读性一分没涨，
+ * 而该栏**未选中**那支中性墨（[bottomBarInk] 在同一块栏体板上解出来的）在那一格也正是纯白，
+ * 两支墨逐字相同。选中态唯一的职责是"一眼可辨"，那一格于是只剩胶囊和字重在说话。
+ *
+ * 于是判据搬到坡道上：[bottomBarInk] 里已经写着"两支候选都到不了 AA 的那一带，那 0.05~0.7 档
+ * 的差距换不来可读性"，跟着主题走；同一句话，既然推到尽头也到不了 AA，就一步都别推，
+ * **逐字交回 [accent]**。判据不另发明尺度——量的还是 [accentReads] 对两块板里更严那一块
+ * （[bottomBarIndicatorPlateLuma]，恒更严这条钉在测试里），看的还是这条坡道 8 bit 量化之后的
+ * 最优那一档：[legibleAccentOn] 无解时交出的正是坡道尽头那支，所以它自己读不到 AA 就等于整条
+ * 坡道读不到（坡道按通道逐档线性插值，亮度沿坡道单调，固定底色下的比值在跨过底色之前单调升、
+ * 之后单调降，最优点落在端点）。
+ *
+ * 代价如实记在这里，不藏：那一格交回的 `#AAC7FF` 在栏体板上只有 2.77:1（改前那支纯白是
+ * 4.72:1）。差别是**换来的一眼可辨**——同一格里未选中那支已经是同一个纯白，改前的选中态等于
+ * 没选中态；这一格真正能读清的出路在底板色（[com.buaa.schedule.core.designsystem.legibleTintPlate]
+ * 会压 tint），那不在本卡口径内，与 [bottomBarInk] 那一段记的是同一笔账。
+ *
  * 不 `@Composable`：与 [bottomBarInk] 同一处境，本模块 JVM 单测没有 Compose 运行时。
  *
  * @param effectiveAlpha [bottomBarSurfaceAlpha] 夹完的那一个值，别传夹之前的 raw
@@ -684,7 +705,10 @@ internal fun bottomBarAccentInk(
     val wash = bottomBarIndicatorWash(darkTheme)
     val onPlate = legibleAccentOn(plate, accent, darkTheme, wash = null)
     if (accentReads(onPlate, plate, wash) >= DesignTokens.WCAG_AA_RATIO) return onPlate
-    return legibleAccentOn(plate, accent, darkTheme, wash = wash)
+    val onIndicator = legibleAccentOn(plate, accent, darkTheme, wash = wash)
+    // 更严那块板的坡道最优一档（8 bit 量化后）仍读不到 AA：一步都不推，逐字交回主题那一支
+    if (accentReads(onIndicator, plate, wash) < DesignTokens.WCAG_AA_RATIO) return accent
+    return onIndicator
 }
 
 /**
