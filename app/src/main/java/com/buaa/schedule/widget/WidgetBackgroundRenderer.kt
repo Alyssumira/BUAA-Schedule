@@ -7,10 +7,9 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffColorFilter
 import android.graphics.RectF
 import android.os.Build
+import android.util.Log
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.scale
 import androidx.core.graphics.withClip
@@ -32,6 +31,8 @@ import com.buaa.schedule.core.designsystem.decodeSampledWallpaper
  * 否则用户选的 20dp 到桌面上会变成 53dp，并且是个椭圆。
  */
 object WidgetBackgroundRenderer {
+
+    private const val TAG = "WidgetBackgroundRenderer"
 
     /**
      * 烘焙画布的尺寸（px）。
@@ -95,7 +96,9 @@ object WidgetBackgroundRenderer {
                             size = widgetSize,
                         )
                         val rect = RectF(0f, 0f, output.width.toFloat(), output.height.toFloat())
-                        canvas.drawRoundRect(rect, radii.radiusX, radii.radiusY, paint)
+                        // 这里以前先拿默认黑色不透明 Paint 垫了一遍整块圆角矩形：画布出生就是全透明，
+                        // 四角的留空本来就由下面的 clip 负责，那一步唯一的效果是让带 alpha 通道的
+                        // 壁纸透出黑色而不是桌面。
 
                         canvas.withClip(android.graphics.Path().apply {
                             addRoundRect(
@@ -111,10 +114,19 @@ object WidgetBackgroundRenderer {
                         }) {
                             drawBitmap(blurred, 0f, 0f, paint)
 
-                            // 叠加用户背景色与透明度，保持与普通配色一致的观感
+                            // 叠加用户背景色与透明度。透明度**必须折进这层的颜色本身**：
+                            // 以前这里是 PorterDuffColorFilter(tint, SRC_OVER) —— 颜色滤波器的输出
+                            // *替换*被画像素的颜色（含 alpha），SRC_OVER 模式下 tint 自身 alpha=255
+                            // 时复合结果恒不透明，paint.alpha 只是喂进滤波器的 src alpha，
+                            // 会被滤波结果整个顶掉。装机实测（id=8）：w8.alpha 从 80 拨到 0，
+                            // tile 内部像素一动不动，始终是底板色 (22,32,58)，糊过的壁纸被盖死。
+                            // 所以改走 drawRect 的默认 SRC_OVER 光栅管线，alpha 经 [glassTintArgb]
+                            // 进最终颜色。期望（自选壁纸是纯白，底面色 (22,32,58)）：
+                            // alpha=80% -> 0.8*(22,32,58) + 0.2*(255,255,255) ≈ (69,77,97)；
+                            // alpha=0%  -> 看到糊过的壁纸本身。逐格钉在 WidgetBackgroundRendererTest。
                             val tint = appearance.resolvedBackground(context)
-                            paint.colorFilter = PorterDuffColorFilter(tint, PorterDuff.Mode.SRC_OVER)
-                            paint.alpha = (appearance.alphaFraction * 255).toInt().coerceIn(0, 255)
+                            paint.colorFilter = null
+                            paint.color = glassTintArgb(tint, appearance.alphaPercent)
                             drawRect(rect, paint)
                         }
 
@@ -129,6 +141,10 @@ object WidgetBackgroundRenderer {
             } finally {
                 if (source.owned) base.recycle()
             }
+        }.onFailure {
+            // 这里以前什么都不留：玻璃背景画不出来会静默回退纯色底，一整轮定位全靠
+            // 装机量像素。语义不变（返回 null = 回退纯色底），只补证据。
+            Log.w(TAG, "玻璃背景这次画不出来，回退纯色底（appWidgetId=$appWidgetId）", it)
         }.getOrNull()
     }
 
@@ -248,6 +264,28 @@ object WidgetBackgroundRenderer {
         return bitmap
     }
 }
+
+/**
+ * 玻璃背景 tint 层的最终 ARGB：把透明度百分比折进底色的高字节。
+ *
+ * 这是「alpha 到底进没进颜色」唯一该问的地方，也是 [render] 里那次修复的全部算式 ——
+ * 抽成本函数只因为它得能在 JVM 单测里逐格钉住（没有 Robolectric，碰 `Canvas`/`Paint`
+ * 的路径根本画不了，见 WidgetBackgroundRendererTest）。位运算手写、不 import
+ * `android.graphics.Color`：与 [WidgetGlassSource] 同一套理由。
+ *
+ * 为什么非要把 alpha 折进颜色、而不是 `PorterDuffColorFilter` + `paint.alpha`：
+ * 颜色滤波器的输出**替换**被画像素的颜色（含 alpha），SRC_OVER 模式是「常量色 tint
+ * 盖在 src 上」，tint 的 alpha=255 时结果恒不透明，`paint.alpha` 只是喂进滤波器的
+ * src alpha，被滤波结果整个顶掉 —— 透明度滑杆在这条分支上从来就没生效过。
+ * 交回默认的 SRC_OVER 光栅管线后，本函数的 alpha 字节才是真正参与复合的那个数：
+ * alpha=80%、纯白壁纸、底色 (22,32,58) 时显示 0.8*(22,32,58)+0.2*(255,255,255)
+ * ≈ (69,77,97)；alpha=0% 时壁纸原样透出。
+ *
+ * @param tintArgb 底色（[WidgetAppearance.resolvedBackground]，高字节按不透明对待）
+ * @param alphaPercent 背景不透明度 0..100；越界夹到端点，与 `alphaFraction` 同一口径
+ */
+internal fun glassTintArgb(tintArgb: Int, alphaPercent: Int): Int =
+    ((alphaPercent.coerceIn(0, 100) * 255 / 100) shl 24) or (tintArgb and 0x00FFFFFF)
 
 /** 用户选的那一档圆角（dp）。越界下标夹到最近档位，与 `cornerDrawableRes` 同一口径。 */
 private fun WidgetAppearance.cornerRadiusDp(): Int =
