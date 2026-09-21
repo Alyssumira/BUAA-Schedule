@@ -41,7 +41,7 @@ class BarhopperNativeLibProbeTest {
         val present = BarhopperNativeLibProbe { name -> loaded += name }
         assertEquals(NativeLibVerdict.Available, present.decideNow())
         assertEquals("加载动作拿到的库名不是探针里那个常量：", listOf(BARHOPPER_NATIVE_LIBRARY), loaded)
-        assertTrue("已判定可用还不放行解码，扫码页就永远只剩手输", present.isAvailable())
+        assertTrue("已判定可用还不放行解码，扫码页的两条解码路就都开不了", present.isAvailable())
 
         val missing = BarhopperNativeLibProbe {
             throw UnsatisfiedLinkError("dlopen failed: library \"lib$BARHOPPER_NATIVE_LIBRARY.so\" not found")
@@ -186,15 +186,18 @@ class BarhopperNativeLibProbeTest {
         )
 
         // 缺库那一档的文案分支：T44 起整条提示档位搬进了 ScanUiStatus.kt 的 scanUiStatus()
-        // （纯 JVM 判据，每档都能单测，见 ScanUiStatusTest）。搬的是写法、不是口径 ——
-        // 这一支照旧钉"不许把用户指向相册那条死路"，只是换个文件读。
+        // （纯 JVM 判据，每档都能单测，见 ScanUiStatusTest）。T45 起口径换了：这一页只剩
+        // 相机与相册两条入口，而它们用的是**同一颗** scanner —— 缺库时两条一起没，
+        // 这一档没有任何出路可指。提到相册（同死的死路）或任何"手输/输入"（已删的入口）
+        // 都是谎话，所以这些子串一个都不许出现在这一档的文案里。
         val ladder = normalize(withoutComments(readSource(SCAN_STATUS_FILE)))
         val marker = "decoderMissing -> \""
         val at = ladder.indexOf(marker)
         check(at >= 0) { "缺库那一档的文案分支不在了（或被合并进 scanner 不可用那一档）：$marker" }
         val text = ladder.substring(at, ladder.indexOf('"', at + marker.length))
-        assertFalse("解码器整条都不在的时候，文案还在把用户指向相册那条死路：$text", text.contains("从相册选"))
-        assertTrue("缺库时唯一还能走的是手输签到码，文案得说这件事：$text", text.contains("手输"))
+        for (banned in listOf("相册", "手输", "输入")) {
+            assertFalse("解码器整条都不在，这一档却没有老实说用不了，而是提起了「$banned」：$text", text.contains(banned))
+        }
     }
 
     // ---- 源码核对工具（与 ScanChainWarmUpTest 同一套手法）----

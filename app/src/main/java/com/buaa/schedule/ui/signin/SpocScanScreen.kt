@@ -26,11 +26,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -41,7 +38,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,7 +65,6 @@ import com.buaa.schedule.core.designsystem.GlassTopBar
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalSemanticColors
 import com.buaa.schedule.core.designsystem.LocalSemanticPlate
-import com.buaa.schedule.core.designsystem.ModalTransition
 import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -85,17 +80,22 @@ import kotlin.coroutines.resume
 /**
  * 智学北航扫码签到页。
  *
- * 三条入口指向同一个状态机（[SignInViewModel]）：相机实时解码、相册识图、手输签到码。
- * 相机是主路径。后两条**不是**在任何设备上都还在：MLKit 的解码库在 release 包里只带
- * arm64 一档（见 docs/BUAA_SPOC_SIGNIN_PLAN.md §1.2 与 app/build.gradle.kts 末尾的
+ * 两条入口指向同一个状态机（[SignInViewModel]）：相机实时解码、相册识图。相机是主路径。
+ * 第三条入口「手输签到码」（底部按钮 + 输入弹窗）已于 2026-09-21 整条删除：
+ * 现实里老师端只有那张二维码，不存在一个可以抄下来的短码，那条入口是按假想需求做的。
+ *
+ * 删掉它之后盖不住一个新事实：这两条入口**不是**在任何设备上都还在 —— MLKit 的解码库
+ * 在 release 包里只带 arm64 一档（见 docs/BUAA_SPOC_SIGNIN_PLAN.md §1.2 与 app/build.gradle.kts 末尾的
  * `androidComponents` 块），而相册识别送进的是**同一个** `scanner.process(...)` ——
- * 缺库的设备上相册也解不出任何东西，这一页真正剩下的只有手输签到码。
+ * scanner 建不出来（缺解码库）时相机与相册**一起没**，这一页在这种设备上一条路都没有。
+ * 以前这个事实被手输那颗按钮盖着，现在只能靠降级文案说实话（见 [scanUiStatus]）。
  *
  * 这件事由 [BarhopperNativeLibProbe] 在任何一次解码调用之前判掉（T24）：不能等 ML Kit
  * 自己抛，它是在自己的工作线程上 `System.loadLibrary` 的，那个 `UnsatisfiedLinkError`
  * 这一页任何一处 catch 都接不住，只会顺着线程默认处理器把进程打死。
- * 判定为不可用时这里的效果是 `scanner` 直接为 null：相机分析器不建、相册入口不再承诺能用、
- * 文案指向手输。arm64 上探针只会回答"可用"，这一页的组合与绑定次序和改动前一致。
+ * 判定为不可用时这里的效果是 `scanner` 直接为 null：相机分析器不建、相册按钮的 enabled
+ * 一起灭掉，文案不再指向任何一条出路。arm64 上探针只会回答"可用"，
+ * 这一页的组合与绑定次序和改动前一致。
  *
  * 扫到即提交，没有确认页（已定决策）：他班的码由服务端判定拒绝，界面只回显原因。
  */
@@ -148,10 +148,6 @@ fun SpocScanScreen(
     // 那样会把 arm64 上预热还没跑到那一档的窗口变成一帧降级页。
     // 这一档比 scannerWorking 更彻底：相册识别用的是同一个 scanner，所以它一起没。
     var decoderMissing by remember { mutableStateOf(barhopperNativeLib.verdict == NativeLibVerdict.Missing) }
-    var showManualInput by remember { mutableStateOf(false) }
-    // 输入态提到外层并 rememberSaveable：弹窗曾把 code 记在 if 分支里，
-    // 转一次屏输入框就清空（分支内的 remember 随子树一起没了）
-    var manualCode by rememberSaveable { mutableStateOf("") }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -222,10 +218,10 @@ fun SpocScanScreen(
     val targetRotation = remember(view) { view.display?.rotation ?: Surface.ROTATION_0 }
     val busy = state is SignInState.Resolving || state is SignInState.Submitting
     // 相机这条路径是否真的在跑：取景框只在它有效时出现，
-    // 退化到相册/手输时再压一层暗区就只是噪音。
+    // 退化到相册时再压一层暗区就只是噪音。
     // 判据抽成纯函数 scanCameraLive（D2）：旧写法漏了 provider 与 analyzer 两项，
-    // provider 拿不到时它照样返回 true，于是取景框画在一块黑 PreviewView 上、
-    // 手输签到码被压成最弱一档，整页谎报"一切正常"。
+    // provider 拿不到时它照样返回 true，于是取景框画在一块黑 PreviewView 上，
+    // 整页谎报"一切正常"。
     val cameraLive = scanCameraLive(
         scannerAvailable = scanner != null,
         analyzerReady = analyzer != null,
@@ -261,7 +257,7 @@ fun SpocScanScreen(
                 analysis,
             )
         }.onFailure {
-            // 没有后置摄像头（平板/模拟器）：这一页只剩相册与手输两条路，不算错误
+            // 没有后置摄像头（平板/模拟器）：这一页只剩相册一条路，不算错误
             cameraError = it.message
         }
     }
@@ -298,8 +294,10 @@ fun SpocScanScreen(
                         }
                         .addOnFailureListener { viewModel.reportNoQrCode() }
                 }
-                // 相册里那张图太大 / 读不出来时，别让整个页面跟着倒
-                .onFailure { cameraError = "读不出那张图：${it.message}" }
+                // 相册里那张图太大 / 读不出来时，别让整个页面跟着倒。
+                // 前缀必须用 GalleryUnreadablePrefix：scanUiStatus 靠它把这一支和绑定失败分开
+                // （相册刚失败时再让用户"改用相册"就是绕圈，见那里的注释）
+                .onFailure { cameraError = "$GalleryUnreadablePrefix：${it.message}" }
         }
     }
 
@@ -337,7 +335,7 @@ fun SpocScanScreen(
                 .fillMaxWidth(),
         ) {
             // 这是全屏页：栏体贴到屏幕最下沿，内容得自己让出系统导航栏，
-            // 否则三键导航机上两颗按钮被导航键压住（M6）
+            // 否则三键导航机上那颗按钮被导航键压住（M6）
             Column(
                 modifier = Modifier.navigationBarsPadding(),
                 verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
@@ -361,7 +359,8 @@ fun SpocScanScreen(
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
-                    // 栏内两颗动作一律 48dp 触控下限（M4）
+                    // 栏内动作一律 48dp 触控下限（M4）。「手输签到码」那颗按钮及其弹窗
+                    // 已整条删除（2026-09-21，现实里不存在可抄的签到码），这一栏只剩相册一颗
                     val barAction = Modifier
                         .weight(1f)
                         .defaultMinSize(minHeight = DesignTokens.minTouchTarget)
@@ -374,21 +373,6 @@ fun SpocScanScreen(
                         enabled = scanner != null && !busy,
                         modifier = barAction,
                     ) { Text("相册识别") }
-                    // 相机能用时手输是最后的兜底，压在最弱一档（TextButton）正合适；
-                    // 相机不可用时它和相册就是仅有的两条路，最弱档等于把它藏起来
-                    if (cameraLive) {
-                        TextButton(
-                            onClick = { showManualInput = true },
-                            enabled = !busy,
-                            modifier = barAction,
-                        ) { Text("手输签到码") }
-                    } else {
-                        OutlinedButton(
-                            onClick = { showManualInput = true },
-                            enabled = !busy,
-                            modifier = barAction,
-                        ) { Text("手输签到码") }
-                    }
                 }
             }
         }
@@ -454,44 +438,6 @@ fun SpocScanScreen(
                 }
             }
         }
-    }
-
-    ModalTransition(open = showManualInput) { modal ->
-        AlertDialog(
-            modifier = modal,
-            onDismissRequest = { showManualInput = false },
-            title = { Text("手输签到码") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
-                    OutlinedTextField(
-                        value = manualCode,
-                        onValueChange = { manualCode = it },
-                        label = { Text("签到码 / 二维码里的链接") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                    )
-                    Text(
-                        text = "投影看不清时才用得上：签到码是二维码正下方那串字母数字。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showManualInput = false
-                        viewModel.signIn(manualCode)
-                        manualCode = ""
-                    },
-                    // 空串提交等于白跑一次状态机，再被失败卡告知"这不是签到码"
-                    enabled = manualCode.isNotBlank(),
-                ) { Text("签到") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showManualInput = false }) { Text("取消") }
-            },
-        )
     }
 }
 

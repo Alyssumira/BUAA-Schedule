@@ -61,7 +61,7 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
      */
     private var inFlight = false
 
-    /** @param raw 扫码得到的原文，或用户手输的签到码 */
+    /** @param raw 扫码得到的原文 —— 相机实时解码与相册识图两条路共用这一个入口（手输入口已删除） */
     fun signIn(raw: String) {
         if (inFlight) return
         val target = SpocQrParser.parse(raw)
@@ -106,7 +106,7 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
     fun reportNoQrCode() {
         if (inFlight) return
         _state.value = SignInState.Failed(
-            "那张图里没认出二维码。可以换一张更清晰的，或改用手输签到码。",
+            "那张图里没认出二维码。请换一张更清晰的图，或用相机重新对准二维码再扫。",
             relogin = false,
         )
     }

@@ -3,6 +3,7 @@ package com.buaa.schedule.ui.signin
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -17,7 +18,7 @@ import org.junit.Test
  * `runCatching { future.get() }`：future 永不完成时 `provider` 停在 null、绑定 effect 在
  * `provider ?: return` 那一句直接返回、`cameraError` 一个字都没写 —— 于是提示条五档全落空、
  * `cameraLive` 还成立，取景框就画在一块永远不会有画面的黑 `PreviewView` 上，
- * 手输签到码被压成最弱一档。这是与 D1 结构同型的第二个「没反应」。
+ * 整页看起来"一切正常"。这是与 D1 结构同型的第二个「没反应」。
  *
  * 为什么这两条判据要抽成纯函数、而不是写一条扫源码的守卫：提示档位一共有五支、
  * `cameraLive` 有六个乘项，只有把判据本体拿到 JVM 里才能逐支跑（仓库口径，
@@ -61,9 +62,10 @@ class ScanUiStatusTest {
         assertNotNull("provider 取不到时提示条仍然一声不吭 —— 这就是第二个「没反应」", text)
         val message = requireNotNull(text)
         assertTrue("这一档的话没提相机开不起来：$message", message.contains("CameraX 起不来"))
-        // 相册那条路仍然可用（scanner 在），所以这句话必须指着它，也不能只指着它
+        // 相册那条路仍然可用（scanner 在），所以这句话必须指着它
         assertTrue("provider 挂了但解码器还在，话里该留着相册那条出口：$message", message.contains("相册"))
-        assertTrue("手输才是最后一档出口：$message", message.contains("手输"))
+        // 手输入口已整条删除（2026-09-21），任何一档都不许再把它当成出路
+        assertFalse("手输入口已经不在了，这一档还在指向它：$message", message.contains("手输"))
         // 与其余每一档的文案都不同（复用同一支就等于把两种病因说成一种）
         val others = listOf(
             statusOf("decoderMissing" to true),
@@ -78,16 +80,37 @@ class ScanUiStatusTest {
     /** ③ 档位次序：谁能决定用户下一步，谁在前 */
     @Test
     fun ladderPriorityFollowsTheNearestWayOut() {
-        // 缺库压过一切（这时候提相册是死路）
-        assertTrue(statusOf("decoderMissing" to true, "granted" to false, "cameraProviderMissing" to true)!!
-            .contains("只能手输"))
+        // 缺库压过一切 —— 而且这一档**没有任何出路可指**（手输已删、相册同死），
+        // 只许说实话：不许提相册、不许提手输/输入
+        val decoderText = statusOf("decoderMissing" to true, "granted" to false, "cameraProviderMissing" to true)!!
+        assertTrue("缺库那一档没说实话（解码库不在）：$decoderText", decoderText.contains("解码库"))
+        for (banned in listOf("相册", "手输", "输入")) {
+            assertFalse("缺库那一档把用户指向已经不存在的出路「$banned」：$decoderText", decoderText.contains(banned))
+        }
         // 没权限时先说权限（provider 同时缺失也不抢这一档：放行之后还可能拿得到）
         assertTrue(statusOf("granted" to false, "cameraProviderMissing" to true)!!.contains("相机权限"))
         // 绑定失败的原因要原文透出来，别被泛化的话吃掉
-        assertEquals("相机不可用（绑定失败：x），请改用下面两个入口。",
+        assertEquals("相机不可用（绑定失败：x），请改用相册识别。",
             statusOf("cameraError" to "绑定失败：x", "cameraProviderMissing" to true))
         // scanner 不可用（建不出来 / 跑起来坏了）压过权限
         assertTrue(statusOf("scannerUsable" to false, "granted" to false)!!.contains("用不了相机扫码"))
+    }
+
+    /**
+     * ③b cameraError 的两个写点必须说不同的话（本卡唯一新增的判据分支）。
+     *
+     * `cameraError` 被两处写：绑定 onFailure（相机真的不可用 ⇒ 相册还是出路）与
+     * galleryLauncher 的读图 onFailure（**相册刚刚才失败** ⇒ 再指相册就是让用户原地绕圈）。
+     * 两支的分辨就靠 GalleryUnreadablePrefix 这个纯字符串判据。
+     */
+    @Test
+    fun cameraErrorBranchesByItsWriter() {
+        val bind = requireNotNull(statusOf("cameraError" to "No back camera"))
+        assertTrue("绑定失败那一支该把用户指向相册：$bind", bind.contains("相册"))
+        val gallery = requireNotNull(statusOf("cameraError" to "$GalleryUnreadablePrefix：file too large"))
+        assertFalse("相册刚失败那一支不许再让用户改用相册（绕圈）：$gallery", gallery.contains("相册"))
+        assertTrue("那一支得给一个真能做的下一步（换图/重扫）：$gallery", gallery.contains("换一张图"))
+        assertNotEquals("两个写点说成了同一句话，分支等于没分", bind, gallery)
     }
 
     /** ④ cameraLive：六个乘项缺一就 false（D2 补的是前三个） */
@@ -145,8 +168,10 @@ class ScanUiStatusTest {
         val code = withoutComments(readMainSource(SCAN_SCREEN_FILE))
         assertEquals("scanUiStatus 被调了 ${occurrences(code, "scanUiStatus(")} 处，只能一处", 1, occurrences(code, "scanUiStatus("))
         assertEquals("scanCameraLive 被调了 ${occurrences(code, "scanCameraLive(")} 处，只能一处", 1, occurrences(code, "scanCameraLive("))
-        // cameraLive：定义一处 + 取景框一处 + 手输那颗按钮的档位一处
-        assertEquals("cameraLive 出现 ${occurrences(code, "cameraLive")} 次（定义 + 取景框 + 手输按钮档位）", 3, occurrences(code, "cameraLive"))
+        // cameraLive：定义一处 + 取景框一处（手输那颗按钮曾用的第三处在 2026-09-21 随入口一起删了）
+        assertEquals("cameraLive 出现 ${occurrences(code, "cameraLive")} 次（定义 + 取景框）", 2, occurrences(code, "cameraLive"))
+        // 手输入口的整条痕迹（按钮 / 弹窗 / state）都不许回来
+        assertFalse("页面里还留着「手输」：弹窗或按钮没拆干净", code.contains("手输"))
         // 页面里不许还藏着文案原文：那就是第二份口径
         for (lit in listOf("没有相机权限", "CameraX 起不来", "这份安装包没带")) {
             assertFalse("提示文案还在页面里另写一份（$lit），判据就被绕过了", code.contains(lit))
