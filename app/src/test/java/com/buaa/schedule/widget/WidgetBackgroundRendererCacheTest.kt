@@ -20,24 +20,16 @@ import org.junit.Test
  * 设备度量（真实尺寸、壁纸像素、uiMode）由 `render` 当参数交进来，而 `render` 走的
  * 就是这个 [GlassBakeCache.obtain]。烘焙本身（`Bitmap` / `Canvas`）在本模块没有
  * Robolectric，造不出来，所以注入的是**一个会数趟数的假件**：它数的正是生产那个
- * `bakeGlass` 被调了几次 —— 而 `decodeSampledWallpaper` 只存在于 `bakeGlass` 里面
- * （经 `Wallpaper.open()`），所以「烤了几趟」与「解了几趟壁纸」在这条路上是同一个数。
+ * `bakeGlass` 被调了几次 —— 而 T46 起图源只剩「实测到手的那张桌面壁纸」一种，
+ * 它的身份（宽高 + 9 枚采样）与像素出自同一次实测，所以这里没有"解了几趟壁纸"那笔
+ * 分开的账可数（改前那一条挂在自选那张的 `decodeSampledWallpaper` 上，路已拆）。
  */
 class WidgetBackgroundRendererCacheTest {
 
     // ---- 造键的公共底版：每一格只改它点名的那枚分量，其余全部照抄 ----
 
-    private val pickedSource = GlassSourceIdentity(
-        kind = GlassSourceKind.PickedImage,
-        pickedUri = "content://media/picked/1",
-        widthPx = 0,
-        heightPx = 0,
-        samples = emptyList(),
-    )
-
-    private val systemSource = GlassSourceIdentity(
-        kind = GlassSourceKind.SystemWallpaper,
-        pickedUri = "",
+    /** 一次实测到手的桌面壁纸：尺寸正常、9 枚采样互不相同。 */
+    private val measuredSource = GlassSourceIdentity(
         widthPx = 1080,
         heightPx = 1920,
         samples = List(9) { 0x11223344 + it },
@@ -49,7 +41,7 @@ class WidgetBackgroundRendererCacheTest {
     private val baseGlass = glass(80)
 
     private fun key(
-        source: GlassSourceIdentity = pickedSource,
+        source: GlassSourceIdentity = measuredSource,
         size: BakeSize = baseSize,
         radii: BakedCornerRadius = baseRadii,
         glassArgb: Int = baseGlass,
@@ -70,8 +62,8 @@ class WidgetBackgroundRendererCacheTest {
     // ==================== ① 键的每一项分量变化都必须判成未命中 ====================
 
     /**
-     * 逐枚分量各钉一格：换一张自选壁纸 / 换一张同尺寸的系统壁纸 / 换系统壁纸的尺寸 /
-     * 换出图宽高 / 改透明度 / 改两轴圆角 / 换深浅色 / 换图源种类。
+     * 逐枚分量各钉一格：换一张桌面壁纸（同尺寸、9 个采样里有 1 点不同）/ 换了尺寸 /
+     * 换出图宽高 / 改透明度 / 改两轴圆角 / 换深浅色。
      *
      * 漏一枚就是一个"陈旧画面"的形：用户拨了滑杆而桌面不动 —— 那正是
      * `fed750f`（alpha 真的进颜色）与 `c05b98f`+`085ef42`（圆角取数）刚还掉的债，
@@ -80,31 +72,26 @@ class WidgetBackgroundRendererCacheTest {
     @Test
     fun everyComponentThatChangesPixelsIsAMiss() {
         val baseline = requireNotNull(key())
-        val systemBaseline = requireNotNull(key(source = systemSource))
         val cases = listOf(
-            "换一张自选壁纸" to requireNotNull(
-                key(source = pickedSource.copy(pickedUri = "content://media/picked/2")),
+            "壁纸换了、尺寸一模一样（9 个采样点里有 1 点不同）" to requireNotNull(
+                key(source = measuredSource.copy(samples = measuredSource.samples.toMutableList().also { it[4] += 1 })),
             ),
-            "系统壁纸换成另一张、9 个采样点里有 1 点不同" to requireNotNull(
-                key(source = systemSource.copy(samples = systemSource.samples.toMutableList().also { it[4] += 1 })),
-            ),
-            "系统壁纸换了尺寸" to requireNotNull(key(source = systemSource.copy(widthPx = 1440))),
+            "桌面壁纸换了尺寸" to requireNotNull(key(source = measuredSource.copy(widthPx = 1440))),
             "换出图宽" to requireNotNull(key(size = BakeSize(479, 320))),
             "换出图高" to requireNotNull(key(size = BakeSize(480, 319))),
             "透明度滑杆从 80 拨到 60" to requireNotNull(key(glassArgb = glass(60))),
             "横轴圆角变了 1px" to requireNotNull(key(radii = BakedCornerRadius(53.5f, 43.75f))),
             "纵轴圆角变了 1px" to requireNotNull(key(radii = BakedCornerRadius(52.5f, 44.75f))),
             "桌面从浅色翻到深色" to requireNotNull(key(nightMode = true)),
-            "自选那张换成桌面壁纸（图源种类换了）" to requireNotNull(key(source = systemSource)),
         )
         for ((label, other) in cases) {
             assertNotEquals("$label：被判成同一格，缓存会把旧画面发出去", baseline, other)
         }
-        // 系统源那一头单独再钉一遍基线自反（上面那格是"和自选比"）
+        // 签名少一格就不许还是同一张壁纸：换壁纸时那一点差别可能就是唯一看得出来的证据
         assertNotEquals(
             "签名少一格就被判成同一张壁纸",
-            systemBaseline,
-            systemBaseline.copy(source = systemBaseline.source.copy(samples = systemBaseline.source.samples.drop(1))),
+            baseline,
+            baseline.copy(source = baseline.source.copy(samples = baseline.source.samples.drop(1))),
         )
     }
 
@@ -114,20 +101,24 @@ class WidgetBackgroundRendererCacheTest {
         assertEquals(key(), key())
         assertEquals(
             "身份逐字段抄一份都该还是同一格",
-            requireNotNull(key(source = systemSource)),
-            requireNotNull(key(source = systemSource.copy())),
+            requireNotNull(key(source = measuredSource)),
+            requireNotNull(key(source = measuredSource.copy())),
         )
     }
 
     /**
-     * 系统壁纸的内容签名取不到时**拒绝**用缓存：那时身份上只剩 (种类, 宽高)，
-     * 换一张同尺寸的壁纸会被判成同一格 —— 宁可白烤，不可糊错。
-     * 自选那条不受影响（它的身份就是 URI，不需要先拿到像素）。
+     * 内容签名取不到时**拒绝**用缓存：那时身份上只剩宽高，
+     * 用户换一张**同尺寸**的壁纸会被判成同一格 —— 宁可白烤，不可糊错。
+     *
+     * 顺带钉住 T46 那件被重新审过的账：这一格不是"无源"那一格。判到没有图源时
+     * `wallpaperForRender` 直接回 null，`render` 在那条键构造之前就返回了，
+     * 所以缓存里永远不会存下一格陈旧的"无源"；这里 null 兜的是"取到了图但签不出名"。
      */
     @Test
-    fun systemSourceWithoutContentSignatureBypassesTheCache() {
-        assertNull(key(source = systemSource.copy(samples = emptyList())))
-        requireNotNull("自选源不需要签名", key(source = pickedSource.copy()))
+    fun sourceWithoutContentSignatureBypassesTheCache() {
+        assertNull(key(source = measuredSource.copy(samples = emptyList())))
+        // 「无源」根本造不出键：空身份（宽高都是 0、没有采样）与签名缺失走同一条 return
+        assertNull(key(source = GlassSourceIdentity(0, 0, emptyList())))
     }
 
     private fun requireNotNull(label: String, value: GlassBakeKey?): GlassBakeKey =

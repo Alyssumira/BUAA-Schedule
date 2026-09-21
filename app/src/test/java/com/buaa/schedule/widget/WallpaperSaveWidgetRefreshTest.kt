@@ -6,17 +6,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * App 内改了壁纸，桌面上那些组件要跟上 —— 而且只在**一处**收口。
+ * App 内拨了壁纸开关，桌面上那些组件要跟上 —— 而且只在**一处**收口。
  *
- * `Personalization.save()` 有十几个调用点（设置页各处 + 首页），它写下的
- * `wallpaper_uri` / `wallpaper_use_system` 正是 `WidgetBackgroundRenderer` 决定糊哪张图
- * 读的那两个键。改动前**没有任何一处**在保存后触发组件重绘：用户换完壁纸，
+ * `Personalization.save()` 有十几个调用点（设置页各处 + 首页），组件读的就是它写下的
+ * `wallpaper_use_system`（T46 起图源只认实测到的系统桌面壁纸，`wallpaper_uri` 只喂
+ * App 内课表背景）。改动前**没有任何一处**在保存后触发组件重绘：用户换完壁纸，
  * 组件还在糊旧图，要等到下一次课表数据刷新才跟上（真机核对：设置页里唯一会主动刷组件的
  * 是那颗手动「立即刷新」按钮）。
  *
  * 为什么又是按源码形状核对：收口本身要 Context（`getSharedPreferences` 在无 Robolectric
  * 的 JVM 单测里是抛 "not mocked" 的桩），跑不了真链路；能跑的判据表在
- * `WidgetGlassSourceTest.saveOnlyNeedsAWidgetRedrawWhenTheTwoKeysTheWidgetReadsChange`。
+ * `WidgetGlassSourceTest.saveOnlyNeedsAWidgetRedrawWhenTheSwitchTheWidgetReadsFlips`。
  * 这里钉的是三种不红的坏形状：
  * ① 漏接（save() 还是不刷，用户仍然要自己去找那颗手动按钮）；
  * ② 在调用点各抄一段刷新代码（十几份，早晚有人漏，而且每份都会压到主线程上）；
@@ -44,15 +44,15 @@ class WallpaperSaveWidgetRefreshTest {
         )
     }
 
-    /** ② save() 里那一次调用要挂在"这两个键真的变了"上，而且要排在落盘之后 */
+    /** ② save() 里那一次调用要挂在"组件读的那枚开关真的变了"上，而且要排在落盘之后 */
     @Test
-    fun redrawIsScheduledOnlyAfterThoseTwoKeysActuallyChanged() {
+    fun redrawIsScheduledOnlyAfterTheKeyTheWidgetReadsActuallyChanged() {
         val body = balancedBlock(withoutComments(readMainSource(PERSONALIZATION_FILE)), "fun save(context: Context)")
 
         assertEquals(
             "变更判据被问了两遍，或者根本没问（恒刷 = 每拖一次滑块重绘六个组件；不问 = 白重绘）：\n$body",
             1,
-            occurrences(body, "WidgetGlassSource.wallpaperKeysChanged("),
+            occurrences(body, "WidgetGlassSource.wallpaperSwitchChanged("),
         )
         assertEquals(
             "save() 里重绘只许一次：\n$body",
@@ -97,11 +97,11 @@ class WallpaperSaveWidgetRefreshTest {
         val helper = balancedBlock(withoutComments(personalization), "fun applyPickedWallpaper(context: Context, uri: Uri)")
 
         assertTrue(
-            "挑图那条链没有顺手把 URI 写进 Personalization（组件读的就是它）：\n$helper",
+            "挑图那条链没有顺手把 URI 写进 Personalization（App 内课表背景读的就是它）：\n$helper",
             helper.contains("wallpaperUri = uri.toString()") && helper.contains("save(context)"),
         )
         assertTrue(
-            "丢了持久授权：OpenDocument 的 URI 默认只授权到本次会话，进程重启后组件读不到那张图：\n$helper",
+            "丢了持久授权：OpenDocument 的 URI 默认只授权到本次会话，进程重启后 App 内背景读不到那张图：\n$helper",
             helper.contains("takePersistableUriPermission"),
         )
 
