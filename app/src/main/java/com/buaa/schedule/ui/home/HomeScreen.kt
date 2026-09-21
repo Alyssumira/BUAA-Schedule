@@ -100,6 +100,7 @@ import com.buaa.schedule.core.designsystem.MotionTokens
 import com.buaa.schedule.data.import.BuaaInPageFetcher
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.startLocalDate
+import com.buaa.schedule.domain.schedule.SemesterWeekDates
 import com.buaa.schedule.ui.ScheduleViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -210,9 +211,13 @@ fun HomeScreen(
         if (state.loading) return@LaunchedEffect
         val week = browseWeek ?: state.currentWeek
         val semesterStart = state.semester?.startLocalDate
-        setBrowseDate(if (semesterStart != null && week != null) {
-            semesterStart.plusDays((week - 1) * 7L + (dow - 1))
+        // 周 → 那一周周一的换算走 SemesterWeekDates（全仓只此一份），这里只补「第几天」
+        val jumpedDate = if (semesterStart != null && week != null) {
+            SemesterWeekDates.mondayOf(semesterStart, week)?.plusDays((dow - 1).toLong())
         } else {
+            null
+        }
+        setBrowseDate(jumpedDate ?: run {
             // 假期 / 未设学期：没有周可依据，退成"最近的那个星期几"（今天也算）
             today.minusDays(((today.dayOfWeek.value - dow + 7) % 7).toLong())
         })
@@ -236,17 +241,19 @@ fun HomeScreen(
         }
     }
 
-    // 顶栏左侧：当前浏览到第几周 + 今天日期（参考稿版式）
+    // 顶栏左侧：当前浏览到第几周 + 这一周的日期（参考稿版式）
     val displayWeekNumber = browseWeek ?: state.currentWeek
     val weekHeadline = weekHeadline(
         hasSemester = state.semester != null,
         displayWeek = displayWeekNumber,
         currentWeek = state.currentWeek,
     )
-    val todayLabel = remember(today) {
-        today.format(
-            java.time.format.DateTimeFormatter.ofPattern("M月d日 EEEE", java.util.Locale.CHINA),
-        )
+    // 第二行跟第一行同源：浏览别的周时显示那一周的周一，见 TopBarDateLabel.kt。
+    // 键必须把四个入参全列出来——漏掉 browseWeek 就是翻周时日期停在今天（本卡修的就是它），
+    // 漏掉学期/今天则是换学期、跨午夜后仍显示旧日期（T41/T43 同类坑）。
+    val semesterStart = state.semester?.startLocalDate
+    val dateLabel = remember(semesterStart, state.currentWeek, browseWeek, today) {
+        topBarDateLabel(semesterStart, state.currentWeek, browseWeek, today)
     }
 
     // 冲突课程 id 集合：周视图/日视图两个分支各算一次（此前是两处重复的 flatMap+toSet），
@@ -400,7 +407,7 @@ fun HomeScreen(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    text = todayLabel,
+                                    text = dateLabel,
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
