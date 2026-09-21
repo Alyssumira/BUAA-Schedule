@@ -279,6 +279,9 @@ object SemesterStats {
     internal fun slotTimes(timeSlots: List<TimeSlot>): Map<Int, Pair<LocalTime, LocalTime>> =
         timeSlots.ifEmpty { TimeSlotProfile.DEFAULT }.toStartEndTimes()
 
+    /** 节次表 → 节次号 → 该节分钟数。[slotTimes] + [slotMinutes] 的合一步，给 T51 的图表内核用 */
+    internal fun slotMinutes(timeSlots: List<TimeSlot>): Map<Int, Long> = slotMinutes(slotTimes(timeSlots))
+
     /** 节次号 → 该节分钟数。`endTime <= startTime` 的节次丢掉（见 [DayLoad.isFree] 的说明） */
     private fun slotMinutes(slotTimes: Map<Int, Pair<LocalTime, LocalTime>>): Map<Int, Long> =
         slotTimes.mapNotNull { (number, span) ->
