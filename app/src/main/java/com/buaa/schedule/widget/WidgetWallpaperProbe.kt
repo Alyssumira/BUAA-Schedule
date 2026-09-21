@@ -6,6 +6,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
+import android.os.Build
 import android.os.SystemClock
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.get
@@ -41,8 +42,9 @@ import androidx.core.graphics.get
  *   "某台设备真的给了权限"那一形的优先源（API ≤33 那档平台不查这枚权限，但**本卡没有
  *   那种设备、未实测**，所以这一条只是不把猜测写成结论，不是已验证的出路）；
  *   判到没有位图时才轮到第二档。
- * 2. **主色档** —— [paletteOf] 问的 `getWallpaperColors(FLAG_SYSTEM)`，零权限拿得到
- *   桌面主色/副色与 colorHints。装机实测读数：primary = sRGB(0.204, 0.243, 0.396)
+ * 2. **主色档** —— [paletteOf] 问的 `getWallpaperColors(FLAG_SYSTEM)`（API 27 起才有这枚方法，
+ *   minSdk 26 那一档机器上这一格交 null、走第三档），零权限拿得到桌面主色/副色与 colorHints。
+ *   装机实测读数：primary = sRGB(0.204, 0.243, 0.396)
  *   = (52, 62, 101)、secondary = (16, 15, 25)、colorHints = 6。它给不了一张图，
  *   但给得出一块板的颜色 —— 「玻璃感壁纸背景」在拿不到位图的设备上第一次有可见效果，
  *   靠的就是这一档（板色怎么从这三格推出来是 [WidgetGlassSource.palettePlateArgb] 的事）。
@@ -253,19 +255,29 @@ internal object WidgetWallpaperProbe {
      * （装机实测）。这条链上没有任何一档要读锁屏壁纸：组件贴在桌面上，跟着桌面那张走
      * 才是这个问题要的答案。
      *
-     * 三种出口都交 null，都按「这一档没有主色可用」处理：抛异常（含权限/服务拿不到的
-     * 那一形）、返回 null（平台算不出颜色）、以及 primary 为 null（只剩两枚次要颜色的
-     * 那一格 —— 本卡的板色以 primary 定色相，没有它就是没有，不拿 secondary 硬顶）。
+     * 三种出口都交 null，都按「这一档没有主色可用」处理：这台设备是 API 26（`getWallpaperColors`
+     * 是 API 27 才加的方法，与"读不读得到壁纸"无关，纯粹是那条问句还不存在）、抛异常（含权限/
+     * 服务拿不到的那一形）、返回 null（平台算不出颜色）、以及 primary 为 null（只剩两枚次要
+     * 颜色的那一格 —— 本卡的板色以 primary 定色相，没有它就是没有，不拿 secondary 硬顶）。
      */
     @SuppressLint("MissingPermission") // 这一档立论就是"零权限也要有答案"，声明权限反而是本卡不许做的事
     private fun paletteOf(context: Context): Palette? {
+        // API 26 上根本没有这一问（方法 27 才加，`NewApi` 那道 lint 就是它的凭据），交 null 之后
+        // 那台设备走第三档 = 画用户自己选的纯色。注意这一格与 T46 拆掉的那道闸门**不是一类东西**：
+        // 那道闸门拿 API 档次代答「读不读得到壁纸」这件实测得出的事（本机实测已证其反），
+        // 这一格挡的是一枚方法在不在这个系统版本上存在 —— 问不出结果，因为问句还没被写出来。
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O_MR1) return null
         val colors = WallpaperManager.getInstance(context)
             .getWallpaperColors(WallpaperManager.FLAG_SYSTEM) ?: return null
         val primary = colors.primaryColor ?: return null
         return Palette(
             primaryArgb = primary.toArgb(),
             secondaryArgb = colors.secondaryColor?.toArgb(),
-            colorHints = colors.colorHints,
+            // `getColorHints()` 是 API 31 才公开的（本机 API 36 量到 6；`primaryColor` /
+            // `secondaryColor` 27 起就有）。27~30 上交 0，而 0 在判据里的语义正是
+            // "平台自己没话说" —— 那一档于是只按两色的实测明暗走，第 2 步天然不投票，
+            // 不需要再造一层"读不到就当没有"的兜底口径。
+            colorHints = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) colors.colorHints else 0,
         )
     }
 
