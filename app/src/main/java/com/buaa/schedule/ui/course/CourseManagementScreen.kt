@@ -297,10 +297,15 @@ private fun CourseGroupCard(
                         .weight(1f)
                         .padding(start = DesignTokens.spaceS),
                 ) {
+                    // 与今日课表卡同一口径：课名列已带 weight(1f) 吃剩余宽，但改前这里
+                    // 连 maxLines 都没有——长课名（带括号后缀的研讨课、不可断词的英文课名）
+                    // 会换行把整卡撑高。省略号收进一行，行高回到短标题卡的节奏。
                     Text(
                         text = group.displayName,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
                     Text(
                         text = joinMeta(
