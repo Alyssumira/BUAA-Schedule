@@ -105,11 +105,11 @@ class WidgetGlassSourceWiringTest {
         )
     }
 
-    /** ④ 实测点只有一处，且 memo 的两个写点都在这同一处里 */
+    /** ④ 实测点只有一处，且 memo 的三枚写点都在这同一处里 */
     @Test
     fun theProbeIsTheOnlyPlaceThatAsksTheDeviceAndItWritesItsMemoOnBothAnswers() {
         val probe = withoutCommentsKeepingLiterals(readMainSource(PROBE_FILE))
-        val measure = normalize(balancedBlock(probe, "fun measure(context: Context): Captured?"))
+        val measure = normalize(balancedBlock(probe, "fun measure(context: Context): Measurement"))
 
         assertEquals(
             "探针里判据被问了两遍（判据只许 WidgetGlassSource.wallpaperLooksUsable 那一份）：\n$probe",
@@ -119,8 +119,8 @@ class WidgetGlassSourceWiringTest {
         assertTrue("实测结论没写进 memo：\n$measure", measure.contains("memoUsable = usable"))
         assertTrue("memo 没时间戳（那 60s 的采信期是空的）：\n$measure", measure.contains("memoAtElapsed ="))
         assertEquals(
-            "两枚 memo 字段少一枚 @Volatile —— 六家 Provider 各自在 goAsync 的 IO 协程上写它：\n$probe",
-            2,
+            "三枚 memo 字段少一枚 @Volatile —— 六家 Provider 各自在 goAsync 的 IO 协程上写它：\n$probe",
+            3,
             occurrences(probe, "@Volatile"),
         )
         assertTrue(
@@ -399,7 +399,7 @@ class WidgetGlassSourceWiringTest {
 
         /** 渲染侧取图源那一格（签名变了这条守卫要跟着改，而它正是"每轮实测"的落点） */
         const val RENDERER_MEASURE_ANCHOR =
-            "private fun wallpaperForRender(context: Context): WidgetWallpaperProbe.Captured?"
+            "private fun wallpaperForRender(context: Context): WidgetWallpaperProbe.Measurement?"
 
         /**
          * 那道一刀切闸门的各种写法。`34` 这一枚只钉到"与壁纸同段出现"的程度不够狠，

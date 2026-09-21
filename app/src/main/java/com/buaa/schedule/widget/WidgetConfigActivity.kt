@@ -285,7 +285,7 @@ private fun WidgetConfigScreen(
                     // 这一页只要结论，不要把图留着：探针画的渲染目标（约 8MB）
                     // 归我们回收，系统持有的一张都不许碰。
                     withContext(Dispatchers.IO) {
-                        WidgetWallpaperProbe.measure(configContext)?.recycleIfOwned()
+                        WidgetWallpaperProbe.measure(configContext).recycleIfOwned()
                     }
                     probeAnswer = WidgetWallpaperProbe.memoized()
                 }

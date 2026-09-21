@@ -84,7 +84,10 @@ object WidgetBackgroundRenderer {
     ): Bitmap? {
         if (!appearance.blurBackground) return null
         return runCatching {
-            val wallpaper = wallpaperForRender(context) ?: return@runCatching null
+            val measured = wallpaperForRender(context) ?: return@runCatching null
+            // 位图档：实测到一张能用的桌面壁纸才走下面那条管线（T37/T42 的账一个字不动）。
+            // 判到位图不可用时本枚仍回 null（= 改前的兜底），主色档在下一枚接上。
+            val wallpaper = measured.captured ?: return@runCatching null
             try {
                 // 尺寸探测自己吞每一层异常（[widgetSizePx]）：取不到尺寸不等于取不到壁纸，
                 // 前者有明写的兜底口径（[WidgetCornerRadii.bake]），后者才是"这张背景画不出来"。
@@ -349,9 +352,9 @@ object WidgetBackgroundRenderer {
             .getBoolean(KEY_USE_SYSTEM_WALLPAPER, Personalization.DEFAULT_USE_SYSTEM_WALLPAPER)
 
     /**
-     * 这一次要糊的壁纸：实测到手才回那张位图（连同它的身份），否则 null，
-     * 调用方（`WidgetCommon.applyAppearance`）落到纯色半透明那条分支 ——
-     * 装机实测里那一形反而是好看的：桌面真的透得过来。
+     * 这一次要糊的壁纸：实测到手才回那一份收获（位图连同它的身份、以及位图判空时
+     * 问到的主色），否则 null，调用方（`WidgetCommon.applyAppearance`）落到纯色半透明
+     * 那条分支 —— 装机实测里那一形反而是桌面真的透得过来。
      *
      * 只有「用户关掉了开关」那一格许在实测之前拦 —— [WidgetGlassSource.decide] 里它
      * 判的是用户自己的选择，是任何实测都翻不动的一格（这也省掉那次 binder 问图）。
@@ -359,7 +362,7 @@ object WidgetBackgroundRenderer {
      * 也照问 —— 组件刷新就是「读不到」那一格的失效边界（桌面换壁纸没有任何广播能进
      * 到我们进程），信了 memo 就会把它锁死到配置页翻页为止，正撞红线。
      */
-    private fun wallpaperForRender(context: Context): WidgetWallpaperProbe.Captured? = when {
+    private fun wallpaperForRender(context: Context): WidgetWallpaperProbe.Measurement? = when {
         !usesSystemWallpaper(context) -> null
         else -> WidgetWallpaperProbe.measure(context)
     }
