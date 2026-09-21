@@ -143,7 +143,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        com.buaa.schedule.core.designsystem.GlassJankMonitor.attach(this)
         if (BuildConfig.DEBUG) {
             com.kyant.backdrop.BackdropDiagnostics.observer = { name, value ->
                 android.util.Log.d("GlassDiag", "$name=$value")
@@ -198,6 +197,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        // 掉帧采样的宿主登记。调用点必须在 setContent 之后：注册本身延到窗口
+        // 附加那一刻（见 GlassJankMonitor.attach 的取证注释），而原先这一行落在
+        // setContent 之前的 onCreate 开头，整条「持续掉帧→自动降玻璃档」的闸门
+        // 在设备上从未跑起来过一次（T52 基线实测，T53 收口）；顺序由守卫钉死
+        // （GlassJankMonitorWiringGuardTest）。
+        com.buaa.schedule.core.designsystem.GlassJankMonitor.attach(this)
 
         // 扫码链预热（T18）：ML Kit 解码器的 libbarhopper_v3.so 的 dlopen 写在
         // BarhopperV3 的实例构造函数里，起手那颗 MlKitInitProvider 一点也帮不上，
