@@ -25,7 +25,9 @@ class WidgetGlassSourceWiringTest {
     fun rendererAsksTheSharedDecisionInsteadOfRepeatingTheOrder() {
         val code = withoutCommentsKeepingLiterals(readMainSource(RENDERER_FILE))
         val availability = normalize(balancedBlock(code, "internal fun availability(context: Context): GlassSource"))
-        val body = normalize(balancedBlock(code, "private fun wallpaperSource(context: Context): Source?"))
+        // 返回类型是 Wallpaper 而不是 Source：T42 把"这一次要糊的那张壁纸"拆成了
+        // 身份 + 惰性取图（缓存命中时不必解码），取源顺序本身一个字没动，下面的锚点就是钉它。
+        val body = normalize(balancedBlock(code, "private fun wallpaperForRender(context: Context): Wallpaper?"))
 
         assertEquals(
             "判据被问了两遍（只许 availability 那一处问，配置页再从它拿答案）：\n$code",
@@ -43,7 +45,7 @@ class WidgetGlassSourceWiringTest {
         assertTrue("取源顺序被改掉了：\n$body", body.contains("when (availability(context))"))
         assertTrue(
             "系统源优先、自选兜底那一条被改掉了：\n$body",
-            body.contains("GlassSource.SystemWallpaperThenPicked -> systemSource(context) ?: picked()"),
+            body.contains("GlassSource.SystemWallpaperThenPicked -> systemWallpaper(context) ?: picked()"),
         )
         assertTrue("只认自选那张那一条被改掉了：\n$body", body.contains("GlassSource.PickedImage -> picked()"))
         assertTrue(

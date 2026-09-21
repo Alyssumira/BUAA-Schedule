@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.WallpaperManager
 import android.appwidget.AppWidgetManager
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -13,6 +14,7 @@ import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
 import androidx.core.graphics.createBitmap
+import androidx.core.graphics.get
 import androidx.core.graphics.scale
 import androidx.core.graphics.withClip
 import com.buaa.schedule.core.designsystem.Personalization
@@ -28,25 +30,37 @@ import com.buaa.schedule.core.designsystem.decodeSampledWallpaper
  * 在位图成功时不能再对同一个 ImageView 下纯色 `setColorFilter` —— 那会把这张图
  * 重新糊成一块实色板，开了开关却和纯色底一模一样。
  *
- * 圆角是**按实例**烘的：画布是固定的 480x320，而背景层 `scaleType="fitXY"` 会把它
- * 非等比拉到组件真实尺寸上，所以半径得按两轴各自的倍数反推（[WidgetCornerRadii]），
- * 否则用户选的 20dp 到桌面上会变成 53dp，并且是个椭圆。
+ * 圆角是**按实例**烘的：画布会被背景层 `scaleType="fitXY"` 非等比拉到组件真实尺寸上，
+ * 所以半径得按两轴各自的倍数反推（[WidgetCornerRadii]），否则用户选的 20dp
+ * 到桌面上会变成 53dp，并且是个椭圆。
+ *
+ * **同参数的实例共用同一张烘焙结果**（[glassCache]，LRU ≤ [GLASS_CACHE_MAX_ENTRIES]）：
+ * 改前每个实例每次刷新都新造一张位图，桌面上 N 个组件在同一轮刷新里把同一张壁纸
+ * 糊 N 遍 —— 与真机 `dumpsys appwidget` 报的 `views_bitmap_memory=614400`
+ * （正好是 480x320 ARGB_8888）逐字吻合的那条路。键的构造见 [glassBakeKey]，
+ * 出图尺寸怎么从实例尺寸推出来见 [bakeSizePx]。
  */
 object WidgetBackgroundRenderer {
 
     private const val TAG = "WidgetBackgroundRenderer"
 
     /**
-     * 烘焙画布的尺寸（px）。
+     * 烘焙画布的**上限**（px）。
      *
-     * 刻意保持 480x320 不变：这张位图要经 RemoteViews 走 binder 事务，
-     * ARGB_8888 下约 0.6 MB，放大到 900x550 就是 1.9 MB，有 TransactionTooLargeException 的风险；
-     * 模糊的观感本来就来自下面那次「先缩到 1/4 再放回」的廉价模糊。
+     * 改前这里是"固定尺寸"，现在是"最大尺寸"：一轴上按这个实例真实尺寸出图
+     * （见 [bakeSizePx]），只有真实尺寸比它还大时才仍然停在 480 / 320。
+     *
+     * 上限这个数本身不许往上抬：这张位图要经 RemoteViews 走 binder 事务，
+     * ARGB_8888 下约 0.6 MB，放大到 900x550 就是 1.9 MB，有 TransactionTooLargeException 的风险。
+     * 往小走没有这条风险，而且走的仍然是同一条管线。
      *
      * internal 是给圆角烘焙（[WidgetCornerRadii]）和它的单测用的：换算必须按**真实**画布算。
      */
     internal const val TARGET_WIDTH = 480
     internal const val TARGET_HEIGHT = 320
+
+    /** 缓存里那位（见 [glassCache]）。见 [GLASS_CACHE_MAX_ENTRIES] 的论证。 */
+    private val glassCache = GlassBakeCache<Bitmap>()
 
     /** 应用内背景的 prefs 与自选壁纸的键（与 Personalization.load 同一份） */
     private const val SETTINGS_PREFS = "schedule_settings"
@@ -59,6 +73,12 @@ object WidgetBackgroundRenderer {
      * 圆角要按**这一个实例**的真实尺寸来烘焙，所以得把 appWidgetId 和宿主句柄传进来：
      * 背景层是 fitXY，画布会被拉到组件尺寸上，半径不除回去就不是用户选的那一档
      * （详见 [WidgetCornerRadii]）。
+     *
+     * 同一枚 [GlassBakeKey] 第二次进来时直接回缓存里那张位图：不解码、不缩放、不画图。
+     * 命中路径上仍然要跑的宿主调用是那三步尺寸探测（理由见 [widgetSizePx]），
+     * 省掉的是烘焙管线本身。图源那一头：自选那张为算身份**不需要**解码，命中时
+     * [Wallpaper.open] 一次都没被调用；系统壁纸那一头为算内容签名已经把位图握在手里了
+     * （`WallpaperManager.getDrawable()` 改前每轮也要问一次，这里不增不减）。
      */
     fun render(
         context: Context,
@@ -67,81 +87,46 @@ object WidgetBackgroundRenderer {
         appWidgetManager: AppWidgetManager,
     ): Bitmap? {
         if (!appearance.blurBackground) return null
-        // 尺寸在 runCatching 之外取：取不到尺寸不等于取不到壁纸，前者有明写的兜底口径
-        // （[WidgetCornerRadii.bake]），而后者才是"这张背景画不出来"。两步 IPC 各自吞异常，
-        // 见 [widgetSizePx]。
-        val widgetSize = widgetSizePx(context, appWidgetManager, appWidgetId)
         return runCatching {
-            // base 可能是系统 WallpaperManager 持有的那张（不归我们），也可能是我们自己
-            // 解码新建的。只有后者要回收 —— 一张 1080x1920 = 约 8MB，每次刷新都漏一份，
-            // 几次之后就会把进程推到 OOM 边缘。
-            val source = wallpaperSource(context) ?: return@runCatching null
-            val base = source.bitmap
-            if (base.isRecycled) return@runCatching null
-
+            val wallpaper = wallpaperForRender(context) ?: return@runCatching null
             try {
-                // 先缩小再放大，得到廉价的模糊效果；后续如需更强可换成 RenderEffect/高斯模糊
-                val small = base.scale(TARGET_WIDTH / 4, TARGET_HEIGHT / 4, true)
-                try {
-                    val blurred = small.scale(TARGET_WIDTH, TARGET_HEIGHT, true)
-                    try {
-                        val output =
-                            createBitmap(TARGET_WIDTH, TARGET_HEIGHT, Bitmap.Config.ARGB_8888)
-                        val canvas = Canvas(output)
-                        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-
-                        val radii = WidgetCornerRadii.bake(
-                            cornerDp = appearance.cornerRadiusDp(),
-                            density = context.resources.displayMetrics.density,
-                            canvasWidthPx = output.width,
-                            canvasHeightPx = output.height,
-                            size = widgetSize,
-                        )
-                        val rect = RectF(0f, 0f, output.width.toFloat(), output.height.toFloat())
-                        // 这里以前先拿默认黑色不透明 Paint 垫了一遍整块圆角矩形：画布出生就是全透明，
-                        // 四角的留空本来就由下面的 clip 负责，那一步唯一的效果是让带 alpha 通道的
-                        // 壁纸透出黑色而不是桌面。
-
-                        canvas.withClip(android.graphics.Path().apply {
-                            addRoundRect(
-                                rect,
-                                floatArrayOf(
-                                    radii.radiusX, radii.radiusY,
-                                    radii.radiusX, radii.radiusY,
-                                    radii.radiusX, radii.radiusY,
-                                    radii.radiusX, radii.radiusY,
-                                ),
-                                android.graphics.Path.Direction.CW,
-                            )
-                        }) {
-                            drawBitmap(blurred, 0f, 0f, paint)
-
-                            // 叠加用户背景色与透明度。透明度**必须折进这层的颜色本身**：
-                            // 以前这里是 PorterDuffColorFilter(tint, SRC_OVER) —— 颜色滤波器的输出
-                            // *替换*被画像素的颜色（含 alpha），SRC_OVER 模式下 tint 自身 alpha=255
-                            // 时复合结果恒不透明，paint.alpha 只是喂进滤波器的 src alpha，
-                            // 会被滤波结果整个顶掉。装机实测（id=8）：w8.alpha 从 80 拨到 0，
-                            // tile 内部像素一动不动，始终是底板色 (22,32,58)，糊过的壁纸被盖死。
-                            // 所以改走 drawRect 的默认 SRC_OVER 光栅管线，alpha 经 [glassTintArgb]
-                            // 进最终颜色。期望（自选壁纸是纯白，底面色 (22,32,58)）：
-                            // alpha=80% -> 0.8*(22,32,58) + 0.2*(255,255,255) ≈ (69,77,97)；
-                            // alpha=0%  -> 看到糊过的壁纸本身。逐格钉在 WidgetBackgroundRendererTest。
-                            val tint = appearance.resolvedBackground(context)
-                            paint.colorFilter = null
-                            paint.color = glassTintArgb(tint, appearance.alphaPercent)
-                            drawRect(rect, paint)
-                        }
-
-                        // output 要交给 RemoteViews，不能回收
-                        output
-                    } finally {
-                        blurred.recycle()
-                    }
-                } finally {
-                    small.recycle()
+                // 尺寸探测自己吞每一层异常（[widgetSizePx]）：取不到尺寸不等于取不到壁纸，
+                // 前者有明写的兜底口径（[WidgetCornerRadii.bake]），后者才是"这张背景画不出来"。
+                // 现在它得排在取图源之后一步 —— 图源判到没有时连这两次 IPC 都不必付。
+                val widgetSize = widgetSizePx(context, appWidgetManager, appWidgetId)
+                val size = bakeSizePx(widgetSize, TARGET_WIDTH, TARGET_HEIGHT)
+                val radii = WidgetCornerRadii.bake(
+                    cornerDp = appearance.cornerRadiusDp(),
+                    density = context.resources.displayMetrics.density,
+                    canvasWidthPx = size.widthPx,
+                    canvasHeightPx = size.heightPx,
+                    size = widgetSize,
+                )
+                // 底色只在这里解析一次：它既进缓存键、又进烘焙管线。动态取色那一路读的是
+                // 主题，两处各解析一次就可能拿到两个值，于是"键"和"像素"对不上、
+                // 换桌面深浅色时缓存会把旧颜色的图发给新颜色该在的那一格。
+                val glass = glassTintArgb(
+                    tintArgb = appearance.resolvedBackground(context),
+                    alphaPercent = appearance.alphaPercent,
+                )
+                val key = glassBakeKey(
+                    source = wallpaper.identity,
+                    size = size,
+                    radii = radii,
+                    glassArgb = glass,
+                    nightMode = isNightMode(context),
+                )
+                // 键给不出来（壁纸内容签名取不到）就照改前的样子现烤一张，不入库
+                if (key == null) {
+                    bakeGlass(wallpaper, size, radii, glass)
+                } else {
+                    glassCache.obtain(key) { bakeGlass(wallpaper, size, radii, glass) }
                 }
             } finally {
-                if (source.owned) base.recycle()
+                // 图源位图归这一次调用管：命中时它压根没被打开过（自选那张因此省掉解码），
+                // 打开过且是我们新建的才回收 —— 一张 1080x1920 = 约 8MB，每次刷新都漏一份，
+                // 几次之后就会把进程推到 OOM 边缘。系统持有的那一张不许碰。
+                wallpaper.close()
             }
         }.onFailure {
             // 这里以前什么都不留：玻璃背景画不出来会静默回退纯色底，一整轮定位全靠
@@ -149,6 +134,92 @@ object WidgetBackgroundRenderer {
             Log.w(TAG, "玻璃背景这次画不出来，回退纯色底（appWidgetId=$appWidgetId）", it)
         }.getOrNull()
     }
+
+    /**
+     * 把一张壁纸糊成最终要交给 RemoteViews 的那张位图：廉价模糊（先缩到 1/4 再放回）
+     * + 圆角裁剪 + 用户底色与透明度。
+     *
+     * 从 [render] 里拆出来只为让"这一步很贵、值得缓存"这件事在调用点看得出来：
+     * 它是缓存未命中时才跑的那一段，[render] 负责算键、管图源的生命周期。
+     * 管线本身一个字没改（改前它在 [render] 里连着解码一起写）。
+     *
+     * 位图交给 RemoteViews 后不能回收，所以缓存里那位、以及这里 return 出去的这张，
+     * 都不在 [Wallpaper.close] 的回收范围内 —— 这里回收的只有两张中间图。
+     */
+    private fun bakeGlass(
+        wallpaper: Wallpaper,
+        size: BakeSize,
+        radii: BakedCornerRadius,
+        glass: Int,
+    ): Bitmap? {
+        val base = wallpaper.open()?.bitmap ?: return null
+        if (base.isRecycled) return null
+        val width = size.widthPx
+        val height = size.heightPx
+        // 先缩小再放大，得到廉价的模糊效果；后续如需更强可换成 RenderEffect/高斯模糊。
+        // 缩小的是**这张画布**的 1/4，不是固定的 120x80：糊的强度按画面内容算始终
+        // 是 25%，出图尺寸跟着组件走时观感不动，只是采样更密。
+        val small = base.scale(width / 4, height / 4, true)
+        return try {
+            val blurred = small.scale(width, height, true)
+            try {
+                val output = createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                val canvas = Canvas(output)
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
+                val rect = RectF(0f, 0f, width.toFloat(), height.toFloat())
+                // 这里以前先拿默认黑色不透明 Paint 垫了一遍整块圆角矩形：画布出生就是全透明，
+                // 四角的留空本来就由下面的 clip 负责，那一步唯一的效果是让带 alpha 通道的
+                // 壁纸透出黑色而不是桌面。
+                canvas.withClip(android.graphics.Path().apply {
+                    addRoundRect(
+                        rect,
+                        floatArrayOf(
+                            radii.radiusX, radii.radiusY,
+                            radii.radiusX, radii.radiusY,
+                            radii.radiusX, radii.radiusY,
+                            radii.radiusX, radii.radiusY,
+                        ),
+                        android.graphics.Path.Direction.CW,
+                    )
+                }) {
+                    drawBitmap(blurred, 0f, 0f, paint)
+
+                    // 叠加用户背景色与透明度。透明度**必须折进这层的颜色本身**：
+                    // 以前这里是 PorterDuffColorFilter(tint, SRC_OVER) —— 颜色滤波器的输出
+                    // *替换*被画像素的颜色（含 alpha），SRC_OVER 模式下 tint 自身 alpha=255
+                    // 时复合结果恒不透明，paint.alpha 只是喂进滤波器的 src alpha，
+                    // 会被滤波结果整个顶掉。装机实测（id=8）：w8.alpha 从 80 拨到 0，
+                    // tile 内部像素一动不动，始终是底板色 (22,32,58)，糊过的壁纸被盖死。
+                    // 所以改走 drawRect 的默认 SRC_OVER 光栅管线，alpha 经 [glassTintArgb]
+                    // 进最终颜色。期望（自选壁纸是纯白，底面色 (22,32,58)）：
+                    // alpha=80% -> 0.8*(22,32,58) + 0.2*(255,255,255) ≈ (69,77,97)；
+                    // alpha=0%  -> 看到糊过的壁纸本身。逐格钉在 WidgetBackgroundRendererTest。
+                    paint.colorFilter = null
+                    paint.color = glass
+                    drawRect(rect, paint)
+                }
+                output
+            } finally {
+                blurred.recycle()
+            }
+        } finally {
+            small.recycle()
+        }
+    }
+
+    /**
+     * 这台设备当前是深色桌面吗。
+     *
+     * 只有 `UI_MODE_NIGHT_MASK` 这一格进缓存键（[glassBakeKey] 的 nightMode）：
+     * 「跟随系统取色」那条分支的底色是经 `Theme_DeviceDefault_DayNight` 解析出来的
+     * （[resolveSystemWidgetColor]），深浅色翻面时它翻面。这里判的是 uiMode，
+     * 不是"底色这次解析出了什么"，因为底色是 [render] 里现算的一个数、本来就是键的分量 ——
+     * 这一枚是给"底色没变、但桌面翻了面"那种以后可能出现的口径留的余量。
+     */
+    private fun isNightMode(context: Context): Boolean =
+        context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+            Configuration.UI_MODE_NIGHT_YES
 
     /**
      * 这一个组件实例的真实尺寸（px）。
@@ -167,6 +238,16 @@ object WidgetBackgroundRenderer {
      * 那是"能拖到多大"而不是"现在多大"。为什么要这道闸、以及它为什么不会把方向
      * 从"偏方"推成"偏圆"，判据全在 [WidgetCornerRadii.resolveSizePx] 那边；
      * 这里只负责交出一个**物理屏幕**的 dp（拿不到就交 0，那一轴等于不夹）。
+     *
+     * **这三步探测一份都不缓存**（本卡刻意少做的那一条）：`getAppWidgetOptions` +
+     * `getAppWidgetInfo` + WindowManager 仍然每实例每次刷新各问一遍。抄的是
+     * `BackgroundSync.refreshWidgets` 对"结论"立的同一份口径 —— 结论当参数传下去、
+     * 而不是缓存起来，没有缓存就没有陈旧问题；组件刚被拖上/拆掉那两条路
+     * （`onEnabled` / `onDisabled`）当场问到自己那份数，靠的正是这里也没留一份旧的尺寸。
+     * 要缓存尺寸就得给出一条"这个实例被拉大/缩小了"的失效边界，而那个信号只有宿主的
+     * `onAppWidgetOptionsChanged` 给得起（本卡不许动那几个文件）。
+     * 少做这一条的代价不大：命中路径上真正贵的三样（壁纸解码、两张中间位图的重采样、
+     * 那张 614,400 B 的画布）都已经收在 [glassCache] 那一头了。
      */
     private fun widgetSizePx(
         context: Context,
@@ -241,8 +322,35 @@ object WidgetBackgroundRenderer {
         return widthPx / density to heightPx / density
     }
 
-    /** 一张壁纸位图 + 它是不是我们新建的（新建的才归 [render] 回收） */
+    /** 一张壁纸位图 + 它是不是我们新建的（新建的才归 [Wallpaper.close] 回收） */
     private class Source(val bitmap: Bitmap, val owned: Boolean)
+
+    /**
+     * 这一次渲染要糊的那张壁纸：**身份**与**取图**分开。
+     *
+     * 拆开就是本卡的落点。[identity] 不需要解码就能算出来（自选那张的身份就是 URI 本身），
+     * 所以缓存命中时 [open] 根本没被调用过，那次 `decodeSampledWallpaper` 整个省掉；
+     * 只有真要烘焙才付取图的钱。系统源那一头身份是从位图本身采出来的，
+     * 位置图已经握在手里（[opened] 出生就非空），所以它没有"省掉一次 IPC"可拿，
+     * 省掉的是后面那三张位图的分配与两次重采样。
+     *
+     * 只在单个 [render] 调用里活，所以 [opened] 这个可变字段不需要跨线程同步
+     * （刷新协程是逐个实例顺序刷的，见 `WidgetCommon.updateAll`）。
+     */
+    private class Wallpaper(
+        val identity: GlassSourceIdentity,
+        private val opener: () -> Source?,
+        private var opened: Source? = null,
+    ) {
+        /** 真要糊图了才把位图取回来；同一次 [render] 里最多取一次。 */
+        fun open(): Source? = opened ?: opener().also { opened = it }
+
+        /** 我们新建的那张才回收；系统持有的一张都不许碰。 */
+        fun close() {
+            opened?.takeIf { it.owned && !it.bitmap.isRecycled }?.bitmap?.recycle()
+            opened = null
+        }
+    }
 
     /**
      * 这一次「玻璃感壁纸背景」到底有没有图源。
@@ -268,23 +376,38 @@ object WidgetBackgroundRenderer {
     }
 
     /**
-     * 取一张可糊的壁纸。走哪一条由 [availability] 定：
+     * 这一次要糊的壁纸（含它的身份）。走哪一条由 [availability] 定：
      * - 开关开着且这台设备读得到桌面壁纸时**优先**系统源、自选那张兜底；
      * - 用户关掉「使用桌面壁纸」时**只**认自选那张 —— 他刚说不想用桌面壁纸，
      *   组件却还在糊桌面壁纸，两边就对不上了；
      * - 判到没有图源时直接 null，调用方回退纯色圆角底。
      *
-     * 这里只负责把判据落成两次取图，不再自己重排先后。
+     * 这里只负责把判据落成两次取图，不再自己重排先后。与改前唯一的区别是自选那一条
+     * 改成**惰性**：它的身份不需要解码就得出（URI 本身），于是缓存命中时这张图根本不读盘。
      */
-    private fun wallpaperSource(context: Context): Source? {
+    private fun wallpaperForRender(context: Context): Wallpaper? {
         val prefs = context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
-        val picked: () -> Source? = {
-            prefs.getString(KEY_WALLPAPER_URI, null)?.let { uri ->
-                decodeSampledWallpaper(context, uri)?.let { Source(it, owned = true) }
+        // 归一口径与 WidgetGlassSource.hasPickedImage 同一份（trim + 空串当没有）：
+        // 否则 " uri " 与 "uri" 会占掉缓存的两个格子，而它们在配置页是同一个选择。
+        val pickedUri = prefs.getString(KEY_WALLPAPER_URI, null)?.trim()?.takeIf { it.isNotEmpty() }
+        val picked: () -> Wallpaper? = {
+            pickedUri?.let { uri ->
+                Wallpaper(
+                    identity = GlassSourceIdentity(
+                        kind = GlassSourceKind.PickedImage,
+                        pickedUri = uri,
+                        widthPx = 0,
+                        heightPx = 0,
+                        samples = emptyList(),
+                    ),
+                    opener = {
+                        decodeSampledWallpaper(context, uri)?.let { Source(it, owned = true) }
+                    },
+                )
             }
         }
         return when (availability(context)) {
-            GlassSource.SystemWallpaperThenPicked -> systemSource(context) ?: picked()
+            GlassSource.SystemWallpaperThenPicked -> systemWallpaper(context) ?: picked()
             GlassSource.PickedImage -> picked()
             GlassSource.NoSourceWallpaperReadBlocked,
             GlassSource.NoSourceSystemWallpaperOff,
@@ -293,20 +416,40 @@ object WidgetBackgroundRenderer {
     }
 
     @SuppressLint("MissingPermission") // 版本闸门在 [WidgetGlassSource] 那一头；更低版本读取壁纸无需该权限
-    private fun systemSource(context: Context): Source? {
+    private fun systemWallpaper(context: Context): Wallpaper? {
         // 闸门不在这个文件里再写一遍 34：配置页那句"这台设备读不读得到桌面壁纸"
         // 与这里必须同进同退，两处各写一个数字迟早对不上。
         if (!WidgetGlassSource.systemWallpaperReadable(Build.VERSION.SDK_INT)) return null
-        val wallpaper = WallpaperManager.getInstance(context).drawable ?: return null
-        return if (wallpaper is android.graphics.drawable.BitmapDrawable &&
-            wallpaper.bitmap != null &&
-            !wallpaper.bitmap.isRecycled
-        ) {
-            // 这张是系统持有的原图，不归我们回收
-            Source(wallpaper.bitmap, owned = false)
-        } else {
-            Source(drawableToBitmap(wallpaper), owned = true)
-        }
+        val source = runCatching {
+            val wallpaper = WallpaperManager.getInstance(context).drawable ?: return@runCatching null
+            if (wallpaper is android.graphics.drawable.BitmapDrawable &&
+                wallpaper.bitmap != null &&
+                !wallpaper.bitmap.isRecycled
+            ) {
+                // 这张是系统持有的原图，不归我们回收
+                Source(wallpaper.bitmap, owned = false)
+            } else {
+                Source(drawableToBitmap(wallpaper), owned = true)
+            }
+        }.getOrNull() ?: return null
+        val base = source.bitmap
+        // 内容签名：9 个点，不复制位图。它在 [glassBakeKey] 里替"用户在桌面换了一张壁纸，
+        // 而我们没有任何通知"这一格站着 —— 换掉一张壁纸，这 9 枚像素不可能全同。
+        // 取不到（硬件位图、位图刚被系统回收）就交空表，那一格 [glassBakeKey] 会拒绝缓存。
+        val samples = runCatching {
+            wallpaperSamplePoints(base.width, base.height).map { (x, y) -> base[x, y] }
+        }.getOrDefault(emptyList())
+        return Wallpaper(
+            identity = GlassSourceIdentity(
+                kind = GlassSourceKind.SystemWallpaper,
+                pickedUri = "",
+                widthPx = base.width,
+                heightPx = base.height,
+                samples = samples,
+            ),
+            opener = { source },
+            opened = source,
+        )
     }
 
     private fun drawableToBitmap(drawable: android.graphics.drawable.Drawable): Bitmap {
@@ -345,3 +488,235 @@ internal fun glassTintArgb(tintArgb: Int, alphaPercent: Int): Int =
 /** 用户选的那一档圆角（dp）。越界下标夹到最近档位，与 `cornerDrawableRes` 同一口径。 */
 private fun WidgetAppearance.cornerRadiusDp(): Int =
     WidgetAppearance.CORNER_RADII_DP[cornerBucket.coerceIn(0, WidgetAppearance.CORNER_RADII_DP.lastIndex)]
+
+/*
+ * 下面这一整段是「玻璃背景烘焙结果缓存」的判据本体：键怎么构造、出图尺寸怎么从实例尺寸
+ * 推出来、缓存容器本身。**一个 android 类型都不 import**，设备度量（真实尺寸、density、
+ * uiMode、壁纸像素）全部由 [WidgetBackgroundRenderer.render] 当参数交进来 ——
+ * 与 [glassTintArgb]、[WidgetGlassSource]、[WidgetCornerRadii] 同一套理由：
+ * 本模块没有 Robolectric，碰 `Bitmap` / `Build.VERSION` 的写法在 JVM 里全是抛
+ * "not mocked" 的桩，只有这条纯函数路能在单测里逐格钉住，而它恰恰决定
+ * 「第二次进来到底复不复用」和「这一张画布到底多大」这两件会改变画面的事。
+ */
+
+/**
+ * 缓存容量上限：两条。
+ *
+ * 为什么两条够，而不是"每实例一条"或者一个不限增长的 map：
+ * - 同一屏上的多个组件实例**绝大多数是同壁纸、同外观参数**的（用户拖三个组件出来，
+ *   配色往往一套），它们只差尺寸档 —— 于是真正会同时活着的键只有一个；
+ * - 第二条留给"同一轮里两档尺寸"那一形：2×1「下一节课」与 4×2「今日课程」并排，
+ *   两档尺寸两张图，这一格必须不互相逐出，否则每轮还是烤两遍；
+ * - 剩下的形（用户给两个实例配了不同底色）本来就该各烤一张：位图字节不一样，
+ *   缓存救不了，多留格子只是把 1.2 MB 变成 1.8 MB 挂在这个既要跑 Compose 首页、
+ *   又要跑 Room 同步的进程上。缓存要救的是**重复**，不是**不同**。
+ *
+ * 代价就写在这儿：两条各 ≤ 480x320 ARGB_8888 = 614,400 B，进程内驻留上限 1,228,800 B。
+ */
+internal const val GLASS_CACHE_MAX_ENTRIES = 2
+
+/**
+ * 一轴短到这条以下就不按真实尺寸出图（见 [bakeSizePx]）。
+ *
+ * 这条线是为廉价模糊那一步画的：管线把画布缩到 1/4 再放回，短边一旦掉到 64 以下，
+ * 缩完就只剩 16px 的一栏，糊出来的东西与那张壁纸已经没关系了。现实里撞不上这一档
+ * （最小的 2×1「下一节课」短边是 40dp，density 2.625 的机上是 105px），
+ * 真撞上就退回改前那一档固定画布 —— 行为与今天一致，不会更差。
+ */
+internal const val MIN_BAKE_AXIS_PX = 64
+
+/** 图源是哪一条。两个枚举名与 [GlassSource] 对得上（那里是"有没有源"，这里是"用的哪个源"）。 */
+internal enum class GlassSourceKind { SystemWallpaper, PickedImage }
+
+/**
+ * 一张壁纸的身份，全部是能在 JVM 里比的数。
+ *
+ * - 自选那张：身份 = URI。解码都不用做就能比对，这正是缓存省下解码的依据。
+ *   URI 没变而那张图的内容被外部改过这一格认不出来 —— 这不是缓存新引入的洞，
+ *   [WidgetGlassSource.pickedImageChanged] 的注释已经把同一格写成"不在承诺里"
+ *   （出路还是设置页那颗「立即刷新」）；而且能进缓存的键都是**烤成功过**的，
+ *   图真被删掉时下一次命中给的是最后一次成功糊过的那张，比回退纯色底更接近用户要的。
+ * - 系统那张：身份 = 宽高 + 9 枚采样像素（[wallpaperSamplePoints]）。桌面换壁纸
+ *   没有任何广播进到我们进程，只有把内容本身编进键才不会糊出一张旧壁纸。
+ *   取不到像素时这一格交空表，由 [glassBakeKey] 拒绝缓存。
+ */
+internal data class GlassSourceIdentity(
+    val kind: GlassSourceKind,
+    val pickedUri: String,
+    val widthPx: Int,
+    val heightPx: Int,
+    val samples: List<Int>,
+)
+
+/** 这一次要烘的画布尺寸（px）。 */
+internal data class BakeSize(val widthPx: Int, val heightPx: Int)
+
+/**
+ * 烘焙结果的缓存键：**凡是能让最终像素变的输入，都必须在这里有一枚分量**。
+ *
+ * 逐枚对上管线（[WidgetBackgroundRenderer.bakeGlass]）：
+ * - [source] —— `drawBitmap(blurred, …)` 的那个 src，壁纸换了像素就换了；
+ * - [bakeWidthPx] / [bakeHeightPx] —— 两次 `scale` 的目标尺寸与画布本身；
+ * - [radiusX] / [radiusY] —— 裁剪 Path 用的半径。这里放的是**换算完的半径**而不是
+ *   `cornerDp` / density / 组件尺寸那三枚原始输入：换算在 [WidgetCornerRadii.bake] 里，
+ *   只要它输出的数相同，画出来的形状就相同。放终点数而不是放起点数，键就永远不会
+ *   比管线"多判"或"少判"一档 —— 少判那一格是陈旧画面，多判那一格是白烤。
+ * - [glassArgb] —— drawRect 那层的最终颜色，透明度已经折进高字节（[glassTintArgb]）；
+ * - [nightMode] —— 「跟随系统取色」的底色来自 DayNight 主题（[resolveSystemWidgetColor]）。
+ *
+ * 刻意**不进键**的：appWidgetId（它是"谁在用"，不是"长什么样"，进键等于逐实例一条，
+ * N 个实例永远命中不了）、textMode / showTitle / gridMaxLines（不碰这张背景位图）。
+ */
+internal data class GlassBakeKey(
+    val source: GlassSourceIdentity,
+    val bakeWidthPx: Int,
+    val bakeHeightPx: Int,
+    val radiusX: Float,
+    val radiusY: Float,
+    val glassArgb: Int,
+    val nightMode: Boolean,
+)
+
+/**
+ * 键的构造点，同时是"这一次能不能用缓存"的那道闸。
+ *
+ * 返回 null = 这次别用缓存（照改前一样现烤，也不入库）。只有一种情形才拒：
+ * 系统源而内容签名又取不到（硬件位图 `getPixel` 抛了、或刚被系统回收）。那时
+ * [GlassSourceIdentity] 上只剩 (kind, 宽高)，用户换一张**同尺寸**的壁纸会被判成
+ * 同一个键 —— 组件会一直糊着旧壁纸，而这正是缓存唯一不能被原谅的那一形。
+ * 宁可白烤，不可糊错。
+ *
+ * 自选源不受这条影响：它的身份就是 URI，不需要先拿到像素。
+ */
+internal fun glassBakeKey(
+    source: GlassSourceIdentity,
+    size: BakeSize,
+    radii: BakedCornerRadius,
+    glassArgb: Int,
+    nightMode: Boolean,
+): GlassBakeKey? {
+    if (source.kind == GlassSourceKind.SystemWallpaper && source.samples.isEmpty()) return null
+    return GlassBakeKey(
+        source = source,
+        bakeWidthPx = size.widthPx,
+        bakeHeightPx = size.heightPx,
+        radiusX = radii.radiusX,
+        radiusY = radii.radiusY,
+        glassArgb = glassArgb,
+        nightMode = nightMode,
+    )
+}
+
+/**
+ * 从这一个实例报上来的真实尺寸推出要烘的画布尺寸（每一轴各推各的）。
+ *
+ * 改前这里是"一律 480x320"：一个 2×1「下一节课」真身 110x40dp，在 density 2.625 的机上
+ * 是 288x105px，却还是先烤 480x320（614,400 B）、再由 fitXY 缩回 288x105 显示 ——
+ * 白多分配五倍的像素（153,600px 对 30,240px）、白多采样五倍，而且 Launcher 那一步
+ * 缩放还把模糊又糊了一层。现在按真实尺寸出一张
+ * 288x105（120,960 B），1:1 显示。
+ *
+ * 每一轴三档，方向只有一个：**出图尺寸永远不超过该轴的真实尺寸**（除了退回上限那一档，
+ * 那是尺寸缺失/退化时的改前口径）：
+ * - 该轴缺数（[size] 为 null，或这一轴 ≤ 0）→ 用 [maxWidthPx]/[maxHeightPx]，与改前逐字一致；
+ * - 真实尺寸落在 `[minUsefulPx, max]` → 就用它（向下取整，宁可少一像素）；
+ * - 短到 [minUsefulPx] 以下 → 退回上限，理由见 [MIN_BAKE_AXIS_PX]。
+ *
+ * 为什么出图尺寸变了而**屏幕上看到的圆角不变**（这条是本函数敢动的立论）：
+ * [WidgetCornerRadii.bake] 烘的半径是 `cornerDp * density / (组件px / 画布px)`，
+ * Launcher 再按 `组件px / 画布px` 把它拉回去，两个数在屏幕上互为逆运算，
+ * 乘出来恒等于 `cornerDp * density` —— 画布取 480 还是取 288 根本不参与这个结果。
+ * 同理，模糊强度是"缩到本画布的 1/4 再放回"，是画面内容的 25%，也不随画布绝对尺寸变。
+ * 所以这一档动的只是位图字节数与采样密度，动的都不是刚验收过的那三件收口项
+ * （圆角、透明度、取色）。
+ */
+internal fun bakeSizePx(
+    size: WidgetSizePx?,
+    maxWidthPx: Int,
+    maxHeightPx: Int,
+    minUsefulPx: Int = MIN_BAKE_AXIS_PX,
+): BakeSize = BakeSize(
+    widthPx = bakeAxisPx(size?.widthPx, maxWidthPx, minUsefulPx),
+    heightPx = bakeAxisPx(size?.heightPx, maxHeightPx, minUsefulPx),
+)
+
+private fun bakeAxisPx(axisPx: Float?, maxPx: Int, minUsefulPx: Int): Int {
+    if (axisPx == null || axisPx <= 0f) return maxPx
+    // 向下取整：出图尺寸宁可少一像素也不许多一像素 —— 多出真实尺寸的那一列
+    // 会在 fitXY 下被压掉，压掉哪一列是浮点误差说了算，不是判据。
+    val actual = axisPx.toInt()
+    return when {
+        actual > maxPx -> maxPx
+        actual < minUsefulPx -> maxPx
+        else -> actual
+    }
+}
+
+/**
+ * 壁纸内容签名的取样点：3x3，落在 1/8 到 7/8 那一带。
+ *
+ * 为什么不取边缘一圈：边缘有状态栏压暗、有启动器的圆角遮罩、还有整块的黑边，
+ * 那些东西换了壁纸也不动，取它们等于给两幅不同的壁纸做出同一个签名。
+ * 为什么不取中心一个：一张"上暗下亮"的壁纸换成另一张同样上暗下亮的，
+ * 中心那一点撞上的概率不低，而 9 个点全撞上的概率已经没有工程意义了。
+ *
+ * 宽高不是正数（拿到位图却没尺寸）时交空表 —— 调用方据此放弃缓存，见 [glassBakeKey]。
+ */
+internal fun wallpaperSamplePoints(widthPx: Int, heightPx: Int): List<Pair<Int, Int>> {
+    if (widthPx <= 0 || heightPx <= 0) return emptyList()
+    val xs = listOf(widthPx / 8, widthPx / 2, (widthPx * 7) / 8).distinctClamp(widthPx)
+    val ys = listOf(heightPx / 8, heightPx / 2, (heightPx * 7) / 8).distinctClamp(heightPx)
+    return ys.flatMap { y -> xs.map { x -> x to y } }
+}
+
+/** 保证每个坐标都落在 `0 until dimension` 里（1xN 这种退化尺寸上 1/8 与 1/2 会重合到 0，没问题，但 7/8 可能越界）。 */
+private fun List<Int>.distinctClamp(dimension: Int): List<Int> =
+    distinct().map { it.coerceIn(0, dimension - 1) }
+
+/**
+ * 玻璃烘焙结果的有界 LRU。
+ *
+ * 为什么用泛型而不是直接持有 `Bitmap`：这件容器是"键 → 至多一份昂贵结果"，
+ * 与里面放的是什么无关。把它做成泛型，本卡的判据（同键第二次不重复烤、逐出边界）
+ * 就能在纯 JVM 单测里用一个计数假件钉住 —— 真位图在这个模块的单测里根本造不出来。
+ * 生产与测试跑的是**同一个** [obtain]，测的即是用的。
+ *
+ * 线程：刷新全在 `goAsync()` 的 IO 协程上（`WidgetCommon.launchRefresh`），
+ * 六个 Provider 各自起协程，所以 [obtain] 整体加锁 —— 锁的是查表与写入这两次
+ * 哈希操作，不锁烘焙：两个线程同时未命中同一个键时各自烤一份，写进去后一份赢，
+ * 结果是同一张画（同键同管线），多花一次 CPU 而不会出错。反过来若把烘焙圈进锁里，
+ * 一次 8MB 位图的重采样会把同轮后面的实例堵在锁上等，那就是把省下来的钱换个地方花。
+ *
+ * 逐出时**不回收**位图：这张图可能已经交给 RemoteViews、还在 binder 事务里排着，
+ * 或者正被 Launcher 显示 —— 回收一张别人还引用的位图，下一次用到它就是
+ * Canvas/`drawBitmap` 上的 IllegalStateException。丢掉引用就够了：API 26 起
+ * 位图像素就在 Java 堆上，GC 自己收（这仓库 minSdk 26，没有"像素在 native 堆、
+ * 不 recycle 就漏"那一档要照顾）。
+ */
+internal class GlassBakeCache<V>(private val maxEntries: Int = GLASS_CACHE_MAX_ENTRIES) {
+
+    /** accessOrder = true：读取也算使用，被逐出的永远是最久没被碰过的那一条。 */
+    private val entries = object : LinkedHashMap<GlassBakeKey, V>(4, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<GlassBakeKey, V>?): Boolean =
+            size > maxEntries
+    }
+
+    /**
+     * 命中就回缓存那份；未命中跑一次 [bake] 并入库。
+     *
+     * [bake] 交回 null（图源撞空、尺寸算崩）时**不入库**：失败多半下一刻就好了
+     * （用户刚挑了张图），把"画不出来"缓存下来就等于把一次瞬时失败变成一整轮的纯色底。
+     */
+    @Synchronized
+    fun obtain(key: GlassBakeKey, bake: () -> V?): V? {
+        entries[key]?.let { return it }
+        val baked = bake() ?: return null
+        entries[key] = baked
+        return baked
+    }
+
+    /** 单测与将来的排障入口用：生产路径上没有"清缓存"这一步，键自己会翻面。 */
+    @Synchronized
+    fun entryCount(): Int = entries.size
+}
+
