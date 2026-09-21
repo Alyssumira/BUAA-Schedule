@@ -756,6 +756,23 @@ private fun DayTimelineCourseList(
                         }
                     }
                 }
+                // 「现在」线画在课程块**之下**（T55）：它此前是这个 Box 的最后一个子项，
+                // 于是 2dp 的红线从课程名中间横过去——装机实测（buaa36，周一 17:41，
+                // 17:30–18:15 那一节）「思想政治」四个字被划了一道，读起来像被划掉。
+                // Box 的子项按声明顺序叠放，挪到块之前就是卡片盖住线：文字一处不碰，
+                // 而课间、轴两端与块与块之间的空隙仍然露出它——"现在"的信号留在空档处。
+                // 块是 0.72 的半透明板（取色链 T23/T25b/T29 定的口径，本卡不动），
+                // 所以线在块底透出一道更淡的横印，那是叠色不是划线：它压不到字上，
+                // 因为文字在同一个块里、画在自己的板之上。
+                // 越界不画的边界行为仍长在 NowGlideLine 自己的 fraction≤0/≥1 判断里，
+                // 与周视图共用同一个组件，两边不会再各改各的。
+                NowLine(
+                    visible = isToday,
+                    startMin = window.startMin,
+                    endMin = window.endMin,
+                    totalHeight = totalHeight,
+                    nowTickState = nowLineTick,
+                )
                 blocks.forEachIndexed { blockIndex, block ->
                     val course = block.row.course
                     val y = hourHeight * ((block.startMin - window.startMin) / 60f)
@@ -855,16 +872,6 @@ private fun DayTimelineCourseList(
                         }
                     }
                 }
-                // 「现在」线压在块之上（周视图的 z 序也是如此：线在最后画）。
-                // 越界不画的边界行为就长在 NowLine 自己的 fraction≤0/≥1 判断里，
-                // 与周视图逐字一致，由共享组件本身保证，两个视图不会再各改各的。
-                NowLine(
-                    visible = isToday,
-                    startMin = window.startMin,
-                    endMin = window.endMin,
-                    totalHeight = totalHeight,
-                    nowTickState = nowLineTick,
-                )
             }
         }
     }

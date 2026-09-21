@@ -732,6 +732,31 @@ private fun WeekGrid(
                         .fillMaxHeight()
                         .onSizeChanged { daysAreaWidthPx = it.width },
                 ) {
+                    // 「现在」线画在七天列**之下**（T55）：它此前是这个 Box 的最后一个子项，
+                    // 于是 2dp 的红线整条横穿网格——装机实测（buaa36，周一 17:41）第 10 节
+                    // 那三张卡（思想政治 / 算法竞赛训练 / 思想政治）的名字全被划了一道。
+                    // Box 的子项按声明顺序叠放，挪到列之前就是卡片盖住线：没有一张卡上的字
+                    // 被压，而空着的列（这一行里的周二三四日）照旧把线整段露出来，
+                    // "现在"读得出。玻璃卡画的是整屏烘焙的那张壁纸前缀（LocalSharedCourseBackdrop
+                    // 录的是 SceneBackground，壁纸/主题变才重录），所以玻璃档下线在卡下不透出来；
+                    // 降级档的板是 0.92，透出的那点已经读不出来。
+                    // 24h 模式与节次行模式共用这一处落位，两条线不该各修一次。
+                    if (timeMode) {
+                        NowLine(
+                            visible = weekForContent == currentWeek,
+                            startMin = timeWindow.first,
+                            endMin = timeWindow.second,
+                            totalHeight = gridHeight,
+                            nowTickState = nowTickState,
+                        )
+                    } else {
+                        NowLinePeriod(
+                            visible = weekForContent == currentWeek,
+                            layouts = periodLayouts,
+                            totalHeight = gridHeight,
+                            nowTickState = nowTickState,
+                        )
+                    }
                     Row(modifier = Modifier.fillMaxHeight()) {
                         dayNames.forEachIndexed { index, _ ->
                             val day = index + 1
@@ -1102,22 +1127,6 @@ private fun WeekGrid(
                                 }
                             }
                         }
-                    }
-                    if (timeMode) {
-                        NowLine(
-                            visible = weekForContent == currentWeek,
-                            startMin = timeWindow.first,
-                            endMin = timeWindow.second,
-                            totalHeight = gridHeight,
-                            nowTickState = nowTickState,
-                        )
-                    } else {
-                        NowLinePeriod(
-                            visible = weekForContent == currentWeek,
-                            layouts = periodLayouts,
-                            totalHeight = gridHeight,
-                            nowTickState = nowTickState,
-                        )
                     }
                     // 周次有值但本周没有课时，在课程区域给出明确空态，
                     // 避免只剩时间轴空白让人以为渲染坏了
