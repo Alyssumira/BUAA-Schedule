@@ -710,6 +710,16 @@ private fun AppNavHost(
             if (com.buaa.schedule.data.import.SpocSession.hasSession()) "spoc_scan" else "spoc_login",
         )
     }
+    // 设置页这一族跳转回调只在这里构造一次（理由同上 openSpocSignIn：两处各写一份迟早走岔）。
+    // SettingsScreen 的这些回调全都带 `= {}` 默认值，而它在根界面与 settings/{section} 子页
+    // 各有一次调用点：任何一处漏传一个，那一行点击就是静默 no-op —— 编译不报错、
+    // JVM 单测也碰不到这条链。「学期统计」进不去就是这么漏出来的：它那一行只在 SCHEDULE
+    // 子页渲染，回调却只写在了只画分类入口的根界面上。
+    val openSettingsSection: (com.buaa.schedule.ui.settings.SettingsSection) -> Unit = { section ->
+        navController.navigate("settings/${section.id}")
+    }
+    val openCourseManagement: () -> Unit = { navController.navigate("course_management") }
+    val openStats: () -> Unit = { navController.navigate("stats") }
     @OptIn(ExperimentalSharedTransitionApi::class)
     SharedTransitionLayout(modifier = Modifier.fillMaxSize()) {
         val sharedTransitionScope = this
@@ -870,11 +880,9 @@ private fun AppNavHost(
                     viewModel = viewModel,
                     onDarkThemeChange = onDarkThemeChange,
                     // 分类入口 → 打开独立的设置子界面（不再是同页折叠）
-                    onOpenSection = { section ->
-                        navController.navigate("settings/${section.id}")
-                    },
-                    onOpenCourseManagement = { navController.navigate("course_management") },
-                    onOpenStats = { navController.navigate("stats") },
+                    onOpenSection = openSettingsSection,
+                    onOpenCourseManagement = openCourseManagement,
+                    onOpenStats = openStats,
                     onOpenSpocSignIn = openSpocSignIn,
                     bottomBarVisible = bottomBarVisible,
                 )
@@ -895,7 +903,9 @@ private fun AppNavHost(
                     onDarkThemeChange = onDarkThemeChange,
                     section = com.buaa.schedule.ui.settings.SettingsSection
                         .fromId(entry.arguments?.getString("section")),
-                    onOpenCourseManagement = { navController.navigate("course_management") },
+                    onOpenSection = openSettingsSection,
+                    onOpenCourseManagement = openCourseManagement,
+                    onOpenStats = openStats,
                     onOpenSpocSignIn = openSpocSignIn,
                 )
             }
