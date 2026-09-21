@@ -332,6 +332,34 @@ object BackgroundSync {
      * 单独成一个函数是为了让冷启动那条链在**问过一遍 Launcher** 之后整步跳过它
      * （见 [runColdStartWidgetSteps]），而不是再各自探测一次。6 次 `updateAll` 的
      * **顺序**仍然只有这一份实现（组件刷新时序是验证过的口径，别在这里挪）。
+     *
+     * 「调用路里有三条课表数据一个字没改（开机 / 改时间 / 12 小时兜底，加每日零点那一条），
+     * 要不要把这里收窄」—— 评估过，两条都**不做**，理由记在这里免得下一个人再量一遍：
+     *
+     * 1. **「数据没变就跳过快照重写」这一半已经由快照侧自己收掉了**（见
+     *    [WidgetDataSynchronizer.planSnapshotWrites]）：一轮 K = 学期数 + 1 行里，
+     *    内容逐字节相同且表里那行还被读侧认账的，一行 upsert 都不发，
+     *    而这四条路一行都不用发 ⇒ 这里再判一次"数据变没变"买 0 行。
+     *    反过来，"这里干脆整步不调 [WidgetDataSynchronizer.sync]"是**不安全**的：
+     *    [refreshWidgets] 开头已经无条件 `WidgetDataCache.invalidate()`，
+     *    不 sync 就没有任何一行带着新时刻的快照，六个 Provider 的每一次读都会掉进
+     *    `WidgetDataCache.get` 的主库回退分支（`WidgetDataCache.kt:78-88`，
+     *    每次 3 趟查询 + 1 次补写），比这一次性 sync 贵得多。
+     * 2. **「按受影响 provider 收窄重绘」拿不到"受影响"这个结论。** 六个 provider 读的都是
+     *    同一份 [WidgetData]（今日 / 明日 / 周课表 / 周网格 / 下一节课 / 今明两栏都按教学周
+     *    过滤课程），任一字段变化六家都可能变；要判"只有今日变"得先有一套"哪个实例绑了哪个
+     *    学期、画的是哪一天"的枚举与依赖图，[WidgetBindingStore] 只有逐 `appWidgetId` 读写、
+     *    没有枚举接口（同 [WidgetDataSynchronizer.sync] 类注释第 1 条取证）。
+     *    而省下来的的量级本来就不大：`updateAll` 每家第一件事就是 `getAppWidgetIds`，
+     *    **没有实例的那几家就地返回**（`WidgetCommon.updateAllOfProvider*`），
+     *    一轮 6 次跨 binder 探测之后真正付渲染的只有桌面上那几家的实例数；
+     *    真数据变化（[onDataChanged]）六家都得重绘，收窄收益为 0、风险为"漏一家"。
+     *
+     * ⚠️ 另有一条路**不归这里管、也不许被任何收窄顺路收进去**：
+     * [WidgetCommon.requestLiveRefresh]（上/下课铃驱动的轻重绘，只碰今日/下一节课/今明两栏）。
+     * 它刻意不走 [refreshWidgets]，因为那一刻课表没改、只是时间翻面 ——
+     * 今日列表的「进行中」高亮正是随铃翻面的，任何"数据没变就不用重绘"的判据落在它身上
+     * 都是功能回归。
      */
     internal suspend fun syncAndRedrawAllWidgets(context: Context) {
         WidgetDataSynchronizer.sync(context)

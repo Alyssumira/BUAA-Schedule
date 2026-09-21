@@ -34,6 +34,30 @@
       `ScheduleAppWidgetProvider` 基类一份实现里（此前六家各写一份、内容逐字相同），
       并且整条链跑在 `goAsync()` 续命的 `Dispatchers.IO` 协程上而不是广播主线程上 ——
       WorkManager 已改按需初始化，"进程里第一个调 `getInstance` 的线程"就是付建库钱的人
+- [x] 桌面快照只写脏 key（T43）：`WidgetDataSynchronizer.sync()` 每轮仍给每个 key 排一行
+      （K = 学期数 + 1，"一 key 一行"这条不变式没动），但**只把内容真的变了的行 upsert** 进
+      `widget_snapshots`。判据三条（任一成立才写）：没有凭据 / 载荷 SHA-256 不同 /
+      表里那一行的时刻已经不被读侧认账（与 `WidgetDataCache` 那条 15 分钟 + 同一天同口径 ——
+      少了第三条就是把"一轮省 K 次 upsert"换成"每次组件刷新多付 3 趟主库查询 + 1 次补写"，净亏）。
+      凭据是本进程内存里那张 `key → (载荷哈希, 写入时刻)`，**不去 SELECT 表里那行回来比**：
+      读回 K 行就把省下的那次写换成了 K 趟查询，一分不买。脏判定与哈希对比是纯 JVM 函数
+      （`planSnapshotWrites` / `payloadHashOf` / `snapshotStampStillFresh`，时钟与"是否同一天"
+      都由调用点当参数传），钉在 `WidgetSnapshotDirtyTest`（13 条）。
+      收益实数（K = 5）：数据未变、同进程再来一轮 ⇒ 改前 1+5 查 5 写、改后 1+5 查 **0 写**；
+      改一门课 ⇒ 5 写 → 1～2 写；冷进程第一轮 / 超 15 分钟（开机、零点、12 小时兜底）⇒
+      仍是 5 写，一行都没少、查询也没多付。
+      **最高判据是"一个 key 都不误删"**：`deleteKeysNotIn` 拿的名单仍是 `keys`
+      （全部排产 key），不是写出去的那几行 —— 名单跟着写集合走的话，"本轮一行都没写"
+      就等价于"把整表判空"，那条 `DELETE ... NOT IN ()` 是 prepare 即语法失败、整批事务回滚。
+      这一条既有纯函数级断言（跳满 K 行时凭据键集仍是 K 个 key），也有一条按源码核对
+      "传的是 `keys.toList()`"的守卫（JVM 跑不到真库，办法抄 `ColdStartRebuildWiringTest`）。
+      同时评估过两条收窄，**都判为不做**，理由记在 `BackgroundSync.syncAndRedrawAllWidgets`
+      的注释里：① "数据没变跳过快照重写"这一半已由上面收掉，整步不调 `sync` 反而不安全
+      （`refreshWidgets` 开头无条件把进程内缓存 invalidate 掉了）；② "按受影响 provider 收窄重绘"
+      拿不到"受影响"这个结论（六家共读同一份 `WidgetData`、`WidgetBindingStore` 没有枚举接口），
+      而各家 `updateAll` 第一件事就是 `getAppWidgetIds`、没实例的家就地返回，本来就没的量可省。
+      ⚠️ `WidgetCommon.requestLiveRefresh`（上下课铃驱动的轻重绘）不参与任何这类收窄 ——
+      那一刻课表一个字没改、只是时间翻面，今日列表的「进行中」高亮靠的就是这一枪
 - [x] 备份恢复预览（版本校验 + 内容摘要确认）
 - [x] 课表分享口令（压缩编码，聊天工具可直接粘贴互导）
       ⚠️ 口令是**明文编码**（无加密、无口令保护），拿到即可完整还原课表（课程/教师/教室）；
