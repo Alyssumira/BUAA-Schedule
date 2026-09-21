@@ -4,8 +4,9 @@
 > "哪些已经落地、哪些还没做、哪些明确不做"的贡献者，所以条目按开发顺序而不是使用顺序排。
 > 带 ⚠️ 的条目有平台限制或使用前提。
 >
-> 最后整理：2026-09-21（去掉「手输签到码」入口，T45；上一次整体整理停在 2026-09-18
-> 的学期统计页 / 学分字段，v0.1.0 之前的整理见对应条目）。
+> 最后整理：2026-09-22（学期统计页三张增密图 T51/T54、课次卡片进场动画 T52、
+> 掉帧自动降档死链修好 T53；上一轮整理是 2026-09-21 的「去掉手输签到码」入口，T45；
+> v0.1.0 之前的整理见对应条目）。
 
 ## 已落地
 
@@ -452,4 +453,80 @@
       守卫：`DayTimelineAxisTest` +4 真单测（16→20），`DayTimelineStructureGuardTest`
       +3 结构钉子（5→8，负向验证：临时摘掉 LineTop 传参/链开关/描边换色三处机制实测全红）。
       门禁：**1030 单测 / 128 套件 / 2 跳过 / 0 失败**（+7，T49 后地板 1023 只涨不跌），
+      lint **0 error / 14 warning**（与基线同一组，无新增）。
+
+- [x] 学期统计页三张增密图：周次覆盖 Gantt / 负载趋势 / 空档分布（T51，2026-09-22，
+      `ac68501`…`72aa922` 七枚）：判据全部落在三个纯 JVM 内核里——
+      `CourseWeekSpans`（一门课实际在上的周次区间，连续周并段、断周不并）、
+      `WeekFreeGrid`（某一周的「周几 × 节次」占用格，带 `dayRows` 转置视图与
+      查不到节次时长的诚实计数）、`WeeklyLoadTrend`（逐周分钟数、峰值周、结课周标记）。
+      界面侧 `ScheduleCharts.kt` 新增 `CourseWeekGantt` / `WeekFreeHeatGrid` /
+      `WeeklyLoadTrendChart` 三张组件，`StatsScreen.kt` 按「趋势紧跟每周负载、覆盖紧跟
+      课程学分、分布紧跟空档」的顺序各起一张同族 `GlassSurface(PANEL)` 卡，
+      旧三张卡一字未动；三内核结果与 `SemesterSummary` 同一口径 `remember` memoize，
+      全学期重算只在 courses/semester/timeSlots 真变时发生一次。
+      取色走 `courseColor → legibleTintPlate → coursePlateSceneLuma` 那条 T23/T25b/T29
+      真机校准过的链，不裸铺在玻璃板上；Gantt 逐行、热力格逐日挂 `contentDescription`
+      （`ganttRowDescription` / `heatGridDayDescription` 就是为读屏写的）。
+      每张图只有一个整块 `reveal` 缩放（与 `WeekDensityStrip` 同口径：不逐行挂动画），
+      且读在 draw 阶段。门禁：**1100 单测 / 134 套件 / 0 失败**（+70/+6）。
+
+- [x] 课次卡片进场动画 + 三处可打断收口（T52，2026-09-22，`34c82b4`…`b7629cc`）：
+      今日页列表 / 今日页时间轴 / 周课表网格三处的课程卡，第一次进入这一屏时
+      淡入 + 8dp 上浮（`EntrancePlaybook` 进程内一把键只播一遍，三把常量键
+      `day-list` / `day-timeline` / `week-grid`；键掺进日期或课程数就会「改一次数据
+      重播一遍」，所以一律常量）。**一屏只有一条 `animateFloatAsState`**（380ms，
+      只从 `MotionTokens.DURATION_LONG` 取），每张卡从这条驱动里切自己那一段窗口
+      （`entranceSlotProgress`，窗口 0.45）——末格恰在驱动收尾时落定，
+      「总时长封顶」是构造性质而不是算出来的，条目再多只压步长。
+      周网格的名次不是渲染循环下标（列内课程是 DAO 顺序不是节次顺序），
+      改为对既有聚合表一次 `remember` 建「天→节次」名次表、逐卡一次哈希查找。
+      进场变换在 CourseCell 里**并进既有那张按压/脉冲缩放层**（两张图层各持一份 alpha
+      就没法合账），今日页两处自持一层挂在 `animateItem` 之前；落定后恒为
+      alpha=1 / translationY=0，静止像素与改前逐位一致（装机复核过）。
+      同批收口：列表↔时间轴从 `Crossfade` 换成带 1/20 屏纵向位移的 `AnimatedContent`；
+      「现在」线的一分钟一跳补成一段滑行；`pendingSyncTarget` 让「外部改周」被惯性
+      滑动打断时不再整个丢掉（此前顶栏写第 20 周、屏幕停在第 12 周）；
+      脉冲撤销从 `snapTo(0)` 改成从当前值接着淡出。
+      守卫：`EntrancePlaybookTest` 11 条真单测（含「总长封顶」那条可执行定义）＋
+      `CourseEntranceWiringGuardTest` 8 条结构钉子（三处接线与常量键）。
+      ⚠️ 记账一条方法学：**buaa36 的录帧包络量不出 260ms 级动画**——它平均每
+      250~400ms 才出一帧，一段横向滑行与一次硬切都只落一根尖峰。所以「切日 / 底栏切页
+      是硬切」这个旧结论已作废（代码里 `dayAxisTransition`、NavHost 的
+      enter/exit/popEnter 都在），进场动画能测出来只因为它是 380ms 且发生在冷启动
+      最慢的那一段。帧级验收要么走真机，要么走代码 + 结构守卫。
+
+- [x] 掉帧自动降档整条死链修好（T53，2026-09-22，`442e199`…`8053480`）：
+      装机实测 `GlassJankMonitor` 从未收到过一次帧回调（同一进程 `GlassDiag` 1197 行、
+      `GlassJank` 0 行、`ps -T` 里没有 FrameMetrics 线程），于是 release 包里
+      「持续掉帧→自动降玻璃档」这道运行时自保护从未跑起来过。根因两处：
+      `attach()` 落在 `MainActivity.onCreate` 开头（`setContent` 之前），
+      而 `addOnFrameMetricsAvailableListener` 传 null Handler 在现在的平台链上
+      （`View.addFrameMetricsListener → FrameMetricsObserver → HardwareRendererObserver`）
+      直接抛 NPE——老的「null 就自起 FrameMetrics HandlerThread」兜底已被删；
+      外面那层 `runCatching` 把异常吞得看不见。修法：注册延到 `decorView.post`
+      （那一刻 `mAttachInfo` 就位、ThreadedRenderer 已建，两条死路都不再可走）、
+      进程内懒建一个 `HandlerThread("FrameMetrics")` 复用、失败打 `Log.e` 留痕
+      （release 也要看得见），`registered` 标志让 detach 只对真注册过的监听发 remove。
+      降档语义一字未动（连续两个坏窗口、10 分钟冷却、只降不升、压到 OFF 才停采样），
+      判据本体剥进 `GlassJankDecision.kt`（零 android import，帧数/坏帧数/时间戳当参数）。
+      **装机复验通过**：`logcat -s GlassJank` 出「FrameMetrics 监听已注册」+
+      `frames=19 jank=18 jankRate=94.7`，`ps -T` 出现 FrameMetrics 线程。
+      守卫：`GlassJankDecisionTest` 表驱动 7 条 + `GlassJankMonitorWiringGuardTest` 3 条。
+      ⚠️ 顺带量到一条：模拟器 10 秒窗口只出 19 帧、其中 18 帧超 32ms——
+      `RELEASE_MIN_FRAMES = 100` 那道"帧数太少不判"的闸正好挡住了误降档，
+      这条保护在模拟器上被真实触发过一次。
+
+- [x] 周次覆盖 Gantt 八行压成一行（T54，2026-09-22，`9ec1f4c`，装机复核暴露）：
+      `CourseWeekGantt` 里背景格线那个 `Row` 与 `visibleRows.forEach { Row(...) }`
+      是同一个 `Box` 的两个子项，Box 默认把所有子项叠在 top-start，于是八行课程名
+      互相压字、八条轨道叠成一行，而格线高度按八行算——卡片下方一大片空白。
+      行层收进 `Column`（两列权重、`GanttRowPitch`、semantics、reveal 一字未动）。
+      顺手给「空档分布」表头补了轴标注「列 = 节次（数字是第几节）· 行 = 周几」——
+      原来 `第 4周 1 2 3 … 14` 读起来像 1..14 是周次。另两张图逐行核过，
+      同族形状（Box 里裸 `forEach`）只有这一处，守卫泛扫三张图钉住这一类。
+      守卫：`StatsChartsStructureGuardTest` +4 条（行层必须在 Column 且与格线同 Box、
+      三层权重各 3 处 + 格线高=pitch×行数、三图泛扫、轴标注零命中即失败）。
+      门禁：**1144 单测 / 140 套件 / 0 失败**（skipped 2 是
+      `ReleaseForensicLogSurvivalTest` 在没有 release APK 的工作区里的既有产物层跳过），
       lint **0 error / 14 warning**（与基线同一组，无新增）。
