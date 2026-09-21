@@ -1,6 +1,7 @@
 package com.buaa.schedule.ui.stats
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -12,12 +13,15 @@ import org.junit.Test
  * 找不到源码目录直接抛、零命中直接失败，不用 assumeTrue 跳过
  * （"没找到就算过"的守卫会在下一次改名时静默变绿）。
  *
- * 钉两件事：
+ * 钉三件事：
  * 1. 三张新图（CourseWeekGantt / WeekFreeHeatGrid / WeeklyLoadTrendChart）确实都
  *    挂在 StatsScreen 的卡片里，且判据内核是在 remember 里算的（不许组合期全学期重算）、
  *    Gantt 的课程色走 legibleTintPlate 那条推导链（不许裸铺）；
  * 2. ganttRowDescription / heatGridDayDescription 两处读屏文案都挂在 semantics 上——
- *    Canvas 画的色块读屏拿不到，摘掉挂钩这一层，读屏用户就只剩一片色块。
+ *    Canvas 画的色块读屏拿不到，摘掉挂钩这一层，读屏用户就只剩一片色块；
+ * 3. T54 装机实测的形状守卫：Gantt 画行的 forEach 必须待在 Column 里、与背景格线
+ *    同处一个 Box（Box 子项默认全叠 top-start，裸 forEach 会把八行压到 y=0），
+ *    三张新图里一律不许出现「Box 里裸 forEach」，热力格表头必须自带轴标注。
  */
 class StatsChartsStructureGuardTest {
 
@@ -78,6 +82,87 @@ class StatsChartsStructureGuardTest {
         )
     }
 
+    // ---- T54 装机实测的形状守卫 ----------------------------------------------------
+
+    @Test
+    fun ganttRowLayerIsAColumnSharingTheGridlineBoxNotBareRows() {
+        val gantt = chartBody("fun CourseWeekGantt(")
+        val hits = allOccurrences(gantt, "visibleRows.forEach")
+        assertTrue(
+            "画 Gantt 行的循环（visibleRows.forEach）没了：改名要跟着改这条守卫，不许静默放行",
+            hits.isNotEmpty(),
+        )
+        for (at in hits) {
+            val column = containerOf(gantt, at)
+            assertTrue(
+                "画 Gantt 行的循环不再直待在 Column 里：Box 子项默认全叠 top-start，" +
+                    "裸 forEach 会把每行的名字和轨道压到同一 y（T54 装机实测形状）。当前容器：${column?.name}",
+                column?.name == "Column",
+            )
+            // Column 自己的容器必须是那个 Box——行层与背景格线同层叠放才谈得上对齐
+            val box = containerOf(gantt, column!!.brace)
+            assertTrue(
+                "Gantt 行层的 Column 不在 Box 里了：背景格线与行层得是同一个 Box 的两子项",
+                box?.name == "Box",
+            )
+            val end = matchingClose(gantt, box!!.brace)
+                ?: throw AssertionError("Gantt 的 Box 花括号配不上对，解析器该修了")
+            val boxBody = gantt.substring(box.brace, end)
+            assertTrue(
+                "背景格线不在行层所在的 Box 里（GanttRowPitch * visibleRows.size 那层）",
+                "GanttRowPitch * visibleRows.size" in boxBody,
+            )
+        }
+    }
+
+    @Test
+    fun ganttRowAndGridlineLayersShareWeightsAndPitch() {
+        val gantt = chartBody("fun CourseWeekGantt(")
+        // 刻度行 / 背景层 / 行层，三层都用同一组权重切两列：任何一侧自己加 padding
+        // 或改权重，格线就和轨道条错开
+        assertEquals(
+            "weight(GanttLabelWeight) 的处数变了：加的那一层还和背景格线逐像素对齐吗",
+            3,
+            allOccurrences(gantt, "weight(GanttLabelWeight)").size,
+        )
+        assertEquals(
+            "weight(GanttTrackWeight) 同上",
+            3,
+            allOccurrences(gantt, "weight(GanttTrackWeight)").size,
+        )
+        // 背景高 = pitch × 实际渲染行数、行高 = pitch：展开/折叠切换后不留空白的那对口径
+        assertTrue("背景格线高度不再是 GanttRowPitch * visibleRows.size", "GanttRowPitch * visibleRows.size" in gantt)
+        assertTrue("Gantt 行高不再是 GanttRowPitch", ".height(GanttRowPitch)" in gantt)
+    }
+
+    @Test
+    fun noComposableLoopLiesBareInsideBox() {
+        for (signature in listOf("fun CourseWeekGantt(", "fun WeekFreeHeatGrid(", "fun WeeklyLoadTrendChart(")) {
+            val body = chartBody(signature)
+            val hits = allOccurrences(body, ".forEach") + allOccurrences(body, ".forEachIndexed")
+            assertTrue("$signature 里一个 forEach 都没有：靶子改名了，这条守卫要跟着改", hits.isNotEmpty())
+            for (at in hits) {
+                val container = containerOf(body, at)
+                assertTrue(
+                    "$signature 有个循环直躺在 Box 里（第 ${body.substring(0, at).count { it == '\n' } + 1} 行）：" +
+                        "Box 子项全叠 top-start，这是 T54 同族的布局 bug",
+                    container?.name != "Box",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun heatGridHeaderNamesBothAxes() {
+        val heat = chartBody("fun WeekFreeHeatGrid(")
+        val missing = listOf("列 = 节次", "行 = 周几").filterNot { it in heat }
+        assertTrue(
+            "热力格表头丢了轴标注：「第 4周」紧跟「1 2 3…」会被读成 1..14 是周次，" +
+                "那行数字其实是节次（T54 装机反馈）。缺：$missing",
+            missing.isEmpty(),
+        )
+    }
+
     // ---- 靶子定位与词法小工具（与 DayTimelineStructureGuardTest 同族） ----------------
 
     /** ScheduleCharts.kt 里指定组件的函数体（注释已抹，字符串保留） */
@@ -116,6 +201,62 @@ class StatsChartsStructureGuardTest {
             dir = dir?.parentFile
         }
         throw IllegalStateException("找不到 app/src/main/java：当前目录 ${File("").absolutePath}")
+    }
+
+    /** [needle] 在 [hay] 里的全部起点（守卫要数处数、也要逐个查位置，一个命中都不放过） */
+    private fun allOccurrences(hay: String, needle: String): List<Int> {
+        val hits = mutableListOf<Int>()
+        var at = hay.indexOf(needle)
+        while (at >= 0) {
+            hits += at
+            at = hay.indexOf(needle, at + needle.length)
+        }
+        return hits
+    }
+
+    /** 回溯找到的容器：尾随 lambda 的调用名 + 那个开大括号的位置 */
+    private class Container(val name: String, val brace: Int)
+
+    /**
+     * 从 [at] 往前按花括号配平，找包住它的最近一个「调用 + 尾随 lambda」的调用名
+     * （Box / Column / Row / Canvas / clipRect…）。闭括号要回溯配平到它自己的开括号，
+     * 调用名在那之外——`Column(modifier = Modifier.fillMaxWidth()) {` 的紧邻左括号是
+     * fillMaxWidth 的，直接拿它会解出空名字。控制流块（if/else 的 `{`）前面没有
+     * `name(`，跳过继续往上找——不然 else 分支里的循环会被误报成没有容器。
+     */
+    private fun containerOf(code: String, at: Int): Container? {
+        var depth = 0
+        var i = at - 1
+        while (i >= 0) {
+            when (code[i]) {
+                '}' -> depth++
+                '{' -> if (depth == 0) {
+                    var j = i - 1
+                    while (j >= 0 && code[j].isWhitespace()) j--
+                    if (j >= 0 && code[j] == ')') {
+                        var parens = 0
+                        while (j >= 0) {
+                            when (code[j]) {
+                                ')' -> parens++
+                                '(' -> parens--
+                            }
+                            if (parens == 0) break
+                            j--
+                        }
+                    }
+                    if (j > 0 && code[j] == '(') {
+                        var k = j - 1
+                        while (k >= 0 && (code[k].isLetterOrDigit() || code[k] == '_')) k--
+                        val name = code.substring(k + 1, j)
+                        if (name.isNotEmpty()) return Container(name, i)
+                    }
+                } else {
+                    depth--
+                }
+            }
+            i--
+        }
+        return null
     }
 
     /** 把 `//` 与 `/* */` 注释抹成空格（字符串保留、长度与换行位置不变） */

@@ -717,76 +717,81 @@ fun CourseWeekGantt(
                     }
                 }
             }
-            visibleRows.forEach { row ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(GanttRowPitch),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = row.label,
-                        style = MaterialTheme.typography.bodySmall,
-                        // 已结课的那门课名字也跟着淡一档：明度是"还要不要上"的第二通道
-                        color = if (row.finished) scheme.onSurfaceVariant else scheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+            // 行层必须待在 Column 里：Box 的所有子项默认叠在 top-start，
+            // 裸 forEach 会把每一行的名字和轨道全部压到 y=0（T54 装机实测的形状）。
+            // Column 逐行往下排，行高 GanttRowPitch 与背景层的高度口径同一条，逐像素对齐
+            Column(modifier = Modifier.fillMaxWidth()) {
+                visibleRows.forEach { row ->
+                    Row(
                         modifier = Modifier
-                            .weight(GanttLabelWeight)
-                            .padding(end = DesignTokens.spaceS),
-                    )
-                    Box(
-                        modifier = Modifier
-                            .weight(GanttTrackWeight)
-                            .height(GanttBarHeight)
-                            .semantics {
-                                contentDescription = ganttRowDescription(row, totalWeeks, currentWeek)
-                            },
+                            .fillMaxWidth()
+                            .height(GanttRowPitch),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            val width = size.width
-                            val height = size.height
-                            val corner = CornerRadius(height / 2f, height / 2f)
-                            // 轨道：整学期留白会被读成"这里没画"，先铺一层素色（同 WeekDensityStrip）
-                            drawRoundRect(
-                                color = scheme.surfaceVariant,
-                                size = Size(width, height),
-                                cornerRadius = corner,
-                            )
-                            clipRect(right = width * reveal) {
-                                if (row.weeksUnknown) {
-                                    drawDashedLine(
-                                        color = scheme.outline,
-                                        y = height / 2f,
-                                        fromX = 0f,
-                                        toX = width,
-                                        dash = DesignTokens.spaceS.toPx(),
-                                    )
-                                } else {
-                                    row.spans.forEach { span ->
-                                        val (from, to) = ganttSpanFraction(span, totalWeeks)
-                                        // 过去/未来分两档浓度；当前周拿不到就不分——
-                                        // 没有原点时"哪一段过去了"这个问题不成立
-                                        val split = currentWeek?.let {
-                                            ganttWeekStartFraction(it, totalWeeks).coerceIn(from, to)
-                                        } ?: to
-                                        if (split > from) {
-                                            drawRoundRect(
-                                                color = row.color.copy(
-                                                    alpha = if (row.finished) GanttFinishedPastAlpha else GanttPastAlpha,
-                                                ),
-                                                topLeft = Offset(from * width, 0f),
-                                                size = Size((split - from) * width, height),
-                                                cornerRadius = corner,
-                                            )
-                                        }
-                                        if (to > split) {
-                                            drawRoundRect(
-                                                color = row.color.copy(alpha = GanttUpcomingAlpha),
-                                                topLeft = Offset(split * width, 0f),
-                                                size = Size((to - split) * width, height),
-                                                cornerRadius = corner,
-                                            )
+                        Text(
+                            text = row.label,
+                            style = MaterialTheme.typography.bodySmall,
+                            // 已结课的那门课名字也跟着淡一档：明度是"还要不要上"的第二通道
+                            color = if (row.finished) scheme.onSurfaceVariant else scheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .weight(GanttLabelWeight)
+                                .padding(end = DesignTokens.spaceS),
+                        )
+                        Box(
+                            modifier = Modifier
+                                .weight(GanttTrackWeight)
+                                .height(GanttBarHeight)
+                                .semantics {
+                                    contentDescription = ganttRowDescription(row, totalWeeks, currentWeek)
+                                },
+                        ) {
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                val width = size.width
+                                val height = size.height
+                                val corner = CornerRadius(height / 2f, height / 2f)
+                                // 轨道：整学期留白会被读成"这里没画"，先铺一层素色（同 WeekDensityStrip）
+                                drawRoundRect(
+                                    color = scheme.surfaceVariant,
+                                    size = Size(width, height),
+                                    cornerRadius = corner,
+                                )
+                                clipRect(right = width * reveal) {
+                                    if (row.weeksUnknown) {
+                                        drawDashedLine(
+                                            color = scheme.outline,
+                                            y = height / 2f,
+                                            fromX = 0f,
+                                            toX = width,
+                                            dash = DesignTokens.spaceS.toPx(),
+                                        )
+                                    } else {
+                                        row.spans.forEach { span ->
+                                            val (from, to) = ganttSpanFraction(span, totalWeeks)
+                                            // 过去/未来分两档浓度；当前周拿不到就不分——
+                                            // 没有原点时"哪一段过去了"这个问题不成立
+                                            val split = currentWeek?.let {
+                                                ganttWeekStartFraction(it, totalWeeks).coerceIn(from, to)
+                                            } ?: to
+                                            if (split > from) {
+                                                drawRoundRect(
+                                                    color = row.color.copy(
+                                                        alpha = if (row.finished) GanttFinishedPastAlpha else GanttPastAlpha,
+                                                    ),
+                                                    topLeft = Offset(from * width, 0f),
+                                                    size = Size((split - from) * width, height),
+                                                    cornerRadius = corner,
+                                                )
+                                            }
+                                            if (to > split) {
+                                                drawRoundRect(
+                                                    color = row.color.copy(alpha = GanttUpcomingAlpha),
+                                                    topLeft = Offset(split * width, 0f),
+                                                    size = Size((to - split) * width, height),
+                                                    cornerRadius = corner,
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -876,6 +881,14 @@ fun WeekFreeHeatGrid(
     )
 
     Column(modifier = modifier) {
+        // 轴标注：「第 4周」紧贴着「1 2 3…」会被读成"1..14 是周次"——那行数字是节次
+        // （列 = 节次、行 = 周几），表头自己说不清，就在它上面把两根轴点名
+        Text(
+            text = "列 = 节次（数字是第几节）· 行 = 周几",
+            style = MaterialTheme.typography.labelSmall,
+            color = scheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = DesignTokens.spaceXS),
+        )
         // 列头：节次号。与下面的格子同一套"weight + spacedBy(同一条缝)"的分法，才对得齐
         Row(
             modifier = Modifier.fillMaxWidth(),
