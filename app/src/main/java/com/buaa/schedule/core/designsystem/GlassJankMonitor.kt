@@ -97,10 +97,22 @@ object GlassJankMonitor {
             windowStart = now
             when (action) {
                 GlassJankWindowAction.WindowOpen -> Unit
-                GlassJankWindowAction.DebugReport -> Log.d(
-                    TAG,
-                    "frames=$frames jank=$jank jankRate=${if (frames == 0L) 0.0 else jank * 100.0 / frames}",
-                )
+                GlassJankWindowAction.DebugReport -> {
+                    // 字面量 BuildConfig.DEBUG 在这里再挡一道，别当成冗余 if 顺手删：
+                    // DebugReport 只在 debug == true 时由判据内核返回，release 运行时永远走不到
+                    // 这一支，但分支选择取决于运行时的枚举值，R8 折叠不动——没有这道字面量闸门，
+                    // "frames=/jank=/jankRate=" 就留在 release dex 的常量池里（T53 把判据剥成
+                    // 纯函数后真漏进去过）。ReleaseForensicLogSurvivalTest 的反向对照
+                    // DEBUG_ONLY_FRAGMENTS 判的正是 "jankRate=" 在 release 产物里查无此文，
+                    // 它一泄漏，那整个第 3 层「取证行还活着」的证明力就废掉。
+                    // 注意闸门必须是 BuildConfig.DEBUG 字面量本身，局部 val debug 折叠不掉。
+                    if (BuildConfig.DEBUG) {
+                        Log.d(
+                            TAG,
+                            "frames=$frames jank=$jank jankRate=${if (frames == 0L) 0.0 else jank * 100.0 / frames}",
+                        )
+                    }
+                }
                 GlassJankWindowAction.GoodWindow -> lastWindowBad = false
                 GlassJankWindowAction.FirstBadWindow -> lastWindowBad = true
                 GlassJankWindowAction.CooldownHold -> {
