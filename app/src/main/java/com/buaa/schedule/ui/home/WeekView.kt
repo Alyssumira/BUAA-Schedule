@@ -1680,14 +1680,9 @@ private fun NowLinePeriod(
         }
     }
 
-    if (fraction <= 0f || fraction >= 1f) return
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(2.dp)
-            .offset(y = totalHeight * fraction)
-            .background(MaterialTheme.colorScheme.error),
-    )
+    // 画线与"一分钟一跳补成一段滑行"都由共享件负责（理由见 TimelineAxis.kt 的 NowGlideLine）：
+    // 24h 模式与日视图时间轴此前各画一条、各跳一次，收口只收在一处。
+    NowGlideLine(fraction, totalHeight)
 }
 
 /** 固定星期标题栏，与网格日期列共用同一横向滚动状态；今天高亮 */

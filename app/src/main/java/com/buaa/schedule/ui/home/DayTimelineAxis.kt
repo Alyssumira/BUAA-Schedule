@@ -144,6 +144,20 @@ internal fun dayTimelineBlockContains(startMin: Int, endMin: Int, nowMin: Int): 
     nowMin in startMin until endMin
 
 /**
+ * 「现在」线在窗口内的纵向分数：0 = 窗口顶，1 = 窗口底。
+ *
+ * 从 NowLine 的函数体里搬出来（T52③）：这条算式日视图时间轴与周视图 24h 模式共用，
+ * 而"越界怎么取值"决定了线画不画（调用点按 `fraction <= 0f || >= 1f` 直接不画），
+ * 摆在只有 android 依赖的绘制件里就没法在 JVM 上钉住。
+ * 窗口高 ≤0（脏节次表）时取 0 = 不画，与搬动前逐位一致。
+ */
+internal fun nowLineFraction(minuteOfDay: Int, startMin: Int, endMin: Int): Float {
+    val total = endMin - startMin
+    if (total <= 0) return 0f
+    return ((minuteOfDay - startMin).toFloat() / total).coerceIn(0f, 1f)
+}
+
+/**
  * 「现在」线的 15 秒链这一拍要不要跑。
  *
  * 链唯一喂给的是 NowLine 一个组合作用域（块的高亮走分钟级 now 参数），而
