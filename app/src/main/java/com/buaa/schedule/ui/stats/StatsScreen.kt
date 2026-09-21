@@ -28,21 +28,32 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.buaa.schedule.core.designsystem.CourseWeekGantt
 import com.buaa.schedule.core.designsystem.DayLoadBars
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.EmptyState
+import com.buaa.schedule.core.designsystem.GanttRow
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassTopBar
 import com.buaa.schedule.core.designsystem.GlassVariant
+import com.buaa.schedule.core.designsystem.HeatGridDay
 import com.buaa.schedule.core.designsystem.MiniBar
 import com.buaa.schedule.core.designsystem.SectionHeader
+import com.buaa.schedule.core.designsystem.WeekFreeHeatGrid
+import com.buaa.schedule.core.designsystem.WeeklyLoadTrendChart
 import com.buaa.schedule.core.designsystem.courseColor
+import com.buaa.schedule.core.designsystem.coursePlateSceneLuma
+import com.buaa.schedule.core.designsystem.legibleTintPlate
 import com.buaa.schedule.core.designsystem.motionSpec
+import com.buaa.schedule.domain.schedule.CourseWeekSpans
 import com.buaa.schedule.domain.schedule.SemesterStats
+import com.buaa.schedule.domain.schedule.WeekFreeGrid
+import com.buaa.schedule.domain.schedule.WeeklyLoadTrend
 import com.buaa.schedule.ui.ScheduleViewModel
 
 /**
@@ -55,6 +66,8 @@ import com.buaa.schedule.ui.ScheduleViewModel
  * 数字一律来自 [SemesterStats.summarize]（纯 Kotlin，已在 JVM 单测里钉住口径），
  * 本页只负责画与说，不负责算——尤其**不在这里对片段求和算学分**：
  * 一条 Course 只是排课片段，学分开在整门课上，归并口径见 SemesterStats 文件头。
+ * T51 的三张增密图同理：判据在 [CourseWeekSpans] / [WeekFreeGrid] / [WeeklyLoadTrend]
+ * 三个内核里算完，本页只把结果映射成图形入参。
  */
 @Composable
 fun StatsScreen(
@@ -67,6 +80,18 @@ fun StatsScreen(
     val state by viewModel.uiState.collectAsState()
     val summary = remember(state.courses, state.semester, state.timeSlots) {
         SemesterStats.summarize(state.courses, state.semester, state.timeSlots)
+    }
+    // T51 三件套的判据内核：memoize 键与 summary 同一口径（courses/semester 必带，
+    // 吃节次表的再带 timeSlots），外加各内核自己声明的设备事实 currentWeek ——
+    // 全学期重算只在这几个输入真的变了一次时发生，不在组合期反复跑
+    val ganttBoard = remember(state.courses, state.semester, state.currentWeek) {
+        CourseWeekSpans.board(state.courses, state.semester, state.currentWeek)
+    }
+    val freeGrid = remember(state.courses, state.semester, state.timeSlots, state.currentWeek) {
+        WeekFreeGrid.gridOf(state.courses, state.semester, state.timeSlots, state.currentWeek)
+    }
+    val loadTrend = remember(state.courses, state.semester, state.timeSlots, state.currentWeek) {
+        WeeklyLoadTrend.trendOf(state.courses, state.semester, state.timeSlots, state.currentWeek)
     }
     // 柱状图吃的是 7 项平均分钟数；busiest 是 ISO 星期序号（1 = 周一），下标要退一格
     val dayMinutes = remember(summary) { summary.dayLoads.map { it.averageMinutes } }
@@ -108,8 +133,13 @@ fun StatsScreen(
                 ) {
                     CreditHeadline(summary)
                     DayLoadCard(dayMinutes, busiestIndex, summary)
+                    // 趋势紧跟「每周负载」：那张是全学期平均、这张是按周摊开，同一个问题的两半
+                    LoadTrendCard(loadTrend)
                     CreditListCard(summary.perCourse, maxCredit)
+                    WeekCoverageCard(ganttBoard)
                     FreeSlotsCard(summary)
+                    // 逐周的热力格紧跟全学期并集口径的空档卡，两张对着读才知道"这周真空没空"
+                    FreeSlotsGridCard(freeGrid)
                     Spacer(modifier = Modifier.height(DesignTokens.spaceXL))
                 }
             }
@@ -288,10 +318,142 @@ private fun FreeSlotsCard(summary: SemesterStats.SemesterSummary) {
     }
 }
 
+/** 负载趋势：每周上多少分钟、哪周最忙、从哪周开始塌下去（判据在 WeeklyLoadTrend 内核） */
+@Composable
+private fun LoadTrendCard(trend: WeeklyLoadTrend.Trend) {
+    GlassSurface(
+        variant = GlassVariant.PANEL,
+        contentPadding = DesignTokens.spaceL,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM)) {
+            SectionHeader("负载趋势")
+            WeeklyLoadTrendChart(
+                minutes = trend.minutes,
+                totalWeeks = trend.totalWeeks,
+                currentWeek = trend.currentWeek,
+                peakWeek = trend.peakWeek,
+                endings = trend.endings,
+                dataAbsent = !trend.hasAnyWeeksData,
+            )
+            if (!trend.isEmpty) {
+                Text(
+                    text = listOfNotNull(
+                        trend.peakWeek?.let { "最忙的是第 $it 周，约 ${humanMinutes(trend.peakMinutes)}" },
+                        "有课的周平均 ${humanMinutes(trend.averageMinutes)}",
+                        trend.freeWeeks.size.takeIf { it > 0 }?.let { "另有 $it 个整周没课" },
+                        // 节次时长查不到的格贡献 0 分钟：折线只会偏低，偏低这件事得当场说
+                        trend.unschedulablePeriodCellCount.takeIf { it > 0 }
+                            ?.let { "另有 $it 格查不到节次时长，这条线偏低" },
+                    ).joinToString("；"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** 周次覆盖：每门课上到哪一周、中间断不断（判据在 CourseWeekSpans 内核，一行 = 一门课） */
+@Composable
+private fun WeekCoverageCard(board: CourseWeekSpans.Board) {
+    val darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val rows = remember(board, darkTheme) {
+        board.rows.map { coverage ->
+            val tint = courseColor(coverage.course)
+            GanttRow(
+                label = coverage.label,
+                // 课程色块走周视图/日视图同一条推导链（T23/T25b/T29 真机校准的账），不裸铺在玻璃板上
+                color = legibleTintPlate(
+                    tint,
+                    DesignTokens.dayBlockTintAlpha,
+                    coursePlateSceneLuma(tint, darkTheme),
+                ).tint,
+                spans = coverage.spans,
+                weeksUnknown = coverage.weeksUnknown,
+                finished = coverage.finished,
+                endsAtWeek = coverage.lastWeek,
+            )
+        }
+    }
+    GlassSurface(
+        variant = GlassVariant.PANEL,
+        contentPadding = DesignTokens.spaceL,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM)) {
+            SectionHeader("周次覆盖")
+            CourseWeekGantt(
+                rows = rows,
+                totalWeeks = board.totalWeeks,
+                currentWeek = board.currentWeek,
+            )
+            val note = listOfNotNull(
+                board.nextToEnding?.let { "下一门结课的是「${it.label}」，第 ${it.lastWeek} 周" },
+                board.finishedCount.takeIf { it > 0 }?.let { "已有 $it 门课结课" },
+                // 周次未知的行画的是虚线轨道，不是空轨道——文字要跟上这个区分
+                board.unknownCount.takeIf { it > 0 }?.let { "另有 $it 门课没有周次数据，画成虚线" },
+            ).joinToString("；")
+            if (note.isNotEmpty()) {
+                Text(
+                    text = note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** 空档分布：这一周每个（周几 × 节次）格空不空，逐格判定（判据在 WeekFreeGrid 内核） */
+@Composable
+private fun FreeSlotsGridCard(grid: WeekFreeGrid.Grid) {
+    val days = remember(grid) {
+        grid.dayRows.map { day ->
+            HeatGridDay(
+                label = "周${weekdayChar(day.dayOfWeek)}",
+                occupiedPeriods = day.occupiedPeriods,
+                isEmptiest = grid.freeDayOfWeek == day.dayOfWeek,
+            )
+        }
+    }
+    val periodLabels = remember(grid) { grid.rows.map { it.period.toString() } }
+    GlassSurface(
+        variant = GlassVariant.PANEL,
+        contentPadding = DesignTokens.spaceL,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM)) {
+            SectionHeader("空档分布")
+            WeekFreeHeatGrid(
+                days = days,
+                periodLabels = periodLabels,
+                currentWeek = grid.week,
+            )
+            val scope = grid.week?.let { "第 $it 周" } ?: "全学期"
+            val note = listOfNotNull(
+                grid.freeDayOfWeek?.let { "${scope}最空的是周${weekdayChar(it)}" },
+                grid.freePeriods.takeIf { it.isNotEmpty() }
+                    ?.joinToString("、") { "第 $it 节" }
+                    ?.let { "$it 整周不落课" },
+                // 作息表被裁剪时确实有"有课却画不出的格"：不说的图是在撒谎
+                grid.offProfilePeriodCount.takeIf { it > 0 }
+                    ?.let { "另有 $it 格的节次不在作息表里，未画出" },
+            ).joinToString("；")
+            if (note.isNotEmpty()) {
+                Text(
+                    text = note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
 // ---- 文案换算 ----
 
-private fun weekdayChar(dayOfWeek: Int): String =
-    "一二三四五六日".getOrElse(dayOfWeek - 1) { '?' }.toString()
+private fun weekdayChar(dayOfWeek: Int): String =    "一二三四五六日".getOrElse(dayOfWeek - 1) { '?' }.toString()
 
 /** 分钟数说成人话：不足一小时只说分钟，整点只说小时 */
 private fun humanMinutes(minutes: Long): String {
