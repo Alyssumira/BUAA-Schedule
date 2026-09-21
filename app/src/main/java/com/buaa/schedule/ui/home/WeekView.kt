@@ -1468,8 +1468,9 @@ private val dragEdgeMaxSpeed = 14.dp
 /** 卡片没压在边缘上时的轮询间隔：手指可能随时把它移过去，但不用每帧都问 */
 private const val DRAG_IDLE_TICK_MS = 32L
 
-/** 进入本周时把「现在」停在视口的这个位置——0.35 = 上三分之一，而不是紧贴顶边 */
-private const val NOW_VIEWPORT_FRACTION = 0.35f
+/** 进入本周时把「现在」停在视口的这个位置——0.35 = 上三分之一，而不是紧贴顶边。
+ *  internal：日视图时间轴的自动滚动（T49-C）落点要和周视图同一个口径 */
+internal const val NOW_VIEWPORT_FRACTION = 0.35f
 
 /** 每一档重叠让出的横向距离：够看见前面那张卡的边缘，又不至于把卡压成一条 */
 private val conflictStaggerStep = 8.dp

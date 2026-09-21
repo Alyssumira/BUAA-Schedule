@@ -11,7 +11,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -45,6 +47,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -52,8 +55,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -438,6 +445,8 @@ private fun DayScreen(
                         DayTimelineCourseList(
                             rows = rows,
                             periodTimes = periodTimes,
+                            isToday = isToday,
+                            now = now,
                             onClick = onCourseClick,
                         )
                     } else {
@@ -506,11 +515,21 @@ private fun buildDayRows(
  */
 private const val BlockTintAlpha = DesignTokens.dayBlockTintAlpha
 
-/** 日视图时间网格：按真实时间线性定位的课程时间轴 */
+/** 日视图时间网格：按真实时间线性定位的课程时间轴（T49 重做）
+ *
+ * 真机镜像实测（buaa36，周一 10:44、当天 5 节课）此前的问题逐条对位：
+ * 左侧小时刻度列＋整点网格线（"看不出这是时间轴"）、NowLine 与 15 秒链
+ * （"全天看不出此刻在哪"）、进入时自动把"现在"滚进视野（"先看到 08:00 的空档"）、
+ * 课间虚线＋「课间 N 分钟」（"一两小时的空白像渲染坏了"）。
+ * 判据（窗口吸附/刻度位置/滚动落点/课间分段/当前块命中）全部在 DayTimelineAxis.kt，
+ * 零 android、纯 JVM 可测；这里只做摆放。
+ */
 @Composable
 private fun DayTimelineCourseList(
     rows: List<DayCourseRow>,
     periodTimes: Map<Int, Pair<LocalTime, LocalTime>>,
+    isToday: Boolean,
+    now: LocalTime,
     onClick: (Course) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -518,33 +537,162 @@ private fun DayTimelineCourseList(
         Text("节次时间未配置", modifier = modifier, color = MaterialTheme.colorScheme.onSurfaceVariant)
         return
     }
-    val minStart = periodTimes.values.minOf { it.first }
-    val maxEnd = periodTimes.values.maxOf { it.second }
-    val totalMinutes = java.time.Duration.between(minStart, maxEnd).toMinutes().toInt().coerceAtLeast(1)
+    // 窗口整点吸附的推导与理由见 [dayTimelineWindow]：刻度列是每整点一格，不吸附刻度对不上。
+    val window = remember(periodTimes) {
+        dayTimelineWindow(periodTimes.values.minOf { it.first }, periodTimes.values.maxOf { it.second })
+    }
     // 1.05dp/分钟：45 分钟 ≈47dp，刚好贴着 48dp 触控下限——再矮就得靠补齐高度，
     // 而补齐会让相邻两节课互相压住。推导见 [DesignTokens.dayHeightPerMinute]。
     val heightPerMinute = DesignTokens.dayHeightPerMinute
-    val totalHeight = heightPerMinute * totalMinutes.toFloat()
+    // 时高/总高都从 hourHeight 出发：刻度格、网格线、块定位共用同一把尺，
+    // 周视图 24h 模式就是这么算的（WeekView 的 gridHeight 与卡片 top 同一来源）
+    val hourHeight = heightPerMinute * 60f
+    val totalHeight = hourHeight * ((window.endMin - window.startMin) / 60f)
+
+    // 块的起止分钟：刻度、课间、当前态、滚动落点都吃这一份，
+    // 不再各自把 periodTimes 解析一遍（周视图为此专门立了 TimeSlotIndex，同一动机）
+    val blocks = remember(rows, periodTimes) {
+        rows.mapNotNull { row ->
+            val start = periodTimes[row.segment.first]?.first ?: return@mapNotNull null
+            val end = periodTimes[row.segment.last]?.second ?: return@mapNotNull null
+            DayTimelineBlock(
+                row = row,
+                start = start,
+                end = end,
+                startMin = start.hour * 60 + start.minute,
+                endMin = end.hour * 60 + end.minute,
+            )
+        }
+    }
+    val hourLineOffsets = remember(window) {
+        dayTimelineHourLineOffsets(window, heightPerMinute.value.toDouble())
+    }
+    val gaps = remember(blocks) { dayTimelineGaps(blocks.map { IntRange(it.startMin, it.endMin) }) }
+    // 分钟级"现在"：与 Hero/倒计时同源（DayScreen 传下来的 now），块的当前态
+    // 只在整分钟边界翻面，跟着分钟就够，不必蹭 15 秒节奏
+    val nowMinuteOfDay = timelineMinuteOfDay(now)
+
+    // 「现在」线的实时度走 15 秒一档（TIMELINE_TICK_MS），且只喂给 NowLine 一个组合作用域：
+    // 周视图同族做法（WeekView 把 nowTickState 作为 State 传下去，普通卡片不读它）。
+    // 若在列表本体读这个 State，每 15 秒整条时间轴连同全部色块一起重组。
+    val nowLineTick = remember { mutableStateOf(LocalTime.now()) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                // 先发布再等边界、一次读取两处共用——理由见 NowTick.kt 的 nextTickDelayMillis
+                val current = LocalTime.now()
+                nowLineTick.value = current
+                delay(nextTickDelayMillis(current, TIMELINE_TICK_MS))
+            }
+        }
+    }
+
+    // —— 进入模式即把"现在"滚进视野 ——
+    // scrollTo 挂在 effect 里、先于首帧呈现执行（Compose 首组：applyChanges → effects → 绘制），
+    // 所以没有"先跳顶再滚"的闪烁；周视图 :623 那整条链就是这样落地的。
+    // scrolledToNow 用 remember 而非 rememberSaveable：Crossfade 在切模式时会销毁另一侧，
+    // 标记天然随"这一次进入时间轴"重置——隔一会儿再切回来，课已经上了一截，
+    // 理应重新对齐现在，而不是尊重一个上一轮的停留位。
+    val scrollState = rememberScrollState()
+    val density = LocalDensity.current
+    var viewportHeightPx by remember { mutableIntStateOf(0) }
+    var scrolledToNow by remember { mutableStateOf(false) }
+    LaunchedEffect(viewportHeightPx) {
+        if (scrolledToNow || viewportHeightPx == 0) return@LaunchedEffect
+        scrolledToNow = true
+        // 别的日子没有"现在"可对：留在顶部，从第一节看起（全 past/全 future 的落点判据见锚点函数）
+        if (!isToday) return@LaunchedEffect
+        val anchor = dayTimelineAnchorMinute(
+            nowMinuteOfDay,
+            window,
+            blocks.map { IntRange(it.startMin, it.endMin) },
+        )
+        scrollState.scrollTo(
+            dayTimelineScrollTargetPx(
+                anchor,
+                window,
+                with(density) { heightPerMinute.toPx() },
+                viewportHeightPx,
+            ),
+        )
+    }
+
+    val lineColor = MaterialTheme.colorScheme.outlineVariant
+    val gapTextColor = MaterialTheme.colorScheme.onSurfaceVariant
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
+            .onSizeChanged { viewportHeightPx = it.height },
     ) {
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(totalHeight),
+                .verticalScroll(scrollState),
         ) {
-            rows.forEach { row ->
-                val course = row.course
-                val start = periodTimes[row.segment.first]?.first
-                val end = periodTimes[row.segment.last]?.second
-                if (start != null && end != null) {
-                    val y = heightPerMinute *
-                        java.time.Duration.between(minStart, start).toMinutes().toFloat()
-                    val blockHeight = (heightPerMinute *
-                        java.time.Duration.between(start, end).toMinutes().toFloat().coerceAtLeast(0.5f))
+            // 左侧小时刻度列：与周视图 24h 模式同一件控件（TimelineAxis.kt，T49 提取）
+            Box(modifier = Modifier.width(DesignTokens.weekTimeColumnWidth)) {
+                HourLabels(window.startMin / 60, window.endMin / 60, hourHeight)
+            }
+            Spacer(modifier = Modifier.width(DesignTokens.spaceS))
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(totalHeight),
+            ) {
+                // 整点横线：走主题 outlineVariant，不写死灰
+                hourLineOffsets.forEach { yDp ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .offset(y = yDp.dp)
+                            .background(lineColor),
+                    )
+                }
+                // 课间：≥20 分钟画虚线、≥30 分钟追加文字（阈值与并块理由见 dayTimelineGaps）。
+                // 画在课程块之下：课间按定义没有块盖着它，但重叠容错不该依赖这个假设。
+                gaps.forEach { gap ->
+                    val gapMidY = hourHeight * ((gap.startMin + gap.endMin) / 2f - window.startMin) / 60f
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .offset(y = gapMidY),
+                    ) {
+                        drawLine(
+                            color = lineColor,
+                            start = Offset.Zero,
+                            end = Offset(size.width, 0f),
+                            strokeWidth = 1.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(
+                                floatArrayOf(4.dp.toPx(), 4.dp.toPx()),
+                            ),
+                        )
+                    }
+                    if (gap.minutes >= DAY_GAP_LABEL_MIN_MINUTES) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .offset(y = gapMidY + 3.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "课间 ${gap.minutes} 分钟",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = gapTextColor,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+                blocks.forEach { block ->
+                    val course = block.row.course
+                    val y = hourHeight * ((block.startMin - window.startMin) / 60f)
+                    val blockHeight = (
+                        hourHeight * ((block.endMin - block.startMin).coerceAtLeast(1) / 60f)
+                        )
                         // 短节次按真实比例只有十几 dp，补到触控下限。
                         // 因为比例已经是 1.05dp/分钟，正常的 45 分钟课只多出不到 1dp，
                         // 不会出现"上一节的色块压住下一节"。
@@ -555,27 +703,46 @@ private fun DayTimelineCourseList(
                     // 所以场景亮度与周视图课程卡取同一个口径（最不利分块，不是 surface）。
                     // 用主题的 onSurface 时，深色主题下那是近白色，
                     // 压在亮黄/亮绿的时间块上几乎看不见。
+                    // （T23/T25b/T29 用真机数据校准出的这条推导链不许动，T49 只改形状。）
                     val darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
-                    val block = legibleTintPlate(
+                    val plate = legibleTintPlate(
                         blockColor,
                         BlockTintAlpha,
                         coursePlateSceneLuma(blockColor, darkTheme),
                     )
-                    val onBlock = block.foreground
+                    val onBlock = plate.foreground
                     // 圆角与周视图课程格同一令牌：同一个"课程"在两个视图里不该是两种形状
                     val blockShape = RoundedCornerShape(DesignTokens.cornerCourse)
+                    // 正在上的那一节：可辨识的当前态不只靠颜色——描边从 1dp 加到 2dp
+                    // 并换成与「现在」线同族的 error 色，几何（线宽）是第二通道
+                    val isCurrent = isToday &&
+                        dayTimelineBlockContains(block.startMin, block.endMin, nowMinuteOfDay)
                     val blockModifier = Modifier
                         .offset(y = y)
                         .height(blockHeight)
                         .fillMaxWidth()
                         .padding(horizontal = 2.dp)
+                        // 1dp 投影：块从"平贴网格线的色卡"变成浮在轴上的物体。
+                        // 不套 GlassSurface——用户实测口径是大面积厚玻璃板丑，这里数量多、
+                        // 尺寸中等，收口只做描边＋轻投影，对比度仍由 tint plate 推导链负责。
+                        .shadow(elevation = 1.dp, shape = blockShape)
                         .clip(blockShape)
-                        .background(block.tint.copy(alpha = block.alpha), blockShape)
+                        .background(plate.tint.copy(alpha = plate.alpha), blockShape)
+                        .border(
+                            width = if (isCurrent) 2.dp else 1.dp,
+                            color = if (isCurrent) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                blockColor.copy(alpha = 0.55f)
+                            },
+                            shape = blockShape,
+                        )
                         .clickable { onClick(course) }
                         .padding(horizontal = 6.dp, vertical = 3.dp)
                     Box(modifier = blockModifier, contentAlignment = Alignment.TopStart) {
                         // 色块按真实时长定位，装不下就不画那一行：
                         // 挤出去的第三行会把课程名顶没，反而更看不清。
+                        // （38/58dp 两档是按 1.05dp/分钟标定的既有口径，本卡不动。）
                         Column {
                             Text(
                                 text = course.displayName,
@@ -586,7 +753,8 @@ private fun DayTimelineCourseList(
                             )
                             if (blockHeight >= 38.dp) {
                                 Text(
-                                    text = "${hhmm(start)}–${hhmm(end)} · ${periodLabel(row.segment)}",
+                                    text = "${hhmm(block.start)}–${hhmm(block.end)} · " +
+                                        periodLabel(block.row.segment),
                                     style = MaterialTheme.typography.labelMedium,
                                     color = onBlock,
                                     maxLines = 1,
@@ -597,7 +765,7 @@ private fun DayTimelineCourseList(
                                 Text(
                                     text = course.location ?: "教室未定",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = block.secondaryForeground,
+                                    color = plate.secondaryForeground,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
@@ -605,10 +773,29 @@ private fun DayTimelineCourseList(
                         }
                     }
                 }
+                // 「现在」线压在块之上（周视图的 z 序也是如此：线在最后画）。
+                // 越界不画的边界行为就长在 NowLine 自己的 fraction≤0/≥1 判断里，
+                // 与周视图逐字一致，由共享组件本身保证，两个视图不会再各改各的。
+                NowLine(
+                    visible = isToday,
+                    startMin = window.startMin,
+                    endMin = window.endMin,
+                    totalHeight = totalHeight,
+                    nowTickState = nowLineTick,
+                )
             }
         }
     }
 }
+
+/** 时间轴上的一个课程块：起止墙钟 + 当日分钟数（摆放与判据共用一份解析结果） */
+private class DayTimelineBlock(
+    val row: DayCourseRow,
+    val start: LocalTime,
+    val end: LocalTime,
+    val startMin: Int,
+    val endMin: Int,
+)
 
 /**
  * 当前/下一节课 Hero 摘要卡（仅今日显示）。
