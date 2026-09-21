@@ -527,6 +527,60 @@
       同族形状（Box 里裸 `forEach`）只有这一处，守卫泛扫三张图钉住这一类。
       守卫：`StatsChartsStructureGuardTest` +4 条（行层必须在 Column 且与格线同 Box、
       三层权重各 3 处 + 格线高=pitch×行数、三图泛扫、轴标注零命中即失败）。
-      门禁：**1144 单测 / 140 套件 / 0 失败**（skipped 2 是
-      `ReleaseForensicLogSurvivalTest` 在没有 release APK 的工作区里的既有产物层跳过），
+      门禁：**1144 单测 / 140 套件 / 0 失败**（当时那 2 枚 skipped 被记成
+      「没有 release APK 的工作区里的既有产物层跳过」——**这个口径下一节被证伪**，见 T57），
       lint **0 error / 14 warning**（与基线同一组，无新增）。
+
+- [x] 「现在」线收进课程卡之下（T55，2026-09-22，`fb5b41e`+`3bd8cfe`，装机复核暴露）：
+      时间轴与周课表两处的 `NowLine` 都是那个 `Box` 的**最后一个子项**，排在课程块/七天列之后，
+      于是 2dp 红线从卡名中间横过去——装机实测（buaa36，周一 17:41）时间轴把「思想政治」
+      四个字划了一道，周课表第 10 节三张卡各被划一道。Box 子项按声明顺序叠放，
+      所以修法就是把线的声明挪到块/列之前（`DayView.kt:769`、`WeekView.kt:744`）：
+      卡片盖住线、文字一处不碰，而课间与空列照旧把线整段露出来，「现在」的信号留在空档处。
+      没做区间镂空——玻璃卡画的是 `LocalSharedCourseBackdrop` 烘焙的整屏前缀，线在卡下不透出来，
+      降级档板 alpha=0.92 也只透 8%，镂空是为一个看不到的东西加一层账。取色链与动画规格不动。
+      守卫：`NowLineUnderCardsGuardTest` 4 条（两视图各钉「线在课程块之前、且在整点线之后」、
+      调用点各恰一处、旧注释「线在最后画」不许再出现）。本模块没有 Robolectric，
+      只能钉声明顺序这一层，真正的像素结论交装机。
+      ⚠️ 留两笔同类残账：`ScheduleCharts.kt:357` 学期统计的今日时段带也是「线最后画」，
+      但那里压的是 8dp 色条、没有文字，观感影响小；今日页时间轴的**课间文字标签**
+      （「课间 115 分钟」）仍可能被线横穿（线在课间层之上）——收它要牺牲空档处的可见性，是设计口径不是 bug。
+
+- [x] 浏览周次时顶栏第二行的日期跟着那一周（T56，2026-09-22，`da5c1b9`+`bf917e6`）：
+      第一行 `weekHeadline` 跟着 `browseWeek` 走，第二行 `todayLabel` 却永远写今天，
+      装机实测「第3周（浏览）」下面挂着「9月21日 星期一」，而 9/21 正是第 4 周的周一
+      （网格表头自己就写着 9/14–9/20）——两行自相矛盾，用户读成 app 算错了周。
+      周→日期这条算式在仓里原本各写一份（周课表表头内联、桌面组件 `weekRange`、组件跳周链），
+      收成一份 `domain/schedule/SemesterWeekDates.kt`（锚点归一仍只走 `WeekCalculator.mondayOf`，
+      不新增第二套锚点算法），`WidgetCommon.weekRange` 改为一行委托，于是顶栏与组件副标题
+      报的必定是同一段日期；`week < 1` 从「凭空算出开学前的日期」变成返回 null 走调用方兜底。
+      派生逻辑剥进零 android import 的 `ui/home/TopBarDateLabel.kt`：跟随模式（`browseWeek` 为 null
+      或翻回当前周）仍报今天、格式与 locale 逐字符不变，学期读不到时也退回今天不猜。
+      `remember` 的键列全四个入参——漏 `browseWeek` 就是翻周日期停在今天（本卡修的正是它），
+      漏学期/今天就是换学期、跨午夜仍显示旧日期（T41/T43 同类坑）。
+      ⚠️ `WeekView.kt:237` 表头那份内联算式**尚未收口**（本卡文件边界所限），
+      「全仓一份」目前是两处已收、一处未收。
+      守卫：`SemesterWeekDatesTest` 5 + `TopBarDateLabelTest` 5（跨年学期、开学日在周中、
+      `browseWeek` 为 null/0/越上界、当前周恰为第 1 周）+ `TopBarDateWiringGuardTest` 4。
+
+- [x] `jankRate=` 泄漏进 release dex，产物层反向对照复活（T57，2026-09-22，`205cc77`）：
+      T55/T56 合进 master 后整树门禁 **1162 条里真红 1 条**：
+      `ReleaseForensicLogSurvivalTest.minifiedDexStillCarriesEveryForensicLine`。
+      该文件的 `DEBUG_ONLY_FRAGMENTS = ["GlassDiag", "jankRate="]` 是**反向对照**——
+      这两串在 release 产物里必须查无此文，它们「不在」才证明读到的是真被 R8 折叠过
+      `BuildConfig.DEBUG` 分支的 minified 产物，同一文件里那些「取证行还活着」的断言才有证明力。
+      根因是 T53 的副作用：那条日志原先长在 `if (BuildConfig.DEBUG)` 里，连分支带字符串一起被删；
+      判据剥成纯函数后分支取决于**运行时枚举值**，R8 折叠不动，字符串就留在常量池里。
+      运行时行为本来就是对的（内核只在 `debug == true` 时返回 `DebugReport`，release 永远走不到），
+      纯粹是产物里多带一具走不到的身体。修法：调用点用**字面量** `BuildConfig.DEBUG` 再挡一道
+      （局部 `val debug` 折叠不掉，注释里点明），判据内核一个字不动，
+      **不许**靠放宽 `DEBUG_ONLY_FRAGMENTS` 变绿。
+      直接证据（对 `classes*.dex` 按字节搜）：`jankRate=` 有→无、`GlassDiag` 两边均无、
+      同支的 `frames=` 与 ` jank=` 一并折掉。
+      ⚠️ **方法学订正（本卡真正的产出）**：这条红之所以每一轮都没报，是因为第 3 层断言
+      「没有 release 产物就 `assumeTrue` 跳过」，而 worktree 里从来没有产物——
+      之前把「2 skipped」记成"环境性、不是代码问题"是**错的**，那两枚 skip 正好盖住了它。
+      门禁顺序从此钉死：`:app:assembleRelease` **必须排在** `:app:testDebugUnitTest` 前面，
+      收单时看 skipped 计数而不是只看 failures。worktree 没有签名口令时产出的是
+      `app-release-unsigned.apk`，测试按 `*.apk` 通配取第一个，照样吃得到，别以为构建坏了。
+      门禁（顺序合规）：**1162 单测 / 144 套件 / 0 失败 / 0 skipped**，lint **0 error / 14 warning**。
