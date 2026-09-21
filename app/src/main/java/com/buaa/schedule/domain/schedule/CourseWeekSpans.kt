@@ -32,6 +32,8 @@ object CourseWeekSpans {
      * 一门课（按 [SemesterStats.courseGroupKey] 归并）的周次覆盖。
      *
      * @param groupKey 课程身份键，仅用于稳定排序与调试，界面不显示
+     * @param course 组内第一个片段：只为展示层取颜色（`courseColor` 要读整条片段上的
+     *   `customColorArgb` / `colorIndex`），名字一律读 [label]，别再各自派生一遍
      * @param label 课程显示名（别名优先，见 `Course.displayName`）
      * @param spans 该课实际在上的周次区间，**升序、两两不相邻也不重叠**：
      *   连续周次并成一段，单周 `{1,3,5}` 这类就是三段（不为"好看"把中间的空周并进去）
@@ -45,6 +47,7 @@ object CourseWeekSpans {
      */
     data class Coverage(
         val groupKey: String,
+        val course: Course,
         val label: String,
         val spans: List<IntRange>,
         val firstWeek: Int?,
@@ -113,6 +116,7 @@ object CourseWeekSpans {
             val lastWeek = inRangeWeeks.maxOrNull()
             Coverage(
                 groupKey = key,
+                course = fragments.first(),
                 label = fragments.first().displayName,
                 spans = spansOf(inRangeWeeks),
                 firstWeek = inRangeWeeks.minOrNull(),

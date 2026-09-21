@@ -42,6 +42,16 @@ object WeekFreeGrid {
     }
 
     /**
+     * 一天一行的转置视图（[Grid.dayRows]）：界面按"周几 × 节次"画，
+     * 与首页周课表同一个朝向，用户不用在脑子里把矩阵翻一遍。
+     */
+    data class DayRow(val dayOfWeek: Int, val occupiedPeriods: List<Boolean>) {
+        val occupiedCount: Int get() = occupiedPeriods.count { it }
+        val freeCount: Int get() = occupiedPeriods.size - occupiedCount
+        val isFree: Boolean get() = occupiedPeriods.none { it }
+    }
+
+    /**
      * [gridOf] 的结果。
      *
      * @param week 判定的教学周；null 表示原点缺失，此时 [rows] 是全学期并集口径
@@ -71,6 +81,12 @@ object WeekFreeGrid {
         val cellCount: Int get() = rows.size * SemesterStats.TOTAL_DAYS
         val freeCellCount: Int get() = cellCount - occupiedCellCount
         val emptyWeek: Boolean get() = occupiedCellCount == 0 && offProfilePeriodCount == 0
+
+        /** 转置视图：恒 7 项，下标 0 = 周一（界面按"周几 × 节次"画，见 [DayRow]） */
+        val dayRows: List<DayRow>
+            get() = (1..SemesterStats.TOTAL_DAYS).map { day ->
+                DayRow(dayOfWeek = day, occupiedPeriods = rows.map { row -> row.occupiedDays[day - 1] })
+            }
     }
 
     /**
