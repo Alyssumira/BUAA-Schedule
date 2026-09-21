@@ -129,7 +129,7 @@ object GlassJankMonitor {
         // setContent 之前就地注册，实测整条链是死的（T52 基线：debug 包同一进程 GlassDiag
         // 1197 行、GlassJank 0 行、ps -T 里没有 FrameMetrics 线程），而 runCatching 把
         // 注册异常吞得看不见。机制取证（本机唯一带实现的 sources 包 android-37.0，
-        // 完整命令与结论在判据单测 GlassJankDecisionTest 的类注释和 T53 提交消息里）：
+        // 完整命令与结论在 GlassJankMonitorWiringGuardTest 的类注释和 T53 提交消息里）：
         // 平台链 View.addFrameMetricsListener → FrameMetricsObserver → HardwareRendererObserver
         // 现在对 null Handler 直接抛 NPE（HardwareRendererObserver.java:69），老的「null 就
         // 自起 FrameMetrics HandlerThread」兜底已删；Window 层另有一条 decor 为空抛
