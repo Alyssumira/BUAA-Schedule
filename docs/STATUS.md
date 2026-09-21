@@ -353,3 +353,12 @@
       ⚠️ 口径：这 −18% 是 **release + profile** 那一档的账，T18 的 −11.4%
       （`docs/PERF-STARTUP-2026-09-19.md` §8 ①）是 **debug 双版本**的账 —— ART 不对 debuggable 包做
       `speed-profile`，profile 那一笔进不了它的差值。两档各算各的，**不可相加**。
+
+- [x] 今日课表长课名不再把状态胶囊挤出卡外（T48，2026-09-21，用户反馈「课程标题太长时排版出 bug」）：
+      `DayView.CourseTimelineCard` 课名/胶囊同排互抢——`Row` 按顺序把剩余全宽先递给非加权的课名 Text，
+      长名吃满整行后胶囊 maxWidth 归零、被摆到行宽之外，PANEL 底板的 clip 把它整枚裁没。
+      课名收进 `weight(1f, fill = false)`（fill=false 保证短标题行逐像素不动），胶囊文字补锁
+      `maxLines = 1` —— 长标题卡多出的那截竖向空隙真因就是没锁行数的胶囊在归零宽度下逐字竖排撑高。
+      同族收口：管理页 `CourseGroupCard` 课名补 `maxLines = 1` + 省略号（列本有 weight(1f)）。
+      守卫：`CourseTitleRowBudgetGuardTest` 纯 JVM 扫主源码钉死「同排课名 Text 必须带 weight/maxLines」
+      （负向验证过，摘掉 weight 即红）。时间轴模式（`DayTimelineCourseList`）不在本卡范围。
