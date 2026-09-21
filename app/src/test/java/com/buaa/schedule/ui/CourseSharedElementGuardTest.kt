@@ -68,16 +68,18 @@ class CourseSharedElementGuardTest {
         assertTrue("首页 destination 不再供 AnimatedVisibilityScope：从今日页点卡就没有转场作用域", homeProvides)
     }
 
-    /** helper 自己：两个 Local 缺任一个 must 退成空修饰符，而不是 NPE / 静默注册半条链 */
+    /** helper 自己：两个 Local 缺任一个 must 退成原样（扩展写法下 this 就是"空修饰符"），而不是 NPE / 静默注册半条链 */
     @Test
     fun helperDegradesWhenLocalsAreMissing() {
         val code = blankComments(source(HELPER))
+        // ④ 之后 helper 是 Modifier 扩展（compose lint 判红非扩展的 modifier 工厂），
+        // 退化时原样交还接收者：语义与旧版 `?: return Modifier` 逐字等价
         assertTrue(
-            "helper 要对两个 Local 都做 ?: return Modifier（引导页那一支不是 NavHost 的 destination）",
-            code.contains("LocalSharedTransitionScope.current ?: return Modifier") &&
-                code.contains("LocalAnimatedVisibilityScope.current ?: return Modifier"),
+            "helper 要对两个 Local 都做 ?: return this（引导页那一支不是 NavHost 的 destination）",
+            code.contains("LocalSharedTransitionScope.current ?: return this") &&
+                code.contains("LocalAnimatedVisibilityScope.current ?: return this"),
         )
-        assertTrue("courseId 为 null（新增课程）时也要退成空修饰符", code.contains("courseId ?: return Modifier"))
+        assertTrue("courseId 为 null（新增课程）时也要退成原样", code.contains("courseId ?: return this"))
     }
 
     private fun source(relative: String): String {

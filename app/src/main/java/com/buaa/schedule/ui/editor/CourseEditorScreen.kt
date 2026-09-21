@@ -256,7 +256,7 @@ fun CourseEditorScreen(
     BackHandler(enabled = isDraftDirty && !saving) { showDiscardDialog = true }
 
     // 键与写法收口在 courseSharedElementModifier（T52④）；null = 新增课程，那一格没有配对的卡
-    val editorSharedModifier = courseSharedElementModifier(initialCourse?.id)
+    val editorSharedModifier = Modifier.courseSharedElementModifier(initialCourse?.id)
 
     Scaffold(
         modifier = Modifier.fillMaxSize().then(editorSharedModifier),

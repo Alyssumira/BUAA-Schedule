@@ -2,6 +2,7 @@ package com.buaa.schedule.ui.home
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -10,7 +11,9 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -29,7 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -333,6 +336,43 @@ private fun dayAxisTransition(reduceMotion: Boolean, forward: Boolean): ContentT
     )
 }
 
+/**
+ * 列表 ↔ 时间轴的转场（T52①）：一次性的交叉 + 轻微纵向位移，方向由"哪一档进来"决定。
+ *
+ * 口径是"同一张表换了画法"：列表是逐行的、时间轴是沿时间往下铺的，
+ * 所以往时间轴走时新内容从下方 1/20 屏高处进场、旧的往上让；反向整体调转。
+ * 位移取内容高度的分数而不是 dp：两档正文都几乎一屏高，写死 dp 会在矮屏上读成"抖了一下"。
+ *
+ * 时长取 [MotionTokens.DURATION_MEDIUM]（260ms）：换画法改动的是一整块正文，
+ * 不是一枚控件（那一档是 180），也不是翻整一天那种手势级的 140。
+ * 转场 lambda 在组合期外求值，读不到 `LocalReduceMotion`，开关由调用方读出来传进来（§2.7）。
+ *
+ * `sizeTransform(clip = false)`：两侧正文都是 `fillMaxSize`，容器高度由外层
+ * `Crossfade(weight(1f))` 钉死，尺寸本来就不变，所以这一条不影响任何静止像素；
+ * 关裁剪是因为带着位移的那 260ms 里正文底部会被默认的矩形裁掉一截，
+ * 而"换了个画法"不该读成"内容被切了一刀"。
+ */
+private fun dayModeTransition(reduceMotion: Boolean, toTimeline: Boolean): ContentTransform {
+    if (reduceMotion) {
+        return ContentTransform(
+            targetContentEnter = EnterTransition.None,
+            initialContentExit = ExitTransition.None,
+            sizeTransform = SizeTransform(clip = false),
+        )
+    }
+    // +1 = 新内容从下方进场、旧的往上退；反向整体取负
+    val enterShift = if (toTimeline) 1 else -1
+    val fadeSpec = motionSpecFor<Float>(reduceMotion, MotionTokens.DURATION_MEDIUM)
+    val slideSpec = motionSpecFor<IntOffset>(reduceMotion, MotionTokens.DURATION_MEDIUM)
+    return ContentTransform(
+        targetContentEnter = fadeIn(fadeSpec) +
+            slideInVertically(slideSpec, initialOffsetY = { enterShift * it / 20 }),
+        initialContentExit = fadeOut(fadeSpec) +
+            slideOutVertically(slideSpec, targetOffsetY = { -enterShift * it / 20 }),
+        sizeTransform = SizeTransform(clip = false),
+    )
+}
+
 /** 页头副行的周次口径：Crossfade 里的每一天都要自己算，不能沿用外层那一天的结果 */
 private fun weekTextFor(semester: Semester?, semesterStart: LocalDate?, date: LocalDate): String {
     val week = semester?.let { s ->
@@ -366,6 +406,8 @@ private fun DayScreen(
     onCourseClick: (Course) -> Unit,
 ) {
     val isToday = date == today
+    // 转场 lambda 不在组合期求值，读不到 LocalProvide，开关在这里读一次传进去（§2.7）
+    val reduceMotion = LocalReduceMotion.current
     val week = semester?.let { s ->
         semesterStart?.let { start ->
             WeekCalculator.currentWeekOrNull(start, s.totalWeeks, date)
@@ -435,11 +477,11 @@ private fun DayScreen(
                     }
                 }
             } else {
-                // 列表 / 时间轴切换也做淡入淡出，保持与首页周/日切换一致的操作质感
-                Crossfade(
+                // 列表 / 时间轴切换：一次性的交叉 + 轻微纵向位移，读成"同一张表换了画法"（T52①）
+                AnimatedContent(
                     targetState = timelineMode,
-                    // 与首页周/日切换同源：默认 1000ms 且不读 reduce-motion
-                    animationSpec = motionSpec<Float>(),
+                    transitionSpec = { dayModeTransition(reduceMotion, toTimeline = targetState) },
+                    label = "DayViewMode",
                     modifier = Modifier.fillMaxSize().padding(top = DesignTokens.spaceM),
                 ) { timeline ->
                     if (timeline) {
@@ -451,10 +493,16 @@ private fun DayScreen(
                             onClick = onCourseClick,
                         )
                     } else {
+                        // 卡片进场（T52②）：一条驱动按行次切窗口，第一次进入今日列表播一遍
+                        val entrance = rememberCourseEntrance(EntrancePlaybook.DAY_LIST)
                         LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
                             verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
                         ) {
-                            items(rows, key = { "${it.course.id}-${it.segment.first}" }) { row ->
+                            itemsIndexed(
+                                items = rows,
+                                key = { _, row -> "${row.course.id}-${row.segment.first}" },
+                            ) { index, row ->
                                 CourseTimelineCard(
                                     course = row.course,
                                     status = row.status,
@@ -463,7 +511,11 @@ private fun DayScreen(
                                     timeSlots = timeSlots,
                                     onClick = { onCourseClick(row.course) },
                                     // 换日期/删课/挪课时整批行不会瞬间替换（items 有稳定 key 才能生效）
-                                    modifier = Modifier.animateItem(),
+                                    // 进场变换自持一层 graphicsLayer、挂在 animateItem 之前：
+                                    // 两者各自持有一层，谁在外面对最终像素没有影响（落定后都是恒等变换）
+                                    modifier = Modifier.graphicsLayer {
+                                        entrance.applyTo(this, index, rows.size)
+                                    }.animateItem(),
                                 )
                             }
                         }
@@ -565,6 +617,9 @@ private fun DayTimelineCourseList(
             )
         }
     }
+    // 卡片进场（T52②）：与列表模式同一口径、另一把键——切到时间轴确实是"换了一张表画法"，
+    // 值得各播一次；但进程内只播一次，翻回来翻回去都不会再来一遍（见 EntrancePlaybook）
+    val entrance = rememberCourseEntrance(EntrancePlaybook.DAY_TIMELINE)
     val hourLineOffsets = remember(window) {
         dayTimelineHourLineOffsets(window, heightPerMinute.value.toDouble())
     }
@@ -701,7 +756,7 @@ private fun DayTimelineCourseList(
                         }
                     }
                 }
-                blocks.forEach { block ->
+                blocks.forEachIndexed { blockIndex, block ->
                     val course = block.row.course
                     val y = hourHeight * ((block.startMin - window.startMin) / 60f)
                     val blockHeight = (
@@ -740,10 +795,18 @@ private fun DayTimelineCourseList(
                         .offset(y = y)
                         .height(blockHeight)
                         .fillMaxWidth()
+                        // 进场变换自持一层 graphicsLayer、挂在共享元素之前：
+                        // 驱动落定后是恒等变换，静止像素与改前一致，
+                        // 而共享元素接管的是它自己那一层，两者不互相改写
+                        .then(
+                            Modifier.graphicsLayer {
+                                entrance.applyTo(this, blockIndex, blocks.size)
+                            },
+                        )
                         // 共享元素：时间轴模式与列表模式是同一条链（T52④ 缺的就是这两处）。
                         // 放在 fillMaxWidth 之后、视觉层之前：共享的那块矩形=色块本体，
                         // 与周视图课程格的接法逐字一致。
-                        .then(courseSharedElementModifier(course.id))
+                        .then(Modifier.courseSharedElementModifier(course.id))
                         .padding(horizontal = 2.dp)
                         // 1dp 投影：块从"平贴网格线的色卡"变成浮在轴上的物体。
                         // 不套 GlassSurface——用户实测口径是大面积厚玻璃板丑，这里数量多、
@@ -966,7 +1029,7 @@ private fun CourseTimelineCard(
             .fillMaxWidth()
             // 共享元素：与周视图课程格、编辑器同一个 key（键的收口见 CourseSharedElement.kt）。
             // 列表模式此前根本没接这条链——从今日课表点开一节课只有整页淡入淡出。
-            .then(courseSharedElementModifier(course.id))
+            .then(Modifier.courseSharedElementModifier(course.id))
             .animateContentSize(motionSpec<IntSize>()),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {

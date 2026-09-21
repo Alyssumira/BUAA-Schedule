@@ -294,10 +294,22 @@ fun WeekView(
                     initialPage = (pagerWeek - 1).coerceIn(0, totalWeeks - 1),
                     pageCount = { totalWeeks },
                 )
-                // 外部改周（顶部翻周按钮 / 跳周弹窗 / 回到本周）时同步 Pager
+                // 外部改周（顶部翻周按钮 / 跳周弹窗 / 回到本周）时同步 Pager。
+                // T52⑤（可打断）：这里此前第一行就是 `if (isScrollInProgress) return@LaunchedEffect`
+                // ——那一次翻周被**整个丢掉**：这个 effect 只在 displayWeek / currentWeek 变化时重启，
+                // 提前 return 之后没有任何东西补这一次同步；而下面的落定回写又会把用户刚点的那一周
+                // 当成"用户自己滑到的"去对照，结果是顶栏写着第 20 周、屏幕停在惯性滑到的第 12 周。
+                // 现在：手势没停就先把目标记下，等这一次自己落定立刻续上（见下面的 settle 监听）。
+                var pendingSyncTarget by remember(pagerState) { mutableIntStateOf(-1) }
                 LaunchedEffect(displayWeek, currentWeek) {
-                    if (pagerState.isScrollInProgress) return@LaunchedEffect
                     val target = ((displayWeek ?: currentWeek ?: 1) - 1).coerceIn(0, totalWeeks - 1)
+                    if (pagerState.isScrollInProgress) {
+                        pendingSyncTarget = target
+                        return@LaunchedEffect
+                    }
+                    pendingSyncTarget = -1
+                    // animateScrollToPage 的契约本身就是"从当前值接着走"：
+                    // 已有程序化滚动在飞时新的调用会接管它、从此刻的位置继续，不回到上一页重来
                     if (pagerState.currentPage != target) pagerState.animateScrollToPage(target)
                 }
                 // 只在滑动**落定**后回写：一次长距离惯性滑动会连着跨过好几页，
@@ -321,6 +333,14 @@ fun WeekView(
                         }
                         if (!wasScrolling) return@collect
                         wasScrolling = false
+                        val pending = pendingSyncTarget
+                        if (pending >= 0) {
+                            // 这一滑是被"外部改周"打断的：先把人送到该去的那一周，
+                            // 不把中途的落点当成用户自己选的周次回写（那会把顶栏刷回第 12 周）
+                            pendingSyncTarget = -1
+                            if (pagerState.currentPage != pending) pagerState.animateScrollToPage(pending)
+                            return@collect
+                        }
                         val week = pagerState.currentPage + 1
                         if (week != latestDisplayWeek) {
                             latestOnBrowseWeekChange(week)
@@ -424,6 +444,10 @@ private fun WeekGrid(
     // 每列取数预聚合一次：此前是在 7 列的循环里各 filter 一遍，
     // 每次重组（15s tick、拖拽每一帧）都要重做 8 次过滤。
     val coursesByDay = remember(coursesForContent) { coursesForContent.groupBy { it.dayOfWeek } }
+    // 卡片进场（T52②）：整屏一条驱动（见 rememberCourseEntrance），名次逐卡走
+    // "天列 → 列内课程 → 连续段"——渲染顺序即显示顺序；CourseCell 自带按压/脉冲
+    // 的缩放层，进场变换并进那同一层（applyTo），不叠第二层、不添离屏代价
+    val entrance = rememberCourseEntrance(EntrancePlaybook.WEEK_GRID)
     // 节次起止时间预解析：slotRange 每次调用是 2 次线性扫描 + 2 次 LocalTime.parse，
     // 而它被每张卡的「当前节课」判断在绘制期调用（R5 F-23）
     val slotIndex = remember(slots) { TimeSlotIndex(slots) }
@@ -440,6 +464,24 @@ private fun WeekGrid(
                 .filter { it in slotIndex.numbered }
                 .toPeriodSegments(slotIndex::gapMinutes)
         }
+    }
+    // 进场名次表（T52②）：显示序号按「天 → 节次」排——列内课程列表是 DAO 的
+    // (dayOfWeek, id) 顺序而不是节次顺序，直接拿循环下标会排错先后。这里对
+    // **已聚合好的** coursesByDay/segmentsByCourse 走一次 remember 建表（改动课表
+    // 才重算），渲染循环里逐卡只是一次哈希查找：不为排名次在每次重组重走数据，
+    // 也不给每张卡各起一条动画。key 不含天：一门课只属于一天，(id, 段起点) 唯一。
+    val (entranceRanks, entranceCardCount) = remember(coursesByDay, segmentsByCourse) {
+        val ranks = HashMap<Pair<Long, Int>, Int>()
+        var rank = 0
+        dayNames.indices.forEach { day ->
+            coursesByDay[day + 1].orEmpty()
+                .flatMap { course ->
+                    segmentsByCourse[course.id].orEmpty().map { course.id to it.first }
+                }
+                .sortedBy { (_, startPeriod) -> startPeriod }
+                .forEach { key -> ranks[key] = rank++ }
+        }
+        ranks to rank
     }
     // 玻璃档位与渲染能力探测在网格层算一次：effectiveTier 内部读 Runtime，
     // isRenderEffectSupported 走系统能力查询，逐卡各算一次 = 拖动时每帧几十次（R5 F-22）
@@ -794,6 +836,9 @@ private fun WeekGrid(
                                             CourseCell(
                                                 course = course,
                                                 segment = segment,
+                                                entrance = entrance,
+                                                entranceSlot = entranceRanks[course.id to segment.first] ?: 0,
+                                                entranceSlotCount = entranceCardCount,
                                                 cardHeight = hDp,
                                                 inConflict = course.id in conflictCourseIds,
                                                 notEveryWeek = course.weeks.size < totalWeeks,
@@ -914,6 +959,9 @@ private fun WeekGrid(
                                         CourseCell(
                                             course = course,
                                             segment = segment,
+                                            entrance = entrance,
+                                            entranceSlot = entranceRanks[course.id to segment.first] ?: 0,
+                                            entranceSlotCount = entranceCardCount,
                                             cardHeight = cardHeight,
                                             inConflict = course.id in conflictCourseIds,
                                             notEveryWeek = course.weeks.size < totalWeeks,
@@ -1890,6 +1938,11 @@ private val CourseCellContentPadding = 5.dp
 private fun CourseCell(
     course: Course,
     segment: IntRange,
+    /** 整屏共享的进场驱动（T52②）：变换并进下面那张按压/脉冲的 graphicsLayer，不叠第二层 */
+    entrance: CourseEntrance,
+    /** 本卡在屏内的显示名次与总卡数，由网格层的名次表一次建好（见 entranceRanks） */
+    entranceSlot: Int,
+    entranceSlotCount: Int,
     /** 卡片实际高度（与 modifier 上的 .height() 一致），用于按可用空间分配文本行数 */
     cardHeight: Dp,
     inConflict: Boolean,
@@ -1921,7 +1974,7 @@ private fun CourseCell(
     val background = courseColor(course)
     // 共享元素转场：课程卡与编辑器使用同一 key，由 MainActivity 的 SharedTransitionLayout 驱动。
     // 键的写法收口在 courseSharedElementModifier（T52④：日视图两种模式漏接的就是这份重复）。
-    val sharedModifier: Modifier = courseSharedElementModifier(course.id)
+    val sharedModifier: Modifier = Modifier.courseSharedElementModifier(course.id)
     // 手势：单击打开课程；长按打开快捷菜单；长按后继续移动且超过触摸阈值才进入拖拽。
     // 这样“长按菜单”和“长按拖移”可以共存：原地松手=菜单，移动=拖拽。
     val viewConfiguration = LocalViewConfiguration.current
@@ -1958,7 +2011,11 @@ private fun CourseCell(
             pulse.animateTo(1f, pulseSpec)
             pulse.animateTo(0f, pulseSpec)
         } else if (pulse.value != 0f) {
-            pulse.snapTo(0f)
+            // T52⑤（可打断）：撤掉脉冲此前是 snapTo(0)——描边正淡到一半被瞬间抽走，
+            // 读成"闪一下就没了"。改成从**当前值**接着淡出（Animatable 的 animateTo 天生如此）。
+            // 上面那条启动路径保留 snapTo(0)：重新要一次定位，就得看到一次完整的脉冲，
+            // 从半截接着亮第二次读不出"这是新的一次"。
+            pulse.animateTo(0f, pulseSpec)
         }
     }
     val dragGestureModifier = if (hasCustomGesture) {
@@ -2031,6 +2088,9 @@ private fun CourseCell(
             scaleX = pressScale * pulseBoost
             scaleY = pressScale * pulseBoost
             if (dragged) shadowElevation = 18f
+            // 进场（T52②）：alpha/translationY 并进这同一层——两张图层各持一份 alpha
+            // 就没法合账，落定后也各自恒等，静止像素与改前逐位一致。
+            entrance.applyTo(this, entranceSlot, entranceSlotCount)
         }
 
     // 液态玻璃课程卡：共享模糊前缀（整屏一次烘焙）+ 卡片自身折射，

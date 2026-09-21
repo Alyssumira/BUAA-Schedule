@@ -18,16 +18,18 @@ import com.buaa.schedule.core.designsystem.LocalSharedTransitionScope
  * （见 MainActivity 的 setContent），拿不到 `AnimatedVisibilityScope`，
  * 此时不注册共享元素而不是崩在那里。
  *
- * @param courseId null = 这一屏还没有对应的课程（新增课程的编辑器），同样退成空修饰符
+ * @param courseId null = 这一屏还没有对应的课程（新增课程的编辑器），同样退成原样
  */
 @Composable
 @OptIn(ExperimentalSharedTransitionApi::class)
-internal fun courseSharedElementModifier(courseId: Long?): Modifier {
-    val sharedScope = LocalSharedTransitionScope.current ?: return Modifier
-    val animScope = LocalAnimatedVisibilityScope.current ?: return Modifier
-    val id = courseId ?: return Modifier
+internal fun Modifier.courseSharedElementModifier(courseId: Long?): Modifier {
+    // Modifier 扩展而非"返回 Modifier 的工厂函数"：后者被 compose lint 判红
+    // （ModifierFactoryExtensionFunction），且扩展写法天然保住调用点已挂的链
+    val sharedScope = LocalSharedTransitionScope.current ?: return this
+    val animScope = LocalAnimatedVisibilityScope.current ?: return this
+    val id = courseId ?: return this
     return with(sharedScope) {
-        Modifier.sharedElement(
+        this@courseSharedElementModifier.sharedElement(
             sharedContentState = rememberSharedContentState(key = "course_$id"),
             animatedVisibilityScope = animScope,
         )

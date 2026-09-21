@@ -244,7 +244,7 @@ private fun CourseGroupCard(
     val primary = group.fragments.first()
     val color = com.buaa.schedule.core.designsystem.courseColor(primary)
     // 键与写法收口在 courseSharedElementModifier（与周视图课程格、编辑器同源，T52④）
-    val sharedModifier = courseSharedElementModifier(primary.id)
+    val sharedModifier = Modifier.courseSharedElementModifier(primary.id)
 
     GlassSurface(
         variant = GlassVariant.PANEL,
