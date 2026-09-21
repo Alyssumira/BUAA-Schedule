@@ -85,6 +85,31 @@ class DayTimelineAxisTest {
         assertEquals(900, dayTimelineAnchorMinute(22 * 60, w, blocks))
     }
 
+    @Test
+    fun nestedBlocksDoNotFakeAllPastInsideTheOuterClass() {
+        val w = DayTimelineWindow(8 * 60, 23 * 60)
+        // 并行课（冲突数据）嵌套：A=[600,800] 10:00–13:20，B=[610,620] 整段在 A 里。
+        // 旧口径 maxByOrNull{first} 挑中外层里的**小块 B** 当"最后一节课"，now=700
+        // （11:40，明明还压在 A 里、天没上完）被误判成全 past，锚点跳到 610。
+        // 与 dayTimelineGaps 同口径先并块：合并块 [600,800] 盖着 700 → 锚点停在 now 本身。
+        // 负向验证：把 DayTimelineAnchor 换回 maxByOrNull{first} 这条必红（实测红在 610≠700）。
+        assertEquals(
+            700,
+            dayTimelineAnchorMinute(700, w, listOf(IntRange(600, 800), IntRange(610, 620))),
+        )
+    }
+
+    @Test
+    fun allPastAnchorUsesMergedBlockStartNotInnerBlock() {
+        val w = DayTimelineWindow(8 * 60, 23 * 60)
+        // 真·全 past（14:00 已过合并块下课 13:20）：锚点是**合并块**的起点 600，
+        // 不是内层 B 的 610——一天真正"上到哪儿"由外层区间说话（旧口径这里红在 610≠600）
+        assertEquals(
+            600,
+            dayTimelineAnchorMinute(14 * 60, w, listOf(IntRange(600, 800), IntRange(610, 620))),
+        )
+    }
+
     // ── 滚动目标 ──────────────────────────────────────────────────
 
     @Test

@@ -57,17 +57,22 @@ internal fun dayTimelineHourLineOffsets(
 /**
  * 自动滚动的锚点（当日分钟数）。当天没有"现在"可对齐时的三种情形：
  * - 空课表、或 now 早于窗口（全 future）→ 窗口顶：白天之前本来就该从第一节看起；
- * - now 不早于最后一节课的下课（全 past）→ **最后一节课的上课时刻**：
+ * - now 不早于一天结束（全 past）→ **最后一段课的上课时刻**：
  *   把"一天上到哪儿"钉在视口上三分之一，而不是让用户停在一屏空档底部；
  * - 其余（课中/课间）→ now 本身：课间空档已有虚线＋文字显式表达，不靠移视野遮掩。
+ *
+ * 「一天结束」走 [mergeDayTimelineBlocks] 之后取末段，而不是旧口径的
+ * `maxByOrNull { it.first }.last`：并行课（冲突数据）的区间会嵌套——外层 A=[600,800]、
+ * 内层 B=[610,620] 时旧口径把 B 当"最后一节课"，700（正落在 A 里、天没上完）
+ * 被误判成全 past，锚点跳到 610 而不是停在 now。与 [dayTimelineGaps] 选并块
+ * 而非 maxOf{last} 是同一个理由：并完还顺手给出正确的段起点，两处共用一份口径不再各算各的。
  */
 internal fun dayTimelineAnchorMinute(
     nowMin: Int,
     window: DayTimelineWindow,
     blocks: List<IntRange>,
 ): Int {
-    if (blocks.isEmpty()) return window.startMin
-    val last = blocks.maxByOrNull { it.first } ?: return window.startMin
+    val last = mergeDayTimelineBlocks(blocks).lastOrNull() ?: return window.startMin
     return when {
         nowMin < window.startMin -> window.startMin
         nowMin >= last.last -> last.first
@@ -102,18 +107,16 @@ internal const val DAY_GAP_MARKER_MIN_MINUTES = 20
 internal const val DAY_GAP_LABEL_MIN_MINUTES = 30
 
 /**
- * 合并课程块（先排序、再并重叠区间），取相邻块之间 ≥ [minGapMinutes] 的课间。
+ * 合并课程块（先排序、再并重叠区间）。
  *
  * 合并这步不能省：并行课（冲突数据）的区间互相重叠甚至嵌套，不并区间
  * 直接按起点排序做差，会拿**内层块**的尾巴去减下一块的开头，量出一段
  * 其实有课覆盖的"假课间"画到轴上（负重叠本身会被阈值滤掉，救不了嵌套那种）。
+ * [dayTimelineAnchorMinute] 的"一天结束"取的就是这里的末段——两处共用一份口径。
  */
-internal fun dayTimelineGaps(
-    blocks: List<IntRange>,
-    minGapMinutes: Int = DAY_GAP_MARKER_MIN_MINUTES,
-): List<DayTimelineGap> {
+private fun mergeDayTimelineBlocks(blocks: List<IntRange>): List<IntRange> {
     val sorted = blocks.filter { it.last >= it.first }.sortedBy { it.first }
-    if (sorted.size < 2) return emptyList()
+    if (sorted.size < 2) return sorted
     val merged = mutableListOf<IntRange>()
     for (b in sorted) {
         val prev = merged.lastOrNull()
@@ -123,11 +126,18 @@ internal fun dayTimelineGaps(
             merged += b
         }
     }
-    return merged.zipWithNext().mapNotNull { (a, b) ->
+    return merged
+}
+
+/** 相邻两个（已合并的）课程块之间的课间空档区间（当日分钟数）≥ [minGapMinutes] 的那些 */
+internal fun dayTimelineGaps(
+    blocks: List<IntRange>,
+    minGapMinutes: Int = DAY_GAP_MARKER_MIN_MINUTES,
+): List<DayTimelineGap> =
+    mergeDayTimelineBlocks(blocks).zipWithNext().mapNotNull { (a, b) ->
         val gap = DayTimelineGap(a.last, b.first)
         if (gap.minutes >= minGapMinutes) gap else null
     }
-}
 
 /** 此刻是否落在这个课程块里：左闭右开——下课铃响的那一分钟，这块就不再是"正在上" */
 internal fun dayTimelineBlockContains(startMin: Int, endMin: Int, nowMin: Int): Boolean =
