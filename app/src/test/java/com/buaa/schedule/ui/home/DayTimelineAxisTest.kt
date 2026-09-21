@@ -174,4 +174,23 @@ class DayTimelineAxisTest {
     fun minuteOfDayConvertsLocalTime() {
         assertEquals(10 * 60 + 44, timelineMinuteOfDay(LocalTime.of(10, 44)))
     }
+
+    // ── 15 秒链的开关（T49b③） ────────────────────────────────────
+
+    @Test
+    fun liveTickOffForOtherDaysAndOutsideWindow() {
+        val w = DayTimelineWindow(8 * 60, 23 * 60)
+        assertFalse("非今天：NowLine 直接 return，链不许醒", nowLineNeedsLiveTick(false, 10 * 60, w))
+        assertFalse(nowLineNeedsLiveTick(true, 7 * 60, w))   // 早于窗口：fraction≤0 不画线
+        assertFalse(nowLineNeedsLiveTick(true, 23 * 60, w))  // 窗口末界：fraction≥1 不画线
+    }
+
+    @Test
+    fun liveTickBoundsMatchNowLineVisibility() {
+        val w = DayTimelineWindow(8 * 60, 23 * 60)
+        // 开区间界：与 NowLine 的 fraction>0 && <1 逐点对齐——窗口内一秒都不许多醒，
+        // 界线外一秒都不许漏（漏了红线会停在窗口外时刻的旧位置）
+        assertTrue(nowLineNeedsLiveTick(true, 8 * 60 + 1, w))
+        assertTrue(nowLineNeedsLiveTick(true, 23 * 60 - 1, w))
+    }
 }

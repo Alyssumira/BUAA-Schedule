@@ -20,6 +20,8 @@ import org.junit.Test
  *    新键不许长出 week_grid_mode_declared 那种一次性收敛。
  * 5. HourLabels / NowLine 全仓只定义一次（共享件），周视图调用点还在——
  *    防的是"把副本复制回来"而不是提取失败。
+ * 6. T49b 的三处收口：刻度对齐档按视图分（周视图保持默认档逐像素不变）、
+ *    15 秒链走判据开关不许退回单键无条件起链、当前块描边让位 error 红给现在线独享。
  */
 class DayTimelineStructureGuardTest {
 
@@ -105,6 +107,54 @@ class DayTimelineStructureGuardTest {
         assertTrue(
             "day_timeline_mode 是全新键，不许照抄 week_grid_mode_declared 那种一次性收敛",
             !perso.contains("day_timeline_mode_declared"),
+        )
+    }
+
+    // ── T49b 新增机制的钉子 ────────────────────────────────────────
+
+    /**
+     * ①：刻度列的对齐档。钉的是"日视图传 LineTop、周视图维持默认档"——
+     * 提取成共享件后两视图共用一份代码，对齐口径却是各自画布的（日视图有整点线、
+     * 周视图没有），谁把自己的档改回居中都该在这里变红，而不是等下次装机才发现。
+     */
+    @Test
+    fun hourLabelsAnchorIsPerCanvasAndDefaultKeepsWeekPixelIdentical() {
+        val axis = blankComments(source("com/buaa/schedule/ui/home/TimelineAxis.kt"))
+        assertTrue(
+            "HourLabels 必须走锚点参数、默认档 SlotCenter（周视图不传参才逐像素不变）",
+            axis.contains("anchor: HourLabelAnchor = HourLabelAnchor.SlotCenter") &&
+                axis.contains("contentAlignment = anchor.cellAlignment"),
+        )
+        val day = timelineBody()
+        assertTrue("日视图刻度列要显式传 LineTop，否则文字又落回两线正中", day.contains("HourLabelAnchor.LineTop"))
+        val week = blankComments(source("com/buaa/schedule/ui/home/WeekView.kt"))
+        val weekCallLines = week.lines().filter { "HourLabels(" in it }
+        assertTrue(
+            "周视图调用点一共该有且只有一处、且不许传锚点参数（它不画整点线，居中档才是已验收口径）：" +
+                weekCallLines.joinToString(),
+            weekCallLines.size == 1 && weekCallLines.single().let { "HourLabelAnchor" !in it },
+        )
+    }
+
+    /** ③：15 秒链收在纯判据开关后面，不许退回无条件起链 */
+    @Test
+    fun nowLineTickChainIsGatedByKernelPredicate() {
+        val body = timelineBody()
+        assertTrue("链的开关必须走判据内核 nowLineNeedsLiveTick（纯算式可单测）", body.contains("nowLineNeedsLiveTick("))
+        assertTrue(
+            "LaunchedEffect(lifecycle) 单键形态 = 非今天也每 15 秒白醒一次（T49b③ 修的就是它）",
+            !Regex("LaunchedEffect\\(\\s*lifecycle\\s*\\)").containsMatchIn(body),
+        )
+    }
+
+    /** ④：error 红收归「现在」线独享，当前块描边不再同色 */
+    @Test
+    fun currentBlockBorderYieldsErrorRedToNowLine() {
+        val body = timelineBody()
+        assertTrue(
+            "当前块描边不许再用 colorScheme.error：真机实测描边下沿 y=1673 与现在线 y=1660 只差 13px，" +
+                "同色 (186,26,26) 读成一条发虚的加粗边（取舍账见 DayView 块描边注释）",
+            !body.contains("colorScheme.error"),
         )
     }
 

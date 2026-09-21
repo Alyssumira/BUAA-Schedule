@@ -24,16 +24,38 @@ import java.time.LocalTime
  * 函数体与渲染结果逐字未动——周视图的调用点在同一个包里，签名兼容。
  */
 
+/**
+ * 刻度文字在小时格内的纵向锚点（[HourLabels] 的对齐档）。
+ *
+ * 两档对应两种画布：周视图 24h 模式**不画整点线**（全文件没有 outlineVariant），
+ * 文字归属由所在行决定，居中即可；日视图时间轴（T49）画了整点线，居中档的
+ * 文字便恰好落在自己那条线与下一条线的正中间——真机实测（buaa36，周二）
+ * 09:00 线在 y=830 而 "09:00" 文字中心在 y=903，逐枚偏后半格，用户没法判断
+ * 哪条线是几点。[LineTop] 把文字顶边贴到格顶 = 自己那枚整点上。
+ */
+internal enum class HourLabelAnchor(val cellAlignment: Alignment) {
+    /** 既有口径（周视图）：文字在小时格内逐像素居中，默认档 */
+    SlotCenter(Alignment.Center),
+
+    /** 日视图时间轴：文字顶边对齐格顶（即该整点的网格线所在高度），水平仍居中 */
+    LineTop(Alignment.TopCenter),
+}
+
 /** 24h 时间轴模式的小时刻度列 */
 @Composable
-internal fun HourLabels(startHour: Int, endHour: Int, hourHeight: Dp) {
+internal fun HourLabels(
+    startHour: Int,
+    endHour: Int,
+    hourHeight: Dp,
+    anchor: HourLabelAnchor = HourLabelAnchor.SlotCenter,
+) {
     Column(modifier = Modifier.fillMaxSize()) {
         (startHour until endHour).forEach { hour ->
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(hourHeight),
-                contentAlignment = Alignment.Center,
+                contentAlignment = anchor.cellAlignment,
             ) {
                 Text(
                     text = "%02d:00".format(hour),

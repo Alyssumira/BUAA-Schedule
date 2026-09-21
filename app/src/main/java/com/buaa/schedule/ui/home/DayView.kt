@@ -575,9 +575,15 @@ private fun DayTimelineCourseList(
     // 「现在」线的实时度走 15 秒一档（TIMELINE_TICK_MS），且只喂给 NowLine 一个组合作用域：
     // 周视图同族做法（WeekView 把 nowTickState 作为 State 传下去，普通卡片不读它）。
     // 若在列表本体读这个 State，每 15 秒整条时间轴连同全部色块一起重组。
+    // 链只在线真被画的时候起（判据与口径见 nowLineNeedsLiveTick）：此前无条件起链，
+    // 真机实测（buaa36）翻到周二看时间轴，屏幕每 15 秒白醒一次写一个没人读的 State——
+    // NowLine 在非今天直接 return，块高亮走分钟级 now 参数、不吃这个 tick。
+    // 「回到今天」不受害：isToday 翻转 → key 变 → effect 重启，第一拍先发布再等边界。
     val nowLineTick = remember { mutableStateOf(LocalTime.now()) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(lifecycle) {
+    val liveTickWanted = nowLineNeedsLiveTick(isToday, nowMinuteOfDay, window)
+    LaunchedEffect(lifecycle, liveTickWanted) {
+        if (!liveTickWanted) return@LaunchedEffect
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
                 // 先发布再等边界、一次读取两处共用——理由见 NowTick.kt 的 nextTickDelayMillis
@@ -631,9 +637,16 @@ private fun DayTimelineCourseList(
                 .fillMaxWidth()
                 .verticalScroll(scrollState),
         ) {
-            // 左侧小时刻度列：与周视图 24h 模式同一件控件（TimelineAxis.kt，T49 提取）
+            // 左侧小时刻度列：与周视图 24h 模式同一件控件（TimelineAxis.kt，T49 提取）。
+            // LineTop 档把每枚文字顶边贴到自己那枚整点的网格线上（错位实测与两档口径见
+            // HourLabelAnchor 的注释）；周视图调用点不传参、走默认档，那一屏逐像素不变
             Box(modifier = Modifier.width(DesignTokens.weekTimeColumnWidth)) {
-                HourLabels(window.startMin / 60, window.endMin / 60, hourHeight)
+                HourLabels(
+                    window.startMin / 60,
+                    window.endMin / 60,
+                    hourHeight,
+                    HourLabelAnchor.LineTop,
+                )
             }
             Spacer(modifier = Modifier.width(DesignTokens.spaceS))
             Box(
@@ -713,8 +726,13 @@ private fun DayTimelineCourseList(
                     val onBlock = plate.foreground
                     // 圆角与周视图课程格同一令牌：同一个"课程"在两个视图里不该是两种形状
                     val blockShape = RoundedCornerShape(DesignTokens.cornerCourse)
-                    // 正在上的那一节：可辨识的当前态不只靠颜色——描边从 1dp 加到 2dp
-                    // 并换成与「现在」线同族的 error 色，几何（线宽）是第二通道
+                    // 正在上的那一节：可辨识的当前态走几何＋浓度两通道——线宽 1dp→2dp，
+                    // 描边从 0.55f 浓度跳到满浓度。
+                    // T49b④：描边不再借「现在」线的 error 红。真机实测（buaa36，周一 11:18）：
+                    // 当前块 09:50–11:25 的 error 描边下沿 y=1673，「现在」线 y=1660，只差 13px
+                    // 且两边同是 (186,26,26)——线与框读成一条发虚的加粗边，分不出"此刻几点"
+                    // 和"正在上哪节"。红色收归现在线独享（它是全轴唯一的时间信号），
+                    // 当前块退回自己的课程色满浓度：与所在块同族、又与邻块之间绝无雷同。
                     val isCurrent = isToday &&
                         dayTimelineBlockContains(block.startMin, block.endMin, nowMinuteOfDay)
                     val blockModifier = Modifier
@@ -730,11 +748,7 @@ private fun DayTimelineCourseList(
                         .background(plate.tint.copy(alpha = plate.alpha), blockShape)
                         .border(
                             width = if (isCurrent) 2.dp else 1.dp,
-                            color = if (isCurrent) {
-                                MaterialTheme.colorScheme.error
-                            } else {
-                                blockColor.copy(alpha = 0.55f)
-                            },
+                            color = if (isCurrent) blockColor else blockColor.copy(alpha = 0.55f),
                             shape = blockShape,
                         )
                         .clickable { onClick(course) }

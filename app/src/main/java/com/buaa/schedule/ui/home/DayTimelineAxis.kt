@@ -142,3 +142,16 @@ internal fun dayTimelineGaps(
 /** 此刻是否落在这个课程块里：左闭右开——下课铃响的那一分钟，这块就不再是"正在上" */
 internal fun dayTimelineBlockContains(startMin: Int, endMin: Int, nowMin: Int): Boolean =
     nowMin in startMin until endMin
+
+/**
+ * 「现在」线的 15 秒链这一拍要不要跑。
+ *
+ * 链唯一喂给的是 NowLine 一个组合作用域（块的高亮走分钟级 now 参数），而
+ * NowLine 在 !visible 或 fraction≤0/≥1 时直接 return——非今天、以及 now 落在
+ * 窗口外（早于第一节、晚于最后一节）时线根本不画，链每 15 秒醒来写一次没人读的 State。
+ * 真机实测（buaa36）：翻到周二看时间轴，屏幕每 15 秒白醒一次。边界取开区间，
+ * 与 NowLine 自己的 fraction>0 && <1 可见条件同口径；回到今天时这个值翻回 true、
+ * effect 重启，第一拍先发布当前时刻再等边界，红线不会停在旧时刻。
+ */
+internal fun nowLineNeedsLiveTick(isToday: Boolean, nowMin: Int, window: DayTimelineWindow): Boolean =
+    isToday && nowMin > window.startMin && nowMin < window.endMin
