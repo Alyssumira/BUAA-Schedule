@@ -223,4 +223,60 @@ class WeekFreeGridTest {
         assertFalse(grid.weekUnresolved)
         assertTrue(dayOf(grid, 1, 1))
     }
+
+    // ---- 转置视图（T51③ 热力格界面按"周几 × 节次"画，取的就是这一层） ----
+
+    @Test
+    fun dayRowsFlipTheSameMatrixWithoutRecomputingOccupancy() {
+        val grid = WeekFreeGrid.gridOf(
+            listOf(course(1, listOf(1, 2), weeks = (1..8).toList()), course(3, listOf(2), weeks = (1..16).toList())),
+            semester,
+            emptyList(),
+            week = 3,
+        )
+
+        val dayRows = grid.dayRows
+        assertEquals("恒 7 项，下标 0 = 周一", 7, dayRows.size)
+        assertEquals(1, dayRows.first().dayOfWeek)
+        // 逐格与主口径（rows 的 occupiedDays）核对，防转置时把某个索引写反
+        dayRows.forEach { day ->
+            day.occupiedPeriods.forEachIndexed { periodIndex, occupied ->
+                assertEquals(
+                    "周${day.dayOfWeek} 第 $periodIndex 列不该在两个视图里给出不同答案",
+                    grid.rows[periodIndex].occupiedDays[day.dayOfWeek - 1],
+                    occupied,
+                )
+            }
+        }
+        assertTrue(dayRows.first().occupiedPeriods.first())
+        assertEquals(2, dayRows.first().occupiedCount)
+        assertEquals(0, dayRows[1].occupiedCount)
+        assertEquals("周一的 freeCount = 总节次数 - 占用数", grid.rows.size - 2, dayRows.first().freeCount)
+    }
+
+    @Test
+    fun aFullyFreeDayAndAFullyBusyWeekBothReadTheirOwnRow() {
+        val grid = WeekFreeGrid.gridOf(
+            listOf(course(1, listOf(1), weeks = (1..16).toList())),
+            semester,
+            emptyList(),
+            week = 3,
+        )
+
+        val freeDay = grid.dayRows.first { it.dayOfWeek == 5 }
+        assertTrue("周五整天空", freeDay.isFree)
+        assertEquals(grid.rows.size, freeDay.freeCount)
+        assertTrue(grid.dayRows.first { it.dayOfWeek == 1 }.occupiedPeriods.first())
+    }
+
+    @Test
+    fun allCellsOccupiedKeepsEveryRowBusyAndGivesNoEmptiestDay() {
+        // 极端档：全部格子都被占（默认作息 14 节 × 7 天）——不许崩、也不许选出"最空的一天"
+        val everyDay = (1..7).map { course(it, (1..14).toList()) }
+        val grid = WeekFreeGrid.gridOf(everyDay, semester, emptyList(), week = 2)
+
+        assertTrue(grid.dayRows.all { it.occupiedCount == grid.rows.size && !it.isFree })
+        assertEquals(grid.cellCount, grid.occupiedCellCount)
+        assertNull("七天排得一模一样时不下『最空的是周几』的结论", grid.freeDayOfWeek)
+    }
 }
