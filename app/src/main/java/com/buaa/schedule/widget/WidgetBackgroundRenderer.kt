@@ -327,9 +327,11 @@ object WidgetBackgroundRenderer {
      * 这一次「玻璃感壁纸背景」到底有没有图源。
      *
      * 判据本体在 [WidgetGlassSource]（不 import 任何 android 类型，所以那张表能在 JVM 单测里
-     * 逐格钉住）；这里只把两格事实翻译成它的入参 —— 「使用桌面壁纸」那枚开关（prefs）与
-     * 探针上一次的实测结论（[WidgetWallpaperProbe.memoized]）。改前的第三枚入参是 API 档次，
-     * 已被装机实测证伪，换成实测（论证在探针那文件的 KDoc）。
+     * 逐格钉住）；这里只把三格事实翻译成它的入参 —— 「使用桌面壁纸」那枚开关（prefs）、
+     * 探针上一次的位图实测结论（[WidgetWallpaperProbe.memoized]）与主色实测结论
+     * （[WidgetWallpaperProbe.memoizedPalette]）。改前的第三枚入参是 API 档次，
+     * 已被装机取证否掉（真因是权限 + app-op 两道闸，论证在 `docs/KNOWN_ISSUES.md` §1），
+     * 换成实测；本卡又把位图之外的那一档接了进来。
      *
      * memo 交 null（从没测过、或过了 60s 采信期）时**原样交 null**，不许在这里折成
      * "读得到"或"读不到"里的任何一头：这一格的答案唯一的读者是配置页那句说明，
@@ -343,6 +345,7 @@ object WidgetBackgroundRenderer {
      */
     internal fun availability(context: Context): GlassSource = WidgetGlassSource.decide(
         systemWallpaperUsable = WidgetWallpaperProbe.memoized(),
+        wallpaperPaletteAvailable = WidgetWallpaperProbe.memoizedPalette() != null,
         useSystemWallpaper = usesSystemWallpaper(context),
     )
 

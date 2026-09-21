@@ -533,33 +533,45 @@ private fun WidgetConfigScreen(
                 )
                 // 说明按图源判定分叉，而判定与渲染侧是同一个函数（availability 读探针的
                 // 实测结论）。改前那四档里"糊 App 内自选那张"的两条连同"先挑一张图"的
-                // 承诺一起作废 —— 装机实测证明把自选那张铺在桌面上只会糊出一块与壁纸
-                // 无关的死板（(69,77,97) 恒值板）。开关照样能拨、说明说实话，取舍记在
-                // [GlassSource] 那一头；这里也不挂挑图按钮：挑了也不会糊到桌面上。
+                // 承诺一起作废 —— 装机取证证明自选那张铺在桌面上只会糊出一块与壁纸无关的
+                // 死板（(69,77,97) 恒值板），而"桌面壁纸那张"这一档在声明相册权限的设备上
+                // 才可能成立（本应用不申请，见 docs/KNOWN_ISSUES.md §1）。
+                // 五格各说一句实话：位图档说"糊的是壁纸"，主色档说"没糊图、只有底色跟着
+                // 桌面走"，这两句不许互换 —— 把它们混成一句就是 T46 那次「实测证伪」的
+                // 订正本领犯错的地方（拿透明板透出的桌面像素当壁纸进过组件的证据）。
                 // 「还没测过」单独一档：这一句此刻没有出处，说"读得到"或"读不到"都是
-                // 替设备编答案（本卡拆的就是这类编法），所以它只能说"正在确认"。
+                // 替设备编答案（这条链拆的就是这类编法），所以它只能说"正在确认"。
                 Text(
                     text = when (glassSource) {
                         GlassSource.SystemWallpaper ->
-                            "底图糊的是系统桌面壁纸（这台设备实测读得到），换壁纸后跟着更新。"
+                            "底图糊的是系统桌面壁纸（这台设备实测读得到那张位图），换壁纸后跟着更新。"
+                        GlassSource.SystemWallpaperPaletteOnly ->
+                            "这台设备实测读不到壁纸位图（要读那张位图得给相册权限，本应用不申请），" +
+                                "所以这里没有糊任何图：那块半透明底的颜色取自桌面主色，" +
+                                "换一张桌面壁纸后底色跟着变，透明度与圆角仍按你自己的设置。" +
+                                "换句话说这个开关拨动看得见的是「这块板跟着桌面换色」，不是壁纸本身。"
                         GlassSource.NotMeasuredYet ->
                             "正在确认这台设备读不读得到系统桌面壁纸（这一页已经在后台问过一次了），" +
                                 "稍后再回来看这一句 —— 上面那个开关照旧能拨。"
                         GlassSource.NoSourceSystemWallpaperUnusable ->
-                            "现在没有能糊的图：这台设备实测读不到系统桌面壁纸，" +
-                                "而组件只糊桌面本身，不借 App 内自选的图。所以这个开关拨了" +
+                            "现在什么都没有：这台设备实测读不到系统桌面壁纸位图，也没问到桌面主色，" +
+                                "而组件只认桌面本身，不借 App 内自选的图。所以这个开关拨了" +
                                 "不会有任何变化 —— 换一张桌面壁纸后等组件下一轮刷新再试。"
                         GlassSource.NoSourceSystemWallpaperOff ->
                             "现在没有能糊的图：你在 App 内关掉了「使用桌面壁纸」。" +
                                 "所以这个开关拨了不会有任何变化 —— 重新打开它就好。"
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    // 警告色只留给"这台设备确实给不出图"那两格；"还没问完"不是坏消息
+                    // 警告色只留给"这台设备两档都给不出东西"与"用户自己关了"那两格；
+                    // "还没问完"与"只有主色可用"都不是坏消息（后者开关真的拨得动了）
                     color = when (glassSource) {
                         GlassSource.NoSourceSystemWallpaperUnusable,
                         GlassSource.NoSourceSystemWallpaperOff,
                         -> LocalSemanticColors.current.warning
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        GlassSource.SystemWallpaper,
+                        GlassSource.SystemWallpaperPaletteOnly,
+                        GlassSource.NotMeasuredYet,
+                        -> MaterialTheme.colorScheme.onSurfaceVariant
                     },
                 )
                 SettingsSwitchRow(

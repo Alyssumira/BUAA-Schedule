@@ -41,8 +41,15 @@ class WidgetGlassSourceTest {
         "还没实测（探针没判过 / 已过采信期）" to null,
     )
 
-    private fun answer(measurement: Boolean?, useSystemWallpaper: Boolean) =
-        WidgetGlassSource.decide(systemWallpaperUsable = measurement, useSystemWallpaper = useSystemWallpaper)
+    private fun answer(
+        measurement: Boolean?,
+        useSystemWallpaper: Boolean,
+        hasPalette: Boolean = false,
+    ) = WidgetGlassSource.decide(
+        systemWallpaperUsable = measurement,
+        wallpaperPaletteAvailable = hasPalette,
+        useSystemWallpaper = useSystemWallpaper,
+    )
 
     // ==================== ① 实测那件事实怎么判 ====================
 
@@ -169,19 +176,21 @@ class WidgetGlassSourceTest {
     }
 
     @Test
-    fun theFourAnswersStayDistinct() {
+    fun theFiveAnswersStayDistinct() {
         // 每一格都要能被配置页单独指认：合并任意两格都会少说一句话或多许诺一条出路
         val all = listOf(
             answer(true, true),
-            answer(false, true),
+            answer(false, true, hasPalette = true),
+            answer(false, true, hasPalette = false),
             answer(null, true),
             answer(true, false),
         )
-        assertEquals("四格答案撞成了 ${all.distinct().size} 格", 4, all.distinct().size)
+        assertEquals("五格答案撞成了 ${all.distinct().size} 格", 5, all.distinct().size)
         assertEquals(
             "枚举与判据对不上了（加一格就要连着改配置页那句 when）",
             setOf(
                 GlassSource.SystemWallpaper,
+                GlassSource.SystemWallpaperPaletteOnly,
                 GlassSource.NotMeasuredYet,
                 GlassSource.NoSourceSystemWallpaperUnusable,
                 GlassSource.NoSourceSystemWallpaperOff,
