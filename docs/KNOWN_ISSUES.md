@@ -5,21 +5,37 @@
 
 ## 平台限制（App 无法绕过，已做引导或回退）
 
-### 1. Android 14+ 读不到系统壁纸
+### 1. 「Android 14+ 读不到系统壁纸」这句断言已被实测证伪
 
-- **现象**：Android 14（API 34）起，`WallpaperManager.getDrawable()` 需要
-  `MANAGE_EXTERNAL_STORAGE` 或签名级 `READ_WALLPAPER_INTERNAL`，普通应用一律返回 null。
-  **澎湃 OS（HyperOS）基于 Android 14/15，全部在此范围内** ——
-  「使用桌面壁纸」开关在该系统上必然无效，这是平台硬限制，不是 bug。
-- **现状**：`SceneBackground.decodeSystemWallpaper()` 在 API 34+ **显式提前返回 null**，
-  背景回退北航蓝渐变或用户自选图片；桌面组件壁纸模糊同理回退纯色圆角底。
-- **引导**：设置页在「Android 14+ 且开启『使用桌面壁纸』且未选自定义图片」时会显示
-  明确提示，建议改用「选择壁纸图片」手动指定。
-- **替代方案**：手动选图（「选择壁纸图片」）不受该限制，选一次持久生效。
-  若选图后背景仍不变，排查方向：① 部分选择器（"最近"列表）返回的 URI 不支持
-  持久授权，重启后失效（logcat 过滤 `SettingsScreen` 可见告警）；
-  ② 解码失败（图片损坏/URI 失效）会记 `SceneBackground` 告警日志。
-- **结论**：不是 bug，是平台收紧；不要尝试申请 `MANAGE_EXTERNAL_STORAGE` 来恢复该功能。
+- **本节以前怎么写**：Android 14（API 34）起 `WallpaperManager.getDrawable()` 需要
+  `MANAGE_EXTERNAL_STORAGE` 或签名级 `READ_WALLPAPER_INTERNAL`，普通应用一律返回 null，
+  并据此下结论「澎湃 OS 基于 Android 14/15，『使用桌面壁纸』在该系统上必然无效，
+  这是平台硬限制，不是 bug」。**那句断言在本仓库里从来没有被量过。**
+- **实测怎么说**（2026-09-21，模拟器 buaa36 / API 36）：`getDrawable()` 仍返回真实的
+  桌面壁纸 —— 把渲染侧那道 `SDK_INT >= 34` 闸门抬到 100 之后，组件 tile 立刻跟着桌面的
+  亮暗两区走（亮区 (43,57,88)、暗区 (21,29,51)，正是底色按 alpha 复合在局部桌面像素上的
+  算法预期值）。闸门白关了一半设备，还把配置页那句说明钉成了一句谎话。
+- **桌面组件这条链已经改（T46）**：不再由 API 档次代答，每轮刷新**实测一次** ——
+  `WidgetWallpaperProbe` 问一次 `getDrawable()`，把宽高与 9 枚采样像素交给零 android
+  import 的判据 `WidgetGlassSource.wallpaperLooksUsable`（拿不到位图 / 尺寸退化到 64px
+  以下 / 9 枚采样全同的纯色占位，三种都判「这一次没有源」）。判到没有源时组件走**纯色
+  半透明**那条分支（桌面真的透得过来，装机实测里这一形反而好看），不再拿 App 内自选的
+  那张图顶包 —— 顶包铺出来的是一块与桌面无关的死板，那块恒值板就是这么来的。配置页那句
+  说明读的是同一个答案（`WidgetBackgroundRenderer.availability`），无源时只说设备实测的
+  事实，不再挂"先挑一张图"那颗兑现不了的按钮。
+- **仍然成立的一半（本卡刻意未动）**：App 内课表背景那条链
+  （`SceneBackground.decodeSystemWallpaper`）还留着自己那一刀切的 `SDK_INT >= 34 → null`，
+  所以在 14+ 上「使用桌面壁纸」拨了照旧没反应，设置页也还在按 API 档次显示那段
+  "系统限制第三方应用读取桌面壁纸"的死提示（`SettingsScreen` 壁纸那一节）。
+  **这一半现在是待修问题，不是平台限制** —— 它该走组件这条链同一种实测口径，
+  改之前不要把「必然无效」当结论写给用户。手动选图那条出路对这一半仍然有效
+  （自选图只喂 App 内课表背景），排查方向照旧两条：① 部分选择器（"最近"列表）返回的
+  URI 不支持持久授权，重启后失效（logcat 过滤 `Personalization` 可见告警）；
+  ② 解码失败（图片损坏 / URI 失效）会记 `SceneBackground` 告警日志。
+- **取证边界**：证伪只在模拟器 buaa36 / API 36 这一档上完成，真机（尤其 HyperOS）这一档
+  读不读得到仍未取到证 —— 区别在于现在**由实测去问**，而不是靠断言代答。
+- **不要做什么**：不要为恢复这条功能去申请 `MANAGE_EXTERNAL_STORAGE`（组件那条链不需要它），
+  也不要把那道 SDK 闸门加回组件这条链 —— 加回去就是把这个 bug 原样再造一遍。
 
 ### 2. 精确闹钟可能被收回（Android 12+）
 

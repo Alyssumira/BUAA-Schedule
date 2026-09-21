@@ -167,6 +167,23 @@
       门禁：**980 单测 / 125 套件 / 2 跳过 / 0 失败**（+1：`cameraError` 两分支的新判据；
       手输 UI 本来就没有自己的单测，被改的是钉旧文案的那几条断言），lint **0 error / 14 warning**
       （与基线同一组，删掉的五枚 import 没留下 UnusedImport）
+- [x] 组件玻璃背景的图源从 API 档次一刀切换成运行时实测（T46，2026-09-21）：
+      「Android 14 起第三方应用读不到桌面壁纸」这句写在 `KNOWN_ISSUES.md` 多年的断言
+      被装机实测证伪（API 36 上 `getDrawable()` 仍返回真实壁纸）；闸门白关一半设备，
+      被关的那一半退到"兜底"档把 App 内自选那张糊成不透明底 —— 一块与桌面无关的
+      (69,77,97) 恒值死板，这就是「修复小部件背景，现在的样子太别扭了」。
+      现在 `WidgetWallpaperProbe` 每轮刷新实测一次（零 android import 的判据收三格
+      拒绝：拿不到位图 / 尺寸退化 / 采样全同纯色占位），组件侧图源只认实测到的系统
+      桌面壁纸（`PickedImage` 在组件侧作废，无源走纯色半透明那条"桌面透得过来"的
+      好看形），配置页与渲染侧共用 memo 这一个答案、四格说明按实测口径重写、那颗
+      只在无源时出现的挑图按钮删除。⚠️ **App 内课表背景那条链（`SceneBackground
+      .decodeSystemWallpaper` + `SettingsScreen` 壁纸提示）本卡刻意未动**，还留着
+      同一道 34 闸门 —— 待修口径见 `docs/KNOWN_ISSUES.md` §1。
+      上方「课表背景默认提取系统桌面壁纸」与待办「桌面组件背景的真实高斯模糊」两格里
+      "Android 14 起系统禁止普通应用读取壁纸"的说法，对本条之后的**组件**这条链不再
+      成立（按只追加规矩不改写原文），实况以 §1 与本条为准。
+      门禁：**983 单测 / 125 套件 / 2 跳过 / 0 失败**（+2：wiring 新增"整包扫闸门
+      回潮"与"探针唯一实测点"两条守卫），lint **0 error / 14 warning**（与基线同一组）
 - [x] 冷启动链瘦身（T18）：三件事。① **WorkManager 改按需初始化** —— 清单里给
       `androidx.startup.InitializationProvider` 挂 `tools:node="merge"`、只对它下面
       `androidx.work.WorkManagerInitializer` 那**一条** meta-data 挂 `tools:node="remove"`
