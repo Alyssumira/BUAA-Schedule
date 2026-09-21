@@ -32,6 +32,10 @@ import kotlin.math.round
  *
  * 公开函数对以下输入都不抛异常、不返回 null：空课程列表、`credit == null`、
  * 周次越出学期范围、`semester == null`、开学日期非法、作息表为空。
+ *
+ * T51 给统计页新加的三张图（[CourseWeekSpans] / [WeekFreeGrid] / [WeeklyLoadTrend]）
+ * 沿用本文件的 [courseGroupKey]、[weekAxisLength] 与作息表取数口径：上面那两个口径
+ * 对它们同样成立，谁另起一套"一门课"或"横轴多少周"，三张图就会各说各话。
  */
 object SemesterStats {
 
@@ -168,7 +172,7 @@ object SemesterStats {
         semester: Semester?,
         timeSlots: List<TimeSlot>,
     ): List<DayLoad> {
-        val weeks = weekCount(courses, semester)
+        val weeks = weekAxisLength(courses, semester)
         val slotTimes = slotTimes(timeSlots)
         val slotMinutes = slotMinutes(slotTimes)
         val periodsPerDay = slotTimes.size
@@ -204,6 +208,21 @@ object SemesterStats {
                 freePeriodCount = (periodsPerDay - occupiedByDay[day].size).coerceAtLeast(0),
             )
         }
+    }
+
+    /**
+     * 参与计算的周数：学期总周数优先，没有学期行时用数据里出现过的最大周次。
+     * 两者都钳到 [CourseConstraints.MAX_TOTAL_WEEKS]，且恒 ≥ 1（下面要拿它当除数）。
+     *
+     * T51 起对同目录的图表内核开放（[CourseWeekSpans.board] /
+     * [WeekFreeGrid.gridOf] / [WeeklyLoadTrend.trendOf]）：横轴长度一旦有第二套算法，
+     * 三张图和统计页那句"共 N 周"就会各说各话。
+     */
+    fun weekAxisLength(courses: List<Course>, semester: Semester?): Int {
+        val weeks = semester?.totalWeeks?.takeIf { it > 0 }
+            ?: courses.asSequence().flatMap { it.weeks.asSequence() }.maxOrNull()
+            ?: 1
+        return weeks.coerceIn(1, CourseConstraints.MAX_TOTAL_WEEKS)
     }
 
     /** 平均分钟数最大的一天（并列取星期序号最小的）；整周都没有课时返回 null */
@@ -243,7 +262,7 @@ object SemesterStats {
             quietestBusyDay = quietestBusyDay(loads)?.dayOfWeek,
             periodsPerDay = slotTimes(timeSlots).size,
             freeSlotCount = loads.sumOf { it.freePeriodCount },
-            weekCount = weekCount(courses, semester),
+            weekCount = weekAxisLength(courses, semester),
             semesterAnchored = semester?.startLocalDate != null,
         )
     }
@@ -251,21 +270,13 @@ object SemesterStats {
     // ---- 内部实现 ----
 
     /**
-     * 参与计算的周数：学期总周数优先，没有学期行时用数据里出现过的最大周次。
-     * 两者都钳到 [CourseConstraints.MAX_TOTAL_WEEKS]，且恒 ≥ 1（下面要拿它当除数）。
-     */
-    private fun weekCount(courses: List<Course>, semester: Semester?): Int {
-        val weeks = semester?.totalWeeks?.takeIf { it > 0 }
-            ?: courses.asSequence().flatMap { it.weeks.asSequence() }.maxOrNull()
-            ?: 1
-        return weeks.coerceIn(1, CourseConstraints.MAX_TOTAL_WEEKS)
-    }
-
-    /**
      * 作息表 → 节次号 → (上课, 下课)。
      * 时间解析不出来的行整个丢掉：它既排不进时间轴，也不该在空档分母里占一格。
+     *
+     * 对 [WeekFreeGrid] 开放（`internal` 而非 `private`）：热力格的"行轴"就是这份
+     * 节次表，另写一套取表逻辑会多出"哪张图用了默认作息"的口径分岔。
      */
-    private fun slotTimes(timeSlots: List<TimeSlot>): Map<Int, Pair<LocalTime, LocalTime>> =
+    internal fun slotTimes(timeSlots: List<TimeSlot>): Map<Int, Pair<LocalTime, LocalTime>> =
         timeSlots.ifEmpty { TimeSlotProfile.DEFAULT }.toStartEndTimes()
 
     /** 节次号 → 该节分钟数。`endTime <= startTime` 的节次丢掉（见 [DayLoad.isFree] 的说明） */
