@@ -790,8 +790,15 @@ private fun CourseTimelineCard(
             Spacer(modifier = Modifier.width(DesignTokens.spaceM))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 改前：课名不带 weight，Row 按顺序把「剩余全宽」先递给非加权子节点，
+                    // 于是长课名在自己末尾省略掉整格，轮到胶囊时 maxWidth 已经归零——
+                    // 胶囊被摆到行宽之外，而 PANEL 底板 clip(shape)（LiquidGlass）把它整枚裁没。
+                    // 改后：weight(1f, fill = false) 让 Row 先量胶囊与间隔的自然宽，课名只吃剩下那份。
+                    // fill 必须为 false：短标题时课名保持自然宽、胶囊紧贴其后，视觉与改前逐像素一致；
+                    // 若用默认的 fill=true，课名会被拉满整格，短行的胶囊会被顶到行尾去。
                     Text(
                         text = course.displayName,
+                        modifier = Modifier.weight(1f, fill = false),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = if (status == SlotStatus.PAST) {
@@ -819,11 +826,17 @@ private fun CourseTimelineCard(
                                     vertical = DesignTokens.spaceMicro,
                                 ),
                         ) {
+                            // 改前这里没锁行数：课名吃满整行后胶囊的 maxWidth 归零，
+                            // 「未开始」被逐字断成三行竖排——这一行的高度是被**裁在卡外**的
+                            // 胶囊撑起来的，所以长标题的卡在课名与地点之间多出一截空隙
+                            // （列表模式实测 deformity 之三的真因）。锁一行，高度与短标题行齐平。
                             Text(
                                 text = statusLabel,
                                 style = MaterialTheme.typography.labelMedium,
                                 color = if (status == SlotStatus.ONGOING) contentOn(accent)
                                 else MaterialTheme.colorScheme.onSecondaryContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
