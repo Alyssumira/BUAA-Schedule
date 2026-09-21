@@ -122,6 +122,35 @@
       模拟器上进这一页会自动降级为相册 + 手输，没有实时取景
       ⚠️ **真机联调未跑过**：老师端二维码的字面内容是唯一没取到证的环节，解析器按三形态
       兼容。偏差与待答问题见 `docs/BUAA_SPOC_SIGNIN_PLAN.md` §11、`docs/KNOWN_ISSUES.md` §11
+- [x] 扫码页「扫码没反应」三条（T44）：三条都是"界面看着活着、链路其实已经停了"。
+      ① **提交闸门从布尔死锁换成「原文 + 时刻」**（根因）。旧写法 `QrCodeAnalyzer.consumed`
+      在任何一次放行后置 true，而清它只有 `SignInState.Idle` 那一档、Idle 又只有按结果卡上的
+      「重新扫码 / 继续扫码」才回得来 —— 同一张码重投出来的 `Failed` 与上一个值**相等**，
+      `MutableStateFlow` 对相等的值不重发，那颗 `LaunchedEffect(state)` 就再也不触发，
+      于是之后每一帧在 `analyze` 入口被 `image.close()` 丢掉。现在是 `ScanHandled(payload, atMillis)`
+      + 纯函数 `shouldSubmitScan`：**换一张码立刻放行**（旧锁唯一走不通的就是这一条），
+      同一张码要过 `RescanCooldownMillis = 1500ms` 冷却、**并且**屏幕上没有等用户按的结果卡
+      （少了后一半就是每 1500ms 一次真提交，一直刷到用户离开 —— 同一颗闸门历来偏保守的方向）。
+      代价写在 KDoc 里：闸门挪到解码之后才拦，已放行过的那些帧照旧各解一次，
+      按帧节奏仍由 `STRATEGY_KEEP_ONLY_LATEST` + 单线程 executor 压着（同一时刻最多一帧在 ML Kit 手里）。
+      ② `cameraLive` 旧式 `scanner != null && scannerWorking && granted && cameraError == null`
+      **不看 provider**，而 `ProcessCameraProvider` 取不到（`future.get()` 抛、或永不完成）时
+      `cameraError` 也留空 —— 提示条五档全落空、取景框画在一块黑 `PreviewView` 上、
+      手输签到码被压成最弱一档。补法：`provider != null && analyzer != null` 进 `cameraLive`，
+      提示档位新增 provider 专属一档，取值改成 `withTimeoutOrNull(4_000ms)` + 一次重试
+      （重试只治瞬时失败：`getInstance` 是进程单例，那颗 future 真卡住时第二次等的还是它，
+      这种设备最后由文案说话）。③ 权限的 `granted` 是颗无 key `remember{}`，
+      「Don't allow」→ 去系统设置放行 → 回来，这一页永远停在「没有相机权限」且绑定不再重跑；
+      现在 ON_RESUME 撞一次 tick 就重读真权限（口径抄设置页），取 provider 那颗 effect 的键
+      也从 `Unit` 换成 `granted`。
+      两条判据（`ScanSubmissionGate.kt` / `ScanUiStatus.kt`）零 `android` import、时钟与权限
+      都在调用点读，`ScanSubmissionGateTest`（11 条）+ `ScanUiStatusTest`（8 条）逐支跑；
+      「置位先于回调」「resume 还连着那颗按钮」「页面没有另算一份口径」这几条 JVM 跑不到的
+      按源码形状钉住。门禁：**979 单测 / 125 套件 / 2 跳过 / 0 失败**，lint **0 error / 14 warning**。
+      ⚠️ 三条都**没上设备验过**（本卡只有 JVM 单测 + lint），待复验的三件观测：
+      ① 扫一张无效码→按「重新扫码」→再扫另一张码要有反应（改前是此后再也不反应）；
+      ② `adb shell pm revoke` 掉相机权限后进页面、再去系统设置里放行，返回时提示条要翻面；
+      ③ 造一个 provider 拿不到的场景（把相机服务打掉）后提示条要出现"CameraX 起不来"那一句
 - [x] 冷启动链瘦身（T18）：三件事。① **WorkManager 改按需初始化** —— 清单里给
       `androidx.startup.InitializationProvider` 挂 `tools:node="merge"`、只对它下面
       `androidx.work.WorkManagerInitializer` 那**一条** meta-data 挂 `tools:node="remove"`

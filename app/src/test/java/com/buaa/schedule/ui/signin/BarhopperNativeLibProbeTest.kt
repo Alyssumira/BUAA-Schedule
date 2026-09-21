@@ -185,10 +185,14 @@ class BarhopperNativeLibProbeTest {
             gallery.indexOf("barhopperNativeLib.isAvailable()") in 0 until gallery.indexOf("scanner.process("),
         )
 
+        // 缺库那一档的文案分支：T44 起整条提示档位搬进了 ScanUiStatus.kt 的 scanUiStatus()
+        // （纯 JVM 判据，每档都能单测，见 ScanUiStatusTest）。搬的是写法、不是口径 ——
+        // 这一支照旧钉"不许把用户指向相册那条死路"，只是换个文件读。
+        val ladder = normalize(withoutComments(readSource(SCAN_STATUS_FILE)))
         val marker = "decoderMissing -> \""
-        val at = code.indexOf(marker)
-        check(at >= 0) { "缺库那一档的文案分支不在了（或被合并进 scanner == null 那一档）：$marker" }
-        val text = code.substring(at, code.indexOf('"', at + marker.length))
+        val at = ladder.indexOf(marker)
+        check(at >= 0) { "缺库那一档的文案分支不在了（或被合并进 scanner 不可用那一档）：$marker" }
+        val text = ladder.substring(at, ladder.indexOf('"', at + marker.length))
         assertFalse("解码器整条都不在的时候，文案还在把用户指向相册那条死路：$text", text.contains("从相册选"))
         assertTrue("缺库时唯一还能走的是手输签到码，文案得说这件事：$text", text.contains("手输"))
     }
@@ -369,6 +373,7 @@ class BarhopperNativeLibProbeTest {
         const val MAIN_PREFIX = "app/src/main/java"
         const val PROBE_FILE = "com/buaa/schedule/ui/signin/BarhopperNativeLibProbe.kt"
         const val SCAN_SCREEN_FILE = "com/buaa/schedule/ui/signin/SpocScanScreen.kt"
+        const val SCAN_STATUS_FILE = "com/buaa/schedule/ui/signin/ScanUiStatus.kt"
         const val BUILD_SCRIPT = "app/build.gradle.kts"
         const val THREADS = 8
     }

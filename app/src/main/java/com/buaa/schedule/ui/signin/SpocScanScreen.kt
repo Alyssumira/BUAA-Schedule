@@ -3,6 +3,7 @@ package com.buaa.schedule.ui.signin
 import android.Manifest
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.util.Log
 import android.view.Surface
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -37,6 +38,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -58,6 +60,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
@@ -74,6 +78,7 @@ import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.Executors
 import kotlin.coroutines.resume
 
@@ -109,13 +114,32 @@ fun SpocScanScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val state by viewModel.state.collectAsState()
 
-    var granted by remember {
+    // 权限的真相在系统那边，不在进入页面那一刻的快照里（D3）：
+    // 「Don't allow」→ 去系统设置里放行 → 回来，这一页必须跟着翻面。
+    // 旧写法是一颗无 key 的 remember{}，只在组合时读一次，请求回调之外再没人重读它 ——
+    // 用户从设置回来照样写着「没有相机权限」，而下面那颗以 granted 为键的绑定 effect
+    // 也永远不会再跑第二遍。口径抄设置页那一处（permissionResumeTick）：
+    // ON_RESUME 撞一次就把 tick 加一，remember 连带重建、当场重读真实权限。
+    // ⚠️ 读权限这件事留在调用点（一次 checkSelfPermission 的易失读），判据不在这里。
+    var permissionResumeTick by remember { mutableIntStateOf(0) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) permissionResumeTick++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    var granted by remember(permissionResumeTick) {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
                 PackageManager.PERMISSION_GRANTED,
         )
     }
     var provider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    // 取 provider 这一步本身失败过（抛错 / 超时 / future 永不完成），而且重试也拿不到（D2）：
+    // 它和 cameraError 是两件事 —— cameraError 只有拿到 provider 之后、绑定阶段才写得进去，
+    // 所以 provider 拿不到时那个字段是空的，旧版整页就这样一声不吭。
+    var cameraProviderMissing by remember { mutableStateOf(false) }
     var cameraError by remember { mutableStateOf<String?>(null) }
     // 解码器"跑起来之后"坏了（analyzer 收到 ML Kit 的失败回调）：相机这条先停用，
     // scanner 还在，所以相册识别仍然承诺得起
@@ -177,8 +201,20 @@ fun SpocScanScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
-        provider = cameraProviderOrNull(context)
+    LaunchedEffect(granted) {
+        // 键从 Unit 换成 granted（D3 的第二半）：有些设备上相机服务在没放行之前根本不给
+        // provider，那一档下第一次取值是白取的 —— 放行回来要能再拿一次。
+        // 已经拿到手就不重复取（ProcessCameraProvider 是进程单例，取值本身几十毫秒级）。
+        if (provider != null) return@LaunchedEffect
+        cameraProviderMissing = false
+        val acquired = cameraProviderWithRetry(context)
+        provider = acquired
+        if (acquired == null) {
+            cameraProviderMissing = true
+            // 这一条只在日志里存在是不够的：用户那台机器（HyperOS）logcat 砍到 Info 级、
+            // release 又剥 Verbose，读证据的是下面 scanUiStatus 那一档文案
+            Log.w(TAG, "相机服务未交出 ProcessCameraProvider（首试 + 重试各 ${ProviderTimeoutMillis}ms 上限）")
+        }
     }
 
     // CompositionLocal 只能在组合期读，绑定发生在协程里，所以先把旋转值取出来
@@ -186,8 +222,18 @@ fun SpocScanScreen(
     val targetRotation = remember(view) { view.display?.rotation ?: Surface.ROTATION_0 }
     val busy = state is SignInState.Resolving || state is SignInState.Submitting
     // 相机这条路径是否真的在跑：取景框只在它有效时出现，
-    // 退化到相册/手输时再压一层暗区就只是噪音
-    val cameraLive = scanner != null && scannerWorking && granted && cameraError == null
+    // 退化到相册/手输时再压一层暗区就只是噪音。
+    // 判据抽成纯函数 scanCameraLive（D2）：旧写法漏了 provider 与 analyzer 两项，
+    // provider 拿不到时它照样返回 true，于是取景框画在一块黑 PreviewView 上、
+    // 手输签到码被压成最弱一档，整页谎报"一切正常"。
+    val cameraLive = scanCameraLive(
+        scannerAvailable = scanner != null,
+        analyzerReady = analyzer != null,
+        cameraProviderReady = provider != null,
+        granted = granted,
+        scannerWorking = scannerWorking,
+        cameraError = cameraError,
+    )
 
     LaunchedEffect(granted, provider, scannerWorking, analyzer) {
         // 纪律（T24）：真正要用解码器之前先把判定做完 —— 绑上分析流就是第一帧解码的
@@ -220,8 +266,16 @@ fun SpocScanScreen(
         }
     }
 
-    // 一帧二维码能被连续解几十次，analyzer 里用 consumed 锁死；回到待扫状态时要手动放行
+    // 闸门（ScanSubmissionGate）由两件事驱动：
+    // ① 回到 Idle（用户按了「重新扫码 / 继续扫码」）⇒ 整枚清掉，同一张码也允许再来一次；
+    // ② 结果卡还挂在屏幕上 ⇒ 告诉闸门"用户在点按钮了"，这一档同一份原文不再重投。
+    // 第 ② 条不是多余的保险：同一张解不开的码重投出来的还是**相等**的 Failed 值，
+    // MutableStateFlow 对相等的值不重发，所以 ① 那一支永远不会被它触发；
+    // 只靠冷却期的话就是每 1500ms 一次真提交，一直刷到用户离开（旧闸门的 consumed
+    // 之所以是颗死锁，就是为了压住这个 —— 现在压住它的是这一条，而不是"以后全不投了"）。
+    // 换一张码（payload 变了）不看这一条，照旧立刻放行。
     LaunchedEffect(state) {
+        analyzer?.markAwaitingUserAction(state is SignInState.Failed || state is SignInState.Signed)
         if (state is SignInState.Idle) analyzer?.resume()
     }
 
@@ -288,15 +342,17 @@ fun SpocScanScreen(
                 modifier = Modifier.navigationBarsPadding(),
                 verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
             ) {
-                val hintText = when {
-                    // 解码器整条链都不在（T24）：相机与相册用的是同一个 scanner，
-                    // 再提"从相册选那张二维码"就是把用户往死路上引 —— 只剩手输
-                    decoderMissing -> "这份安装包没带这台设备那一档的扫码解码库，相机和相册都解不出二维码，只能手输签到码。"
-                    scanner == null || !scannerWorking -> "这台设备用不了相机扫码，请从相册选那张二维码，或直接输入签到码。"
-                    !granted -> "没有相机权限，无法扫码。请在系统设置里放行，或改用下面两个入口。"
-                    cameraError != null -> "相机不可用（$cameraError），请改用下面两个入口。"
-                    else -> null
-                }
+                // 文案档位抽成纯函数 scanUiStatus（ScanUiStatus.kt），每一档都能在 JVM 单测里
+                // 逐支跑一遍：这一页的提示条是唯一可靠的取证面（用户那台机器读不到 Log.d）。
+                // 新增的是 cameraProviderMissing 那一档（D2）—— 旧版里 provider 取不到时
+                // 五支全落空，提示条一个字都不出，而 cameraLive 还谎报正常。
+                val hintText = scanUiStatus(
+                    decoderMissing = decoderMissing,
+                    scannerUsable = scanner != null && scannerWorking,
+                    granted = granted,
+                    cameraError = cameraError,
+                    cameraProviderMissing = cameraProviderMissing,
+                )
                 if (hintText != null) {
                     Text(
                         text = hintText,
@@ -490,8 +546,16 @@ private val analysisExecutor = Executors.newSingleThreadExecutor()
 /**
  * 相机帧 → QR 原文。
  *
- * [consumed] 是这一页唯一的「一次只签一个」闸门：CameraX 按帧回调，同一张二维码
- * 在预览里能被解出几十次，不锁住就会连着发几十次提交请求。
+ * 闸门是 [handled] 那一枚「原文 + 时刻」，判据在 [shouldSubmitScan]（纯 JVM，单测钉着）。
+ * 它换掉了原先那颗 [consumed] 式的布尔死锁：那颗锁只在 `SignInState.Idle` 才清，而 Idle 只有
+ * 用户按结果卡上的按钮才回得来 —— 于是**放行过一次之后**每一帧都被静默丢掉（预览照旧活着，
+ * 再对准一张码也不会有任何反应），这就是用户报的「扫码没反应」。
+ *
+ * ⚠️ 代价要说清：闸门现在在解码**之后**才拦，不再在 analyze 入口把帧直接 close 掉。
+ * 这个区别只影响"已经放行过一次之后"那一段：那一档以前每帧零开销、现在每帧照旧解一次。
+ * 而正常取景时（还没扫到码）本来就在按帧解码，两者是同一份账 —— 何况旧写法省下的那份开销
+ * 换来的是整页失效。按帧的节奏仍由 `STRATEGY_KEEP_ONLY_LATEST` + 单线程 executor 压着，
+ * 同一时刻最多一帧在 ML Kit 手里。
  */
 private class QrCodeAnalyzer(
     private val scanner: BarcodeScanner,
@@ -499,10 +563,29 @@ private class QrCodeAnalyzer(
     private val onFailure: () -> Unit,
 ) : ImageAnalysis.Analyzer {
 
-    @Volatile private var consumed = false
+    /**
+     * 上一次放行。@Volatile 是必须的：写它的是 ML Kit 的回调线程，读它的是 analysisExecutor，
+     * 清它的是主线程 —— 三处不同线程，而且**整枚换引用**（[ScanHandled] 不可变），
+     * 所以任何一次读到的都是配对完整的「原文 + 时刻」。
+     */
+    @Volatile private var handled: ScanHandled? = null
 
+    /** 屏幕上是否挂着等用户按的结果卡（`Failed` / `Signed`），由组合侧推进来，见 [markAwaitingUserAction] */
+    @Volatile private var awaitingUserAction = false
+
+    /** 回到待扫状态：整枚闸门清掉，连同一张码也重新允许（「重新扫码 / 继续扫码」那一颗按钮） */
     fun resume() {
-        consumed = false
+        handled = null
+        awaitingUserAction = false
+    }
+
+    /**
+     * 结果卡挂着的时候把闸门按在"只认新码"这一档：同一份原文不再重投。
+     * 少了这一半，冷却期一到就会每 [RescanCooldownMillis] ms 把同一张码真提交一次
+     * （相等的 `Failed` 值不重发 → Idle 那一支永远等不到），论证见 [shouldSubmitScan]。
+     */
+    fun markAwaitingUserAction(awaiting: Boolean) {
+        awaitingUserAction = awaiting
     }
 
     // 只在本函数内消化这个 opt-in：标 @ExperimentalGetImage 会把它传染给调用方，
@@ -510,10 +593,6 @@ private class QrCodeAnalyzer(
     // 必须是 androidx 那个 @OptIn —— lint 的 UnsafeOptInUsageError 只认它，kotlin.OptIn 压不住
     @androidx.annotation.OptIn(markerClass = [androidx.camera.core.ExperimentalGetImage::class])
     override fun analyze(image: ImageProxy) {
-        if (consumed) {
-            image.close()
-            return
-        }
         val mediaImage = image.image
         if (mediaImage == null) {
             image.close()
@@ -526,16 +605,24 @@ private class QrCodeAnalyzer(
             // 「这台设备用不了相机扫码」而永久关掉整页的扫码能力。
             scanner.process(InputImage.fromMediaImage(mediaImage, image.imageInfo.rotationDegrees))
                 .addOnSuccessListener { codes ->
-                    codes.firstOrNull()?.rawValue?.let {
-                        // 先置位再回调：回调里就会开始发请求，这期间新帧可能已经进来了
-                        consumed = true
-                        onCode(it)
+                    codes.firstOrNull()?.rawValue?.let { raw ->
+                        // 墙钟在调用点读、判据是纯函数（仓库口径）
+                        val now = System.currentTimeMillis()
+                        if (shouldSubmitScan(handled, raw, now, awaitingUserAction)) {
+                            // 先置位再回调：回调里就会开始发请求，这期间新帧可能已经进来了
+                            // （这一句次序钉在 ScanSubmissionGateTest 的形状守卫里）
+                            handled = ScanHandled(raw, now)
+                            onCode(raw)
+                        }
                     }
                 }
                 .addOnFailureListener {
                     // 解不出来是常态（画面糊、没对准），只有 native 缺失这种才值得降级；
-                    // 但连 MLKit 都报错时继续按帧重试只是白耗电，交给界面提示换入口
-                    consumed = true
+                    // 但连 MLKit 都报错时继续按帧重试只是白耗电，交给界面提示换入口。
+                    // 留痕用 [DecodeFailurePayload] 占位（这次解码没有原文可记），并把闸门按在
+                    // "只认新码"这一档：与旧 consumed 的口径一致，只是不再排斥以后真解出来的码。
+                    handled = ScanHandled(DecodeFailurePayload, System.currentTimeMillis())
+                    awaitingUserAction = true
                     onFailure()
                 }
                 .addOnCompleteListener { image.close() }
@@ -547,10 +634,50 @@ private class QrCodeAnalyzer(
             // 分析流根本不绑，而绑定之前又必须先 awaitDecided()（见 SpocScanScreen）。
             // 所以能拿到回调的 scanner 一定是"已判定可用"的那一颗，这里只剩运行期故障。
             image.close()
-            consumed = true
+            handled = ScanHandled(DecodeFailurePayload, System.currentTimeMillis())
+            awaitingUserAction = true
             onFailure()
         }
     }
+}
+
+/**
+ * provider 单次取值的等待上限。
+ *
+ * 4 秒的账：CameraX 绑相机服务 + 枚举摄像头正常是几十毫秒（`ScanChainWarmUp` 就是提前
+ * 把这一档跑掉的，见它的 `warmUpCameraProvider`），而它自己那一份等待的上限也是秒级。
+ * 再短会把"系统进程冷启动"那一档误判成没有相机，再长就是用户站在那儿盯黑屏。
+ */
+private const val ProviderTimeoutMillis = 4_000L
+
+/** 取值次数：首试 + 一次重试。一次就够 —— 重试只对"瞬时的服务抖动/绑定失败"有用 */
+private const val ProviderAttempts = 2
+
+/**
+ * 取 CameraProvider，带上限与一次重试（D2）。
+ *
+ * 旧写法是 `provider = cameraProviderOrNull(context)` 一句、包在只跑一次的
+ * `LaunchedEffect(Unit)` 里，而 `cameraProviderOrNull` 内部那颗 `future.get()` 没有上限、
+ * 没有日志、没有重试：future 永不完成时这一页就永远停在 provider == null，
+ * 而既不进 cameraError、也不进任何文案 —— 第二结构性「没反应」。
+ *
+ * ⚠️ 重试只对"这一次取值本身失败了"有用：`ProcessCameraProvider.getInstance` 给的是
+ * 进程单例，那颗 future 一旦永不完成，第二次 `get()` 等的还是同一颗 —— 这种设备最后还是
+ * 靠 [scanUiStatus] 的 provider 那一档说话。不假装重试能治好一切。
+ */
+private suspend fun cameraProviderWithRetry(context: android.content.Context): ProcessCameraProvider? {
+    repeat(ProviderAttempts) { attempt ->
+        // withTimeoutOrNull 的两种结局都是 null（超时 → null；超时被 cameraProviderOrNull 里的
+        // runCatching 吞掉、块自己返回 null → 也是 null），所以"这次等待有上限"这件事
+        // 不依赖谁去接那个取消异常 —— 这里只关心一件事：到底拿没拿到 provider。
+        val hit = withTimeoutOrNull(ProviderTimeoutMillis) { cameraProviderOrNull(context) }
+        if (hit != null) {
+            if (attempt > 0) Log.i(TAG, "相机 provider 第 ${attempt + 1} 次取值成功")
+            return hit
+        }
+        Log.w(TAG, "相机 provider 第 ${attempt + 1} 次取值未成功（${ProviderTimeoutMillis}ms 上限，或取值本身抛了）")
+    }
+    return null
 }
 
 /**
@@ -575,3 +702,6 @@ private suspend fun cameraProviderOrNull(context: android.content.Context): Proc
             }
         }.getOrNull()
     }
+
+/** 与本页另一条设备链路（SpocLoginScreen）同一个 TAG 口径：只留证据，不代替文案 */
+private const val TAG = "SpocScanScreen"
