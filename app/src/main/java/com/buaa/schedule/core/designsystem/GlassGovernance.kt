@@ -12,8 +12,12 @@ package com.buaa.schedule.core.designsystem
  */
 object GlassGovernance {
 
-    /** 两次运行时降档之间的最小间隔：给降档后的渲染一个观察窗口，避免一路压到 OFF */
-    private const val LOWER_COOLDOWN_MS = 10 * 60_000L
+    /**
+     * 两次运行时降档之间的最小间隔：给降档后的渲染一个观察窗口，避免一路压到 OFF。
+     * internal 不是放宽语义：[GlassJankMonitor] 要把它连同上次降档时刻一起传进
+     * 纯判据内核，让冷却窗口内的 Demote 在发起前就被拦下（判据本体在 GlassJankDecision.kt）。
+     */
+    internal const val LOWER_COOLDOWN_MS = 10 * 60_000L
 
     /** 运行时降档上限（null = 未降档）；由 [lowerTierForJank] 维护 */
     @Volatile private var runtimeCap: Int? = null
@@ -29,10 +33,10 @@ object GlassGovernance {
     private val staticCap: Int by lazy {
         val maxMemoryMb = Runtime.getRuntime().maxMemory() / 1024L / 1024L
         val cores = Runtime.getRuntime().availableProcessors()
-        // 档位只有 OFF / STANDARD 两级（②V-14 删掉了「增强」），所以这里只需判一处：
+        // 档位只有 OFF / STANDARD 两级（②V-14 删掉了「增强」），判据提取进
+        // glassStaticCapTier（零 android import，表驱动单测能逐边界打），阈值分毫未动：
         // 128MB 内存或 4 核以下直接关闭 AGSL 玻璃走 tint 降级，其余设备拿满标准档。
-        if (maxMemoryMb <= 128L || cores <= 4) DesignTokens.GLASS_TIER_OFF
-        else DesignTokens.GLASS_TIER_STANDARD
+        glassStaticCapTier(maxMemoryMb, cores, DesignTokens.GLASS_TIER_OFF, DesignTokens.GLASS_TIER_STANDARD)
     }
 
     /** 用户偏好 → 经设备能力 + 运行时降档钳制后的实际生效档位 */
@@ -50,8 +54,7 @@ object GlassGovernance {
      */
     fun lowerTierForJank(nowMillis: Long = System.currentTimeMillis()) {
         synchronized(this) {
-            val previous = lastLowerAt
-            if (previous != null && nowMillis - previous < LOWER_COOLDOWN_MS) return
+            if (isGlassLowerCoolingDown(lastLowerAt, nowMillis, LOWER_COOLDOWN_MS)) return
             lastLowerAt = nowMillis
             // 基准必须是可用的最高档：从 Int.MAX_VALUE 往下减得到的 MAX-1 经 coerceAtMost 恒等，
             // 于是"降了一档"实际什么都没降，低端机/热节流场景永不降级（R5 F-18）。
@@ -63,6 +66,13 @@ object GlassGovernance {
 
     /** 当前运行时上限（测试与诊断用；null 表示未因掉帧降档） */
     fun runtimeCapForTest(): Int? = runtimeCap
+
+    /**
+     * 上次降档时刻（null = 从未降档）：[GlassJankMonitor] 把它连同 [LOWER_COOLDOWN_MS]
+     * 传进纯判据内核，冷却窗口在发起 Demote 之前就该被看见。读一次 volatile 字段，
+     * 不加锁——它只用于决策参考，真正的闸门仍在本对象 [lowerTierForJank] 的同步块里。
+     */
+    internal fun lastLowerAtMillis(): Long? = lastLowerAt
 
     /** 测试用：清掉运行时降档状态（单例在 JVM 测试里会跨用例存活） */
     internal fun resetRuntimeForTest() {
