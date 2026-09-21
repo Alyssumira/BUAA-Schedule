@@ -26,8 +26,13 @@ package com.buaa.schedule.ui.signin
  *
  * @param decoderMissing 探针已判定：这份安装包没带这台设备的解码库
  * @param scannerUsable 解码器可用（= `scanner != null && scannerWorking`，调用点合成）：
- *   建不出来、或跑起来之后自己报坏了，都算这一档不成立。跑坏了那一支相册确实还承诺得起
- *   （scanner 在，只是相机那条先停用）；文案按这条出口写。
+ *   建不出来、或跑起来之后自己报坏了，都算这一档不成立。这一档按相册是否还在分两支说话，
+ *   见 [galleryUsable]。
+ * @param galleryUsable 相册那条路还在不在（= `scanner != null`，调用点读设备事实当参数传）。
+ *   相机与相册共用同一颗 scanner，所以 scanner **跑坏了**（`scannerWorking == false`）时相册
+ *   确实还是真出路，那一支指相册；scanner **建不出来**（`scanner == null`）时相册那颗按钮的
+ *   `enabled` 同键一起灭，那一支再指相册就是谎话 —— 与 [decoderMissing] 同一口径，只说实话、
+ *   两条一起没、不许指任何出路。
  * @param granted 相机权限。相册识别不需要它，所以这一档的出口是"放行 + 相册"两条。
  * @param cameraError 失败原因的原文。它有**两个写点**（SpocScanScreen 的绑定失败与相册
  *   读图失败），后者恰恰是相册刚失败 —— 所以这一档按来源分两支说话，见函数体注释。
@@ -36,17 +41,26 @@ package com.buaa.schedule.ui.signin
 internal fun scanUiStatus(
     decoderMissing: Boolean,
     scannerUsable: Boolean,
+    galleryUsable: Boolean,
     granted: Boolean,
     cameraError: String?,
     cameraProviderMissing: Boolean,
 ): String? = when {
     // 解码器整条链都不在（T24）：相机与相册用的是同一颗 scanner，两条一起没。
-    // 手输入口删除后这一档**没有任何出路可指** —— 提相册、提输入都是谎话，
-    // 这一条被 BarhopperNativeLibProbeTest ⑦ 按子串钉着（相册/手输/输入都不许出现）。
-    decoderMissing -> "这份安装包没带这台设备那一档的扫码解码库，这一页的两条解码路径都没有，在这台设备上用不了扫码签到。"
-    // scanner 建不出来时相册那颗按钮也灭着（enabled 同键）；这一档主要说的是
-    // "scanner 在、相机那条跑坏了"——那时相册确实还是能走的路。
-    !scannerUsable -> "这台设备用不了相机扫码，请改用相册识别。"
+    // 手输入口删除后这一档**没有任何出路可指** —— 但必须把"哪两条路没了"点名说清楚，
+    // 用户看"两条解码路径"是不知道指的是什么的。守的是 BarhopperNativeLibProbeTest ⑦：
+    // 陈述"相册也解不出"是实话，**指向**相册（改用相册 / 从相册选…）才是谎话，禁的是指向语。
+    decoderMissing -> "这份安装包没带这台设备那一档的扫码解码库，相机实时扫码和相册识别都解不出二维码，这台设备上用不了扫码签到。"
+    // scannerUsable 不成立有两种病因，相册在不在完全不同，必须按 galleryUsable 分两支：
+    // - 跑坏了（scanner 在、相机那条先停用）：相册仍是真出路 ⇒ 指相册（唯一允许的一处指向）。
+    // - 建不出来（scanner == null）：相册那颗按钮 enabled 同键一起灭 ⇒ 与缺库同一口径，
+    //   两条都没了，点名相机与相册、不许指任何出路。
+    !scannerUsable ->
+        if (galleryUsable) {
+            "这台设备用不了相机扫码，请改用相册识别。"
+        } else {
+            "这台设备的扫码解码器建不起来，相机实时扫码和相册识别都用不了，这一页在这台设备上用不了扫码签到。"
+        }
     // 相册不需要相机权限，所以放行与相册两条出口在这档都成立。
     !granted -> "没有相机权限，无法扫码。请在系统设置里放行，或改用相册识别（相册不需要相机权限）。"
     // 绑定失败与 provider 缺失可以同时成立吗？不能：cameraError 只在 provider 已经拿到手之后

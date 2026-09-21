@@ -347,6 +347,7 @@ fun SpocScanScreen(
                 val hintText = scanUiStatus(
                     decoderMissing = decoderMissing,
                     scannerUsable = scanner != null && scannerWorking,
+                    galleryUsable = scanner != null,
                     granted = granted,
                     cameraError = cameraError,
                     cameraProviderMissing = cameraProviderMissing,

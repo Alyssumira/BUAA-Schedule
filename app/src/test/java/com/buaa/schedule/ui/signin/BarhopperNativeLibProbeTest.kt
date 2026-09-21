@@ -28,7 +28,7 @@ import org.junit.Test
  *   非 arm64 的 release 包立刻回到启动即崩。
  * ⑥ 全仓库只有探针那一处 `System.loadLibrary`：不许有第二处自己判断。
  * ⑦ 扫码页那四条纪律（scanner 以结论为键、绑定分析流之前先等判定、相册只放行"已判定
- *   可用"、缺库时文案不再指向相册）—— 这一页的降级形状一旦漂走，用户就会被指到一条死路。
+ *   可用"、缺库时文案不指向任何出路）—— 这一页的降级形状一旦漂走，用户就会被指到一条死路。
  *
  * 至于「判定不可用时预热那一档零 ML Kit 调用」，那条落在 `ScanChainWarmUpTest` ⑨⑩。
  */
@@ -186,17 +186,21 @@ class BarhopperNativeLibProbeTest {
         )
 
         // 缺库那一档的文案分支：T44 起整条提示档位搬进了 ScanUiStatus.kt 的 scanUiStatus()
-        // （纯 JVM 判据，每档都能单测，见 ScanUiStatusTest）。T45 起口径换了：这一页只剩
-        // 相机与相册两条入口，而它们用的是**同一颗** scanner —— 缺库时两条一起没，
-        // 这一档没有任何出路可指。提到相册（同死的死路）或任何"手输/输入"（已删的入口）
-        // 都是谎话，所以这些子串一个都不许出现在这一档的文案里。
+        // （纯 JVM 判据，每档都能单测，见 ScanUiStatusTest）。T45 起这一页只剩相机与相册两条
+        // 入口，而它们用的是**同一颗** scanner —— 缺库时两条一起没，这一档没有任何出路可指。
+        //
+        // 守的是「指向语」而不是裸子串：这一档必须把话说清楚，就得点名相机和相册两条都解不出
+        // （"相册识别也解不出"是**实话**）；把用户往某条路引才是谎话（"改用相册""从相册选"
+        // 那已经和相机同死的死路，"手输""输入签到码"那已删除的入口）。所以禁的是"改用相册 /
+        // 从相册选 / 请从相册 / 手输 / 输入签到码"这一类**指向语**，不是"相册"这个裸字 ——
+        // 裸子串会逼文案写成"两条解码路径都没有"那种含糊话，用户读不出指的是什么。
         val ladder = normalize(withoutComments(readSource(SCAN_STATUS_FILE)))
         val marker = "decoderMissing -> \""
         val at = ladder.indexOf(marker)
         check(at >= 0) { "缺库那一档的文案分支不在了（或被合并进 scanner 不可用那一档）：$marker" }
         val text = ladder.substring(at, ladder.indexOf('"', at + marker.length))
-        for (banned in listOf("相册", "手输", "输入")) {
-            assertFalse("解码器整条都不在，这一档却没有老实说用不了，而是提起了「$banned」：$text", text.contains(banned))
+        for (banned in listOf("改用相册", "从相册选", "请从相册", "手输", "输入签到码")) {
+            assertFalse("解码器整条都不在，这一档不许把用户指向已经不存在的出路「$banned」：$text", text.contains(banned))
         }
     }
 

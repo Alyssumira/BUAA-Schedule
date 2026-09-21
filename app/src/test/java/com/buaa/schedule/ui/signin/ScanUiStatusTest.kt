@@ -33,6 +33,7 @@ class ScanUiStatusTest {
     private val healthy = mapOf(
         "decoderMissing" to false,
         "scannerUsable" to true,
+        "galleryUsable" to true,
         "granted" to true,
         "cameraError" to null as String?,
         "cameraProviderMissing" to false,
@@ -43,6 +44,7 @@ class ScanUiStatusTest {
         return scanUiStatus(
             decoderMissing = s["decoderMissing"] as Boolean,
             scannerUsable = s["scannerUsable"] as Boolean,
+            galleryUsable = s["galleryUsable"] as Boolean,
             granted = s["granted"] as Boolean,
             cameraError = s["cameraError"] as String?,
             cameraProviderMissing = s["cameraProviderMissing"] as Boolean,
@@ -80,11 +82,13 @@ class ScanUiStatusTest {
     /** ③ 档位次序：谁能决定用户下一步，谁在前 */
     @Test
     fun ladderPriorityFollowsTheNearestWayOut() {
-        // 缺库压过一切 —— 而且这一档**没有任何出路可指**（手输已删、相册同死），
-        // 只许说实话：不许提相册、不许提手输/输入
+        // 缺库压过一切 —— 这一档**没有任何出路可指**（手输已删、相册同死），但必须点名
+        // "哪两条路没了"（相机与相册都说出来才不含糊），且不许出现任何指向语。
         val decoderText = statusOf("decoderMissing" to true, "granted" to false, "cameraProviderMissing" to true)!!
         assertTrue("缺库那一档没说实话（解码库不在）：$decoderText", decoderText.contains("解码库"))
-        for (banned in listOf("相册", "手输", "输入")) {
+        assertTrue("缺库那一档必须点名相机这条路（否则用户不知道是哪两条）：$decoderText", decoderText.contains("相机"))
+        assertTrue("缺库那一档必须点名相册这条路（相册同死，实话要说全）：$decoderText", decoderText.contains("相册"))
+        for (banned in listOf("改用相册", "从相册选", "请从相册", "手输", "输入签到码")) {
             assertFalse("缺库那一档把用户指向已经不存在的出路「$banned」：$decoderText", decoderText.contains(banned))
         }
         // 没权限时先说权限（provider 同时缺失也不抢这一档：放行之后还可能拿得到）
@@ -94,6 +98,27 @@ class ScanUiStatusTest {
             statusOf("cameraError" to "绑定失败：x", "cameraProviderMissing" to true))
         // scanner 不可用（建不出来 / 跑起来坏了）压过权限
         assertTrue(statusOf("scannerUsable" to false, "granted" to false)!!.contains("用不了相机扫码"))
+    }
+
+    /**
+     * ③c !scannerUsable 那一档必须按"相册还在不在"分两支（galleryUsable 参数）。
+     *
+     * 相机与相册共用同一颗 scanner：scanner **跑坏了**（scannerWorking=false）时相册还是真出路，
+     * 指相册；scanner **建不出来**（scanner==null）时相册那颗按钮 enabled 同键一起灭，
+     * 再指相册就是谎话 —— 那一支得与缺库同口径，点名两条都没了、不许指任何出路。
+     */
+    @Test
+    fun scannerUnusableBranchesOnGalleryAvailability() {
+        val galleryAlive = requireNotNull(statusOf("scannerUsable" to false, "galleryUsable" to true))
+        assertTrue("相机跑坏而相册还在时，这一档必须把用户指向相册：$galleryAlive", galleryAlive.contains("改用相册"))
+
+        val galleryDead = requireNotNull(statusOf("scannerUsable" to false, "galleryUsable" to false))
+        assertTrue("相册同死时得点名相机：$galleryDead", galleryDead.contains("相机"))
+        assertTrue("相册同死时得点名相册（老实说两条都没了）：$galleryDead", galleryDead.contains("相册"))
+        for (banned in listOf("改用相册", "从相册选", "请从相册", "手输", "输入签到码")) {
+            assertFalse("scanner 建不出来时相册一起没，这一档还在把用户指向「$banned」：$galleryDead", galleryDead.contains(banned))
+        }
+        assertNotEquals("两分支说成了同一句话，按 galleryUsable 分支等于没分", galleryAlive, galleryDead)
     }
 
     /**
