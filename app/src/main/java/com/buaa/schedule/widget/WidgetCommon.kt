@@ -354,6 +354,12 @@ object WidgetCommon {
      * 实色板，于是"玻璃感壁纸背景"开了和不开一模一样（真机反馈的设置不生效）。
      * 两件事收在同一个函数里，调用点也就没有把先后下反的机会。
      *
+     * T47 起这个出口是三格（[GlassRender]）而不是"有没有位图"两格：位图撞空但问到
+     * 桌面主色时，走的仍然是下面那三条纯色指令 —— 只是 `setColorFilter` 交出去的色
+     * 换成推导出来的那块板色（透明磨砂那一层照旧、`setAlpha` 照旧按用户的透明度走，
+     * 所以这一档改的是"板是什么颜色"，不是"板怎么画"）。三格都在这个 `when` 里落地、
+     * 不带 else，将来加一格会在编译期被点名，也不会出现"渲染侧自己再判一次图源"。
+     *
      * 圆角在两条分支上必须是同一个数：`setImageResource` 那条由 `<corners radius>` 保证精确，
      * 位图那条则要按这个实例的真实尺寸把半径反推回去再画（背景层是 fitXY，
      * 画布会被非等比拉到组件尺寸上），见 [WidgetCornerRadii]。所以 appWidgetId
@@ -371,11 +377,21 @@ object WidgetCommon {
         isListLayout: Boolean,
     ) {
         val bgViewId = android.R.id.background
-        val background = appearance.resolvedBackground(context)
-        val bitmap = if (appearance.blurBackground) {
+        val presetBackground = appearance.resolvedBackground(context)
+        val glass = if (appearance.blurBackground) {
             WidgetBackgroundRenderer.render(context, appearance, appWidgetId, appWidgetManager)
         } else {
-            null
+            GlassRender.Preset
+        }
+        // 真正画到那块板上的颜色：只有主色档会把它换掉（开关关着时永远走不到那一格 ——
+        // 上面那个 if 就是这道闸）。文字墨色取的是这一枚，因为 `titleColorFor` 的契约
+        // 就是"传实际着色后的背景色"；自动取字那一档因此会跟着真的板走，而强制黑字/
+        // 白字那两档也不会翻面 —— 判据里"不许换墨的一侧"那条夹取（WidgetGlassSource
+        // 第 3 步）保证了这一点：跨侧就整格退回用户自己选的色。
+        val (bitmap, background) = when (glass) {
+            is GlassRender.FromBitmap -> glass.bitmap to presetBackground
+            is GlassRender.FromPalette -> null to glass.plateArgb
+            GlassRender.Preset -> null to presetBackground
         }
         if (bitmap != null) {
             views.setImageViewBitmap(bgViewId, bitmap)

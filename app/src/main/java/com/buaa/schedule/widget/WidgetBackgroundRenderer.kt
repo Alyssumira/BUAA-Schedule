@@ -26,6 +26,11 @@ import com.buaa.schedule.core.designsystem.Personalization
  * 在位图成功时不能再对同一个 ImageView 下纯色 `setColorFilter` —— 那会把这张图
  * 重新糊成一块实色板，开了开关却和纯色底一模一样。
  *
+ * 但"没产出位图"从 T47 起不再等于"什么都没得画"：实测拿不到位图却问到桌面主色时，
+ * 这里交出去的是**一块推导出来的板色**（[GlassRender.FromPalette]），由调用点按既有的
+ * 纯色那条分支画 —— 圆角 drawable 与 `setAlpha` 的口径一个字不动。三格的落点见
+ * [GlassRender]，判据见 [WidgetGlassSource.palettePlateArgb]。
+ *
  * 圆角是**按实例**烘的：画布会被背景层 `scaleType="fitXY"` 非等比拉到组件真实尺寸上，
  * 所以半径得按两轴各自的倍数反推（[WidgetCornerRadii]），否则用户选的 20dp
  * 到桌面上会变成 53dp，并且是个椭圆。
@@ -63,31 +68,42 @@ object WidgetBackgroundRenderer {
     private const val KEY_USE_SYSTEM_WALLPAPER = "wallpaper_use_system"
 
     /**
-     * 生成一张玻璃背景。
+     * 生成一次玻璃背景该画成什么。
      *
      * 圆角要按**这一个实例**的真实尺寸来烘焙，所以得把 appWidgetId 和宿主句柄传进来：
      * 背景层是 fitXY，画布会被拉到组件尺寸上，半径不除回去就不是用户选的那一档
      * （详见 [WidgetCornerRadii]）。
      *
+     * 三格出口（[GlassRender]）逐格对上探针的两档图源：实测到位图 → 烘一张图出去，
+     * 与改前逐格同一条管线；位图撞空但问到主色 → 只交一块推导出来的板色，
+     * 那块板仍由调用点按既有的圆角 drawable + `setAlpha` 画（T37 的 alpha 复合口径、
+     * T30/T38/T39 的圆角账、T42 的按轴出图与 [GlassBakeCache] 一个都不碰）；两档都没有 →
+     * 用户自己选的配色。
+     *
      * 同一枚 [GlassBakeKey] 第二次进来时直接回缓存里那张位图：不重采样、不画图。
      * 命中路径上仍然要跑的是那三步尺寸探测（理由见 [widgetSizePx]）与一次图源实测
-     * （[WidgetWallpaperProbe.measure]）——后者在改前的"闸门放行"那一档设备上也每轮
-     * 要问一次，省掉的是烘焙管线本身。T46 起图源只剩一种（实测可用的系统桌面壁纸），
-     * 它的身份从同一次实测里顺手算出，不再有"命中时省一趟解码"那条路 ——
-     * 那条路省的是自选那张的解码，而它从本卡起不再是组件的图源。
+     * （[WidgetWallpaperProbe.measure]）—— 后者在改前的"闸门放行"那一档设备上也每轮
+     * 要问一次，省掉的是烘焙管线本身。T46 起图源只剩实测这一种来历；T47 起它分两档，
+     * 而主色档不进缓存（一次 binder 问色换一枚 Int，没有值得缓存的东西）。
+     *
+     * internal 是因为返回类型 [GlassRender] 是模块内的三格出口 —— 本函数唯一的调用点
+     * 就在同包的 `WidgetCommon.applyAppearance`，升成 public 只会让第四处也来判一次图源。
      */
-    fun render(
+    internal fun render(
         context: Context,
         appearance: WidgetAppearance,
         appWidgetId: Int,
         appWidgetManager: AppWidgetManager,
-    ): Bitmap? {
-        if (!appearance.blurBackground) return null
+    ): GlassRender {
+        if (!appearance.blurBackground) return GlassRender.Preset
         return runCatching {
-            val measured = wallpaperForRender(context) ?: return@runCatching null
-            // 位图档：实测到一张能用的桌面壁纸才走下面那条管线（T37/T42 的账一个字不动）。
-            // 判到位图不可用时本枚仍回 null（= 改前的兜底），主色档在下一枚接上。
-            val wallpaper = measured.captured ?: return@runCatching null
+            val measured = wallpaperForRender(context) ?: return@runCatching GlassRender.Preset
+            // 底色在这里解析一次就够：它既进缓存键、又进烘焙管线，还喂主色档那条
+            // "不许换墨的一侧"的夹取。动态取色那一路读的是主题，两处各解析一次就可能
+            // 拿到两个值，于是"键"和"像素"对不上、换桌面深浅色时缓存会把旧颜色的图
+            // 发给新颜色该在的那一格。
+            val tintArgb = appearance.resolvedBackground(context)
+            val wallpaper = measured.captured ?: return@runCatching palettePlateOrPreset(measured, tintArgb)
             try {
                 // 尺寸探测自己吞每一层异常（[widgetSizePx]）：取不到尺寸不等于取不到壁纸，
                 // 前者有明写的兜底口径（[WidgetCornerRadii.bake]），后者才是"这张背景画不出来"。
@@ -101,11 +117,8 @@ object WidgetBackgroundRenderer {
                     canvasHeightPx = size.heightPx,
                     size = widgetSize,
                 )
-                // 底色只在这里解析一次：它既进缓存键、又进烘焙管线。动态取色那一路读的是
-                // 主题，两处各解析一次就可能拿到两个值，于是"键"和"像素"对不上、
-                // 换桌面深浅色时缓存会把旧颜色的图发给新颜色该在的那一格。
                 val glass = glassTintArgb(
-                    tintArgb = appearance.resolvedBackground(context),
+                    tintArgb = tintArgb,
                     alphaPercent = appearance.alphaPercent,
                 )
                 val key = glassBakeKey(
@@ -116,11 +129,12 @@ object WidgetBackgroundRenderer {
                     nightMode = isNightMode(context),
                 )
                 // 键给不出来（壁纸内容签名取不到）就照改前的样子现烤一张，不入库
-                if (key == null) {
+                val baked = if (key == null) {
                     bakeGlass(wallpaper, size, radii, glass)
                 } else {
                     glassCache.obtain(key) { bakeGlass(wallpaper, size, radii, glass) }
                 }
+                baked?.let { GlassRender.FromBitmap(it) } ?: GlassRender.Preset
             } finally {
                 // 图源位图归这一次调用管：只有我们新建的那张（探针画的渲染目标）才回收，
                 // 一次 1080x1920 = 约 8MB，每次刷新都漏一份，几次之后就会把进程推到
@@ -130,9 +144,33 @@ object WidgetBackgroundRenderer {
             }
         }.onFailure {
             // 这里以前什么都不留：玻璃背景画不出来会静默回退纯色底，一整轮定位全靠
-            // 装机量像素。语义不变（返回 null = 回退纯色底），只补证据。
+            // 装机量像素。语义不变（回退 = 画用户自己选的那块板），只补证据。
             Log.w(TAG, "玻璃背景这次画不出来，回退纯色底（appWidgetId=$appWidgetId）", it)
-        }.getOrNull()
+        }.getOrElse { GlassRender.Preset }
+    }
+
+    /**
+     * 位图档撞空时的第二档：问到主色就交一块推导出来的板色，问不到就照改前那样回
+     * 用户自己选的配色。
+     *
+     * 判据本体是 [WidgetGlassSource.palettePlateArgb]（零 android import，四格约束能在
+     * JVM 里逐格钉住）；这里只把探针那三格 Int / Int? 交过去。`presetArgb` 也交进去，
+     * 因为「不许换墨的一侧」那一夹取要拿用户那块板当参照 —— 墨在哪一侧由调用点
+     * （`WidgetCommon.applyAppearance` 的 `usesDarkInk`）决定，这里不重判一次。
+     */
+    private fun palettePlateOrPreset(
+        measured: WidgetWallpaperProbe.Measurement,
+        tintArgb: Int,
+    ): GlassRender {
+        val palette = measured.palette ?: return GlassRender.Preset
+        return GlassRender.FromPalette(
+            WidgetGlassSource.palettePlateArgb(
+                primaryArgb = palette.primaryArgb,
+                secondaryArgb = palette.secondaryArgb,
+                colorHints = palette.colorHints,
+                presetArgb = tintArgb,
+            ),
+        )
     }
 
     /**
@@ -355,9 +393,11 @@ object WidgetBackgroundRenderer {
             .getBoolean(KEY_USE_SYSTEM_WALLPAPER, Personalization.DEFAULT_USE_SYSTEM_WALLPAPER)
 
     /**
-     * 这一次要糊的壁纸：实测到手才回那一份收获（位图连同它的身份、以及位图判空时
-     * 问到的主色），否则 null，调用方（`WidgetCommon.applyAppearance`）落到纯色半透明
-     * 那条分支 —— 装机实测里那一形反而是桌面真的透得过来。
+     * 这一次要糊的图源：实测到手才回那一份收获（位图连同它的身份、以及位图判空时
+     * 问到的主色），开关关着时连问都不问（回 null = 什么都不画）。调用方
+     * （`WidgetCommon.applyAppearance`）拿到的三格出口见 [GlassRender] —— 位图档烘一张图、
+     * 主色档换一块板色、两档都没有就画用户自己选的那块板（装机实测里那一形反而是
+     * 桌面真的透得过来）。
      *
      * 只有「用户关掉了开关」那一格许在实测之前拦 —— [WidgetGlassSource.decide] 里它
      * 判的是用户自己的选择，是任何实测都翻不动的一格（这也省掉那次 binder 问图）。
@@ -369,6 +409,34 @@ object WidgetBackgroundRenderer {
         !usesSystemWallpaper(context) -> null
         else -> WidgetWallpaperProbe.measure(context)
     }
+}
+
+/**
+ * 这一次「玻璃感壁纸背景」要画成什么 —— [WidgetBackgroundRenderer.render] 的三格出口。
+ *
+ * 为什么不是一个 `Bitmap?`：T46 之前那枚返回值只回答"糊没糊上图"，而"没糊上图"在
+ * T47 之后分成了两种**像素不同**的形 —— 主色档要把那块半透明板的底色换成桌面主色
+ * 推出来的颜色，两档都撞空才回用户自己选的配色。压成一个可空位图就会让调用点
+ * （`WidgetCommon.applyAppearance`）自己再去问一次图源 —— 那正是 T31 与 T46 各修过一次的
+ * 「两边各判一次」，也是「开关能拨、拨完没反应」那次的成因。
+ *
+ * 而且这里**没有第四格**留给"App 内自选那张"：它不是桌面，铺出来就是那块
+ * (69,77,97) 恒值死板（论证在 [WidgetGlassSource]）。
+ *
+ * 三格与 [GlassSource] 五格的对应关系是"两档图源 + 一格什么都没有"，配置页那句说明
+ * 走的是 [GlassSource] 那一头（它多两格：还没实测、以及用户自己关了开关）。
+ * 调用点对这个 `when` 不带 else：将来加一格要在编译期被点名。
+ */
+internal sealed interface GlassRender {
+
+    /** 位图档：糊的是实测到的那张桌面壁纸，圆角/底色/透明度已经烘在这张图里 */
+    data class FromBitmap(val bitmap: Bitmap) : GlassRender
+
+    /** 主色档：没有糊任何图，只是那块半透明板的底色改吃桌面主色（本卡新增） */
+    data class FromPalette(val plateArgb: Int) : GlassRender
+
+    /** 两档都没有（或用户关了「使用桌面壁纸」、或这次烘焙崩了）：画用户自己选的那块板 */
+    data object Preset : GlassRender
 }
 
 /**
