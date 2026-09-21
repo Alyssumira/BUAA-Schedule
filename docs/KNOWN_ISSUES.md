@@ -5,37 +5,63 @@
 
 ## 平台限制（App 无法绕过，已做引导或回退）
 
-### 1. 「Android 14+ 读不到系统壁纸」这句断言已被实测证伪
+### 1. 组件读不到系统桌面壁纸：真因是「权限 + app-op」两道闸，不是 API 档次
 
-- **本节以前怎么写**：Android 14（API 34）起 `WallpaperManager.getDrawable()` 需要
-  `MANAGE_EXTERNAL_STORAGE` 或签名级 `READ_WALLPAPER_INTERNAL`，普通应用一律返回 null，
-  并据此下结论「澎湃 OS 基于 Android 14/15，『使用桌面壁纸』在该系统上必然无效，
-  这是平台硬限制，不是 bug」。**那句断言在本仓库里从来没有被量过。**
-- **实测怎么说**（2026-09-21，模拟器 buaa36 / API 36）：`getDrawable()` 仍返回真实的
-  桌面壁纸 —— 把渲染侧那道 `SDK_INT >= 34` 闸门抬到 100 之后，组件 tile 立刻跟着桌面的
-  亮暗两区走（亮区 (43,57,88)、暗区 (21,29,51)，正是底色按 alpha 复合在局部桌面像素上的
-  算法预期值）。闸门白关了一半设备，还把配置页那句说明钉成了一句谎话。
-- **桌面组件这条链已经改（T46）**：不再由 API 档次代答，每轮刷新**实测一次** ——
-  `WidgetWallpaperProbe` 问一次 `getDrawable()`，把宽高与 9 枚采样像素交给零 android
-  import 的判据 `WidgetGlassSource.wallpaperLooksUsable`（拿不到位图 / 尺寸退化到 64px
-  以下 / 9 枚采样全同的纯色占位，三种都判「这一次没有源」）。判到没有源时组件走**纯色
-  半透明**那条分支（桌面真的透得过来，装机实测里这一形反而好看），不再拿 App 内自选的
-  那张图顶包 —— 顶包铺出来的是一块与桌面无关的死板，那块恒值板就是这么来的。配置页那句
-  说明读的是同一个答案（`WidgetBackgroundRenderer.availability`），无源时只说设备实测的
-  事实，不再挂"先挑一张图"那颗兑现不了的按钮。
+- **这一节前后写过两版口径，两版都错**：
+  - 第一版（多年）：断言 Android 14（API 34）起 `getDrawable()` 需要 `MANAGE_EXTERNAL_STORAGE`
+    或签名级 `READ_WALLPAPER_INTERNAL`，普通应用一律返回 null，并据此下结论「澎湃 OS 基于
+    Android 14/15，『使用桌面壁纸』在该系统上必然无效，这是平台硬限制，不是 bug」。
+    **那句断言在本仓库里从来没有被量过。**
+  - 第二版（T46，2026-09-21）：说第一版"已被装机实测证伪 —— API 36 的镜像上 `getDrawable()`
+    仍返回真实桌面壁纸，关掉那道 `SDK_INT >= 34` 闸门后组件 tile 立刻跟着桌面的亮暗两区走
+    （亮区 (43,57,88)、暗区 (21,29,51)）"。**这句也是错的**，而且是同一个坑踩第二次：
+    那两组数量的是**无源时那块半透明板透出来的桌面像素**（板本身半透明、RemoteViews 宿主窗口
+    透明），量到的是桌面而不是玻璃 —— 与本项目已经栽过一次的「取样先扫 tile 包围盒、别量到
+    壁纸上」同一条陷阱。
+- **真因（同日在同一台 buaa36 / API 36 / 1080×2400 上做一次性 instrumented 取证跑）**：
+  1. `getDrawable()` / `peekDrawable()` / `getBitmap()` / `peekDrawable(displayId)` **四个入口全部抛**
+     `SecurityException: Permission android.permission.READ_EXTERNAL_STORAGE denied for package com.buaa.schedule`。
+     本应用**从来没有声明过**这枚权限（`git log -S READ_EXTERNAL_STORAGE -- app/src/main/AndroidManifest.xml`
+     零条提交）⇒「组件玻璃糊桌面位图」这条路在 T46 之前和之中都从未真正跑通过；那道 SDK 闸门
+     也就没关掉过任何设备，它挡的是一条本来就撞权限的路。
+  2. 只声明 + 授予 `READ_EXTERNAL_STORAGE`：改抛
+     `SecurityException: Op READ_MEDIA_IMAGES ignore for package com.buaa.schedule` —— app-op 那一层还在拦。
+  3. 再声明 + 授予 `READ_MEDIA_IMAGES`：`getDrawable()` 才返回真实的 `BitmapDrawable`
+     **922×1024 ARGB_8888**，3×3 九枚采样里 8 种不同值。
+     ⇒ **平台在 API 36 仍然把桌面壁纸位图发给三方应用**，挡路的只有我们自己不肯要相册权限。
+  4. 零权限可用的那一条通道：`getWallpaperColors(FLAG_SYSTEM)` 正常返回 ——
+     primary = sRGB(0.204, 0.243, 0.396) = **(52, 62, 101)**，secondary = **(16, 15, 25)**，
+     colorHints = 6。而 `FLAG_SYSTEM or FLAG_LOCK` 会抛
+     `IllegalArgumentException: Must specify exactly one kind of wallpaper to read`（一次只能问一种）。
+- **本卡（T47）的取舍**：**不新增任何权限**。为一块背景板去要相册权限，代价大于收益 ——
+  用户对一颗日历 App 读相册的合理预期是"它凭什么"。位图那条入口保留不动（它判到没有源时
+  本来就一个像素都不多吃），新增的是**主色这一档**：拿不到位图但读得到 colors 时，
+  那层半透明板的底色由 primary/secondary 推导（仍夹在既有的亮度/alpha 约束里），
+  两者都没有才回用户自己选的配色。开关（`blurBackground`）关掉时一律吃用户配色，不许吃桌面主色。
+  判据零 android import（`WidgetGlassSource`），设备事实由 `WidgetWallpaperProbe` 在 IO 线程实测后
+  翻译成 Int / Float 交进去。
+- **组件这条链的口径（T46 立实测、T47 加第二档）**：每轮刷新实测一次，图源分两档 ——
+  位图档（`getDrawable()`，保留给"某台设备真给了权限"那种形；API ≤33 那档平台不查这枚权限，
+  **但本卡没有那种设备，未实测，不当已验证写**）与主色档（`getWallpaperColors(FLAG_SYSTEM)`，
+  零权限，本机唯一真正常开的一档）。配置页「这台设备实测读不到系统桌面壁纸」那句**仍然成立、
+  要保住**：组件这条链确实从未拿到位图，配置页与渲染侧同一个答案这件事没变；本卡改的是
+  读不到位图之后画什么，以及不许再许诺"糊的是壁纸"。
 - **仍然成立的一半（本卡刻意未动）**：App 内课表背景那条链
   （`SceneBackground.decodeSystemWallpaper`）还留着自己那一刀切的 `SDK_INT >= 34 → null`，
   所以在 14+ 上「使用桌面壁纸」拨了照旧没反应，设置页也还在按 API 档次显示那段
   "系统限制第三方应用读取桌面壁纸"的死提示（`SettingsScreen` 壁纸那一节）。
-  **这一半现在是待修问题，不是平台限制** —— 它该走组件这条链同一种实测口径，
+  **这一半现在是待修问题，不是平台限制** —— 而且它按本节的真因来看，连"限制"都没有过。
   改之前不要把「必然无效」当结论写给用户。手动选图那条出路对这一半仍然有效
   （自选图只喂 App 内课表背景），排查方向照旧两条：① 部分选择器（"最近"列表）返回的
   URI 不支持持久授权，重启后失效（logcat 过滤 `Personalization` 可见告警）；
   ② 解码失败（图片损坏 / URI 失效）会记 `SceneBackground` 告警日志。
-- **取证边界**：证伪只在模拟器 buaa36 / API 36 这一档上完成，真机（尤其 HyperOS）这一档
-  读不读得到仍未取到证 —— 区别在于现在**由实测去问**，而不是靠断言代答。
-- **不要做什么**：不要为恢复这条功能去申请 `MANAGE_EXTERNAL_STORAGE`（组件那条链不需要它），
-  也不要把那道 SDK 闸门加回组件这条链 —— 加回去就是把这个 bug 原样再造一遍。
+- **取证边界**：上面那四格只在这台模拟器（buaa36 / API 36）上量过，真机（尤其 HyperOS）
+  这一档仍未取到证；`getDrawable()` 在 API ≤33 上给不给位图也没有设备可验。区别在于现在
+  **由实测去问**，而不是靠断言代答 —— 但"实测到过什么"要按本节这四格的原样说，不许再拿
+  透明板透出来的桌面像素当"读到壁纸"的证据。
+- **不要做什么**：不要为恢复这块背景板去声明 `READ_EXTERNAL_STORAGE` / `READ_MEDIA_IMAGES`，
+  也不要写运行时申请（本卡的立论就是这笔代价不划算）；不要把 `SDK_INT >= 34` 那道闸门加回
+  组件这条链 —— 它既不是真因，加回去也挡不住权限那一层。
 
 ### 2. 精确闹钟可能被收回（Android 12+）
 
