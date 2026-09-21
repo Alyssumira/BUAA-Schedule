@@ -87,7 +87,7 @@ internal object WidgetGlassSource {
     const val PLATE_LIGHT_INK_MAX_LUMA = 0.183f
 
     /** 深色墨那一侧要保证 AA，板色的相对亮度地板 */
-    const val PLATE_DARK_INK_MIN_LUMA = 0.211f
+    const val PLATE_DARK_INK_MIN_LUMA = 0.212f
 
     /** `WallpaperColors.HINT_SUPPORTS_DARK_TEXT`：平台认为这块桌面适合**深色文字**（= 桌面偏亮） */
     const val HINT_SUPPORTS_DARK_TEXT = 1
@@ -224,7 +224,8 @@ internal object WidgetGlassSource {
      * （亮度 ≈0.008））：
      * - 交点：`1.05/(L+0.05) = (L+0.05)/0.058` → `L = 0.197`；
      * - 白字 AA：`1.05/(L+0.05) ≥ 4.5` → `L ≤ 0.183`；
-     * - 黑字 AA：`(L+0.05)/0.058 ≥ 4.5` → `L ≥ 0.211`。
+     * - 黑字 AA：`(L+0.05)/0.058 ≥ 4.5` → `L ≥ 0.211`，取整到 [PLATE_DARK_INK_MIN_LUMA]
+     *   的 0.212（往安全侧多留一格：0.211 代入是 4.495，差的那一点正是浮点末位会丢的）。
      * 三条数各自留了余量，于是**同侧之内**不会出现"改了底色反而把字洗掉"；
      * 卡末那两个改前/改后对比度就是按这三条线量的。
      *
@@ -353,8 +354,10 @@ internal object WidgetGlassSource {
 }
 
 private fun Float.pow(exponent: Float): Float {
-    // 只用到 2.4 这一支指数（sRGB 线性化），所以不引 kotlin.math.pow 的 Double 往返：
+    // 只用到 2.4 这一支指数（sRGB 线性化），所以不引 Double 往返：
     // 这里要的是一枚 Float，且这条判据的每一格都在 JVM 单测里钉，浮点路径短一分少一分漂移。
+    // `ln` / `exp` 都取 Float 重载（返回值本就是 Float，多写一次 toFloat 只是个会被编译器
+    // 点名的冗余转换），于是整条链一次都没进 Double。
     val log = kotlin.math.ln(this) * exponent
-    return kotlin.math.exp(log).toFloat()
+    return kotlin.math.exp(log)
 }

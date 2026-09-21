@@ -184,6 +184,54 @@
       成立（按只追加规矩不改写原文），实况以 §1 与本条为准。
       门禁：**983 单测 / 125 套件 / 2 跳过 / 0 失败**（+2：wiring 新增"整包扫闸门
       回潮"与"探针唯一实测点"两条守卫），lint **0 error / 14 warning**（与基线同一组）
+- [x] 组件玻璃背景加**主色档** + 订正上一条那句"实测证伪"（T47，2026-09-21）：
+      ⚠️ **上一条里「装机实测把『Android 14 起第三方读不到桌面壁纸』证伪了：API 36 上
+      `getDrawable()` 仍返回真实桌面壁纸，关掉闸门后 tile 立刻跟着桌面的亮暗两区走
+      （亮区 (43,57,88)、暗区 (21,29,51)）」这句是错的**（按只追加规矩不改写原文，以本条为准）。
+      那两组数量的是**无源时那块半透明板透出来的桌面像素**（板本身半透明、RemoteViews 宿主
+      窗口透明），不是"壁纸位图进过组件"的证据 —— 同一类取样陷阱第二次踩（第一次见上一条
+      的 (69,77,97) 恒值板）。同一台设备（buaa36 / API 36 / 1080×2400）插桩复测的真因是
+      「运行时权限 + app-op」两道闸：四个读图入口（`getDrawable()` / `peekDrawable()` /
+      `getBitmap()` / `peekDrawable(displayId)`）一律抛 `SecurityException: Permission
+      android.permission.READ_EXTERNAL_STORAGE denied` —— 这枚权限本应用**从未声明**
+      （`git log -S READ_EXTERNAL_STORAGE -- app/src/main/AndroidManifest.xml` 零条提交），
+      ⇒ 那条位图路在 T46 之前和之中都不通；只声明+授予它改抛 `Op READ_MEDIA_IMAGES ignore`，
+      两枚相册权限都给齐才真的收到 `BitmapDrawable` **922×1024 ARGB_8888**（9 枚采样 8 种不同）
+      ⇒ 平台在 API 36 仍然把壁纸发给三方应用，挡路的正是我们自己不要的那两枚权限。
+      零权限那条通道活着：`getWallpaperColors(FLAG_SYSTEM)` 给 primary sRGB(0.204, 0.243, 0.396)
+      = **(52, 62, 101)**、secondary **(16, 15, 25)**、colorHints = 6；`FLAG_SYSTEM or FLAG_LOCK`
+      抛 `IllegalArgumentException: Must specify exactly one kind of wallpaper to read`。
+      逐条读数与取舍在 `docs/KNOWN_ISSUES.md` §1（那一节 T46 写的版本本卡已重写，不再留旧说法）。
+      **本卡做法**：**不新增任何权限**（为一块半透明底板去要"你的全部照片"，代价大于收益，
+      理由写进 `WidgetWallpaperProbe` 的 KDoc，并由 wiring ⑫ 扫全主源集 + 清单钉住那两个名字
+      一次都不许出现）；位图那条入口一字不动地留作第一档，无源时新增**第二档 = 桌面主色**：
+      探针 `paletteOf` 在 IO 线程问一次 `getWallpaperColors(FLAG_SYSTEM)`（只在位图档撞空后才问），
+      memo 加第三格 `@Volatile memoPalette`，写序红线不变（两格结论先写、时间戳最后写，
+      读侧先看时间戳）。判据 `WidgetGlassSource.palettePlateArgb` 零 android import（wiring ⑬
+      钉该文件 `import` 行为 0、四格设备事实全靠参数交进来）：primary 定色相、两色里较暗那格
+      定明度、只有两色分不出明暗（亮度差 <0.02，含副色缺席）时才让 colorHints 投票、
+      不许跨过用户那块板的墨侧（跨侧整格退回预设，那格行为与改前逐字一致）、同侧之内再夹进
+      WCAG AA 亮度带。`GlassSource` 加第五格 `SystemWallpaperPaletteOnly`（配置页那句因此
+      **不许**再说"糊的是壁纸"，五格 `when` 不带 else，wiring ⑯ 逐格钉"该说什么"与"不许说什么"）；
+      渲染侧出口换成三格 `GlassRender`（位图 / 板色 / 纯色），`blurBackground = false` 时
+      一律走用户配色、连那次 binder 都不付。圆角烘焙（T30/T38/T39）、alpha 复合口径（T37）、
+      按轴出图与 `GlassBakeCache`（T42）未动 ⇒ **有位图源时像素与改前逐格一致**。
+      可读性改前/改后（同一条算式复算，白字压在本机那张推导板 (34,39,63)、亮度 0.0215 上）：
+      **16.13:1 → 14.69:1**，两头都远在 AA 4.5 之上；带子本身把暗侧顶在亮度 0.183（=4.51:1）、
+      亮侧地板 0.212（=4.51:1），跨侧那一步先拦，所以不存在"改了底色反而把字洗掉"。
+      过程中被 lint 抓出来、而不是靠猜的两条方法可用性：`getWallpaperColors` 是 **API 27** 才有
+      （minSdk 26 那一档交 null 走第三档）、`WallpaperColors.getColorHints()` 是 **API 31** 才有
+      （27~30 交 hints=0，而 0 在判据里的语义正是"平台没话说"）。这两道版本号挡的是"这枚方法
+      存不存在"，与 T46 拆掉的那道"拿 API 档次代答设备事实"的闸门不是一类东西，`KNOWN_ISSUES.md`
+      §1 里把这句差别写死了。
+      ⚠️ **本卡未上设备复量**（设备由用户占用，只有 JVM 单测 + lint）：装机要看的两件 ——
+      ① 拨「玻璃感壁纸背景」时那块板的底色应随桌面换壁纸而变（改前的观测是 `w8.blur`
+      true/false 来回拨 tile 像素差 **0 / 530100** 的静默 no-op）；② 换一张接近纯白的亮壁纸时
+      板色应当**退回**用户自己选的那块（跨侧被拦下），而不是把字洗掉。取样记得先扫 tile 包围盒。
+      门禁：**999 单测 / 125 套件 / 2 跳过 / 0 失败**（+16：主色档那张纯 JVM 表 9 条 +
+      接线钉 7 条 —— 探针必读 colors 且不读 LOCK、memo 写序、全主源集零相册权限、判据零 import、
+      渲染侧无位图才吃板色且开关关掉时不许吃、`GlassRender` 三格不带 else、配置页五格不带 else
+      与逐格文案分叉），lint **0 error / 14 warning**（与基线同一组）
 - [x] 冷启动链瘦身（T18）：三件事。① **WorkManager 改按需初始化** —— 清单里给
       `androidx.startup.InitializationProvider` 挂 `tools:node="merge"`、只对它下面
       `androidx.work.WorkManagerInitializer` 那**一条** meta-data 挂 `tools:node="remove"`

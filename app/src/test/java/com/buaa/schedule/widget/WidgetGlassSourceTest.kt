@@ -7,21 +7,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 「玻璃感壁纸背景」到底有没有图源 —— 两张表：实测那件事实怎么判，判完怎么答。
+ * 「玻璃感壁纸背景」到底有没有图源、图源给到哪一档 —— 三张表：
+ * 实测那件事实怎么判、判完怎么答、只有主色可用时那块板画成什么颜色。
  *
  * 为什么要在 JVM 里逐格钉住：这条链上出过两次「开关能拨、拨完没反应」。
  * 第一次（T31）是渲染侧与配置页各判一次；第二次（T46）是判据的**来历**错了 ——
- * 「这台设备读不读得到桌面壁纸」由一道 `SDK_INT >= 34` 闸门代答，而装机实测把那句
- * 平台断言证伪了（API 36 的镜像上 `getDrawable()` 仍返回真实壁纸，关掉闸门后组件 tile
- * 立刻跟着桌面的亮暗两区走）。闸门一关，组件就永远走"兜底"那档，把 App 内自选的那张图
- * 铺成不透明底面 —— 那次顶上来的是张纯白测试图，桌面上因此出现一块与壁纸毫无关系的
- * (69,77,97) 恒值板。用户报的「修复小部件背景，现在的样子太别扭了」就是那块板。
+ * 「这台设备读不读得到桌面壁纸」由一道 `SDK_INT >= 34` 闸门代答。而 T46 当时写下的那句
+ * 订正（"装机实测证伪了平台断言：API 36 上 `getDrawable()` 仍返回真实壁纸，关掉闸门后
+ * tile 立刻跟着桌面的亮暗两区走 (43,57,88)/(21,29,51)"）**本领也是错的**：那两组数是
+ * 无源时那块半透明板透出来的桌面像素，量的是桌面而不是玻璃。真因是权限 + app-op 两道闸
+ * （本应用从未声明 `READ_EXTERNAL_STORAGE`），逐条读数见 `docs/KNOWN_ISSUES.md` §1 ——
+ * 也就是说组件这条链从来没有糊到过一张真壁纸，"闸门白关一半设备"关掉的是一条本来就
+ * 撞权限的路。T47 因此不去救那个假口径，而是给无源那一档接上**零权限问得到的主色**。
  *
- * 所以两张表各钉一件事：
+ * 三张表各钉一件事：
  * 1. [WidgetGlassSource.wallpaperLooksUsable] —— 实测拿回来的那东西算不算一张壁纸
  *    （拿不到位图、尺寸退化、采样全同的纯色占位，三种坏形各一格）；
- * 2. [WidgetGlassSource.decide] —— 三态实测结论 x 一枚开关 = 六格，一格一个答案。
- *    其中「还没测」那一格是本卡新立的：它不许被折成"读得到"或"读不到"里的任何一头。
+ * 2. [WidgetGlassSource.decide] —— 三态实测结论 x 主色有没有 x 一枚开关，一格一个答案。
+ *    其中「还没测」那一格不许被折成"读得到"或"读不到"里的任何一头；
+ * 3. [WidgetGlassSource.palettePlateArgb] —— 只有主色可用时那块板画成什么颜色
+ *    （primary 定色相、两色里较暗那格定明度、平局才让 colorHints 投票、不许换墨的一侧、
+ *    同侧之内夹进 AA 带）。这一张表是本卡的新判据，四格约束各钉一格。
  *
  * 判据本身在 [WidgetGlassSource]（零 android import）。本模块没有 Robolectric，
  * 碰 `WallpaperManager` / `Canvas` 的写法在这里根本跑不起来 —— 抽取理由见那个文件的头注释，
@@ -246,5 +252,261 @@ class WidgetGlassSourceTest {
             "开 -> 关",
             WidgetGlassSource.wallpaperSwitchChanged(savedUseSystem = true, currentUseSystem = false),
         )
+    }
+
+    // ==================== ④ 主色档：三格颜色怎么变成一块板 ====================
+    //
+    // 本机（buaa36 / API 36）零权限实测到的那三格事实，原样当输入用：
+    // primary sRGB(0.204, 0.243, 0.396) = (52, 62, 101)、secondary (16, 15, 25)、colorHints = 6。
+    // 逐格读数见 docs/KNOWN_ISSUES.md §1 —— 这张表就是把那次取证的那三格颜色钉进判据。
+
+    @Test
+    fun theDevicePaletteBecomesABluePlateInsteadOfTheUsersPreset() {
+        val derived = plate(PRIMARY_DEVICE, SECONDARY_DEVICE, HINTS_DEVICE, PRESET_DARK)
+        // primary 定色相（偏蓝）、较暗的 secondary 定明度：(52,62,101) 与 (16,15,25) 逐通道对分
+        assertEquals(argb(34, 39, 63), derived)
+        assertNotEquals(
+            "本机改前画的是用户那块固定板（(22,32,58) 恒值），" +
+                "推导色若还等于它就说明这一档根本没接上桌面 —— 开关照旧是静默 no-op",
+            PRESET_DARK and 0xFFFFFF,
+            derived and 0xFFFFFF,
+        )
+        // 卡片要求「文字可读性不许劣化」：改前/改后都按同一条算式复算白字对比度。
+        // 16.13:1 -> 14.69:1，两头都远在 AA 之上（本机白字那一格）。
+        assertEquals(16.13f, contrastVsWhite(luma(PRESET_DARK)), 0.05f)
+        assertEquals(14.69f, contrastVsWhite(luma(derived)), 0.05f)
+        assertTrue(
+            "白字 AA：${contrastVsWhite(luma(derived))}",
+            contrastVsWhite(luma(derived)) >= AA_RATIO,
+        )
+        assertTrue(
+            "近黑字这一格在本机吃的是「跟着暗桌面走」，白字那条带不约束它，但也不许压到看不见",
+            contrastVsDarkInk(luma(derived)) >= 1.0f,
+        )
+    }
+
+    @Test
+    fun hintsDoNotTouchPaletteWhenTheTwoColorsAlreadyDiffer() {
+        // 本机 hints = 6：里面第三格（bit 4）语义根本没取证，拿它当判据就是编。
+        // 判据的立场是「实测两色比一枚建议位可信」—— 两色分得出明暗时 hints 一个通道都不碰。
+        val baseline = plate(PRIMARY_DEVICE, SECONDARY_DEVICE, HINTS_DEVICE, PRESET_DARK)
+        (0..7).forEach { hints ->
+            assertEquals(
+                "hints=$hints 参与了主色档的算法（两色明明分得出明暗）",
+                baseline,
+                plate(PRIMARY_DEVICE, SECONDARY_DEVICE, hints, PRESET_DARK),
+            )
+        }
+        // 反面对照：这一格确实走在「非平局」那一支上（副色与主色差得远超 0.02 的平局线）
+        assertTrue(
+            WidgetGlassSource.srgbLuminance(PRIMARY_DEVICE) -
+                WidgetGlassSource.srgbLuminance(SECONDARY_DEVICE) >=
+                WidgetGlassSource.PALETTE_TIE_LUMA_GAP,
+        )
+    }
+
+    @Test
+    fun aVeryBrightPrimaryNeverFlipsTheInkSide() {
+        // 一张接近纯白的壁纸：primary 亮，混合色也亮。用户如果强制了浅色墨
+        // （"深玻璃"那种暗板预设），把板换到亮侧就是白字压白板 —— 整格退回预设。
+        val brightPrimary = rgb(242, 244, 248)
+        val brightSecondary = rgb(16, 16, 20)
+        assertEquals(
+            "亮主色 x 暗预设：跨侧，退回用户自己选的那块板（行为与改前逐格一致）",
+            PRESET_DARK and 0xFFFFFF,
+            plate(brightPrimary, brightSecondary, 0, PRESET_DARK) and 0xFFFFFF,
+        )
+        // 同一张桌面碰上亮侧预设：不跨侧，于是桌面色进得来（这一格证明上一格不是"永远退回"）
+        val onLightSide = plate(brightPrimary, rgb(216, 220, 230), 0, PRESET_LIGHT)
+        assertEquals(argb(229, 232, 239), onLightSide)
+        assertNotEquals(PRESET_LIGHT and 0xFFFFFF, onLightSide and 0xFFFFFF)
+        assertTrue("亮侧那一格吃的是黑字：AA 地板", contrastVsDarkInk(luma(onLightSide)) >= AA_RATIO)
+    }
+
+    @Test
+    fun onlyATieBetweenTheTwoColorsLetsColorHintsVote() {
+        // 平局（含副色为 null）时建议位是唯一的来历：置 DARK_THEME 向黑压一档，
+        // 置 DARK_TEXT 向白提一档，两枚都置或都不置 = 平台自己没话说。
+        val gray = rgb(128, 128, 128)
+        assertEquals(argb(96, 96, 96), plate(gray, gray, HINT_DARK_THEME, PRESET_DARKISH))
+        assertEquals(
+            "本机 hints=6 里的 bit 4 不许被当成第二张票",
+            plate(gray, gray, HINT_DARK_THEME, PRESET_DARKISH),
+            plate(gray, gray, HINT_DARK_THEME or 4, PRESET_DARKISH),
+        )
+        assertEquals(
+            "两枚都置 = 平台没说清，原样交回（暗预设下这一格会跨侧退回，见下一格）",
+            plate(gray, gray, 0, PRESET_DARKISH),
+            plate(gray, gray, HINT_DARK_TEXT or HINT_DARK_THEME, PRESET_DARKISH),
+        )
+        assertEquals(
+            "没有 DARK_THEME 这一票时，灰色主色落在亮侧，与暗预设跨侧 -> 退回预设",
+            PRESET_DARKISH and 0xFFFFFF,
+            plate(gray, gray, 0, PRESET_DARKISH) and 0xFFFFFF,
+        )
+        // 亮预设那一头：DARK_TEXT 提亮后留在亮侧并被吃到（这一票不是永远白投）
+        assertEquals(argb(159, 159, 159), plate(gray, gray, HINT_DARK_TEXT, PRESET_LIGHTISH))
+        assertEquals(argb(128, 128, 128), plate(gray, gray, 0, PRESET_LIGHTISH))
+        assertEquals(
+            "DARK_THEME 向黑压会跨到暗侧 -> 拦下，退回亮预设",
+            PRESET_LIGHTISH and 0xFFFFFF,
+            plate(gray, gray, HINT_DARK_THEME, PRESET_LIGHTISH) and 0xFFFFFF,
+        )
+        // 副色为 null（平台只算得出主色）也按平局处理：这时没有实测明暗可看，建议位是唯一来历
+        assertEquals(
+            "副色缺席时 hints 必须还能投票，否则这一格完全没有来历",
+            plate(gray, gray, HINT_DARK_THEME, PRESET_DARKISH),
+            plate(gray, null, HINT_DARK_THEME, PRESET_DARKISH),
+        )
+    }
+
+    @Test
+    fun theSameSideStillHasToClearTheAaBand() {
+        // 同侧不等于安全：暗侧里 luma 0.191 的板离白字 AA 天花板（0.183）只差一点，
+        // 亮侧里 0.205 的板也低于黑字地板（0.212）—— 两头都要在对分压里被夹进来。
+        val darkSide = plate(rgb(121, 121, 121), rgb(121, 121, 121), 0, PRESET_DARKISH)
+        assertEquals(argb(61, 61, 61), darkSide)
+        assertTrue(
+            "暗侧压不进白字 AA 带就说明第 4 步没接上：${luma(darkSide)}",
+            luma(darkSide) <= WidgetGlassSource.PLATE_LIGHT_INK_MAX_LUMA,
+        )
+        val lightSide = plate(rgb(125, 125, 125), rgb(125, 125, 125), 0, PRESET_LIGHTISH)
+        assertEquals(argb(190, 190, 190), lightSide)
+        assertTrue(
+            "亮侧同理：${luma(lightSide)}",
+            luma(lightSide) >= WidgetGlassSource.PLATE_DARK_INK_MIN_LUMA,
+        )
+    }
+
+    @Test
+    fun primarySetsTheHueAndTheDarkerColorOnlySetsLightness() {
+        // 一张红壁纸（primary 饱和的红）配一档很暗的蓝黑副色：
+        // 色相必须是红的（primary 参与每一通道），明度被暗那档拖下去 —— 两块信息各管一件事。
+        val derived = plate(rgb(200, 40, 40), rgb(10, 10, 60), 0, PRESET_DARK)
+        val (r, g, b) = channels(derived)
+        assertEquals(argb(105, 25, 50), derived)
+        assertTrue("primary 的色相（红）不许被副色吃掉：r=$r g=$g b=$b", r > g && r > b)
+        assertTrue(
+            "较暗的副色负责压明度：${luma(derived)} < ${luma(rgb(200, 40, 40))}",
+            luma(derived) < luma(rgb(200, 40, 40)),
+        )
+    }
+
+    @Test
+    fun thePaletteArithmeticIgnoresTheHighByteAndAlwaysReturnsOpaque() {
+        val fromColorInt = plate(0xFF343E65.toInt(), 0xFF100F19.toInt(), HINTS_DEVICE, 0xFF16203A.toInt())
+        val fromRgbInt = plate(PRIMARY_DEVICE, SECONDARY_DEVICE, HINTS_DEVICE, PRESET_DARK)
+        assertEquals("高字节参与了运算（AlphaMask 会串进通道）", fromRgbInt, fromColorInt)
+        listOf(
+            plate(PRIMARY_DEVICE, SECONDARY_DEVICE, HINTS_DEVICE, PRESET_DARK),
+            plate(rgb(128, 128, 128), rgb(128, 128, 128), 0, PRESET_LIGHTISH),
+            plate(rgb(128, 128, 128), null, 0, PRESET_DARKISH),
+            plate(rgb(242, 244, 248), rgb(16, 16, 20), 0, PRESET_DARK),
+        ).forEachIndexed { index, argb ->
+            assertEquals(
+                "第 $index 格丢了 alpha：浓淡仍由 alphaFraction 那条链管，这里必须交回不透明色",
+                0xFF000000.toInt() ushr 24,
+                argb ushr 24,
+            )
+        }
+    }
+
+    @Test
+    fun theThreeLumaLinesDoNotInvertAndEachSideClearsAa() {
+        // 三条线的分工：交点管「换不换墨的一侧」，两条 AA 线管「同侧之内还能不能读」。
+        // 顺序必须是 天花板(暗侧顶线) < 交点 < 地板(亮侧底线) —— 反过来说明有一头的墨
+        // 或亮度算式改了而另一头没跟着改，第 3、4 步会互相把对方夹掉。
+        val crossover = WidgetGlassSource.PLATE_LUMA_CROSSOVER
+        val lightMax = WidgetGlassSource.PLATE_LIGHT_INK_MAX_LUMA
+        val darkMin = WidgetGlassSource.PLATE_DARK_INK_MIN_LUMA
+        assertTrue("天花板顶到交点以上，白字侧就没有可画的板了", lightMax < crossover)
+        assertTrue("地板低于交点，暗侧/亮侧的分工会重叠", crossover < darkMin)
+        listOf(
+            "白字压在暗侧天花板上" to WidgetGlassSource.paletteContrastRatio(1f, lightMax),
+            "黑字压在亮侧地板上" to
+                WidgetGlassSource.paletteContrastRatio(darkMin, WidgetGlassSource.srgbLuminance(DARK_INK)),
+        ).forEach { (label, ratio) ->
+            assertTrue("$label 掉到 AA 以下：$ratio", ratio >= AA_RATIO)
+            // 留这一句是钉「两条线是贴着 AA 算出来的」，不是随手挑的整数：
+            // 真要放宽也得多写一行，而不是悄悄把带子拉宽到吃掉桌面色相。
+            assertTrue("$label 离 AA 远到说明这两条线的来历漂了：$ratio", ratio <= AA_RATIO + 0.02f)
+        }
+    }
+
+    @Test
+    fun paletteOnlyLosesToABitmapAndToTheUsersSwitch() {
+        // 优先级「位图 > 主色」：实测到位图那一轮根本不该去问色（探针在位图赢时把 palette 置 null），
+        // 判据这一头也得钉住同样的排序，两头各漂一格就又会互相覆盖。
+        assertEquals(GlassSource.SystemWallpaper, answer(true, true, hasPalette = true))
+        assertEquals(GlassSource.SystemWallpaperPaletteOnly, answer(false, true, hasPalette = true))
+        assertNotEquals(
+            "主色档不许冒充位图档：那一格的用户话是「糊的是壁纸」，而这一档没糊任何东西",
+            GlassSource.SystemWallpaper,
+            answer(false, true, hasPalette = true),
+        )
+        // 开关关掉时一律走用户自己选的配色，不许吃桌面主色
+        listOf(true, false).forEach { hasPalette ->
+            assertEquals(
+                "开关关着还去吃桌面主色（hasPalette=$hasPalette）",
+                GlassSource.NoSourceSystemWallpaperOff,
+                answer(false, false, hasPalette = hasPalette),
+            )
+        }
+        assertEquals(
+            "还没测过那一格不许被主色档抢先：色的结论也是实测的一部分",
+            GlassSource.NotMeasuredYet,
+            answer(null, true, hasPalette = true),
+        )
+    }
+
+    // ---- 主色档那张表的四格输入（本机实测值 + 两支墨），名字与 KNOWN_ISSUES §1 对齐 ----
+
+    private fun rgb(r: Int, g: Int, b: Int): Int = (r shl 16) or (g shl 8) or b
+
+    private fun argb(r: Int, g: Int, b: Int): Int = 0xFF000000.toInt() or rgb(r, g, b)
+
+    private fun channels(argb: Int): Triple<Int, Int, Int> = Triple(
+        (argb ushr 16) and 0xFF,
+        (argb ushr 8) and 0xFF,
+        argb and 0xFF,
+    )
+
+    private fun luma(argb: Int): Float = WidgetGlassSource.srgbLuminance(argb and 0xFFFFFF)
+
+    /** 白字（组件浅色墨 0xFFFFFFFF）压在这块板上的对比度 */
+    private fun contrastVsWhite(plateLuma: Float): Float =
+        WidgetGlassSource.paletteContrastRatio(1f, plateLuma)
+
+    /** 近黑字（组件深色墨 0xFF14161C）压在这块板上的对比度 */
+    private fun contrastVsDarkInk(plateLuma: Float): Float =
+        WidgetGlassSource.paletteContrastRatio(plateLuma, WidgetGlassSource.srgbLuminance(DARK_INK))
+
+    private fun plate(primaryRgb: Int, secondaryRgb: Int?, colorHints: Int, presetRgb: Int): Int =
+        WidgetGlassSource.palettePlateArgb(
+            primaryArgb = primaryRgb,
+            secondaryArgb = secondaryRgb,
+            colorHints = colorHints,
+            presetArgb = presetRgb,
+        )
+
+    private companion object {
+        /** 本机 `getWallpaperColors(FLAG_SYSTEM)` 的三格读数 */
+        const val PRIMARY_DEVICE = 0x343E65
+        const val SECONDARY_DEVICE = 0x100F19
+        const val HINTS_DEVICE = 6
+
+        /** `WallpaperColors` 的两枚公开建议位（值与平台常量一致，钉在判据的常量上） */
+        const val HINT_DARK_TEXT = WidgetGlassSource.HINT_SUPPORTS_DARK_TEXT
+        const val HINT_DARK_THEME = WidgetGlassSource.HINT_SUPPORTS_DARK_THEME
+
+        /** 组件那两支墨与用户可选的两块板（暗/亮各一格，另加两格"中间亮度"的色） */
+        const val DARK_INK = 0xFF14161C.toInt()
+        const val PRESET_DARK = 0x16203A
+        const val PRESET_DARKISH = 0x646464
+        const val PRESET_LIGHT = 0xFAFBFF
+        const val PRESET_LIGHTISH = 0x8282C8
+
+        /** WCAG AA 正文底线，与 App 内 `DesignTokens` 那条同一数 */
+        const val AA_RATIO = 4.5f
     }
 }
