@@ -264,4 +264,20 @@ class CourseWeekSpansTest {
 
         assertEquals("高数", board.rows.single().label)
     }
+
+    // ---- 展示层取用面（T51③：Gantt 的色块从这儿拿课程） ----
+
+    @Test
+    fun coverageCarriesFirstFragmentOnlyForColor() {
+        val first = course("高等数学", "o", weeks = (1..8).toList()).copy(colorIndex = 3)
+        val second = course("高等数学实验", "o", weeks = (9..16).toList(), dayOfWeek = 3)
+            .copy(colorIndex = 7)
+        val board = CourseWeekSpans.board(listOf(first, second), semester, currentWeek = 1)
+
+        val row = board.rows.single()
+        // 取色读组内第一条片段（courseColor 要读片段上的 customColorArgb / colorIndex）；
+        // 名字一律读 label，不许有人拿 course.name 再派生一遍（别名口径会分叉）
+        assertEquals(3, row.course.colorIndex)
+        assertEquals("高等数学", row.label)
+    }
 }
