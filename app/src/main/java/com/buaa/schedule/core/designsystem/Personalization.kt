@@ -49,6 +49,17 @@ object Personalization {
     /** 周视图网格：0 = 节次行（默认），1 = 24 小时连续时间轴（拾光式） */
     var weekGridMode by mutableIntStateOf(WEEK_GRID_PERIOD)
 
+    /**
+     * 今日课表页「列表 / 时间轴」分段控件的选择：false = 列表（默认），true = 时间轴。
+     *
+     * 读盘/写盘走 [weekGridMode] 同一条链（load/save），但**不**照抄它的
+     * `week_grid_mode_declared` 一次性收敛：那个键要先收敛，是因为它的切换入口
+     * 曾是一颗无字面图标、落盘的 1 多半是误触（见 [load] 里那段注释）。
+     * 本键是全新的，唯一入口从第一天起就是带「列表 / 时间轴」文字标签的分段控件，
+     * 盘里的 true 只可能是用户明确点出来的——直接读写即可。
+     */
+    var dayTimelineMode by mutableStateOf(false)
+
     /** 周视图行高缩放：0.75 = 紧凑，1.0 = 默认，1.5 = 宽松 */
     var weekRowScale by mutableFloatStateOf(1f)
 
@@ -159,6 +170,8 @@ object Personalization {
             }
             WEEK_GRID_PERIOD
         }
+        // 全新键：老安装读不到 = 列表模式，与升级前的唯一行为一致，不需要迁移（见属性注释）
+        dayTimelineMode = prefs.getBoolean("day_timeline_mode", false)
         weekRowScale = prefs.getFloat("week_row_scale", 1f)
             .coerceIn(MIN_WEEK_ROW_SCALE, MAX_WEEK_ROW_SCALE)
         weekCornerRadiusDp = prefs.getFloat("week_corner_radius_dp", 0f)
@@ -209,6 +222,7 @@ object Personalization {
             putBoolean("use_dynamic_color", useDynamicColor)
             putInt("theme_seed_color", seedColorArgb ?: Int.MIN_VALUE)
             putInt("week_grid_mode", weekGridMode)
+            putBoolean("day_timeline_mode", dayTimelineMode)
             putFloat("week_row_scale", weekRowScale)
             putFloat("week_corner_radius_dp", weekCornerRadiusDp)
             putBoolean("week_fit_viewport", weekFitViewport)

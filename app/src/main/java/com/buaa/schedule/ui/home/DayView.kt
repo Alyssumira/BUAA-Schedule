@@ -48,13 +48,13 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -80,6 +80,7 @@ import com.buaa.schedule.core.designsystem.dayTimelineSegments
 import com.buaa.schedule.core.designsystem.legibleTintPlate
 import com.buaa.schedule.core.designsystem.LocalReduceMotion
 import com.buaa.schedule.core.designsystem.MotionTokens
+import com.buaa.schedule.core.designsystem.Personalization
 import com.buaa.schedule.core.designsystem.performTick
 import com.buaa.schedule.core.designsystem.motionSpec
 import com.buaa.schedule.core.designsystem.motionSpecFor
@@ -144,7 +145,11 @@ fun DayView(
     val semesterStart = remember(semester?.startDate) {
         semester?.run { startLocalDate }
     }
-    var timelineMode by rememberSaveable { mutableStateOf(false) }
+    // 「列表 / 时间轴」的选择落在 Personalization（同 weekGridMode 一条链）：
+    // 此前它是 rememberSaveable，旋转/返回能活，但杀进程冷启动就回到「列表」——
+    // 用户明确点出来的模式被当成一次性界面状态丢掉了。
+    val context = LocalContext.current
+    val timelineMode = Personalization.dayTimelineMode
 
     // ── 横滑翻日期 ──
     // 此前只有 ‹ › 两个箭头可点，而周视图早已支持横滑翻周——日视图没有对应手势会被当成 bug。
@@ -248,7 +253,10 @@ fun DayView(
             GlassSegmentedControl(
                 options = listOf("列表", "时间轴"),
                 selectedIndex = if (timelineMode) 1 else 0,
-                onSelect = { timelineMode = it == 1 },
+                onSelect = {
+                    Personalization.dayTimelineMode = it == 1
+                    Personalization.save(context)
+                },
             )
             Spacer(modifier = Modifier.weight(1f))
             // 「回到今天」是动作不是模式，不该混进分段里
