@@ -410,3 +410,23 @@
       同族收口：管理页 `CourseGroupCard` 课名补 `maxLines = 1` + 省略号（列本有 weight(1f)）。
       守卫：`CourseTitleRowBudgetGuardTest` 纯 JVM 扫主源码钉死「同排课名 Text 必须带 weight/maxLines」
       （负向验证过，摘掉 weight 即红）。时间轴模式（`DayTimelineCourseList`）不在本卡范围。
+
+- [x] 今日课表「时间轴」模式重做（T49，2026-09-21，用户反馈「时间轴显示模式简陋还丑」）：
+      真机镜像实测（buaa36，周一 10:44、当天 5 节课）六条表现逐条对位——
+      ① 左小时刻度列＋整点网格线（复用周视图 `HourLabels`/`NowLine`，提取进共享件
+      `ui/home/TimelineAxis.kt`，窗口整点吸附是刻度对齐的前提）；
+      ② 「现在」线接上 `TIMELINE_TICK_MS` 15 秒链（State 只喂线，块不跟着重组），
+      正在上的块描边 1dp→2dp 换 error 色，几何当当前态第二通道；
+      ③ 进模式首帧即滚到「现在」（effect 先于首绘不闪；全 past 落最后一节课头、
+      全 future/空表落窗口顶，判据在 `dayTimelineAnchorMinute`）；
+      ④ 课间 ≥20 分钟画虚线、≥30 分钟追加「课间 N 分钟」；
+      ⑤ 色块收口只做课程色描边＋1dp 投影，不套 GlassSurface（小玻璃好看、大玻璃板丑）；
+      ⑥ 模式选择落盘 `Personalization.day_timeline_mode`（全新键，不照抄
+      week_grid_mode_declared 的一次性收敛——入口从第一天起就是带标签的分段控件）。
+      判据内核全部进 `ui/home/DayTimelineAxis.kt`（零 android import，结构守卫钉着）；
+      tint plate 对比度推导链原样保留（守卫同钉）。真机观感待编排者复核。
+      守卫：`DayTimelineAxisTest` 16 条真单测（课间嵌套负例是负向验证逼出来的——
+      第一版测试数据摘掉并块仍绿，换成内层块包住才算住机制）＋
+      `DayTimelineStructureGuardTest` 5 条结构钉子（负向验证：注释掉 NowLine 接线即红）。
+      门禁：**1007 单测 / 128 套件 / 2 跳过 / 0 失败**（+21/+2），
+      lint **0 error / 14 warning**（与基线同一组）。
