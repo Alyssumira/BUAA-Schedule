@@ -341,7 +341,7 @@ private fun LoadTrendCard(trend: WeeklyLoadTrend.Trend) {
                     text = listOfNotNull(
                         trend.peakWeek?.let { "最忙的是第 $it 周，约 ${humanMinutes(trend.peakMinutes)}" },
                         "有课的周平均 ${humanMinutes(trend.averageMinutes)}",
-                        trend.freeWeeks.size.takeIf { it > 0 }?.let { "另有 $it 个整周没课" },
+                        trend.freeWeeks.size.takeIf { it > 0 }?.let { "还有 $it 周整周没课" },
                         // 节次时长查不到的格贡献 0 分钟：折线只会偏低，偏低这件事得当场说
                         trend.unschedulablePeriodCellCount.takeIf { it > 0 }
                             ?.let { "另有 $it 格查不到节次时长，这条线偏低" },
