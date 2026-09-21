@@ -238,7 +238,8 @@ androidComponents {
         // loadLibrary(BARHOPPER_NATIVE_LIBRARY) 判一次（在 IO 线程上，失败就地转成结论），
         // 判定不可用时预热那一档一次 ML Kit 调用都不发、扫码页把 scanner 置 null，
         // 于是相机分析器不建、相册识别（用的是同一个 process()）也一并不再承诺 ——
-        // 那一页在这种设备上真正还能走的只剩手输签到码。
+        // 相机与相册两条一起没，那一页在这种设备上用不了扫码签到、没有兜底入口
+        // （「手输签到码」入口已于 2026-09-21 整条删除）。
         // 这三个文件名与探针里那个常量必须同源，漂移由 BarhopperNativeLibProbeTest
         // 读这份脚本文本比对钉住（不是注释提醒）：改一边不改另一边，测试就红。
         variant.packaging.jniLibs.excludes.addAll(

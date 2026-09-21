@@ -51,7 +51,8 @@
       uses-feature 必须 required=false —— 声明 true 会让无相机设备在商店里直接
       看不到本应用，而课表功能本身与相机无关。非 arm64 设备同理：
       packaging.jniLibs 只保留 arm64 的 libbarhopper_v3.so，那档设备上
-      native 模型加载不了，扫码页靠「相册选图识别 / 手输签到码」继续可用。
+      native 模型加载不了，扫码页的相机与相册两条路用的是同一个解码器、一起没，
+      这一页在那种设备上用不了扫码签到（没有兜底入口，「手输签到码」已删除）。
     -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature

@@ -73,8 +73,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 绝不申请 `CAMERA` 权限（授权归 [SpocScanScreen] 自己现取现用）、绝不打开相机、
  * 绝不做 `bindToLifecycle`。预热失败一律静默：解码器能不能用由 [BarhopperNativeLibProbe]
  * 判、由那一页自己收口，这里没有资格替它决定 —— 但注意那一页剩下的入口有多窄：
- * 相册识别用的就是同一个 `scanner`，所以缺库的设备上它同样解不出东西，真正还能走的
- * 只有手输签到码（口径见 [SpocScanScreen] 的类注释）。
+ * 相册识别用的就是同一个 `scanner`，所以缺库的设备上它同样解不出东西，相机与相册
+ * 两条一起没，这一页在这种设备上用不了扫码签到、没有兜底入口（口径见 [SpocScanScreen] 的类注释）。
  */
 internal object ScanChainWarmUp {
 
