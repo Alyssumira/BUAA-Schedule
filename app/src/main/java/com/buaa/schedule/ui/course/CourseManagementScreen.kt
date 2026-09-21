@@ -1,7 +1,6 @@
 package com.buaa.schedule.ui.course
 
 import androidx.compose.animation.Crossfade
-import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -63,8 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buaa.schedule.core.designsystem.ColorSwatch
 import com.buaa.schedule.core.designsystem.CourseColors
-import com.buaa.schedule.core.designsystem.LocalAnimatedVisibilityScope
-import com.buaa.schedule.core.designsystem.LocalSharedTransitionScope
+import com.buaa.schedule.ui.courseSharedElementModifier
 import com.buaa.schedule.core.designsystem.ModalTransition
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.EmptyState
@@ -245,19 +243,8 @@ private fun CourseGroupCard(
 ) {
     val primary = group.fragments.first()
     val color = com.buaa.schedule.core.designsystem.courseColor(primary)
-    val sharedScope = LocalSharedTransitionScope.current
-    val animScope = LocalAnimatedVisibilityScope.current
-    val sharedModifier = if (sharedScope != null && animScope != null) {
-        @OptIn(ExperimentalSharedTransitionApi::class)
-        with(sharedScope) {
-            Modifier.sharedElement(
-                sharedContentState = rememberSharedContentState(key = "course_${primary.id}"),
-                animatedVisibilityScope = animScope,
-            )
-        }
-    } else {
-        Modifier
-    }
+    // 键与写法收口在 courseSharedElementModifier（与周视图课程格、编辑器同源，T52④）
+    val sharedModifier = courseSharedElementModifier(primary.id)
 
     GlassSurface(
         variant = GlassVariant.PANEL,

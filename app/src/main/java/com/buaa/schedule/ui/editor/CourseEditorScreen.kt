@@ -53,10 +53,9 @@ import androidx.compose.ui.unit.IntSize
 import com.buaa.schedule.core.designsystem.ColorSwatch
 import com.buaa.schedule.core.designsystem.CourseColors
 import com.buaa.schedule.core.designsystem.DesignTokens
+import com.buaa.schedule.ui.courseSharedElementModifier
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
-import com.buaa.schedule.core.designsystem.LocalAnimatedVisibilityScope
-import com.buaa.schedule.core.designsystem.LocalSharedTransitionScope
 import com.buaa.schedule.core.designsystem.LocalSemanticPlate
 import com.buaa.schedule.core.designsystem.ModalTransition
 import com.buaa.schedule.core.designsystem.SettingsSwitchRow
@@ -256,19 +255,8 @@ fun CourseEditorScreen(
     }
     BackHandler(enabled = isDraftDirty && !saving) { showDiscardDialog = true }
 
-    val sharedScope = LocalSharedTransitionScope.current
-    val animScope = LocalAnimatedVisibilityScope.current
-    val editorSharedModifier = if (initialCourse != null && sharedScope != null && animScope != null) {
-        @OptIn(ExperimentalSharedTransitionApi::class)
-        with(sharedScope) {
-            Modifier.sharedElement(
-                sharedContentState = rememberSharedContentState(key = "course_${initialCourse.id}"),
-                animatedVisibilityScope = animScope,
-            )
-        }
-    } else {
-        Modifier
-    }
+    // 键与写法收口在 courseSharedElementModifier（T52④）；null = 新增课程，那一格没有配对的卡
+    val editorSharedModifier = courseSharedElementModifier(initialCourse?.id)
 
     Scaffold(
         modifier = Modifier.fillMaxSize().then(editorSharedModifier),

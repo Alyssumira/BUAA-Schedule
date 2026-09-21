@@ -109,16 +109,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.animation.ExperimentalSharedTransitionApi
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.EmptyState
 import com.buaa.schedule.core.designsystem.GlassGovernance
 import com.buaa.schedule.core.designsystem.LiquidGlassMaterial
-import com.buaa.schedule.core.designsystem.LocalAnimatedVisibilityScope
 import com.buaa.schedule.core.designsystem.LocalReduceMotion
 import com.buaa.schedule.core.designsystem.LocalSceneBackdrop
 import com.buaa.schedule.core.designsystem.LocalSharedCourseBackdrop
-import com.buaa.schedule.core.designsystem.LocalSharedTransitionScope
 import com.buaa.schedule.core.designsystem.ModalTransition
 import com.buaa.schedule.core.designsystem.MotionTokens
 import com.buaa.schedule.core.designsystem.Personalization
@@ -147,6 +144,7 @@ import com.buaa.schedule.domain.model.WEEKDAY_LABELS
 import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.model.toPeriodSegments
 import com.buaa.schedule.domain.schedule.CourseConstraints
+import com.buaa.schedule.ui.courseSharedElementModifier
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.BackdropRenderOptions
 import com.kyant.backdrop.backdrops.SharedBlurSampleScale
@@ -1921,20 +1919,9 @@ private fun CourseCell(
     onResizeEnd: (() -> Unit)? = null,
 ) {
     val background = courseColor(course)
-    // 共享元素转场：课程卡与编辑器使用同一 key，由 MainActivity 的 SharedTransitionLayout 驱动
-    val sharedScope = LocalSharedTransitionScope.current
-    val animScope = LocalAnimatedVisibilityScope.current
-    val sharedModifier: Modifier = if (sharedScope != null && animScope != null) {
-        @OptIn(ExperimentalSharedTransitionApi::class)
-        with(sharedScope) {
-            Modifier.sharedElement(
-                sharedContentState = rememberSharedContentState(key = "course_${course.id}"),
-                animatedVisibilityScope = animScope,
-            )
-        }
-    } else {
-        Modifier
-    }
+    // 共享元素转场：课程卡与编辑器使用同一 key，由 MainActivity 的 SharedTransitionLayout 驱动。
+    // 键的写法收口在 courseSharedElementModifier（T52④：日视图两种模式漏接的就是这份重复）。
+    val sharedModifier: Modifier = courseSharedElementModifier(course.id)
     // 手势：单击打开课程；长按打开快捷菜单；长按后继续移动且超过触摸阈值才进入拖拽。
     // 这样“长按菜单”和“长按拖移”可以共存：原地松手=菜单，移动=拖拽。
     val viewConfiguration = LocalViewConfiguration.current

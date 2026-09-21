@@ -105,6 +105,7 @@ import com.buaa.schedule.domain.model.weekdayLabel
 import com.buaa.schedule.domain.schedule.SlotStatus
 import com.buaa.schedule.domain.schedule.TodayPlanner
 import com.buaa.schedule.domain.schedule.WeekCalculator
+import com.buaa.schedule.ui.courseSharedElementModifier
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -739,6 +740,10 @@ private fun DayTimelineCourseList(
                         .offset(y = y)
                         .height(blockHeight)
                         .fillMaxWidth()
+                        // 共享元素：时间轴模式与列表模式是同一条链（T52④ 缺的就是这两处）。
+                        // 放在 fillMaxWidth 之后、视觉层之前：共享的那块矩形=色块本体，
+                        // 与周视图课程格的接法逐字一致。
+                        .then(courseSharedElementModifier(course.id))
                         .padding(horizontal = 2.dp)
                         // 1dp 投影：块从"平贴网格线的色卡"变成浮在轴上的物体。
                         // 不套 GlassSurface——用户实测口径是大面积厚玻璃板丑，这里数量多、
@@ -957,7 +962,12 @@ private fun CourseTimelineCard(
         onClick = onClick,
         contentPadding = DesignTokens.spaceM,
         // 地点/状态行从无到有时整卡高度平滑长出来，而不是把下面的卡片猛地顶一下
-        modifier = modifier.fillMaxWidth().animateContentSize(motionSpec<IntSize>()),
+        modifier = modifier
+            .fillMaxWidth()
+            // 共享元素：与周视图课程格、编辑器同一个 key（键的收口见 CourseSharedElement.kt）。
+            // 列表模式此前根本没接这条链——从今日课表点开一节课只有整页淡入淡出。
+            .then(courseSharedElementModifier(course.id))
+            .animateContentSize(motionSpec<IntSize>()),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             // 上课时间：这一列以前根本没有，卡片只写"第 1-2 节"，
