@@ -20,6 +20,7 @@ import com.buaa.schedule.domain.model.TimeSlotProfile
 import com.buaa.schedule.domain.model.WEEKDAY_LABELS
 import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.model.toStartEndTimes
+import com.buaa.schedule.domain.schedule.SemesterWeekDates
 import com.buaa.schedule.domain.schedule.WeekCalculator
 import com.buaa.schedule.reminder.ClassProgressScheduler
 import com.buaa.schedule.reminder.clockOf
@@ -1021,15 +1022,11 @@ private val WEEK_RANGE_FORMAT = DateTimeFormatter.ofPattern("M/d")
 /**
  * 某一教学周的周一与周日。
  *
- * 起点先过 [WeekCalculator.mondayOf]：全应用都按「自然周周一 = 第 N 周第一天」排课，
- * 开学日期只要不是周一，直接 plusWeeks 会让每一周的区间整体错位一到六天。
+ * 换算交给 [SemesterWeekDates]：顶栏第二行（T56）与组件副标题报的必须是同一周的
+ * 同一段日期，两处各写一份 plusWeeks 迟早会漂。起点先过 mondayOf 这条口径也在那里。
  */
-internal fun weekRange(semester: Semester?, week: Int?): Pair<LocalDate, LocalDate>? {
-    val start = semester?.startLocalDate ?: return null
-    val target = week ?: return null
-    val monday = WeekCalculator.mondayOf(start).plusWeeks((target - 1).toLong())
-    return monday to monday.plusDays(6)
-}
+internal fun weekRange(semester: Semester?, week: Int?): Pair<LocalDate, LocalDate>? =
+    SemesterWeekDates.spanOf(semester, week)
 
 /** 区间文案「9/14–9/20」；算不出来时返回空串，由调用方决定退回什么 */
 internal fun weekRangeLabel(semester: Semester?, week: Int?): String {
