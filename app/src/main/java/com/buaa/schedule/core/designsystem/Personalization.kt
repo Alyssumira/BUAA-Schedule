@@ -186,20 +186,19 @@ object Personalization {
     /**
      * 把内存态整体落盘（`schedule_settings`）。调用点全在点击/拖动回调里。
      *
-     * ⚠️ 这里同时是「App 内改了壁纸 → 桌面组件跟上」的**唯一**收口：
-     * 组件那张玻璃底读的就是 `wallpaper_uri` / `wallpaper_use_system` 这两个键，
-     * 而它们只经这个函数落盘，所以重绘挂在这里就够，**调用点不要再各自复制一段刷新代码**
+     * ⚠️ 这里同时是「App 内拨了壁纸开关 → 桌面组件跟上」的**唯一**收口：
+     * 组件那张玻璃底只认 `wallpaper_use_system` 这一个键（图源按运行时实测决定，
+     * `wallpaper_uri` 只喂 App 内课表背景，不再参与组件的图源判断），而它们只经这个函数落盘，
+     * 所以重绘挂在这里就够，**调用点不要再各自复制一段刷新代码**
      * （十几个调用点各抄一份，早晚漏一处，而漏的那几处正是「换完壁纸桌面还在糊旧图」）。
-     * 也正因为调用点里大半是在拖滑块，重绘只挂在 [WidgetGlassSource.wallpaperKeysChanged]
+     * 也正因为调用点里大半是在拖滑块，重绘只挂在 [WidgetGlassSource.wallpaperSwitchChanged]
      * 上，并且整个挪到 IO 线程（见 [BackgroundSync.refreshWidgetsAsync]）。
      */
     fun save(context: Context) {
         val prefs = context.getSharedPreferences("schedule_settings", Context.MODE_PRIVATE)
-        // 判据本体在 WidgetGlassSource：不分键的话，每拖一次滑块就要把六个组件全重画一遍。
-        val wallpaperChanged = WidgetGlassSource.wallpaperKeysChanged(
-            savedUri = prefs.getString("wallpaper_uri", null),
+        // 判据本体在 WidgetGlassSource：不判开关的话，每拖一次滑块就要把六个组件全重画一遍。
+        val wallpaperChanged = WidgetGlassSource.wallpaperSwitchChanged(
             savedUseSystem = prefs.getBoolean("wallpaper_use_system", DEFAULT_USE_SYSTEM_WALLPAPER),
-            currentUri = wallpaperUri,
             currentUseSystem = useSystemWallpaper,
         )
         prefs.edit {
@@ -224,11 +223,12 @@ object Personalization {
     }
 
     /**
-     * 用户在 App 内挑了一张壁纸：记下来 + 落盘（并经由 [save] 让桌面组件跟上）。
+     * 用户在 App 内挑了一张壁纸：记下来 + 落盘。
      *
-     * 设置页与组件配置页共用这一份：持久授权与那两个键只有一处写，两条链才不会
-     * 一个生效一个不生效。配置页那侧需要它，是因为「玻璃感壁纸背景」在 Android 14+
-     * 只有挑了图才兑现得了 —— 说明写在开关旁边，出路也得在开关旁边。
+     * 持久授权与壁纸键只有一处写，写这条链的调用点才不会一个生效一个不生效。
+     * 落点只有 App 内课表背景 —— 组件那张玻璃底不读 `wallpaper_uri`，
+     * 它只糊系统桌面本身，实测读不到就走纯色半透明分支（曾经"借这张图顶上"的做法会把
+     * 一张纯白测试图原样铺成 (69,77,97) 恒值板，配置页那句「底图糊的是自选图」也就跟着说谎）。
      */
     fun applyPickedWallpaper(context: Context, uri: Uri) {
         // OpenDocument + 持久授权：避免临时 URI 在进程重启后失效

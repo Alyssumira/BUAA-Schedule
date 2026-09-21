@@ -5,9 +5,7 @@ import android.content.Context
 import android.content.res.Configuration
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -59,6 +57,8 @@ import com.buaa.schedule.core.designsystem.SceneBackground
 import com.buaa.schedule.core.designsystem.SettingsSwitchRow
 import com.buaa.schedule.core.designsystem.contentOn
 import com.buaa.schedule.core.designsystem.rememberSceneBackdrop
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * 桌面组件外观配置页。
@@ -273,22 +273,25 @@ private fun WidgetConfigScreen(
             // 组件本身不需要运行时权限，但这个前置条件坏掉用户只会觉得"组件不准"，
             // 在配置页直接给出诊断 + 跳转，比让用户翻设置页快得多。
             val configContext = androidx.compose.ui.platform.LocalContext.current
-            // 图源判定与渲染侧是同一个函数：这句说明与桌面上画出来的东西必须同一个出处，
-            // 否则配置页就又回到"凭感觉写一段小字、开关照旧静默"那个形状。
-            // 键用 Personalization 那两个全局状态、体内读 prefs（渲染侧读的也是它）：
-            // prefs 自己不会触发重组，而挑完图是"先 save() 再重组"，读到的必然是新键值。
-            val glassSource = remember(
-                configContext,
-                Personalization.wallpaperUri,
-                Personalization.useSystemWallpaper,
-            ) {
-                WidgetBackgroundRenderer.availability(configContext)
+            // 图源判定与渲染侧必须是同一个答案（T31 的规矩），而这个答案现在只有一个
+            // 出处：探针的 memo。配置页不自己判 SDK、也不再翻 wallpaper_uri —— 自选那张
+            // 从 T46 起不是组件图源，拿它当重组键只会让这句说明跟着一个不影响的开关抖。
+            val useSystemWallpaper = Personalization.useSystemWallpaper
+            // memo 可能还没被谁判过（新进程、或已过 60s 采信期）：补一次后台实测。
+            // 红线在这里画死：measure 里有 binder 问图与整屏位图取点，主线程一律不许碰。
+            var probeAnswer by remember { mutableStateOf(WidgetWallpaperProbe.memoized()) }
+            LaunchedEffect(configContext, useSystemWallpaper) {
+                if (useSystemWallpaper && probeAnswer == null) {
+                    // 这一页只要结论，不要把图留着：探针画的渲染目标（约 8MB）
+                    // 归我们回收，系统持有的一张都不许碰。
+                    withContext(Dispatchers.IO) {
+                        WidgetWallpaperProbe.measure(configContext)?.recycleIfOwned()
+                    }
+                    probeAnswer = WidgetWallpaperProbe.memoized()
+                }
             }
-            // 就地挑图：无源时把用户送去 App 的另一个页面找那个按钮，等于没有出路
-            val wallpaperLauncher = rememberLauncherForActivityResult(
-                contract = ActivityResultContracts.OpenDocument(),
-            ) { uri ->
-                if (uri != null) Personalization.applyPickedWallpaper(configContext, uri)
+            val glassSource = remember(configContext, useSystemWallpaper, probeAnswer) {
+                WidgetBackgroundRenderer.availability(configContext)
             }
             val exactAlarmOk = remember {
                 com.buaa.schedule.ui.settings.ReminderGuidance.canScheduleExact(configContext)
@@ -528,40 +531,37 @@ private fun WidgetConfigScreen(
                     checked = appearance.blurBackground,
                     onCheckedChange = { appearance = appearance.copy(blurBackground = it) },
                 )
-                // 说明按图源判定分叉，而判定与渲染侧是同一个函数（availability）：实测在
-                // Android 14+ 且没有自选壁纸时，开关从关拨到开，整块 tile 的像素差 0 / 258258。
-                // 为什么不置灰、也不留一段常驻小字，取舍的理由记在 [GlassSource] 那一头。
+                // 说明按图源判定分叉，而判定与渲染侧是同一个函数（availability 读探针的
+                // 实测结论）。改前那四档里"糊 App 内自选那张"的两条连同"先挑一张图"的
+                // 承诺一起作废 —— 装机实测证明把自选那张铺在桌面上只会糊出一块与壁纸
+                // 无关的死板（(69,77,97) 恒值板）。开关照样能拨、说明说实话，取舍记在
+                // [GlassSource] 那一头；这里也不挂挑图按钮：挑了也不会糊到桌面上。
+                // 「还没测过」单独一档：这一句此刻没有出处，说"读得到"或"读不到"都是
+                // 替设备编答案（本卡拆的就是这类编法），所以它只能说"正在确认"。
                 Text(
                     text = when (glassSource) {
-                        GlassSource.SystemWallpaperThenPicked ->
-                            "底图糊的是系统桌面壁纸，换壁纸后跟着更新。"
-                        GlassSource.PickedImage ->
-                            "底图糊的是 App 内自选的那张图（Android 14 起系统不再允许第三方应用读桌面壁纸）。"
-                        GlassSource.NoSourceWallpaperReadBlocked ->
-                            "现在没有能糊的图：Android 14 起系统不再允许第三方应用读取桌面壁纸，" +
-                                "而 App 内还没有自选壁纸。所以这个开关拨了不会有任何变化 —— 先挑一张图。"
+                        GlassSource.SystemWallpaper ->
+                            "底图糊的是系统桌面壁纸（这台设备实测读得到），换壁纸后跟着更新。"
+                        GlassSource.NotMeasuredYet ->
+                            "正在确认这台设备读不读得到系统桌面壁纸（这一页已经在后台问过一次了），" +
+                                "稍后再回来看这一句 —— 上面那个开关照旧能拨。"
+                        GlassSource.NoSourceSystemWallpaperUnusable ->
+                            "现在没有能糊的图：这台设备实测读不到系统桌面壁纸，" +
+                                "而组件只糊桌面本身，不借 App 内自选的图。所以这个开关拨了" +
+                                "不会有任何变化 —— 换一张桌面壁纸后等组件下一轮刷新再试。"
                         GlassSource.NoSourceSystemWallpaperOff ->
-                            "现在没有能糊的图：你在 App 内关掉了「使用桌面壁纸」，而自选壁纸还是空的。" +
-                                "所以这个开关拨了不会有任何变化 —— 挑一张图，或重新打开「使用桌面壁纸」。"
+                            "现在没有能糊的图：你在 App 内关掉了「使用桌面壁纸」。" +
+                                "所以这个开关拨了不会有任何变化 —— 重新打开它就好。"
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (glassSource.usable) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    } else {
-                        LocalSemanticColors.current.warning
+                    // 警告色只留给"这台设备确实给不出图"那两格；"还没问完"不是坏消息
+                    color = when (glassSource) {
+                        GlassSource.NoSourceSystemWallpaperUnusable,
+                        GlassSource.NoSourceSystemWallpaperOff,
+                        -> LocalSemanticColors.current.warning
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
                     },
                 )
-                if (!glassSource.usable) {
-                    // 复用 App 内那条既有链路（同一张 SAF 选择器 + 同两个键），不新造存储格式。
-                    // 挑完 save() 会顺手把桌面上所有已绑定的实例重绘一遍，这一个也包括在内，
-                    // 于是"拨开关没反应"当场翻成"有反应"。
-                    OutlinedButton(
-                        onClick = { wallpaperLauncher.launch(arrayOf("image/*")) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
-                    ) { Text("选择壁纸图片") }
-                }
                 SettingsSwitchRow(
                     title = "显示标题行",
                     checked = appearance.showTitle,

@@ -1,7 +1,5 @@
 package com.buaa.schedule.widget
 
-import android.annotation.SuppressLint
-import android.app.WallpaperManager
 import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.res.Configuration
@@ -14,11 +12,9 @@ import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
 import androidx.core.graphics.createBitmap
-import androidx.core.graphics.get
 import androidx.core.graphics.scale
 import androidx.core.graphics.withClip
 import com.buaa.schedule.core.designsystem.Personalization
-import com.buaa.schedule.core.designsystem.decodeSampledWallpaper
 
 /**
  * 小组件“玻璃化”背景渲染：把壁纸采样/模糊成一张静态位图。
@@ -62,9 +58,8 @@ object WidgetBackgroundRenderer {
     /** 缓存里那位（见 [glassCache]）。见 [GLASS_CACHE_MAX_ENTRIES] 的论证。 */
     private val glassCache = GlassBakeCache<Bitmap>()
 
-    /** 应用内背景的 prefs 与自选壁纸的键（与 Personalization.load 同一份） */
+    /** 应用内背景的 prefs 与组件唯一读的那枚全局壁纸键（与 Personalization.load 同一份） */
     private const val SETTINGS_PREFS = "schedule_settings"
-    private const val KEY_WALLPAPER_URI = "wallpaper_uri"
     private const val KEY_USE_SYSTEM_WALLPAPER = "wallpaper_use_system"
 
     /**
@@ -74,11 +69,12 @@ object WidgetBackgroundRenderer {
      * 背景层是 fitXY，画布会被拉到组件尺寸上，半径不除回去就不是用户选的那一档
      * （详见 [WidgetCornerRadii]）。
      *
-     * 同一枚 [GlassBakeKey] 第二次进来时直接回缓存里那张位图：不解码、不缩放、不画图。
-     * 命中路径上仍然要跑的宿主调用是那三步尺寸探测（理由见 [widgetSizePx]），
-     * 省掉的是烘焙管线本身。图源那一头：自选那张为算身份**不需要**解码，命中时
-     * [Wallpaper.open] 一次都没被调用；系统壁纸那一头为算内容签名已经把位图握在手里了
-     * （`WallpaperManager.getDrawable()` 改前每轮也要问一次，这里不增不减）。
+     * 同一枚 [GlassBakeKey] 第二次进来时直接回缓存里那张位图：不重采样、不画图。
+     * 命中路径上仍然要跑的是那三步尺寸探测（理由见 [widgetSizePx]）与一次图源实测
+     * （[WidgetWallpaperProbe.measure]）——后者在改前的"闸门放行"那一档设备上也每轮
+     * 要问一次，省掉的是烘焙管线本身。T46 起图源只剩一种（实测可用的系统桌面壁纸），
+     * 它的身份从同一次实测里顺手算出，不再有"命中时省一趟解码"那条路 ——
+     * 那条路省的是自选那张的解码，而它从本卡起不再是组件的图源。
      */
     fun render(
         context: Context,
@@ -123,10 +119,11 @@ object WidgetBackgroundRenderer {
                     glassCache.obtain(key) { bakeGlass(wallpaper, size, radii, glass) }
                 }
             } finally {
-                // 图源位图归这一次调用管：命中时它压根没被打开过（自选那张因此省掉解码），
-                // 打开过且是我们新建的才回收 —— 一张 1080x1920 = 约 8MB，每次刷新都漏一份，
-                // 几次之后就会把进程推到 OOM 边缘。系统持有的那一张不许碰。
-                wallpaper.close()
+                // 图源位图归这一次调用管：只有我们新建的那张（探针画的渲染目标）才回收，
+                // 一次 1080x1920 = 约 8MB，每次刷新都漏一份，几次之后就会把进程推到
+                // OOM 边缘。系统持有的一张都不许碰。缓存命中的路径上它也握了一次，
+                // 照样随这一次调用收尾 —— 实测问图本来就每轮付一次，省的不是它。
+                wallpaper.recycleIfOwned()
             }
         }.onFailure {
             // 这里以前什么都不留：玻璃背景画不出来会静默回退纯色底，一整轮定位全靠
@@ -144,15 +141,15 @@ object WidgetBackgroundRenderer {
      * 管线本身一个字没改（改前它在 [render] 里连着解码一起写）。
      *
      * 位图交给 RemoteViews 后不能回收，所以缓存里那位、以及这里 return 出去的这张，
-     * 都不在 [Wallpaper.close] 的回收范围内 —— 这里回收的只有两张中间图。
+     * 都不在源图的回收范围内 —— 这里回收的只有两张中间图。
      */
     private fun bakeGlass(
-        wallpaper: Wallpaper,
+        wallpaper: WidgetWallpaperProbe.Captured,
         size: BakeSize,
         radii: BakedCornerRadius,
         glass: Int,
     ): Bitmap? {
-        val base = wallpaper.open()?.bitmap ?: return null
+        val base = wallpaper.bitmap
         if (base.isRecycled) return null
         val width = size.widthPx
         val height = size.heightPx
@@ -192,7 +189,8 @@ object WidgetBackgroundRenderer {
                     // 会被滤波结果整个顶掉。装机实测（id=8）：w8.alpha 从 80 拨到 0，
                     // tile 内部像素一动不动，始终是底板色 (22,32,58)，糊过的壁纸被盖死。
                     // 所以改走 drawRect 的默认 SRC_OVER 光栅管线，alpha 经 [glassTintArgb]
-                    // 进最终颜色。期望（自选壁纸是纯白，底面色 (22,32,58)）：
+                    // 进最终颜色。期望那一格按纯白底面算（当时图源恰被一张纯白测试图顶替 ——
+                    // 它就是 T46 追的那块 (69,77,97) 恒值板的原料；算式本身不挑图源）：
                     // alpha=80% -> 0.8*(22,32,58) + 0.2*(255,255,255) ≈ (69,77,97)；
                     // alpha=0%  -> 看到糊过的壁纸本身。逐格钉在 WidgetBackgroundRendererTest。
                     paint.colorFilter = null
@@ -322,144 +320,48 @@ object WidgetBackgroundRenderer {
         return widthPx / density to heightPx / density
     }
 
-    /** 一张壁纸位图 + 它是不是我们新建的（新建的才归 [Wallpaper.close] 回收） */
-    private class Source(val bitmap: Bitmap, val owned: Boolean)
-
-    /**
-     * 这一次渲染要糊的那张壁纸：**身份**与**取图**分开。
-     *
-     * 拆开就是本卡的落点。[identity] 不需要解码就能算出来（自选那张的身份就是 URI 本身），
-     * 所以缓存命中时 [open] 根本没被调用过，那次 `decodeSampledWallpaper` 整个省掉；
-     * 只有真要烘焙才付取图的钱。系统源那一头身份是从位图本身采出来的，
-     * 位置图已经握在手里（[opened] 出生就非空），所以它没有"省掉一次 IPC"可拿，
-     * 省掉的是后面那三张位图的分配与两次重采样。
-     *
-     * 只在单个 [render] 调用里活，所以 [opened] 这个可变字段不需要跨线程同步
-     * （刷新协程是逐个实例顺序刷的，见 `WidgetCommon.updateAll`）。
-     */
-    private class Wallpaper(
-        val identity: GlassSourceIdentity,
-        private val opener: () -> Source?,
-        private var opened: Source? = null,
-    ) {
-        /** 真要糊图了才把位图取回来；同一次 [render] 里最多取一次。 */
-        fun open(): Source? = opened ?: opener().also { opened = it }
-
-        /** 我们新建的那张才回收；系统持有的一张都不许碰。 */
-        fun close() {
-            opened?.takeIf { it.owned && !it.bitmap.isRecycled }?.bitmap?.recycle()
-            opened = null
-        }
-    }
-
     /**
      * 这一次「玻璃感壁纸背景」到底有没有图源。
      *
      * 判据本体在 [WidgetGlassSource]（不 import 任何 android 类型，所以那张表能在 JVM 单测里
-     * 逐格钉住）；这里只把 prefs 与这台设备的 API 档次翻译成它的三个入参。
+     * 逐格钉住）；这里只把两格事实翻译成它的入参 —— 「使用桌面壁纸」那枚开关（prefs）与
+     * 探针上一次的实测结论（[WidgetWallpaperProbe.memoized]）。改前的第三枚入参是 API 档次，
+     * 已被装机实测证伪，换成实测（论证在探针那文件的 KDoc）。
      *
-     * 配置页那句说明读的也是这个函数 —— 两边各判一次就会出现"开关能拨、拨完没反应"
+     * memo 交 null（从没测过、或过了 60s 采信期）时**原样交 null**，不许在这里折成
+     * "读得到"或"读不到"里的任何一头：这一格的答案唯一的读者是配置页那句说明，
+     * 而说明有三态可说（"正在确认这台设备读不读得到，稍后再看这一句"）。
+     * 折成"有"是给了一句没有出处的承诺，折成"没有"是拿一个没问过的问题当已否认的回答。
+     * 渲染侧不靠这一格画玻璃 —— [wallpaperForRender] 每轮自己实测，
+     * 所以"没测过"从来不会让桌面上少一张图，只会让这一句说明暂时不说死。
+     *
+     * 配置页那句说明读的也是这个函数 —— 两边各判一次就会出现「开关能拨、拨完没反应」
      * （真机实测：无源时整块 tile 的像素差 0 / 258258）。
      */
-    internal fun availability(context: Context): GlassSource {
-        val prefs = context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
-        return WidgetGlassSource.decide(
-            systemWallpaperReadable = WidgetGlassSource.systemWallpaperReadable(Build.VERSION.SDK_INT),
-            useSystemWallpaper = prefs.getBoolean(
-                KEY_USE_SYSTEM_WALLPAPER,
-                Personalization.DEFAULT_USE_SYSTEM_WALLPAPER,
-            ),
-            hasPickedImage = WidgetGlassSource.hasPickedImage(
-                prefs.getString(KEY_WALLPAPER_URI, null),
-            ),
-        )
-    }
+    internal fun availability(context: Context): GlassSource = WidgetGlassSource.decide(
+        systemWallpaperUsable = WidgetWallpaperProbe.memoized(),
+        useSystemWallpaper = usesSystemWallpaper(context),
+    )
+
+    /** 组件读的唯一那枚壁纸键。「有没有图源」的口径收在 [availability]，这里只交开关本身。 */
+    private fun usesSystemWallpaper(context: Context): Boolean =
+        context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_USE_SYSTEM_WALLPAPER, Personalization.DEFAULT_USE_SYSTEM_WALLPAPER)
 
     /**
-     * 这一次要糊的壁纸（含它的身份）。走哪一条由 [availability] 定：
-     * - 开关开着且这台设备读得到桌面壁纸时**优先**系统源、自选那张兜底；
-     * - 用户关掉「使用桌面壁纸」时**只**认自选那张 —— 他刚说不想用桌面壁纸，
-     *   组件却还在糊桌面壁纸，两边就对不上了；
-     * - 判到没有图源时直接 null，调用方回退纯色圆角底。
+     * 这一次要糊的壁纸：实测到手才回那张位图（连同它的身份），否则 null，
+     * 调用方（`WidgetCommon.applyAppearance`）落到纯色半透明那条分支 ——
+     * 装机实测里那一形反而是好看的：桌面真的透得过来。
      *
-     * 这里只负责把判据落成两次取图，不再自己重排先后。与改前唯一的区别是自选那一条
-     * 改成**惰性**：它的身份不需要解码就得出（URI 本身），于是缓存命中时这张图根本不读盘。
+     * 只有「用户关掉了开关」那一格许在实测之前拦 —— [WidgetGlassSource.decide] 里它
+     * 判的是用户自己的选择，是任何实测都翻不动的一格（这也省掉那次 binder 问图）。
+     * 其余情形**每轮都跑一次 [WidgetWallpaperProbe.measure]**，memo 说「上次读不到」
+     * 也照问 —— 组件刷新就是「读不到」那一格的失效边界（桌面换壁纸没有任何广播能进
+     * 到我们进程），信了 memo 就会把它锁死到配置页翻页为止，正撞红线。
      */
-    private fun wallpaperForRender(context: Context): Wallpaper? {
-        val prefs = context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
-        // 归一口径与 WidgetGlassSource.hasPickedImage 同一份（trim + 空串当没有）：
-        // 否则 " uri " 与 "uri" 会占掉缓存的两个格子，而它们在配置页是同一个选择。
-        val pickedUri = prefs.getString(KEY_WALLPAPER_URI, null)?.trim()?.takeIf { it.isNotEmpty() }
-        val picked: () -> Wallpaper? = {
-            pickedUri?.let { uri ->
-                Wallpaper(
-                    identity = GlassSourceIdentity(
-                        kind = GlassSourceKind.PickedImage,
-                        pickedUri = uri,
-                        widthPx = 0,
-                        heightPx = 0,
-                        samples = emptyList(),
-                    ),
-                    opener = {
-                        decodeSampledWallpaper(context, uri)?.let { Source(it, owned = true) }
-                    },
-                )
-            }
-        }
-        return when (availability(context)) {
-            GlassSource.SystemWallpaperThenPicked -> systemWallpaper(context) ?: picked()
-            GlassSource.PickedImage -> picked()
-            GlassSource.NoSourceWallpaperReadBlocked,
-            GlassSource.NoSourceSystemWallpaperOff,
-            -> null
-        }
-    }
-
-    @SuppressLint("MissingPermission") // 版本闸门在 [WidgetGlassSource] 那一头；更低版本读取壁纸无需该权限
-    private fun systemWallpaper(context: Context): Wallpaper? {
-        // 闸门不在这个文件里再写一遍 34：配置页那句"这台设备读不读得到桌面壁纸"
-        // 与这里必须同进同退，两处各写一个数字迟早对不上。
-        if (!WidgetGlassSource.systemWallpaperReadable(Build.VERSION.SDK_INT)) return null
-        val source = runCatching {
-            val wallpaper = WallpaperManager.getInstance(context).drawable ?: return@runCatching null
-            if (wallpaper is android.graphics.drawable.BitmapDrawable &&
-                wallpaper.bitmap != null &&
-                !wallpaper.bitmap.isRecycled
-            ) {
-                // 这张是系统持有的原图，不归我们回收
-                Source(wallpaper.bitmap, owned = false)
-            } else {
-                Source(drawableToBitmap(wallpaper), owned = true)
-            }
-        }.getOrNull() ?: return null
-        val base = source.bitmap
-        // 内容签名：9 个点，不复制位图。它在 [glassBakeKey] 里替"用户在桌面换了一张壁纸，
-        // 而我们没有任何通知"这一格站着 —— 换掉一张壁纸，这 9 枚像素不可能全同。
-        // 取不到（硬件位图、位图刚被系统回收）就交空表，那一格 [glassBakeKey] 会拒绝缓存。
-        val samples = runCatching {
-            wallpaperSamplePoints(base.width, base.height).map { (x, y) -> base[x, y] }
-        }.getOrDefault(emptyList())
-        return Wallpaper(
-            identity = GlassSourceIdentity(
-                kind = GlassSourceKind.SystemWallpaper,
-                pickedUri = "",
-                widthPx = base.width,
-                heightPx = base.height,
-                samples = samples,
-            ),
-            opener = { source },
-            opened = source,
-        )
-    }
-
-    private fun drawableToBitmap(drawable: android.graphics.drawable.Drawable): Bitmap {
-        val width = drawable.intrinsicWidth.takeIf { it > 0 } ?: TARGET_WIDTH
-        val height = drawable.intrinsicHeight.takeIf { it > 0 } ?: TARGET_HEIGHT
-        val bitmap = createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        drawable.setBounds(0, 0, canvas.width, canvas.height)
-        drawable.draw(canvas)
-        return bitmap
+    private fun wallpaperForRender(context: Context): WidgetWallpaperProbe.Captured? = when {
+        !usesSystemWallpaper(context) -> null
+        else -> WidgetWallpaperProbe.measure(context)
     }
 }
 
@@ -525,24 +427,17 @@ internal const val GLASS_CACHE_MAX_ENTRIES = 2
  */
 internal const val MIN_BAKE_AXIS_PX = 64
 
-/** 图源是哪一条。两个枚举名与 [GlassSource] 对得上（那里是"有没有源"，这里是"用的哪个源"）。 */
-internal enum class GlassSourceKind { SystemWallpaper, PickedImage }
-
 /**
- * 一张壁纸的身份，全部是能在 JVM 里比的数。
+ * 一张壁纸的身份，全部是能在 JVM 里比的数 —— 而 T46 起组件侧只有一种壁纸：
+ * 实测到手的系统桌面壁纸。改前的另一格「自选那张（身份 = URI）」连同它的
+ * "命中时省一次解码"红利一起作废：把一张与桌面无关的图当不透明底铺上去，
+ * 正是 (69,77,97) 恒值板那起事故的图源半边（论证在 [WidgetGlassSource]）。
  *
- * - 自选那张：身份 = URI。解码都不用做就能比对，这正是缓存省下解码的依据。
- *   URI 没变而那张图的内容被外部改过这一格认不出来 —— 这不是缓存新引入的洞，
- *   [WidgetGlassSource.pickedImageChanged] 的注释已经把同一格写成"不在承诺里"
- *   （出路还是设置页那颗「立即刷新」）；而且能进缓存的键都是**烤成功过**的，
- *   图真被删掉时下一次命中给的是最后一次成功糊过的那张，比回退纯色底更接近用户要的。
- * - 系统那张：身份 = 宽高 + 9 枚采样像素（[wallpaperSamplePoints]）。桌面换壁纸
- *   没有任何广播进到我们进程，只有把内容本身编进键才不会糊出一张旧壁纸。
- *   取不到像素时这一格交空表，由 [glassBakeKey] 拒绝缓存。
+ * 身份 = 宽高 + 9 枚采样像素（[wallpaperSamplePoints]，取样与拒缓存的账在
+ * [glassBakeKey]）。桌面换壁纸没有任何广播进到我们进程，
+ * 只有把内容本身编进键才不会糊出一张旧壁纸。
  */
 internal data class GlassSourceIdentity(
-    val kind: GlassSourceKind,
-    val pickedUri: String,
     val widthPx: Int,
     val heightPx: Int,
     val samples: List<Int>,
@@ -580,13 +475,16 @@ internal data class GlassBakeKey(
 /**
  * 键的构造点，同时是"这一次能不能用缓存"的那道闸。
  *
- * 返回 null = 这次别用缓存（照改前一样现烤，也不入库）。只有一种情形才拒：
- * 系统源而内容签名又取不到（硬件位图 `getPixel` 抛了、或刚被系统回收）。那时
- * [GlassSourceIdentity] 上只剩 (kind, 宽高)，用户换一张**同尺寸**的壁纸会被判成
- * 同一个键 —— 组件会一直糊着旧壁纸，而这正是缓存唯一不能被原谅的那一形。
- * 宁可白烤，不可糊错。
+ * 返回 null = 这次别用缓存（照改前一样现烤，也不入库）。T46 收口后组件侧只剩
+ * 系统源这一种壁纸，所以这一道闸也就是全部：内容签名取不到（硬件位图
+ * `getPixel` 抛了、或刚被系统回收）时身份上只剩宽高，用户换一张**同尺寸**的
+ * 壁纸会被判成同一个键 —— 组件会一直糊着旧壁纸，而这正是缓存唯一不能被原谅的
+ * 那一形。宁可白烤，不可糊错。
  *
- * 自选源不受这条影响：它的身份就是 URI，不需要先拿到像素。
+ * 「无源」那一格不留陈旧状态：判到没有源时 [wallpaperForRender] 直接回 null，
+ * render 在这条键构造之前就返回了，缓存里从来不会有一格「无源」可记；
+ * [GlassBakeCache.obtain] 不缓存 null 的口径因此仍然够 —— 它兜的是"烤失败"，
+ * 与"没图可烤"是两条路。换壁纸翻面的那一格由 [GlassSourceIdentity] 的内容签名负责。
  */
 internal fun glassBakeKey(
     source: GlassSourceIdentity,
@@ -595,7 +493,7 @@ internal fun glassBakeKey(
     glassArgb: Int,
     nightMode: Boolean,
 ): GlassBakeKey? {
-    if (source.kind == GlassSourceKind.SystemWallpaper && source.samples.isEmpty()) return null
+    if (source.samples.isEmpty()) return null
     return GlassBakeKey(
         source = source,
         bakeWidthPx = size.widthPx,
