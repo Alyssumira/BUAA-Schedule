@@ -1630,32 +1630,8 @@ private fun CourseMenuOverlay(
     }
 }
 
-/** 当前时间指示线：独立组合作用域，每分钟只重组这一条线 */
-@Composable
-private fun NowLine(
-    visible: Boolean,
-    startMin: Int,
-    endMin: Int,
-    totalHeight: Dp,
-    nowTickState: State<LocalTime>,
-) {
-    if (!visible) return
-    val total = endMin - startMin
-    val fraction = if (total <= 0) 0f else {
-        val now = nowTickState.value.let { it.hour * 60 + it.minute }
-        ((now - startMin).toFloat() / total).coerceIn(0f, 1f)
-    }
-    if (fraction <= 0f || fraction >= 1f) return
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(2.dp)
-            .offset(y = totalHeight * fraction)
-            .background(MaterialTheme.colorScheme.error),
-    )
-}
-
-/** 节次行模式的时间指示线：按行号 + 行内时间比例定位，和左侧每节一行对齐 */
+/** 节次行模式的时间指示线：按行号 + 行内时间比例定位，和左侧每节一行对齐。
+ *  连续时间轴那一条与小时刻度列已提取到 TimelineAxis.kt（T49：日视图时间轴要用同一套）。 */
 @Composable
 private fun NowLinePeriod(
     visible: Boolean,
@@ -1711,27 +1687,6 @@ private fun NowLinePeriod(
             .offset(y = totalHeight * fraction)
             .background(MaterialTheme.colorScheme.error),
     )
-}
-
-/** 24h 时间轴模式的小时刻度列 */
-@Composable
-private fun HourLabels(startHour: Int, endHour: Int, hourHeight: Dp) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        (startHour until endHour).forEach { hour ->
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(hourHeight),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = "%02d:00".format(hour),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
 }
 
 /** 固定星期标题栏，与网格日期列共用同一横向滚动状态；今天高亮 */
