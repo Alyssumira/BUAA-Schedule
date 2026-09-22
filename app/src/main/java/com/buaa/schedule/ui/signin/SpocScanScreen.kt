@@ -307,6 +307,10 @@ fun SpocScanScreen(
         val activeAnalyzer = analyzer ?: return@LaunchedEffect
         // 停用中故意**不解绑**（也不绑）：帧还得继续到达，内核才有"窗口过完"这个观测量。
         // 这一句排在 unbindAll 之前不是随手写的，排到后面去就把 T59① 唯一的自动活路掐了。
+        // ⚠️ 同一句也盖住了**判死**（那时 scannerWorking 早已停在 false、不再翻面，这颗 effect
+        // 就不会再跑，于是相机一直送帧、分析器一帧一帧 close 却永远 Skip）。判死那一档的停帧
+        // 不归这里管，在下面那颗以 scannerGiveUp 为键的 effect 里（T67，判据 [frameFlowStop]）——
+        // 键表一个字不动（形状守卫钉着），停用窗口一个字不动。
         if (!granted || !scannerWorking) return@LaunchedEffect
         // unbindAll 必须先于 bind：重复绑定同一个 Preview 会抛 IllegalArgumentException
         // 旧句柄与旧 UseCase 在这一刻起就是死物：先清再绑，点击对焦/缩放命令才不会把
@@ -404,6 +408,36 @@ fun SpocScanScreen(
             delay(cameraBindBackoffMillis(attempt))
             attempt++
         }
+    }
+
+    // T67：判死之后把帧流停下来（T59① 有意没收的那笔耗电残账）。
+    // 上面那颗 effect 的 `!scannerWorking` 挡不住这一档：判死发生时它早已是 false、不再翻面，
+    // 于是键表不动、绑定不动、解绑也不动 —— 从判死到用户退出这一页，相机还在按帧送、
+    // 分析器还在一帧一帧 `image.close()`，而 [decoderFrameAction] 从此永远返回 Skip。
+    // 停不停、怎么说那一行都在内核里（[frameFlowStop] / [frameFlowStopLogText]），这里只做四件事：
+    // 读 health、读句柄、解绑、留痕。三件要紧的"不"：
+    // ① 不往上面那颗 effect 的键表里塞东西（那一串被 ScanUiStatusTest ⑥ 按字面钉着）；
+    // ② 不在 ML Kit 的回调里就地解绑 —— 那枚 Task 后面还挂着 `addOnCompleteListener { image.close() }`，
+    //    就地 unbindAll 会把"这一帧关没关"变成回调次序的依赖（本页踩过 close 的坑）；
+    // ③ 停用窗口（未判死）一个字都不改：那一档 frameFlowStop 返回 Keep，帧照旧到达。
+    // ⚠️ 恢复那条活路必须原样跑得通：回到前台把 scannerWorking 翻回 true 时，上面那颗 effect
+    // 照旧重跑并重新绑定（它自己就带 unbindAll + 句柄清零），正面证据仍是分析器那句
+    // "本轮绑定的首帧已到达分析器：第 N 帧"（N 比判死那一帧大 ⇒ 帧流真的回来了）。
+    LaunchedEffect(scannerGiveUp) {
+        val cameraProvider = provider ?: return@LaunchedEffect
+        val health = analyzer?.decoderHealthSnapshot() ?: return@LaunchedEffect
+        val stop = frameFlowStop(
+            health = health,
+            // 帧流此刻开没开：两个句柄任非空都算开着（宁可多停一次也不许漏，第二次解绑由内核挡）
+            analysisFlowBound = boundCamera != null || analysisUseCase != null,
+        )
+        if (stop != FrameFlowStop.Unbind) return@LaunchedEffect
+        // 句柄与解绑同批置 null（T64/T65 立的纪律）：点按对焦与缩放命令不许发到一颗已解绑的 Camera 上
+        boundCamera = null
+        analysisUseCase = null
+        cameraProvider.unbindAll()
+        // 换挡才说话：这颗键只在"暂时↔判死"翻面时动，按帧路径一行都不经过这里
+        Log.w(TAG, frameFlowStopLogText(health))
     }
 
     // ①② 回到前台 = 有界地再给一次机会（额度在 [healthAfterPageVisible]，2 次）。
@@ -1133,6 +1167,18 @@ private class QrCodeAnalyzer(
 
     /** 这一页到底收到过多少帧（⑤ 的证据本体；调用点只在留痕时读一次，不在按帧路径上） */
     fun framesArrived(): Long = frameCount
+
+    /**
+     * T67：把当下那份健康度交给**调用点** —— 停不停帧由 [frameFlowStop] 判、由上面那颗
+     * `LaunchedEffect(scannerGiveUp)` 执行，本类不参与解绑。
+     *
+     * ⚠️ 两件事都不许在这一档顺手做：
+     * - **不执行解绑**：判死的推进点在 ML Kit 的回调里，同一枚 Task 后面还挂着
+     *   `addOnCompleteListener { image.close() }`；就地 unbindAll 会把"这一帧的 proxy 关没关"
+     *   变成回调次序的依赖，而本类里那句 close 的时机是踩过实测坑定下来的（见 [analyze]）；
+     * - 本函数**只读**：不改 health、不取钟、不写任何状态，读的是 @Volatile 整枚换引用的快照。
+     */
+    fun decoderHealthSnapshot(): ScanDecoderHealth = health
 
     /**
      * 首帧到达那一行（⑤）。级别必须是 Info 以上：用户那台机器（HyperOS）把 logcat 砍到
