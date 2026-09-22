@@ -68,6 +68,10 @@ import com.buaa.schedule.ui.ScheduleViewModel
  * 一条 Course 只是排课片段，学分开在整门课上，归并口径见 SemesterStats 文件头。
  * T51 的三张增密图同理：判据在 [CourseWeekSpans] / [WeekFreeGrid] / [WeeklyLoadTrend]
  * 三个内核里算完，本页只把结果映射成图形入参。
+ *
+ * T74 起这一页**先判档再开口**：加载中 / 真的空 / 有内容三档由 [statsPageStageOf] 定，
+ * 就绪之前只画 [StatsLoadingCard] 那一面——"还没有课程可统计"是一句断言，
+ * 没读到东西的时候没有资格说它（台账 #115）。
  */
 @Composable
 fun StatsScreen(
@@ -80,6 +84,13 @@ fun StatsScreen(
     val state by viewModel.uiState.collectAsState()
     val summary = remember(state.courses, state.semester, state.timeSlots) {
         SemesterStats.summarize(state.courses, state.semester, state.timeSlots)
+    }
+    // 三态判定在纯 JVM 内核里（[statsPageStageOf]），调用点只递两件事：
+    // 就绪与否 = `uiState.loading` 取反（首帧吃的是 stateIn 的 initialValue，那里 loading=true），
+    // 条数 = 归并到整门课之后的 courseCount（18 门课在库里是 22 段，用片段数会把档走对、数说错）。
+    // 改前这一档只看 `summary.courseCount == 0`，于是"这一页还没读到"被说成了"你一门课都没有"。
+    val stage = remember(state.loading, summary.courseCount) {
+        statsPageStageOf(ready = !state.loading, courseCount = summary.courseCount)
     }
     // T51 三件套的判据内核：memoize 键与 summary 同一口径（courses/semester 必带，
     // 吃节次表的再带 timeSlots），外加各内核自己声明的设备事实 currentWeek ——
@@ -107,25 +118,21 @@ fun StatsScreen(
             )
         },
     ) { padding ->
-        // 导入第一门课后这一页整版换血，硬切像重开了一遍；淡入淡出与日视图空态同源
+        // 导入第一门课后这一页整版换血，硬切像重开了一遍；淡入淡出与日视图空态同源。
+        // T74：targetState 从"空不空"两档换成三档——加载中 → 有内容那一跳同样要淡入，
+        // 动画规格仍是 motionSpec（reduce-motion 下 snap 成硬切，不另起一炉）
         Crossfade(
-            targetState = summary.courseCount == 0,
+            targetState = stage,
             animationSpec = motionSpec<Float>(),
             modifier = modifier
                 .fillMaxSize()
                 .padding(padding)
                 .padding(horizontal = DesignTokens.spaceL),
-        ) { isEmpty ->
-            if (isEmpty) {
-                // 空态居中（与管理页同一口径）：贴在页顶会让这一页看起来"还没加载完"
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    EmptyStatsCard()
-                }
-            } else {
-                Column(
+        ) { current ->
+            when (current) {
+                StatsPageStage.Loading -> CenteredStatsCard { StatsLoadingCard() }
+                StatsPageStage.Empty -> CenteredStatsCard { EmptyStatsCard() }
+                StatsPageStage.Ready -> Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(rememberScrollState()),
@@ -155,6 +162,42 @@ private fun EmptyStatsCard() {
         title = "还没有课程可统计",
         description = "先在首页导入或添加一门课，这里就会给出学分、每周负载和空档。",
     )
+}
+
+/**
+ * 课表还没读到时的那一档：只说"正在读"，不说"没有"。
+ *
+ * 台账 #115 的假话就出在这一档缺席 —— 这一页的 `ScheduleViewModel` 是 `"stats"` 那条路由
+ * 自己新造的一枚，`uiState` 起步于 `stateIn` 的 `initialValue`（`courses` 空、`loading` 真），
+ * 改前那一档分支把"这枚 VM 还没查到东西"直接当成了"你一门课都没有"。
+ *
+ * 文案两行、外壳 [EmptyState] 那一枚玻璃卡，与 [EmptyStatsCard] 同一形状同一槽位
+ * （见 [CenteredStatsCard]）：**不新增一行高度**，也不给这一页添动画——
+ * 全站 main 源码里没有任何一处 `rememberInfiniteTransition`，本卡不在此开第一例，
+ * 一枚转不完的圈比一屏静止更容易被读成"卡死了"。真机等这一档的时长通常只有一帧，
+ * 装机实测（CPU 饥饿的模拟器）从进入这一页到第一次拿到数据是 3080ms。
+ */
+@Composable
+private fun StatsLoadingCard() {
+    EmptyState(
+        icon = Icons.Filled.Insights,
+        title = "正在读取本学期课表",
+        description = "学分、每周负载和空档要等课表数据到位才算得出来。",
+    )
+}
+
+/**
+ * 加载中与真的空共用同一个居中槽位（与管理页同一口径）：贴在页顶会让这一页看起来"还没加载完"。
+ *
+ * 两档换面不换位：[StatsLoadingCard] 与 [EmptyStatsCard] 落在同一个居中 Box 里，
+ * 从"正在读取"淡入到"还没有课程可统计"时卡片不会跳一下位置。
+ */
+@Composable
+private fun CenteredStatsCard(content: @Composable () -> Unit) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) { content() }
 }
 
 /** 总学分：页面上唯一一个大字号，其余卡片都不该和它抢 */
