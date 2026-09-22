@@ -1138,7 +1138,8 @@ private class QrCodeAnalyzer(
      * 代价说清：本函数在 ML Kit 回调线程上、每成功帧跑一次，[advanceScanAssist] 每次
      * 产一枚小不可变对象 —— 它不在 analyze 入口快路径上（那条路的零分配守卫在
      * `ScanSilentBranchGuardTest` ③），与 InputImage 同一量级，可以付。
-     * 本函数一行 Log 都不写：换挡的话由两颗回调在执行侧说（②d 守卫钉着）。
+     * 本函数一行 Log 都不写（②d 守卫钉着）：缩放命令由执行侧留痕，屏上档位那句话是说给
+     * 用户听的（[scanFrameAidText]），日志不是它的听众。
      */
     private fun noteFrameRung(codes: List<Barcode>) {
         var readable = 0
