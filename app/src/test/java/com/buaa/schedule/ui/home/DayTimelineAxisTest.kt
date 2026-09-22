@@ -11,7 +11,9 @@ import org.junit.Test
  *
  * 这些函数是 T49 全部布局改动的可测面：刻度位置、滚动落点、课间分段、当前块命中。
  * 设备事实（时刻、px/分钟、视口高）一律当参数注入，测试里没有 android。
- * 数字取真机镜像（buaa36）实测场景：周一 10:44、窗口 08:00–23:00、1.05dp/分钟。
+ * 数字取真机镜像（buaa36）实测场景：周一 10:44、窗口 08:00–23:00、1.35dp/分钟
+ * （T61 把 [com.buaa.schedule.core.designsystem.DesignTokens.dayHeightPerMinute] 从 1.05 抬上来的
+ * 那一档；这里的比率只是注入的自变量，改令牌不会改红这些断言）。
  */
 class DayTimelineAxisTest {
 
@@ -45,11 +47,13 @@ class DayTimelineAxisTest {
     @Test
     fun hourLinesCoverOnlyInteriorBoundaries() {
         val w = DayTimelineWindow(8 * 60, 23 * 60)
-        val lines = dayTimelineHourLineOffsets(w, 1.05)
+        val lines = dayTimelineHourLineOffsets(w, 1.35)
         // 09:00..22:00 共 14 条；顶（窗口沿）与底（末整点）不画
         assertEquals(14, lines.size)
-        assertEquals(60 * 1.05, lines.first(), 1e-6)
-        assertEquals((22 - 8) * 60 * 1.05, lines.last(), 1e-6)
+        // 注入的比率与断言同源：这里换的是"真机这一档是多少 dp/分钟"（T61：1.05 → 1.35），
+        // 判据本身一个字没动
+        assertEquals(60 * 1.35, lines.first(), 1e-6)
+        assertEquals((22 - 8) * 60 * 1.35, lines.last(), 1e-6)
     }
 
     @Test
@@ -150,7 +154,7 @@ class DayTimelineAxisTest {
 
     @Test
     fun gapThresholdsMatchTheDesignRationale() {
-        // 20 分钟 ≈21dp（1.05dp/分钟）只够一条虚线；30 分钟才装得下文字行
+        // 20 分钟 ≈27dp（1.35dp/分钟）只够一条虚线；30 分钟才装得下文字行
         assertEquals(20, DAY_GAP_MARKER_MIN_MINUTES)
         assertEquals(30, DAY_GAP_LABEL_MIN_MINUTES)
     }
