@@ -236,7 +236,10 @@ class ScanUiStatusTest {
         assertEquals("scanUiStatus 被调了 ${occurrences(code, "scanUiStatus(")} 处，只能一处", 1, occurrences(code, "scanUiStatus("))
         assertEquals("scanCameraLive 被调了 ${occurrences(code, "scanCameraLive(")} 处，只能一处", 1, occurrences(code, "scanCameraLive("))
         // cameraLive：定义一处 + 取景框一处（手输那颗按钮曾用的第三处在 2026-09-21 随入口一起删了）
-        assertEquals("cameraLive 出现 ${occurrences(code, "cameraLive")} 次（定义 + 取景框）", 2, occurrences(code, "cameraLive"))
+        // T64 起再加三处消费者，都是「相机这条在不在跑」的正当判据入口：点按对焦的键表 +
+        // 未活时忽略那一句、手电档位里 cameraPathLive 的实参。口径仍是这一颗 —— 三处新读者
+        // 都吃同一个 val，没有第二份自算的 cameraLive（那才是本守卫要拦的）。
+        assertEquals("cameraLive 出现 ${occurrences(code, "cameraLive")} 次（定义 + 取景框 + 对焦两处分身 + 手电一处）", 5, occurrences(code, "cameraLive"))
         // 手输入口的整条痕迹（按钮 / 弹窗 / state）都不许回来
         assertFalse("页面里还留着「手输」：弹窗或按钮没拆干净", code.contains("手输"))
         // 页面里不许还藏着文案原文：那就是第二份口径

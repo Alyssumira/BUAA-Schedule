@@ -10,13 +10,19 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.SurfaceOrientedMeteringPointFactory
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,6 +57,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
@@ -59,6 +66,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.Observer
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
@@ -78,6 +86,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 
 /**
@@ -162,6 +171,15 @@ fun SpocScanScreen(
     // 被 ScanUiStatusTest ⑥ 按字面钉着（"LaunchedEffect(granted, provider, scannerWorking, analyzer)"），
     // 所以令牌改藏在 analyzer 的**同一性**里：+1 就换一颗 analyzer，那颗 effect 照旧重跑。
     var bindGeneration by remember { mutableIntStateOf(0) }
+    // T64③④⑤：绑定成功换来的 Camera 与分析 UseCase 各留一份引用。
+    // 为什么不进键表：绑定 effect 的键串被 ScanUiStatusTest ⑥ 按字面钉着，新增的只能藏在
+    // 绑定成功路径里随 bound 一起写。boundCamera 同时充当"活手柄"——对焦/手电/缩放三件事
+    // 都从它的 CameraControl 起手；它是 null 就说明这一轮什么都还没绑上，三条点击路径全部按灭。
+    var boundCamera by remember { mutableStateOf<Camera?>(null) }
+    var analysisUseCase by remember { mutableStateOf<ImageAnalysis?>(null) }
+    // 手电真实状态快照：CameraInfo.getTorchState() 是 LiveData，收成 state 要引
+    // lifecycle-compose（本卡不加依赖），所以用 Observer 原样观察、每变一次写一颗 Int。
+    var torchStateCode by remember { mutableIntStateOf(TorchStateUndefined) }
     // 解码器"根本不在包里"（T24）：探针**已判定**不可用才 true —— 未判定不是不可用，
     // 那样会把 arm64 上预热还没跑到那一档的窗口变成一帧降级页。
     // 这一档比 scannerWorking 更彻底：相册识别用的是同一个 scanner，所以它一起没。
@@ -263,6 +281,21 @@ fun SpocScanScreen(
         cameraError = cameraError,
     )
 
+    // T64④ 手电真实状态的观察窗。为什么读的是 torchState 而不是自己记的布尔：
+    // enableTorch 的 future 会失败（没灯的设备以 IllegalStateException 失败，尽管 javadoc
+    // 读起来像 no-op），自己记的那一份会在失败后说谎；torchState 是唯一会说真话的那颗。
+    DisposableEffect(boundCamera) {
+        val live = boundCamera?.cameraInfo?.torchState
+        if (live == null) {
+            torchStateCode = TorchStateUndefined
+            onDispose { }
+        } else {
+            val observer = Observer<Int> { value -> torchStateCode = value ?: TorchStateUndefined }
+            live.observe(lifecycleOwner, observer)
+            onDispose { live.removeObserver(observer) }
+        }
+    }
+
     LaunchedEffect(granted, provider, scannerWorking, analyzer) {
         // 纪律（T24）：真正要用解码器之前先把判定做完 —— 绑上分析流就是第一帧解码的
         // 唯一入口，所以它必须排在判定之后，未判定的 scanner 一次也不许开帧。
@@ -274,6 +307,10 @@ fun SpocScanScreen(
         // 这一句排在 unbindAll 之前不是随手写的，排到后面去就把 T59① 唯一的自动活路掐了。
         if (!granted || !scannerWorking) return@LaunchedEffect
         // unbindAll 必须先于 bind：重复绑定同一个 Preview 会抛 IllegalArgumentException
+        // 旧句柄与旧 UseCase 在这一刻起就是死物：先清再绑，点击对焦/手电才不会把
+        // startFocusAndMetering 发到一颗已被解绑的 Camera 上。
+        boundCamera = null
+        analysisUseCase = null
         cameraProvider.unbindAll()
         // ② 绑定失败过去是"这一页到此为止"：`cameraError` 不是这颗 effect 的键，抛一次之后
         // 没有任何东西会再跑一次绑定，用户只能退出重进。现在就地重试，次数（3）、退避
@@ -285,20 +322,49 @@ fun SpocScanScreen(
                 val preview = Preview.Builder().build().apply {
                     setSurfaceProvider(previewView.surfaceProvider)
                 }
+                // T64①：向 CameraX 要 1280×720 的分析帧。不声明时 CameraX 的文档默认档是
+                // 640×480 —— 对"1–3 米外看投影仪上的签到码"这一场景，模块在降采样那一刻
+                // 就毁掉了（ML Kit 要求最小单元 ≥2px），任何解码器都救不回来，这是「扫码没反应」
+                // 至今没人动过的那一半根因。FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER：先抬后降，
+                // 16:9 给不出的设备至少落在 4:3 的等量档上。
+                // ⚠️ CameraX 明说交付尺寸可以逐设备不同 —— 所以下面每绑定一条交付尺寸取证行
+                // （B2，判据与措辞在 [analysisFrameLogText]），"请求了 720p"与"拿到了 720p"
+                // 必须能在 logcat 里分开。
                 val analysis = ImageAnalysis.Builder()
+                    .setResolutionSelector(
+                        ResolutionSelector.Builder()
+                            .setResolutionStrategy(
+                                // android.util.Size 全限定：本文件顶部还引着 compose 的 geometry.Size，
+                                // 裸写 Size 在这里是二义的（ResolutionStrategy 要的正是 android 那一颗）
+                                ResolutionStrategy(
+                                    android.util.Size(RequestAnalysisWidthPx, RequestAnalysisHeightPx),
+                                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+                                ),
+                            )
+                            .build(),
+                    )
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setTargetRotation(targetRotation)
                     .build()
                     .apply { setAnalyzer(analysisExecutor, activeAnalyzer) }
-                cameraProvider.bindToLifecycle(
+                val camera = cameraProvider.bindToLifecycle(
                     lifecycleOwner,
                     CameraSelector.Builder().requireLensFacing(CameraSelector.LENS_FACING_BACK).build(),
                     preview,
                     analysis,
                 )
+                // Pair 而不是只带 Camera：对焦那颗 SurfaceOrientedMeteringPointFactory 必须用
+                // **分析流**构造（两参构造默认按活跃 Preview 的画幅换算，两者画幅可以不同），
+                // 所以 UseCase 引用要和 Camera 一起活着上来。
+                camera to analysis
             }
             if (bound.isSuccess) {
+                val (camera, analysis) = bound.getOrThrow()
+                boundCamera = camera
+                analysisUseCase = analysis
                 activeAnalyzer.markBindStarted(SystemClock.elapsedRealtime())
+                // T64⑤：投影场景的缩放按文档化常量在这一处应用（钳制判据在内核，见函数 KDoc）。
+                applyProjectorZoom(context, camera)
                 // 绑上了就要把上一轮的旧错收回去：cameraError 不清的话文案永远停在
                 // "相机不可用"，而它已经不成立 —— 重试机制也就白做了
                 if (cameraError != null) cameraError = null
@@ -311,6 +377,9 @@ fun SpocScanScreen(
             val reason = error?.message?.takeIf { it.isNotBlank() } ?: error?.javaClass?.simpleName ?: "未知失败"
             val kind = classifyCameraBindFailure(reason)
             if (!cameraBindRetryAllowed(attempt, kind)) {
+                // 判死这一档：手柄留在 null 上，对焦/手电/缩放三条路径整机灭掉而不是发往死相机
+                boundCamera = null
+                analysisUseCase = null
                 cameraError = reason
                 Log.w(
                     TAG,
@@ -412,6 +481,87 @@ fun SpocScanScreen(
             ScanViewfinder(modifier = Modifier.fillMaxSize())
         }
 
+        // T64③ 点哪对哪。三件几何事实必须同时说对（判据与推导在 [analysisMeteringPointForTap]）：
+        // ① FILL_CENTER 是纯显示端变换（从 CameraX 源码核实：不动拍摄请求，分析帧携带会话全视场），
+        //    所以屏幕坐标要自己补上那次"放大 + 居中裁切"的逆变换；
+        // ② SurfaceOrientedMeteringPointFactory 的两参构造默认按**活跃 Preview** 的画幅换算 ——
+        //    这里显式用 ImageAnalysis 构造，测光的正是喂解码器的那幅画面；
+        //    坐标则换算进"视口尺寸"的空间（factory 的 width/height 就是视口像素）。
+        // ③ 落在裁切带外/退化输入由内核拒映射（返回 null），绝不夹到边缘 —— 那是把画外的
+        //    意图翻译成画面正中的新假动作。
+        // 这一层只有 pointerInput、没有 clickable，它接住的"点"不来自任何既有控件；
+        // 顶栏/动作条/结果卡都叠在它上面（组合序在后 = z 序在上），那些区域的可点击件先拿走手势。
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(cameraLive, boundCamera, analysisUseCase, analyzer, targetRotation) {
+                    detectTapGestures { tap ->
+                        if (!cameraLive) {
+                            // 相机路径没在跑（没权限/没 provider/停用中）：不发测光，但要说一声，
+                            // 静默吞点击是这一页修过三轮的那类病
+                            Log.i(TAG, "点按对焦被忽略：相机路径当前不在跑")
+                            return@detectTapGestures
+                        }
+                        val camera = boundCamera ?: return@detectTapGestures
+                        val analysis = analysisUseCase ?: return@detectTapGestures
+                        val activeAnalyzer = analyzer ?: return@detectTapGestures
+                        val frameW = activeAnalyzer.deliveredWidthPx
+                        val frameH = activeAnalyzer.deliveredHeightPx
+                        if (frameW <= 0 || frameH <= 0) {
+                            Log.i(TAG, "点按对焦被忽略：还没收到可映射的分析帧尺寸")
+                            return@detectTapGestures
+                        }
+                        val mapped = analysisMeteringPointForTap(
+                            tap.x,
+                            tap.y,
+                            size.width.toFloat(),
+                            size.height.toFloat(),
+                            frameW,
+                            frameH,
+                            activeAnalyzer.deliveredRotationDeg,
+                        )
+                        if (mapped == null) {
+                            Log.i(TAG, "点按对焦被内核拒映射：点击落在裁切带外或输入退化，不夹到边缘代答")
+                            return@detectTapGestures
+                        }
+                        val factory = SurfaceOrientedMeteringPointFactory(
+                            size.width.toFloat(),
+                            size.height.toFloat(),
+                            analysis,
+                        )
+                        val action = FocusMeteringAction
+                            .Builder(
+                                factory.createPoint(mapped.x * size.width, mapped.y * size.height),
+                                FocusMeteringAction.FLAG_AF,
+                            )
+                            .setAutoCancelDuration(FocusAutoCancelSeconds, TimeUnit.SECONDS)
+                            .build()
+                        // 设备报"不支持 AF 测光"时**不许**让 startFocusAndMetering 去抛：
+                        // 先问 cameraInfo（判据是它给的），不支持就一句话说明这一按没有发生
+                        if (!camera.cameraInfo.isFocusMeteringSupported(action)) {
+                            Log.i(TAG, "这台设备的相机不支持点按对焦（AF 测光不可用），这一按没有发生")
+                            return@detectTapGestures
+                        }
+                        // 起不来只该"这一按没成"，不该倒进下一次重试 —— 与手电同一形状：
+                        // 同步抛接住、future 的失败在监听里读出来留痕（不 await：tap 回调不是协程体，
+                        // 为一个取证行拉一颗 coroutineScope 不值得，Listener 是现成的最低成本）
+                        val future = runCatching { camera.cameraControl.startFocusAndMetering(action) }.getOrNull()
+                        if (future == null) {
+                            Log.w(TAG, "startFocusAndMetering 直接抛出（这一按没成，焦点保持原样）")
+                        } else {
+                            future.addListener(
+                                {
+                                    runCatching { future.get() }.onFailure {
+                                        Log.w(TAG, "点按对焦启动失败（最坏=这一按没成）：${it.message ?: it.cause?.message}")
+                                    }
+                                },
+                                ContextCompat.getMainExecutor(context),
+                            )
+                        }
+                    }
+                },
+        )
+
         GlassTopBar(
             title = "扫码签到",
             statusBarInset = true,
@@ -461,6 +611,21 @@ fun SpocScanScreen(
                     val barAction = Modifier
                         .weight(1f)
                         .defaultMinSize(minHeight = DesignTokens.minTouchTarget)
+                    // T64④ 手电档位：画不画、写什么全由 [torchAffordance] 判（没灯/判死/路径不活
+                    // 三档都隐藏）。它在栏内占自己的一份 weight，不覆盖取景区，
+                    // 所以不会从点按对焦那里抢走任何一次点击；无新配色、无新令牌。
+                    val torchAffordanceNow = torchAffordance(
+                        hasFlashUnit = boundCamera?.cameraInfo?.hasFlashUnit() == true,
+                        torchStateCode = torchStateCode,
+                        cameraPathLive = cameraLive,
+                        roundGivenUp = scannerGiveUp,
+                    )
+                    if (torchAffordanceNow.show) {
+                        TextButton(
+                            onClick = { toggleScanTorch(context, boundCamera, torchAffordanceNow) },
+                            modifier = barAction,
+                        ) { Text(torchAffordanceNow.label) }
+                    }
                     Button(
                         onClick = {
                             galleryLauncher.launch(
@@ -674,12 +839,32 @@ private class QrCodeAnalyzer(
     private var firstFrameLogged = false
 
     /**
+     * 本轮绑定是否已留过「交付分析帧尺寸」那一行（T64②）。复位点与 [firstFrameLogged] 同一处
+     * （[markBindStarted]）：两行都在首帧、一个生命周期，但各管各的账 —— 首帧行答
+     * 「帧到过没有」，这一行答「到过的是多大的帧」。640×480 与 1280×720 在解码失败日志里
+     * 长得一模一样，没有这一行就没有这一卡的真机证据。
+     */
+    private var frameSizeLogged = false
+
+    /**
+     * 本轮绑定交付的分析帧尺寸与旋转（T64②③）。分析线程每绑定写一次、主线程点按对焦时读：
+     * volatile 的 Int 写，按帧路径零分配；取"首帧那份快照"而不是最新值，是因为
+     * 一轮绑定内交付尺寸不变，而 rotationDegrees 会随手持方向变 —— 点击映射按 [analysisMeteringPointForTap]
+     * 的入参口径拿同一份快照才自洽（漂移的代价最多是长宽互换的那一档，映射函数对它显式拒映射）。
+     */
+    @Volatile var deliveredWidthPx = 0
+    @Volatile var deliveredHeightPx = 0
+    @Volatile var deliveredRotationDeg = 0
+
+    /**
      * 绑定成功后调一次：健康度那几行取证要报"这是绑定后第多少毫秒发生的事"。
-     * 顺带把首帧标志复位（T59b①）—— 每一轮绑定都该重新报一次"首帧已到达"。
+     * 顺带把首帧标志与交付尺寸标志一起复位（T59b① / T64②）—— 每一轮绑定都该重新报一次
+     * "首帧已到达"和"交付的是多大的帧"。
      */
     fun markBindStarted(elapsedRealtimeMillis: Long) {
         bindElapsedMillis = elapsedRealtimeMillis
         firstFrameLogged = false
+        frameSizeLogged = false
     }
 
     /**
@@ -744,6 +929,16 @@ private class QrCodeAnalyzer(
             // 没有这一行，这两种处境在读证据时长得一模一样。
             firstFrameLogged = true
             logFirstFrameArrived(frame)
+        }
+        if (!frameSizeLogged) {
+            // T64② 交付尺寸取证行：每绑定一行、按帧零分配（一次布尔判 + 三颗 volatile Int 写）。
+            // 排在停用判断**之前**：停用窗口里的帧也是帧，"送到的是多大的帧"这件事
+            // 不能在窗口里变成盲区 —— 判据与措辞在 [analysisFrameLogText]，这里不拼字符串数学。
+            frameSizeLogged = true
+            deliveredWidthPx = image.width
+            deliveredHeightPx = image.height
+            deliveredRotationDeg = image.imageInfo.rotationDegrees
+            logDeliveredAnalysisSize()
         }
         if (decoderFrameAction(health, frame) == DecoderFrameAction.Skip) {
             image.close()
@@ -875,6 +1070,23 @@ private class QrCodeAnalyzer(
     }
 
     /**
+     * 交付分析帧尺寸那一行（T64②）。级别 Info 起的理由与 [logFirstFrameArrived] 同
+     * （HyperOS 把 logcat 砍到 Info，`Log.d` 等于没写）。
+     *
+     * 这一行是本卡的**真机证据本体**：请求了 1280×720 不等于拿到 1280×720，
+     * CameraX 明说交付尺寸逐设备可不同 —— 到底兑没兑现、离内核算出的下限差多少，
+     * 只有这一行说得出。措辞（含"够不够"的判定）全部出自 [analysisFrameLogText]，
+     * 这里只报数：把比较与分支手写在这一行上，内核守卫会红。
+     */
+    private fun logDeliveredAnalysisSize() {
+        Log.i(
+            TAG,
+            "本轮绑定交付的分析帧：${deliveredWidthPx}×${deliveredHeightPx} / 旋转 ${deliveredRotationDeg}° —— " +
+                analysisFrameLogText(deliveredWidthPx, deliveredHeightPx, ViewfinderSideRatio),
+        )
+    }
+
+    /**
      * 「解出了条码，但那枚条码没有可读原文」（③ 的第一支）。
      *
      * 只在**真的看到一枚条码**时计数：空结果（画面里没码）是按帧的常态，一帧一行会把
@@ -956,6 +1168,83 @@ private suspend fun cameraProviderOrNull(context: android.content.Context): Proc
             }
         }.getOrNull()
     }
+
+/**
+ * 投影场景的缩放比（T64⑤，**文档化常量**，本卡口径允许的两形态之一：可见控件 or 文档化常量）。
+ *
+ * 选常量而不是屏幕控件的理由：这一页已经压了结果卡、动作条与取景框，再加两颗缩放钮
+ * 是把「扫码没反应」的修复做成一次改版；1.5f 的账：远距投影码在 720p 帧里仍只占画面一小角
+ * （[DistantCodeHoleFill] 那本账的来由），抬 1.5 倍把它送进取景洞中心的代价是视场收窄 ——
+ * 而视场是唯一由用户自己决定收不收的东西，所以这不是默认行为而是**每次绑定显式应用一次**、
+ * 并且过 [clampedZoomRatio] 的钳制（这台没有缩放控制就一句话不动）。
+ * 改回 1f 就是显式关闭这条，钳制缝与日志整条留在原位。
+ */
+private const val ProjectorZoomRatio = 1.5f
+
+/** 点按对焦的自动取消时长（秒）：3 秒后测光区退回默认，用户的手不会一直替屏幕举着焦点 */
+private const val FocusAutoCancelSeconds = 3L
+
+/**
+ * T64⑤：绑定成功后立刻按内核钳制应用投影缩放。**这一个调用点就是本卡留的触发缝** ——
+ * 判据（这台有没有缩放控制、比值钳到哪）全在 [clampedZoomRatio]，这里只做三件事：
+ * 读 ZoomState 的两个数当参数、null 档一句话、非 null 档设一次并留痕。
+ *
+ * `setZoomRatio` 越界会抛 IllegalArgumentException —— 钳制排在那之前，这一档从根上是防抛，
+ * 但外层仍 runCatching：相机服务半死的时刻 future 会以别的姿态失败，那一档最坏=没放大。
+ * 不 await future：绑定路径整条跑在主线程上，为一行取证把 `get()` 拍在相机服务的应答上是
+ * 把「扫码慢」修成「扫码卡」—— 与手电、对焦同一形状，失败在监听里读出来。
+ */
+private fun applyProjectorZoom(context: android.content.Context, camera: Camera) {
+    val zoomState = camera.cameraInfo.zoomState.value
+    val ratio = clampedZoomRatio(ProjectorZoomRatio, zoomState?.minZoomRatio, zoomState?.maxZoomRatio)
+    if (ratio == null) {
+        Log.i(TAG, "这台设备没有可用的缩放控制（ZoomState 没报出 min/max 或区间固定），视场保持原样")
+        return
+    }
+    val future = runCatching { camera.cameraControl.setZoomRatio(ratio) }.getOrNull()
+    if (future == null) {
+        Log.w(TAG, "setZoomRatio($ratio) 直接抛出（最坏=视场没变）")
+        return
+    }
+    Log.i(TAG, "投影缩放已下发：请求 $ProjectorZoomRatio×，钳制到 ${ratio}×（这台的区间 ${zoomState?.minZoomRatio}×..${zoomState?.maxZoomRatio}×）")
+    future.addListener(
+        {
+            runCatching { future.get() }.onFailure {
+                Log.w(TAG, "投影缩放设置失败（最坏=视场没变）：${it.message ?: it.cause?.message}")
+            }
+        },
+        ContextCompat.getMainExecutor(context),
+    )
+}
+
+/**
+ * T64④ 手电开关。两层兜底各司其职：
+ * ① 显示侧：按钮只在 [torchAffordance] 判 show 时才存在，而 show 的第一判据就是
+ *    `hasFlashUnit` —— 没灯的设备**永远看不到这颗按钮**，`enableTorch` 在那种机器上会以
+ *    IllegalStateException("No flash unit") 失败 future（javadoc 读起来像 no-op，实际不是），
+ *    绝不能让它冒到界面外；
+ * ② 执行侧：hasFlashUnit 的快照会随重绑定漂移（按钮还挂着、相机已换），所以调用本身
+ *    runCatching，future 的失败更要读出来留一行 —— 不读的话 future 失败无人认领、无声吞掉，
+ *    又长成一遍「按了没反应」。真实开没开永远以 torchState 的反馈为准（观察窗在主组合里）。
+ */
+private fun toggleScanTorch(context: android.content.Context, camera: Camera?, affordance: TorchAffordance) {
+    if (!affordance.show) return
+    val control = camera?.cameraControl ?: return
+    val wanted = torchTargetState(affordance)
+    val future = runCatching { control.enableTorch(wanted) }.getOrNull()
+    if (future == null) {
+        Log.w(TAG, "enableTorch 直接抛出（档位 $affordance，想要亮=$wanted）——页面没事，灯以 torchState 的口径为准")
+        return
+    }
+    future.addListener(
+        {
+            runCatching { future.get() }.onFailure {
+                Log.w(TAG, "手电切换失败（想要亮=$wanted）：${it.message ?: it.cause?.message} —— 这一档只是没灯，不是扫码判死")
+            }
+        },
+        ContextCompat.getMainExecutor(context),
+    )
+}
 
 /** 与本页另一条设备链路（SpocLoginScreen）同一个 TAG 口径：只留证据，不代替文案 */
 private const val TAG = "SpocScanScreen"
