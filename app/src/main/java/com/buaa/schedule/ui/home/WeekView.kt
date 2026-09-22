@@ -1821,6 +1821,9 @@ private fun DayHeader(
                                 // 字、色、字距全由 `SpecialDayBadgeText` 那一份决定（T62②）：
                                 // 今日页吃的是同一段代码，所以两处不会各写一种红。
                                 // 这一格的版面事实只有"压不压在主题色胶囊上"，故传 onAccentSurface。
+                                // 全称（「国庆节调休上班」这种七个字）**不进格子只进语义**：
+                                // 窄屏一格 ~43dp，硬摆全称会把"周二 9/25"本身挤没——
+                                // 读屏那侧由共用件挂上「国庆节（节假日）」整句（T62② 的 semantics 约定）。
                                 SpecialDayBadgeText(
                                     date = cellDate,
                                     marks = specialDayMarks,

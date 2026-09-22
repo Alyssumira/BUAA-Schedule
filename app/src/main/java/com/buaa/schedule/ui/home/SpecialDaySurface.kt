@@ -72,15 +72,23 @@ internal fun specialDayHeaderSurface(
     gapWidthDp: Double,
     availableWidthDp: Double,
 ): SpecialDayHeaderSurface {
-    val badge = badgeText?.takeIf { it.isNotBlank() } ?: return None
+    val badge = badgeText?.takeIf { it.isNotBlank() } ?: return SpecialDayHeaderSurface.None
     val full = fullText?.takeIf { it.isNotBlank() } ?: badge
     if (full == badge) {
         // 没有说明可省：装不装得下只决定落在哪一档，两档的文字是同一枚本体
         val fitsBadge = leadingWidthDp + gapWidthDp + badgeWidthDp <= availableWidthDp
-        return if (fitsBadge) Full(badge) else BadgeOnly(badge)
+        return if (fitsBadge) {
+            SpecialDayHeaderSurface.Full(badge)
+        } else {
+            SpecialDayHeaderSurface.BadgeOnly(badge)
+        }
     }
     val fitsFull = leadingWidthDp + gapWidthDp + fullWidthDp <= availableWidthDp
-    return if (fitsFull) Full(full) else BadgeOnly(badge)
+    return if (fitsFull) {
+        SpecialDayHeaderSurface.Full(full)
+    } else {
+        SpecialDayHeaderSurface.BadgeOnly(badge)
+    }
 }
 
 /**

@@ -21,6 +21,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -115,7 +116,10 @@ import com.buaa.schedule.domain.model.weekdayLabel
 import com.buaa.schedule.domain.schedule.SlotStatus
 import com.buaa.schedule.domain.schedule.TodayPlanner
 import com.buaa.schedule.domain.schedule.WeekCalculator
+import com.buaa.schedule.ui.SpecialDayBadge
+import com.buaa.schedule.ui.SpecialDayMark
 import com.buaa.schedule.ui.courseSharedElementModifier
+import com.buaa.schedule.ui.specialDayBadgeLabel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -259,18 +263,28 @@ fun DayView(
                         // 而 labelMedium 那一行放得下，且周次与节假日本来就是同一句话的两半。
                         // 键用 `day`：这一格在 Crossfade 里，翻页过程中新旧两天并存，
                         // 读外层 `date` 就会让滑出去那一屏先换成新日期的徽标（同 AnimatedContent 的理由）。
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        val badge = remember(day, specialDayMarks) {
+                            specialDayBadgeOn(day, specialDayMarks)
+                        }
+                        val weekLine = if (day == today) {
+                            "今天 · ${weekTextFor(semester, semesterStart, day)}"
+                        } else {
+                            weekTextFor(semester, semesterStart, day)
+                        }
+                        if (badge == null) {
+                            // 没有标注的那一天：副行与改前逐字节同（不留占位、不常驻透明胶囊）
                             Text(
-                                text = if (day == today) "今天 · ${weekTextFor(semester, semesterStart, day)}"
-                                else weekTextFor(semester, semesterStart, day),
+                                text = weekLine,
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                             )
-                            SpecialDayBadgeText(
-                                date = day,
+                        } else {
+                            DayBadgeBudgetLine(
+                                day = day,
+                                weekLine = weekLine,
+                                badge = badge,
                                 marks = specialDayMarks,
-                                showNote = true,
                             )
                         }
                     }
@@ -410,6 +424,73 @@ private fun weekTextFor(semester: Semester?, semesterStart: LocalDate?, date: Lo
         semesterStart == null -> "学期开学日期无效，请在设置中修正"
         week == null -> if (date.isBefore(semesterStart)) "未开学" else "假期中"
         else -> "第 $week 周"
+    }
+}
+
+/**
+ * 挂着「休/班」那一天的页头副行：**先量后摆**（T62③，T48 同一思路）。
+ *
+ * 摆法本身（副行、labelMedium、贴着周次文字）是上一档定下的；这一档补的是它欠的
+ * 宽度账——整句「休· 国庆节调休上班」在 360dp 屏的中间列（左右各 48dp 箭头）里
+ * 不是每次都放得下，硬摆就是 T48 的病 replay：撑破一行、把别的字裁到画面外。
+ * 所以三段宽度全部实测（measurer 一台一份，见 [rememberTimelineTextMeasurer] 的账），
+ * 可用宽度由 [BoxWithConstraints] 在这一列自己的约束里拿——"差多少摆哪档"这道算式
+ * 收在零 import 的 [specialDayHeaderSurface] 里，这里只递数、只摆放。
+ *
+ * 最后一道防线是摆法而不是算式：前导周次文字 `weight(1f, fill = false)` 吃剩下的并
+ * ellipsis、徽标拿自然宽（T48 那一手），量算万一失手（新字体、极端字号）被省略号
+ * 吃掉的也只有周次文字，「休」那枚字永远排不到被裁的位置。
+ */
+@Composable
+private fun DayBadgeBudgetLine(
+    day: LocalDate,
+    weekLine: String,
+    badge: SpecialDayBadge,
+    marks: List<SpecialDayMark>,
+) {
+    val metaStyle = MaterialTheme.typography.labelMedium
+    val density = LocalDensity.current
+    val lineMeasurer = rememberTimelineTextMeasurer()
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        val availableWidthDp = with(density) { constraints.maxWidth.toDp().value.toDouble() }
+        val surface = remember(
+            badge, weekLine, metaStyle, lineMeasurer, density, availableWidthDp,
+        ) {
+            val badgeChar = specialDayBadgeLabel(badge, withNote = false)
+            val fullText = specialDayBadgeLabel(badge, withNote = true).takeIf { it != badgeChar }
+            // Dp.value 是 Float，内核那头的账记在 Double 上（打表时 0.5dp 一档差得起）
+            val widthOf: (String) -> Double = { text ->
+                with(density) { lineMeasurer.measure(text, metaStyle).size.width.toDp().value.toDouble() }
+            }
+            specialDayHeaderSurface(
+                badgeText = badgeChar,
+                fullText = fullText,
+                badgeWidthDp = widthOf(badgeChar),
+                fullWidthDp = fullText?.let(widthOf) ?: widthOf(badgeChar),
+                leadingWidthDp = widthOf(weekLine),
+                gapWidthDp = DesignTokens.spaceMicro.value.toDouble(),
+                availableWidthDp = availableWidthDp,
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = weekLine,
+                modifier = Modifier.weight(1f, fill = false),
+                style = metaStyle,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            SpecialDayBadgeText(
+                date = day,
+                marks = marks,
+                // 摆整句还是只摆本体由内核定；被省下的全称走读屏语义（共用件里那份约定）
+                showNote = surface is SpecialDayHeaderSurface.Full,
+            )
+        }
     }
 }
 

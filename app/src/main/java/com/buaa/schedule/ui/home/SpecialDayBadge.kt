@@ -7,6 +7,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,7 +65,8 @@ internal fun specialDayBadgeOn(date: LocalDate, marks: List<SpecialDayMark>): Sp
  *
  * @param onAccentSurface 这一格是不是压在主题色底上（周表头的"今天"是填充胶囊，
  *   徽标得换成 `onPrimary` 才看得见）。这是版面事实、不是判据，所以留在调用点。
- * @param showNote 说明文字（如「中秋节」）摆不摆：周表头一格只有 ~43dp，摆就得把日期本身挤没。
+ * @param showNote 说明文字（如「中秋节」）摆不摆：周表头一格只有 ~43dp，摆就得把日期本身挤没；
+ *   今日页那一档由版面内核 [specialDayHeaderSurface] 按实测宽度决定。
  */
 @Composable
 internal fun SpecialDayBadgeText(
@@ -75,8 +78,16 @@ internal fun SpecialDayBadgeText(
     style: TextStyle = MaterialTheme.typography.labelMedium,
 ) {
     val badge = remember(date, marks) { date?.let { specialDayBadgeOn(it, marks) } } ?: return
+    val text = specialDayBadgeLabel(badge, withNote = showNote)
+    // 摆不进画面的不是字，是信息：全称被版面省下时交给读屏（「国庆节（节假日）」整句，
+    // 休/班两种说法分得开），否则读屏用户永远不知道那个「休」到底是谁。
+    // note 本来就没有时 [specialDayHiddenNoteDescription] 回 null，一格语义都不多加。
+    val hiddenNote = specialDayHiddenNoteDescription(
+        isHoliday = badge.kind == SpecialDayBadgeKind.Holiday,
+        note = badge.note.takeIf { !showNote },
+    )
     Text(
-        text = specialDayBadgeLabel(badge, withNote = showNote),
+        text = text,
         style = style,
         fontWeight = FontWeight.Bold,
         color = specialDayBadgeColor(badge.kind, onAccentSurface),
@@ -84,7 +95,15 @@ internal fun SpecialDayBadgeText(
         overflow = TextOverflow.Ellipsis,
         // 字距取 spaceMicro（2dp）——正是从前表头那枚徽标的实测值，改成几处共用之后
         // 把它写死在这里，免得"离日期远了一格"这种微调在各处各调一次
-        modifier = modifier.padding(start = DesignTokens.spaceMicro),
+        modifier = if (hiddenNote == null) {
+            modifier.padding(start = DesignTokens.spaceMicro)
+        } else {
+            // 整句走卡上定的口径「国庆节（节假日）」：括号那半截就把休/班分开了，
+            // 不再重复屏前那枚字——读屏若把可见文字与描述连读也不会拼出「休 休」
+            modifier
+                .semantics { contentDescription = hiddenNote }
+                .padding(start = DesignTokens.spaceMicro)
+        },
     )
 }
 
