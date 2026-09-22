@@ -15,7 +15,8 @@ import org.junit.Test
  * 表里的宽度全是**合成整数**，不是装机实测数：内核吃的就是"调用点量好的整数"，
  * 这里再掺进任何一枚真机数字，就等于把两条不相干的账绑在一起钉。
  * 装机实宽（density 2.625 / fontScale 1.0 那一档）由 `StatsEntryWiringGuardTest`
- * 钉"调用点确实用 TextMeasurer 量的"，数值本身记在 docs/STATUS.md 的 T69 一节。
+ * 钉"调用点确实用 TextMeasurer 量的"，数值本身与量它们的口径记在
+ * `StatsEntryTopBarBudgetMeasuredBaselineTest.kt` 的文件头那张表里。
  */
 class StatsEntryPolicyTest {
 
@@ -54,13 +55,13 @@ class StatsEntryPolicyTest {
 
     // ---- ② 候选表：每档的宽度 = 它自己的文字 + 它自己的内衬 ----
 
-    /** 合成宽度：四字 112px、二字 56px、内衬 63px、图标块 53px、最小触控 126px */
+    /** 合成宽度：四字 112px、二字 56px、内衬 63px、图标块 53px；minPx 默认 40 让托底不参与这一档 */
     private fun table(
         fullPx: Int = 112,
         shortPx: Int = 56,
         paddingPx: Int = 63,
         iconPx: Int = 53,
-        minPx: Int = 126,
+        minPx: Int = 40,
     ): List<StatsEntryCandidate> = statsEntryCandidates(fullPx, shortPx, paddingPx, iconPx, minPx)
 
     @Test
