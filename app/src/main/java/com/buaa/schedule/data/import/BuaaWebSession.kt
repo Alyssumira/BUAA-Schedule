@@ -13,6 +13,9 @@ import androidx.core.content.edit
 import com.buaa.schedule.data.local.BuaaCookieStore
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import java.lang.ref.WeakReference
 
 /**
@@ -87,6 +90,26 @@ object BuaaWebSession {
 
     /** 应用是否处于前台；false 时保留会话但暂停 WebView 渲染与 JS 定时器以省电 */
     @Volatile private var appForeground: Boolean = true
+
+    /**
+     * 「刚刚有人上缴了一个可用会话」的**边沿**信号（T60）。
+     *
+     * 为什么需要它：`fetchTeachingSchedule` / `refreshSchedule` 都要求同一个进程里活着的
+     * 教务 WebView（[sessionWebView] + [hasSession] 两道都过），而这两样只在 [retain] 里被赋值。
+     * 首页那条 `LaunchedEffect(Unit)` 的补抓恰恰跑在这之前 —— 冷启动时它跑完，会话才被
+     * 恢复出来（或直接根本没有会话），于是那一趟唯一的机会空耗，此后没有任何东西再敲一次门。
+     * 本信号就是那第二声敲门：**会话刚可能出现的那一刻**。
+     *
+     * 只发边沿、不发状态：`hasSession()` 仍然是唯一真相，这里不复刻第二份判据
+     * （一份状态若与它不同步，就会有人照着错的那半写代码）。谁收到自己去问 `hasSession()`。
+     *
+     * 发射点只有 [retain] 一处：登录页五处上缴与冷启动 Cookie 恢复成功后的上缴都汇到那里，
+     * 所以不需要在每个入口各补一行。
+     */
+    private val _sessionRetained = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /** 见 [_sessionRetained]。订阅方（ScheduleViewModel）在 viewModelScope 里收，随 ViewModel 一起走。 */
+    val sessionRetained: SharedFlow<Unit> = _sessionRetained.asSharedFlow()
 
     /**
      * 恢复流程的单飞标志。`onStart` 每次回到前台都会调 [restore]，
@@ -233,6 +256,10 @@ object BuaaWebSession {
         // 若保留时应用已在后台（理论上不会从 UI 路径发生，但兜底）：闸门会同时
         // 处理进程级定时器与这个 WebView 的 onPause
         applyTimerGate(webView)
+        // 会话到这里是真的可用了（sessionWebView 已赋值、lastUrl 在 byxt 域）：敲一声门。
+        // 发在函数末尾是有意的 —— 早一步发，订阅者回头去问 hasSession() 可能还是 false，
+        // 它这一轮就白跑了（为什么只发边沿不发状态见 [_sessionRetained]）。
+        _sessionRetained.tryEmit(Unit)
     }
 
     /**

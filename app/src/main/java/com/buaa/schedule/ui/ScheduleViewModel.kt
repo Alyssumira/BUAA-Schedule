@@ -1,6 +1,7 @@
 package com.buaa.schedule.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import androidx.lifecycle.AndroidViewModel
@@ -278,33 +279,134 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     val specialDays: kotlinx.coroutines.flow.StateFlow<List<com.buaa.schedule.domain.model.SpecialDay>> =
         _specialDays.asStateFlow()
 
+    /**
+     * 补抓的单飞闸门（T60）。
+     *
+     * 必须存在的理由：触发点从一处变成三处（回首页 / 会话刚建立 / 翻到新月份），
+     * 而每一趟都是一串按月走的页面内 JS 请求。
+     *
+     * ⚠️ 它也必须**关得掉**，而且是"由领到它的那个人关"：领取用 compareAndSet、
+     * 归还在 finally 里、且只在 `claimed` 时归还。只开不关的闸门比只关不开更隐蔽 ——
+     * 之后整个进程里这一功能一声不吭，读起来和"从来没坏过"一模一样。
+     * 做成 StateFlow 而不是裸 Boolean：界面上任何时候都读得到"这一轮还在跑"，
+     * 将来要给它加个转圈不用先改判据（口径同 SignInViewModel 的 inFlight，T59⑤）。
+     */
+    private val specialDayFetchInFlight = MutableStateFlow(false)
+
+    /** 屏幕上此刻看得见哪几个月；初值空 = 只按默认窗口（本月/下月）判，见 [onSpecialDayVisibleMonths] */
+    private val specialDayVisibleMonths = MutableStateFlow<Set<SpecialDayMonth>>(emptySet())
+
     init {
-        // 先读缓存（无网也可标注），联网抓取由首页在有会话时触发
+        // 先读缓存（无网也可标注），联网补抓另有三个触发点，见 [refreshSpecialDays]
         viewModelScope.launch(Dispatchers.IO) {
             _specialDays.value = com.buaa.schedule.data.local.SpecialDayCache.loadAll(getApplication())
+        }
+        // 会话刚可能出现的那一刻（T60）。这一路才是把标注真正补回来的那一路：
+        // 冷启动时首页那一趟跑在 Cookie 恢复之前，`fetchTeachingSchedule` 的
+        // `sessionWebView ?: return null` 当场把它判死，而那一趟是全进程唯一的一趟。
+        viewModelScope.launch {
+            com.buaa.schedule.data.import.BuaaWebSession.sessionRetained.collect {
+                refreshSpecialDays(SpecialDayTrigger.SessionReady)
+            }
         }
     }
 
     /**
-     * 抓取本月与下月的「学习日程」标注（需保留的教务会话）。
-     * 失败静默：标注是增强能力，不影响主流程。
+     * 界面上此刻看得见哪几个月（[com.buaa.schedule.ui.home.HomeScreen] 在浏览周次/日期变化时推上来）。
+     *
+     * 为什么需要界面上报：判据原本只看"本月 + 下月"，用户翻到跨月的那一周、
+     * 或者寒假那一周（在上一学期里）时，那个月从来没进过缓存，也就从来没被请求过 ——
+     * 表头上的「休/班」就一直不出，而这一档在日志里连一行痕迹都没有。
+     * 月份集合没变时不重发（StateFlow 的相等判定挡掉了翻同一周的重复组合）。
      */
-    fun refreshSpecialDays() {
+    fun onSpecialDayVisibleMonths(months: List<java.time.YearMonth>) {
+        val keys = months.map { SpecialDayMonth(it.year, it.monthValue) }.toSet()
+        if (keys == specialDayVisibleMonths.value) return
+        specialDayVisibleMonths.value = keys
+        refreshSpecialDays(SpecialDayTrigger.BrowseMonth)
+    }
+
+    /**
+     * 补抓「学习日程」标注：抓不抓、抓哪几个月由 [decideSpecialDayFetch] 判，这里只管领闸门、
+     * 读设备侧事实、跑请求、落盘、留一行日志。
+     *
+     * 口径与旧写法的两处不同：
+     * - **不再静默**。四种停法（闸门被占 / 缓存新鲜 / 无会话 / 接口空手回）各种一行 `Log.i`，
+     *   并写明本轮真的看过哪几个月 —— 这一链过去的全部问题就是"停在某一档而没人知道"。
+     * - **一个进程不止一次**。三个触发点：回首页、会话刚建立、翻到新月份。
+     *
+     * 标注始终是增强能力：任何一档都不影响主流程，也不改动周次计算与提醒调度。
+     */
+    internal fun refreshSpecialDays(trigger: SpecialDayTrigger = SpecialDayTrigger.PageResume) {
+        // 闸门在进协程**之前**领：三个触发点可以挤在同一帧里各敲一次门，
+        // 而每敲一次就是一串几十秒的页面内 JS 请求 —— 进了协程再判，两路都会在同一份
+        // false 上判通过（旧写法的 buaaTermsFetching 就是这个形状，它至少有 `if` 在前头）。
+        // compareAndSet 保证这一轮只有一路拿到闸门。
+        val claimed = specialDayFetchInFlight.compareAndSet(expect = false, update = true)
         viewModelScope.launch {
-            val app = getApplication<Application>()
-            val now = java.time.YearMonth.now()
-            // 本月/下月：没有缓存、或缓存已超过 TTL 才联网抓取。标注按“月”粒度落盘，
-            // 加 TTL 是因为教务的调休常在月初之后才公布——只按“文件存在”判定会永久跳过本月。
-            val wanted = listOf(now, now.plusMonths(1))
-            val stale = com.buaa.schedule.data.local.SpecialDayCache.staleMonths(app, wanted)
-            val months = wanted.filter { it in stale }
-            if (months.isEmpty()) return@launch
-            val fetched = com.buaa.schedule.data.import.BuaaWebSession.fetchTeachingSchedule(months)
-                ?: return@launch
-            fetched.forEach { (month, raw) ->
-                com.buaa.schedule.data.local.SpecialDayCache.put(app, month, raw)
+            // ⚠️ scope 已取消时这段一体都不会跑（finally 也不跑），闸门会留在 true ——
+            // 但那时 ViewModel 已经在清场，这颗闸门随它一起没了，不会有下一轮被挡住。
+            try {
+                runSpecialDayFetch(trigger, fetchInFlight = !claimed)
+            } finally {
+                // 只归还自己领到的那一份：没领到的人去清闸门，等于把正在跑的那趟的门踹开
+                if (claimed) specialDayFetchInFlight.value = false
             }
-            _specialDays.value = com.buaa.schedule.data.local.SpecialDayCache.loadAll(app)
+        }
+    }
+
+    /** [refreshSpecialDays] 的一趟流程；拆出来是为了让闸门那对 try/finally 一眼看得全 */
+    private suspend fun runSpecialDayFetch(trigger: SpecialDayTrigger, fetchInFlight: Boolean) {
+        val app = getApplication<Application>()
+        val nowMonth = java.time.YearMonth.now()
+        val decision = decideSpecialDayFetch(
+            now = SpecialDayMonth(nowMonth.year, nowMonth.monthValue),
+            cachedAges = com.buaa.schedule.data.local.SpecialDayCache.cachedMonthAges(app)
+                .map { (month, ageDays) ->
+                    SpecialDayCacheAge(SpecialDayMonth(month.year, month.monthValue), ageDays)
+                },
+            visibleMonths = specialDayVisibleMonths.value.toList(),
+            // 两份设备侧事实都当参数递给判据：内核自己去问墙钟、问 WebView 单例的话，
+            // "缓存新鲜/过期/半新半旧、有没有会话"这几档就没法在 JVM 里逐支打表了
+            sessionAvailable = com.buaa.schedule.data.import.BuaaWebSession.hasSession(),
+            fetchInFlight = fetchInFlight,
+        )
+        when (decision) {
+            is SpecialDayDecision.Skip -> Log.i(
+                SPECIAL_DAY_LOG_TAG,
+                specialDaySkipLog(decision.reason, decision.months, trigger),
+            )
+
+            is SpecialDayDecision.Fetch -> {
+                val fetched = com.buaa.schedule.data.import.BuaaWebSession.fetchTeachingSchedule(
+                    decision.months.map { java.time.YearMonth.of(it.year, it.month) },
+                )
+                if (fetched == null) {
+                    // 会话在位、请求发出去了，一个月都没回来。这一档以前是纯静默，
+                    // 而它恰恰是"登录了却还是没标注"最常见的一种成因。
+                    Log.i(
+                        SPECIAL_DAY_LOG_TAG,
+                        specialDaySkipLog(SpecialDayFetchSkip.FetchReturnedNull, decision.months, trigger),
+                    )
+                    return
+                }
+                fetched.forEach { (month, raw) ->
+                    com.buaa.schedule.data.local.SpecialDayCache.put(app, month, raw)
+                }
+                val days = com.buaa.schedule.data.local.SpecialDayCache.loadAll(app)
+                _specialDays.value = days
+                Log.i(
+                    SPECIAL_DAY_LOG_TAG,
+                    specialDayFetchDoneLog(
+                        requested = decision.months,
+                        // 「回来的月份」单独算：逐月请求可以只成一半，说成"请求的那几月都好了"就是假话
+                        returned = fetched.keys.map { SpecialDayMonth(it.year, it.monthValue) },
+                        deferred = decision.deferredMonths,
+                        totalAnnotations = days.size,
+                        trigger = trigger,
+                    ),
+                )
+            }
         }
     }
 
@@ -545,6 +647,14 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
 
     companion object {
         const val DEFAULT_BUAA_TERM = "2026-2027-1"
+
+        /**
+         * 假期/调休标注这条链的取证 tag（T60）。四种停法 + 一趟成功都走它，
+         * 于是 `logcat -s SpecialDays` 能单独回答"这一轮到底走到哪一档停了"。
+         * 级别一律 Info：用户那台机器（HyperOS）把 logcat 砍到 Info 以下、
+         * release 又剥 Verbose（口径同扫码页那族取证行，见 ScanSilentBranchGuardTest ⑦）。
+         */
+        private const val SPECIAL_DAY_LOG_TAG = "SpecialDays"
     }
 
     private val _buaaTermCode = MutableStateFlow(DEFAULT_BUAA_TERM)
