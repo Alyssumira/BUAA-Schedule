@@ -310,6 +310,11 @@ class ScanFrameFlowGuardTest {
         val recover = balancedBlock(analyzer, "fun recoverOnPageVisible(")
         assertTrue("恢复时不再推 working（绑定那颗 effect 的键就不动）：\n$recover", recover.contains("onWorkingChanged(working)"))
         assertTrue("恢复时不再推判死档位：\n$recover", recover.contains("onGiveUpChanged(scannerGiveUp(next))"))
+        // 订正的形状：额度用完那一行必须先算档位再进模板。原来那句是
+        // `"…）：" + health.giveUpReason ?: "停用窗口内"`，`+` 绑得比 `?:` 紧 ⇒ Elvis 永远取
+        // 左操作数，停用窗口里读出来是"…：null" —— 本卡那句"还剩什么活路"的近邻证据不许说谎。
+        assertTrue("额度用完那一行不再先算档位（死 Elvis 回来了）：\n$recover", recover.contains("val why = health.giveUpReason ?: \"停用窗口内\""))
+        assertFalse("取证的拼接又把 ?: 挂在 + 后面（读出来就是 null）：\n$recover", Regex("""\+\s*health\.giveUpReason""").containsMatchIn(recover))
         // 绑定成功那一条自己带 unbindAll + 句柄重写 ⇒ 停过帧之后照样能回来
         val bind = balancedBlock(code, "LaunchedEffect(granted, provider, scannerWorking, analyzer)")
         assertTrue("绑定成功路径不再写句柄：\n$bind", bind.contains("boundCamera = camera"))

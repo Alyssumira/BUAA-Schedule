@@ -985,11 +985,15 @@ private class QrCodeAnalyzer(
         if (next === health) {
             // 额度用完了也留一行：否则"回来过"和"没回来过"在读证据时一模一样
             if (!scannerWorkingOf(health)) {
+                // 订正（T67）：这一句原来是 `"...）：" + health.giveUpReason ?: "停用窗口内"`，
+                // 而 `+` 比 `?:` 绑得紧 ⇒ Elvis 永远取左操作数（编译器也这么警告），
+                // 停用窗口里那一档真的读出来是"…：null"。这一行是本卡那句"还剩什么活路"的
+                // 近邻证据，不许说谎：先把档位单独算出来，再进模板。
+                val why = health.giveUpReason ?: "停用窗口内"
                 Log.w(
                     TAG,
                     "回到前台但不再给解码器机会（额度 " +
-                        "${health.pageVisibleRecoveries}/$MaxPageVisibleRecoveries 已用完，已收 $frameCount 帧）：" +
-                        health.giveUpReason ?: "停用窗口内",
+                        "${health.pageVisibleRecoveries}/$MaxPageVisibleRecoveries 已用完，已收 $frameCount 帧）：$why",
                 )
             }
             return scannerWorkingOf(health)
