@@ -186,7 +186,9 @@ fun HomeScreen(
     // 进入主页若有保留教务会话，拉取学期列表供选择器使用
     LaunchedEffect(Unit) {
         viewModel.refreshBuaaTerms()
-        // 假期/调休标注：先读缓存，再尝试联网补抓（无教务会话时静默跳过）
+        // 假期/调休标注：这一路只覆盖"回首页"这一个时机。真正把关口的两趟补上的是
+        // 会话刚建立（ScheduleViewModel 收 BuaaWebSession.sessionRetained）与下面那条
+        // 屏上月份 —— 冷启动时这一趟多半跑在会话恢复之前，判据会留下一行「无可用教务会话」
         viewModel.refreshSpecialDays()
     }
     // 「浏览到哪一周 / 哪一天」null = 跟随当前教学周、今天。
@@ -203,6 +205,27 @@ fun HomeScreen(
         if (browseDateEpochDay < 0L) null else LocalDate.ofEpochDay(browseDateEpochDay)
     fun setBrowseDate(date: LocalDate?) {
         browseDateEpochDay = date?.toEpochDay() ?: -1L
+    }
+    // 屏上月份 → 标注补抓（T60）。周视图那一周可以横跨两个自然月，日视图又是单独一个月，
+    // 所以是"至多三个"而不是一个。
+    // 为什么这件事要界面上报：补抓判据以前只看"本月 + 下月"，用户翻到跨月的那一周
+    // （或寒假那一周）时那个月从没进过缓存、也从没被请求过，表头上的「休/班」就一直不出，
+    // 而这一档在日志里连一行痕迹都没有。"看得见"本身就是唯一可靠的触发条件。
+    // 键必须把浏览状态全列出来：漏 browseWeek 就是翻出跨月的那一周不补抓，
+    // 漏 browseDate 是日视图翻月不补抓（同一颗坑的另一半）。学期没读到时算不出周区间，
+    // 就只报今天那一个月 —— 与 WeekView 没有 weekStartDate 就不画标注的降级方向一致。
+    val specialDayMonths = remember(state.semester, browseWeek, state.currentWeek, browseDate, today) {
+        buildList {
+            val span = SemesterWeekDates.spanOf(state.semester, browseWeek ?: state.currentWeek)
+            span?.let { (monday, sunday) ->
+                add(java.time.YearMonth.from(monday))
+                add(java.time.YearMonth.from(sunday))
+            }
+            add(java.time.YearMonth.from(browseDate ?: today))
+        }.distinct()
+    }
+    LaunchedEffect(specialDayMonths) {
+        viewModel.onSpecialDayVisibleMonths(specialDayMonths)
     }
     // 桌面组件 4×2 格子 → 那一天的日视图（T-26）。
     // 必须等数据到位：日期是从"当前浏览的那一教学周"推出来的，学期没读到就会算错周。
