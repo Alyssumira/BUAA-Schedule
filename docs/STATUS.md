@@ -1161,3 +1161,58 @@
       **岛 / 实况 / 勿扰恢复**（#14 / #90 那两条，这一趟没碰）；帧级动画表现（量具不够，见②）。
       ⚠️ 一条截图口径：扫码页取景框那一格在 `screencap` 里是**纯黑**，而日志证明帧在到达 ⇒
       那是 SurfaceView 不进截图的形状，**不许据此判"预览坏了"**。
+
+- [x] 今日课表左右滑动卡顿（T70，2026-09-23，`f696718`…`1e46166` + 订正 `47ff053`）：
+      用户同批第三条「今日课表模式左右滑动动画有点卡顿」。**这一卡是先量再改，而且把自己的
+      两条假设当场证伪了**（四组对照摆进 `DaySwipePolicy.kt` 的 KDoc，免得下次再猜）：
+      「卡是因为 `AnimatedContent` 转场期新旧两份整页组合」——**一次都不换天的手势反而更慢**
+      （130 帧 / 73.81% / p50 109ms 对 149 帧 / 62.08% / 79ms），双份组合不是主因；
+      「换成 `HorizontalPager` 就不卡」（**我自己卡里给的对照组**）——同一次手势在周视图那条路上
+      p50 帧时 **500ms**、每帧贵 6.3 倍，换过去是往更贵的方向推。
+      能动的因此只剩滑动路径上三处白烧 UI 线程的写法：
+      ① `pointerInput(date)` 每翻一天把整条 `detectHorizontalDragGestures` 拆掉重装，
+        正在飞的那一次拖拽被直接取消（连手快滑两下会掉一下）⇒ 换 `pointerInput(Unit)` +
+        `rememberUpdatedState`，识别器全程只装一次；
+      ② 每个 pointer 事件 `dragScope.launch { dragShift.snapTo(...) }`（一次协程分配 +
+        一次 Animatable 互斥锁 + 一次快照写，而这台镜像一次 300ms 滑动注入约 30 个事件、
+        实测帧时 79ms ⇒ 一帧里挤 5 个事件、其中 4 次写被下一帧覆盖）⇒ 累计位移改成
+        **非 State** 的 `DayDragAccumulator`（普通字段），事件路径只剩两次字段自增，
+        位移由一颗 `LaunchedEffect(dragActive, reduceMotion)` 的帧回调协程按帧落地
+        （`dayDragShouldWriteOffset` ⇒ 一帧最多写一次）；
+      ③ 松手不分翻没翻出去都挂同一根没有明确长度的弹簧 ⇒ 按 `dayDragSettleMode` 分两档：
+        没翻出去照旧弹簧弹回（手感逐字不变），翻出去那一侧改按**转场时长**收回，
+        把"整页正文每帧重画"的窗口从一根无界弹簧收进 140ms。
+      另收一处同族的白烧：`DayScreen` 里那笔全量 `filter + sortedBy` 以前挂在组合期裸算，
+      转场那 140ms 里新旧两页每重组一次就走一遍 ⇒ `remember(date, courses, semester, semesterStart, week)`。
+      **内核** `DaySwipePolicy.kt`（132 行、**零 import**，px 与 72dp 阈值由调用点折好传进来）：
+      `daySwipeCommit` / `dayDragFollowOffset` / `dayDragSettleMode` / `dayDragShouldFollow` /
+      `dayDragShouldWriteOffset`，10 档表驱动 + 8 档源码扫描守卫（含 `t68OwnershipAndNeighbouringCardsSurvive`
+      这一档——它钉住 T68 那两处 `date = browseDateOnScreen` 与「回到今天」的形状没被本卡带走）。
+      门禁（我按序重跑，**并且补跑了一次**）：`assembleRelease` → 第一次测试任务跑出
+      **skipped=3** —— 正是产物层那三条（`ReleaseForensicLogSurvivalTest` 两档 +
+      `ScanSecondEngineWiringGuardTest.releaseApkShipsEachDecoderLibraryForArm64Only`）被
+      `assumeTrue` 跳了：`--rerun-tasks` 会先把 release 包删掉重打，测试恰好挤在那个窗口里跑。
+      ⇒ 单独再跑一次 `:app:testDebugUnitTest --rerun-tasks`（此时包已在盘上）才拿到真数：
+      **1370 tests / 165 suites / 0 失败 / 0 skipped** / lint **0 error / 14 warning**；
+      release 签名包 **7,238,388 B**（同一构建状态下改前 7,237,947 ⇒ **+441 B**）。
+      ⚠️ 一条方法论：`assembleRelease` 与 `testDebugUnitTest` 写在**同一次** gradle 调用里
+      **并不能保证先后**（任务图里两者无依赖），所以"看 skipped"这一步省不掉 —— 以前几轮
+      skipped=0 是运气（上一轮的包还在盘上）。**收单要单独再跑一次测试任务确认 skipped 归零。**
+      **真机交错对照（f128bc02 / 120 Hz 面板 / 同一协议：6 次预热 → reset → 10 次
+      `input swipe 1050,1250→350,1250 500ms`，每侧两轮，改前包用 `.worktrees/T68` 里那枚
+      7,236,213 B 的 `5099903` 产物）**：
+      | 量 | 改前 A | 改后 B |
+      |---|---|---|
+      | 一次序列产出的帧数 | 1752 / 1754 | **1092 / 1120（−38%）** |
+      | p50 / p90 帧时 | 10 / 13，8 / 11 ms | 9 / 13，7 / 11 ms（**同档**） |
+      | p99 帧时 | 53 / 48 ms | 61 / 53 ms（同档，B 略差） |
+      | Janky 计数 | **0 / 1753** | **11 / 1106 ≈ 1%** |
+      ⇒ 站得住的只有一条：**同样的手势少画了近四成的帧，帧时分布不变**（这条对省电是实的）。
+      ⚠️ **不据此宣布"更顺"**：帧数下降有两种解释 —— 停止产出"画面没变"的帧（好），
+      或者跟手采样率掉了一档（坏），而这台设备上**没有能分辨两者的量具**：
+      `screenrecord` 实测只有 43.35 fps 平均（低于被录对象）、`GlassJank` 的 `jankRate=` 是
+      `Log.d` 被 HyperOS 砍掉、gfxinfo 的"平均 fps"被我自己的分母污染（尾段空闲时间算进去了，
+      同一个包同一手势先后量出 84 与 165 两个数 ⇒ 这个导出量作废，只认帧数与分位数）。
+      那 11 枚迟到帧落在哪一帧，决定它是"省了功"还是"更卡"，**这一条要人手感裁决**（已请用户判）。
+      合并后我在真机上复核过滑动仍会翻日、`回到今天` 仍在、T68 的「课表（浏览）」标题照旧出现
+      （截图 `.tmp/phone-*.png` 一组）。
