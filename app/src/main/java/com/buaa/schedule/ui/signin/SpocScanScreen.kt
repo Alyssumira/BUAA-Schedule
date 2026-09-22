@@ -235,6 +235,11 @@ fun SpocScanScreen(
     val view = LocalView.current
     val targetRotation = remember(view) { view.display?.rotation ?: Surface.ROTATION_0 }
     val busy = state is SignInState.Resolving || state is SignInState.Submitting
+    // ③ 有一次签到真的在飞：结果卡上那两颗按钮与相册那颗一起按灭。
+    // 状态机自己也有 `if (inFlight) return` 的守卫（两处口径同一个来源），
+    // 但按灭按钮才是修「按了没反应」的那一半 —— 吞掉动作是 ViewModel 的事，
+    // 让用户看见"现在点不动"是界面的事。
+    val inFlight by viewModel.inFlight.collectAsState()
     // 相机这条路径是否真的在跑：取景框只在它有效时出现，
     // 退化到相册时再压一层暗区就只是噪音。
     // 判据抽成纯函数 scanCameraLive（D2）：旧写法漏了 provider 与 analyzer 两项，
@@ -344,27 +349,42 @@ fun SpocScanScreen(
     val galleryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
     ) { uri: Uri? ->
+        if (uri == null) {
+            // ③ 用户在那张选图框里按了返回：这不是故障，但"这一趟没选图"与"选了图却没反应"
+            // 在读证据时必须分得开 —— 旧写法这里连一行都没有
+            Log.i(TAG, "相册选图被取消，这一次什么都没做")
+            return@rememberLauncherForActivityResult
+        }
         // isAvailable() 是一次 volatile 读（不 dlopen、不挂起）：相册这条走的是同一个
         // scanner.process()，所以"已判定可用"才放行 —— 未判定也挡在外面，宁可这次选择不发生，
         // 也不把一帧递给一个还没验过库的解码器（起手那颗 LaunchedEffect 早就把判定做完了，
         // 用户从选图回到这里之间不可能还没判完，这道判断只是把纪律写成代码）。
-        if (uri != null && scanner != null && barhopperNativeLib.isAvailable()) {
-            runCatching { InputImage.fromFilePath(context, uri) }
-                .onSuccess { image ->
-                    // 解不出来必须说话：以前空结果什么都不发生，用户只会以为"按了没反应"，
-                    // 于是反复挑同一张图（H3）
-                    scanner.process(image)
-                        .addOnSuccessListener { codes ->
-                            val raw = codes.firstOrNull()?.rawValue
-                            if (raw == null) viewModel.reportNoQrCode() else viewModel.signIn(raw)
-                        }
-                        .addOnFailureListener { viewModel.reportNoQrCode() }
-                }
-                // 相册里那张图太大 / 读不出来时，别让整个页面跟着倒。
-                // 前缀必须用 GalleryUnreadablePrefix：scanUiStatus 靠它把这一支和绑定失败分开
-                // （相册刚失败时再让用户"改用相册"就是绕圈，见那里的注释）
-                .onFailure { cameraError = "$GalleryUnreadablePrefix：${it.message}" }
+        //
+        // ⚠️ 以前这三个条件是捏在一起的 `if (a && b && c)`，落空就是纯静默：按钮的 enabled
+        // 只看 scanner，所以"判定没到手 / 已判定不可用"那一档**点得动、点下去什么都没有**（③ 的第二支）。
+        // 现在把它拆成一条明说的支路：状态机落到失败卡（说清是没开始，不是没解出来），
+        // 顺带把相机那边的帧数带上，好让"相机有没有在送帧"这一件事在这里也能对上账。
+        if (scanner == null || !barhopperNativeLib.isAvailable()) {
+            val why = if (scanner == null) "解码器没建出来" else "解码库的判定还没到手，或已判定为不可用"
+            Log.w(TAG, "相册识别没有真正开始：$why（相机侧已收 ${analyzer?.framesArrived() ?: -1L} 帧）")
+            viewModel.reportGalleryBlocked()
+            return@rememberLauncherForActivityResult
         }
+        runCatching { InputImage.fromFilePath(context, uri) }
+            .onSuccess { image ->
+                // 解不出来必须说话：以前空结果什么都不发生，用户只会以为"按了没反应"，
+                // 于是反复挑同一张图（H3）
+                scanner.process(image)
+                    .addOnSuccessListener { codes ->
+                        val raw = codes.firstOrNull()?.rawValue
+                        if (raw == null) viewModel.reportNoQrCode() else viewModel.signIn(raw)
+                    }
+                    .addOnFailureListener { viewModel.reportNoQrCode() }
+            }
+            // 相册里那张图太大 / 读不出来时，别让整个页面跟着倒。
+            // 前缀必须用 GalleryUnreadablePrefix：scanUiStatus 靠它把这一支和绑定失败分开
+            // （相册刚失败时再让用户"改用相册"就是绕圈，见那里的注释）
+            .onFailure { cameraError = "$GalleryUnreadablePrefix：${it.message}" }
     }
 
     BackHandler(enabled = busy, onBack = { })
@@ -437,7 +457,7 @@ fun SpocScanScreen(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
                             )
                         },
-                        enabled = scanner != null && !busy,
+                        enabled = scanner != null && !inFlight,
                         modifier = barAction,
                     ) { Text("相册识别") }
                 }
@@ -491,11 +511,14 @@ fun SpocScanScreen(
                             }
                             TextButton(
                                 onClick = { viewModel.reset() },
+                                // ③ 这颗按钮以前点得动、会被 `if (inFlight) return` 吞掉
+                                enabled = !inFlight,
                                 modifier = cardAction,
                             ) { Text("重新扫码") }
                         }
                         is SignInState.Signed -> Button(
                             onClick = { viewModel.reset() },
+                            enabled = !inFlight,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
@@ -611,6 +634,21 @@ private class QrCodeAnalyzer(
     /** 绑定完成的时刻（`elapsedRealtime`），0 = 还没绑上。主线程写、分析线程读 */
     @Volatile private var bindElapsedMillis = 0L
 
+    /**
+     * 到这一步为止有多少帧"解出了条码却读不出原文"（③ 的第一支）。
+     * 只数不弹：按帧的东西做成 UI 就是每秒十几条 toast。
+     */
+    @Volatile private var valuelessCodes = 0L
+
+    /**
+     * 首帧是否已经留过痕（⑤）。只在本线程读写 ⇒ 不需要 volatile，也不给按帧添分配。
+     *
+     * ⚠️ 这颗标志跟着 analyzer 活：每次重绑（转屏、回到前台重试、停用后恢复）都会再报一行
+     * "首帧已到达"，那是**这一轮绑定**的首帧 —— 不是全进程一次。留的就是"这次绑定到底有没有
+     * 换来帧"这一句话，所以换一次绑定报一次才对。
+     */
+    private var firstFrameLogged = false
+
     /** 绑定成功后调一次：健康度那几行取证要报"这是绑定后第多少毫秒发生的事" */
     fun markBindStarted(elapsedRealtimeMillis: Long) {
         bindElapsedMillis = elapsedRealtimeMillis
@@ -669,6 +707,13 @@ private class QrCodeAnalyzer(
         // 停用窗口里帧**照旧到达**（分析流不 unbind，只是不再喂解码器）—— 这正是
         // [decoderFrameAction] 能算出"窗口过完了"的前提。
         val frame = ++frameCount
+        if (!firstFrameLogged) {
+            // ⑤ 首帧标记：这颗标志只置一次，所以这一行是"每次绑定一行"，不是"每帧一行"。
+            // 它值钱的的地方在于把「相机没送帧」和「送帧了但解不出/被判停用」分开 ——
+            // 没有这一行，这两种处境在读证据时长得一模一样。
+            firstFrameLogged = true
+            logFirstFrameArrived(frame)
+        }
         if (decoderFrameAction(health, frame) == DecoderFrameAction.Skip) {
             image.close()
             return
@@ -688,7 +733,15 @@ private class QrCodeAnalyzer(
                     // 任务正常返回本身就是"这颗解码器还能用"的证据：先记健康度的账，
                     // 再管这一帧解出了什么（解不出东西是常态，不该改判据）
                     noteDecodeSucceeded()
-                    codes.firstOrNull()?.rawValue?.let { raw ->
+                    val first = codes.firstOrNull()
+                    val raw = first?.rawValue
+                    if (raw == null) {
+                        // ③ 以前这里是 `?.let {}` 一句：两种"没有原文"（一枚条码没解出文字 /
+                        // 干脆没有条码）与"这一帧真的什么都没看见"在证据上完全同形，
+                        // 于是用户报的「对准了没反应」连区分都区分不出来。
+                        // 判据（要不要说话、多久说一次）在 [shouldLogValuelessBarcode]。
+                        noteNoReadableValue(sawBarcodeWithoutText = first != null, frame = frame)
+                    } else {
                         // 墙钟在调用点读、判据是纯函数（仓库口径）
                         val now = System.currentTimeMillis()
                         if (shouldSubmitScan(handled, raw, now, awaitingUserAction)) {
@@ -767,6 +820,43 @@ private class QrCodeAnalyzer(
     private fun sinceBindMillis(): Long {
         val at = bindElapsedMillis
         return if (at > 0L) SystemClock.elapsedRealtime() - at else -1L
+    }
+
+    /** 这一页到底收到过多少帧（⑤ 的证据本体；调用点只在留痕时读一次，不在按帧路径上） */
+    fun framesArrived(): Long = frameCount
+
+    /**
+     * 首帧到达那一行（⑤）。级别必须是 Info 以上：用户那台机器（HyperOS）把 logcat 砍到
+     * Info、release 又剥 Verbose，写成 `Log.d` 就等于没写（本页既有取证行同此口径，
+     * 见 [ScanUiStatus] 的 KDoc）。
+     *
+     * 不进 release 取证登记名单（`ReleaseForensicLogSurvivalTest.SITES`）：那本名单是省电审计
+     * §4.3/§4.4 的过滤条件清单，没有一行按扫码页的 tag 过滤。这一行的存活靠的是"仓库里
+     * 没有任何删 `android.util.Log` 的 assume 规则"这条全局守卫（同一份名单的层 1 钉着），
+     * 不需要把自己塞进别人的账本里。
+     */
+    private fun logFirstFrameArrived(frame: Long) {
+        Log.i(TAG, "本轮绑定的首帧已到达分析器：第 $frame 帧（绑定后 ${sinceBindMillis()}ms）—— 相机在送帧")
+    }
+
+    /**
+     * 「解出了条码，但那枚条码没有可读原文」（③ 的第一支）。
+     *
+     * 只在**真的看到一枚条码**时计数：空结果（画面里没码）是按帧的常态，一帧一行会把
+     * logcat 冲干净，那种帧本来也不欠任何解释。要不要说话由 [shouldLogValuelessBarcode]
+     * 判（第一次必说、之后每 [$ValuelessBarcodeLogStride] 次一次），这里只管数。
+     *
+     * 不升成 UI：这是按帧路径，做成状态就是每秒十几次重写组合。
+     */
+    private fun noteNoReadableValue(sawBarcodeWithoutText: Boolean, frame: Long) {
+        if (!sawBarcodeWithoutText) return
+        val total = ++valuelessCodes
+        if (!shouldLogValuelessBarcode(total)) return
+        Log.w(
+            TAG,
+            "解出条码却读不出原文：累计第 $total 次（第 $frame 帧）—— 这种帧投不进签到，" +
+                "用户看到的就是「对准了但没反应」",
+        )
     }
 }
 

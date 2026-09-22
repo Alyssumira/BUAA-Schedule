@@ -58,18 +58,28 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 相机分析流是按帧回调的，同一张二维码在预览里能被连解几十次。
      * 用界面状态挡不够（`Resolving → Failed` 之间会漏），所以单独放一个提交闸门。
+     *
+     * ③ 这一枚以前是颗裸 `Boolean`，于是三个 `if (inFlight) return` 把用户按下去的
+     * 「重新扫码 / 继续扫码 / 相册识别」吃掉而界面毫无动静 —— 那是**按次**的静默支路，
+     * 修法是让动作本身反映实情（按钮在忙的时候点不动），不是排队：签到这件事重复提交
+     * 比"这次没吃进去"更糟，而排队只会把同一张码再投一次。
+     * 现在它是单一来源的一颗 [StateFlow]，界面 collect 它来决定 `enabled`，
+     * 这三个守卫读的还是同一个值。
      */
-    private var inFlight = false
+    private val flight = MutableStateFlow(false)
+
+    /** 有一次签到请求正在飞（界面用它把那颗会丢动作的按钮按灭） */
+    val inFlight: StateFlow<Boolean> = flight.asStateFlow()
 
     /** @param raw 扫码得到的原文 —— 相机实时解码与相册识图两条路共用这一个入口（手输入口已删除） */
     fun signIn(raw: String) {
-        if (inFlight) return
+        if (flight.value) return
         val target = SpocQrParser.parse(raw)
         if (target == null) {
             _state.value = SignInState.Failed("这不是一张智学北航的签到码", relogin = false)
             return
         }
-        inFlight = true
+        flight.value = true
         viewModelScope.launch {
             try {
                 val credential = SpocSession.authorized()
@@ -86,14 +96,14 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
                     is SpocSignTarget.ByQdid -> resolve(target.qdid, credential)
                 }
             } finally {
-                inFlight = false
+                flight.value = false
             }
         }
     }
 
     /** 失败/成功后回到待扫描状态，并重新放行下一次提交 */
     fun reset() {
-        if (inFlight) return
+        if (flight.value) return
         _state.value = SignInState.Idle
     }
 
@@ -104,9 +114,26 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
      * arm64，见本页 KDoc），它静默失败时用户没有任何信号，只能反复选同一张图。
      */
     fun reportNoQrCode() {
-        if (inFlight) return
+        if (flight.value) return
         _state.value = SignInState.Failed(
             "那张图里没认出二维码。请换一张更清晰的图，或用相机重新对准二维码再扫。",
+            relogin = false,
+        )
+    }
+
+    /**
+     * 相册这一次**根本没开始解码**（解码器没建出来，或原生库判定没到手）—— 与
+     * [reportNoQrCode] 是两件事：那条是"递进去了、没认出码"，这一条是"没递进去"。
+     *
+     * 为什么不能复用那条的话：说"换一张更清晰的图"会把用户支使去反复挑同一张好图，
+     * 而这条路上根本没有图的事。底部提示条那一档（[scanUiStatus]）说的才是这台设备的实情，
+     * 这张卡只负责回答"我刚点的那一下去哪了"。
+     */
+    fun reportGalleryBlocked() {
+        if (flight.value) return
+        _state.value = SignInState.Failed(
+            "相册识别这一次没有真正开始：这台设备上的扫码解码器现在用不了。" +
+                "请以底部提示条那一句为准。",
             relogin = false,
         )
     }
