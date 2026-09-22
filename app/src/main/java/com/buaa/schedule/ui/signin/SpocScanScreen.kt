@@ -641,17 +641,27 @@ private class QrCodeAnalyzer(
     @Volatile private var valuelessCodes = 0L
 
     /**
-     * 首帧是否已经留过痕（⑤）。只在本线程读写 ⇒ 不需要 volatile，也不给按帧添分配。
+     * 本轮绑定是否已留过首帧痕（⑤）。只在本线程读写 ⇒ 不需要 volatile，也不给按帧添分配。
      *
-     * ⚠️ 这颗标志跟着 analyzer 活：每次重绑（转屏、回到前台重试、停用后恢复）都会再报一行
-     * "首帧已到达"，那是**这一轮绑定**的首帧 —— 不是全进程一次。留的就是"这次绑定到底有没有
-     * 换来帧"这一句话，所以换一次绑定报一次才对。
+     * T59b① 的订正：这枚标志以前"跟着 analyzer 活、从不复位"是假的 —— analyzer 实例的存活期
+     * 比一次绑定长得多（`remember(scanner, bindGeneration)` 只在 scanner 或 bindGeneration 变时
+     * 才换新实例），而 `scannerWorking` 从 false 翻回 true 那条自动恢复路径会让绑定 effect 重跑
+     * 却不换实例，于是重绑之后再没有首帧行，读证据的人分不清「这次绑定没换来帧」和
+     * 「换来帧了但这轮的标记早就烧掉了」。
+     * 复位点是 [markBindStarted]（绑定成功后被调一次，天然的每绑定钩子）⇒ 语义是**每次绑定一行**。
+     * ⚠️ 复位**不放进 analyzer 构造**：换实例与换绑定不等价，构造时置位盖不住上面那条重绑路径。
+     * [frameCount] 也不跟着复位：它是 [ScanRecoveryPolicy] 内核算停用窗口的时间轴，
+     * 复位就把窗口判据掐了；日志里的「第 N 帧」继续按全局帧号报。
      */
     private var firstFrameLogged = false
 
-    /** 绑定成功后调一次：健康度那几行取证要报"这是绑定后第多少毫秒发生的事" */
+    /**
+     * 绑定成功后调一次：健康度那几行取证要报"这是绑定后第多少毫秒发生的事"。
+     * 顺带把首帧标志复位（T59b①）—— 每一轮绑定都该重新报一次"首帧已到达"。
+     */
     fun markBindStarted(elapsedRealtimeMillis: Long) {
         bindElapsedMillis = elapsedRealtimeMillis
+        firstFrameLogged = false
     }
 
     /**
@@ -708,7 +718,8 @@ private class QrCodeAnalyzer(
         // [decoderFrameAction] 能算出"窗口过完了"的前提。
         val frame = ++frameCount
         if (!firstFrameLogged) {
-            // ⑤ 首帧标记：这颗标志只置一次，所以这一行是"每次绑定一行"，不是"每帧一行"。
+            // ⑤ 首帧标记：这颗标志每次绑定置一次（复位点在 [markBindStarted]，T59b①），
+            // 所以这一行是"每次绑定一行"，不是"每帧一行"。
             // 它值钱的的地方在于把「相机没送帧」和「送帧了但解不出/被判停用」分开 ——
             // 没有这一行，这两种处境在读证据时长得一模一样。
             firstFrameLogged = true

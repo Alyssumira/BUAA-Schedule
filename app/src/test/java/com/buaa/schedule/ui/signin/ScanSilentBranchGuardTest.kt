@@ -71,6 +71,43 @@ class ScanSilentBranchGuardTest {
     }
 
     /**
+     * ②b（T59b①）首帧标志的复位点：每一次绑定都要重新报得出首帧行。
+     *
+     * 上一档只钉了"置位与帧号的次序"，没钉"复位"—— 而"每次绑定一行"这半句恰恰是当时
+     * 做不到的：analyzer 实例的存活期比一次绑定长（`remember(scanner, bindGeneration)`），
+     * `scannerWorking` 翻回 true 那条自动恢复路径重跑绑定却不换实例，标志不复位的话
+     * 第二次绑定起就永远没有首帧行 —— 读证据的人又分不清「这次绑定没换来帧」和
+     * 「标志早就烧掉了」，这一行存在的唯一理由就没了。复位钩子就是绑定成功时必被调一次的
+     * [QrCodeAnalyzer.markBindStarted]。
+     * 顺带钉住帧号时间轴不许被复位逻辑连坐：`val frame = ++frameCount` 仍排在停用判断之前，
+     * 而 markBindStarted 里不许出现把 frameCount 一起清零的"顺手"。
+     */
+    @Test
+    fun everyBindRearmsTheFirstFrameMarkerWithoutTouchingTheFrameTimeline() {
+        val analyzer = analyzerBody()
+        val mark = balancedBlock(analyzer, "fun markBindStarted(")
+        assertTrue(
+            "重绑不再复位首帧标志（回到什么样就是坏了：第二次绑定起永远没有首帧行，" +
+                "「没换来帧」与「标志烧掉了」又读不出来了）：\n$mark",
+            mark.contains("firstFrameLogged = false"),
+        )
+        assertFalse(
+            "绑定钩子里顺手把 frameCount 也清了（回到什么样就是坏了：那是内核算停用窗口的时间轴，" +
+                "清零就等于窗口永远过不完）：\n$mark",
+            mark.contains("frameCount"),
+        )
+        val analyze = balancedBlock(analyzer, "override fun analyze(")
+        val counting = analyze.indexOf("val frame = ++frameCount")
+        val skip = analyze.indexOf("decoderFrameAction(health, frame) == DecoderFrameAction.Skip")
+        check(counting >= 0 && skip >= 0) { "帧计数或停用判断换了写法，⑤ 的证据链要跟着重核：\n$analyze" }
+        assertTrue(
+            "帧号自增排到了停用判断后面（回到什么样就是坏了：停用窗口里的帧不再推进时间轴，" +
+                "窗口永远过不完，「第 N 帧」也不再是全局帧号）：",
+            counting < skip,
+        )
+    }
+
+    /**
      * ③ 按帧路径本身不许直接写日志：所有留痕都必须在"状态翻面 / 节流通过 / 只发生一次"
      * 之后，由那几颗辅助函数说。这一条就是"must not allocate per frame"的可核形式 ——
      * 一条 `Log.i(...)` 的字符串拼接就是一次分配，放在入口等于每秒几十次。
