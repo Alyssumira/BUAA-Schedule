@@ -4,18 +4,19 @@ import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 /**
- * T64「帧质量」接线的源码形状守卫。
+ * 扫码页「帧质量」接线的源码形状守卫（T64 立，T65 扩）。
  *
  * 判据本体在 [ScanCameraAidPolicy] 里有表驱动单测，这里只管三件 JVM 跑不到的事：
  * ① 内核保持零 import、不吃设备事实（否则表驱动就塌回真机）；
  * ② 页面**真的**接了它 —— 分辨率请求挂在 builder 上、交付尺寸每绑定一行且措辞出自内核
- *    （手拼字符串数学就是判据的第二份）、测光点用**分析流**构造的 factory、手电调用点排在
- *    hasFlashUnit 判据之后、缩放先过钳制；
- * ③ 反向钉：`ScanUiStatus.kt` 的放弃阶梯文案**没被本卡动过**（那是下一卡的活，先动它就是抢跑）。
+ *    （手拼字符串数学就是判据的第二份）、测光点用**分析流**构造的 factory、受理路径有人
+ *    留痕、帧观测每成功帧都喂、缩放先过钳制且由阶梯驱动；
+ * ③ 反向钉：`ScanUiStatus.kt` 的**放弃阶梯本体**（scanUiStatus 函数体）逐字节没被动过
+ *    （T65 只许在区域外增改），ML Kit 的缩放建议 API 永不接线 —— bundled 实现零引用它，
+ *    接上就是静默 no-op，阶梯的正主是 [advanceScanAssist]。
  *
  * 手法沿用 [ScanSilentBranchGuardTest] / [SpecialDayBadgeWiringGuardTest]：读源码文本、
  * 匹配前先抹注释、找不到锚点就抛（静默跳过等于没有守卫）、每档断言都要有命中数 > 0 的靶子。
@@ -203,47 +204,71 @@ class ScanCameraAidWiringGuardTest {
     }
 
     /**
-     * ③ 反向钉：本卡不许动 ScanUiStatus 的放弃阶梯 —— 那是下一卡的活，先动就是抢跑。
+     * ②f T65 反向钉：ML Kit 的自动缩放建议 API 在这一页永远零命中。
      *
-     * 用 git 比较而非字面量抄写：把三句文案抄进测试就是第四份真相，阶梯一漂守卫先死。
-     * `git diff --quiet <基线> -- <文件>` 零退出 = 与本卡基线逐字节一致（正证）；
-     * 退出 1 = 基线之后有人动过它 —— 那是属主卡（T63）合并了，反向钉的使命完成，让位跳过。
+     * 事实（前卡逐字节核过依赖 jar）：`ZoomSuggestionOptions` / `setZoomSuggestionOptions`
+     * 只存在于 play-services 薄壳的编译签名里，我们跑的 bundled 实现（barcode-scanning
+     * 17.3.0 的 362 个类）对 `zoom` 零出现、也不引用共享 internal 包 —— 接上它编译过、
+     * 运行起来**一声不吭**，正是这一页修过三轮的静默 no-op 家族里最阴的一支。缩放的正主
+     * 是内核阶梯（[advanceScanAssist]），谁把建议 API 接回来谁红。
+     */
+    @Test
+    fun mlKitZoomSuggestionStaysPinnedOut() {
+        val code = withoutComments(readMainSource(SCAN_SCREEN_FILE))
+        for (banned in listOf("ZoomSuggestionOptions", "setZoomSuggestionOptions", "minAspectRatioToEnlarge")) {
+            assertFalse("接了 bundled 路径上的静默 no-op（$banned）——缩放只许走 advanceScanAssist：", code.contains(banned))
+        }
+        // 靶子：反向钉扫的文件里阶梯的正主必须在（零命中说明扫错了文件/拆错了缝，守卫不能空转）
+        assertTrue("阶梯缝没了（缩放退回无人驱动）：", code.contains("advanceScanAssist("))
+    }
+
+    /**
+     * ③ 反向钉：scanUiStatus 的放弃阶梯**函数体**逐字节不动。
+     *
+     * T65 改动了 STATUS_FILE（合法增改：区域外新增 scanFrameAidText），所以整文件比较
+     * 让位给**区域比较**：从 `internal fun scanUiStatus(` 到 GalleryUnreadablePrefix 声明
+     * 为止的那一段（含七档字面量与优先级）与基线 $LADDER_BASELINE 逐字相等。
+     * 用 git show 取基线而非抄字面量进测试：抄三份文案进来就是第四份真相，阶梯一漂守卫先死。
      * git 不可用时判失败而不是静默通过：这条守卫的全部价值就在于「动没动」可核。
      */
     @Test
-    fun giveUpLadderTextWasNotTouchedByThisCard() {
+    fun giveUpLadderBodyWasNotTouched() {
         val raw = readMainSource(STATUS_FILE)
         // 靶子先立起来：这些字面量在基准点上就该存在（零命中=守卫没在扫真文件）
         for (lit in listOf("这台设备用不了相机扫码", "正在自动重试", "没带这台设备那一档的扫码解码库")) {
-            assertTrue("ScanUiStatus 里找不到阶梯文案「$lit」—— 它已被改写，本守卫按 T63 合并后的新基线重钉", raw.contains(lit))
+            assertTrue("ScanUiStatus 里找不到阶梯文案「$lit」—— 它已被改写，本守卫按合并后的新基线重钉", raw.contains(lit))
         }
-        val untouched = gitLadderUntouchedAgainstBaseline()
-        assumeTrue(
-            "ScanUiStatus.kt 相对本卡基线 $T64_BASELINE 已有他人改动（多半是 T63 合了），反向钉让位",
-            untouched != false,
-        )
-        assertTrue("git 跑不动，反向钉无从核对（本守卫要求 git 在场）", untouched == true)
+        val baseline = gitShowBaselineLadder()
+        check(baseline != null) { "git 跑不动或基线取不到，反向钉无从核对（本守卫要求 git 在场）" }
+        assertEquals("scanUiStatus 的放弃阶梯函数体相对基线一个字都不许动（新措辞只许长在区域外）：", baseline, ladderRegion(raw))
     }
 
     // ---- 源码核对工具（与 ScanSilentBranchGuardTest 同一套，找不着锚点就抛） ----
 
-    /** true = 与基线逐字节一致；false = 动过；null = git 跑不了（不存在/不在 PATH） */
-    private fun gitLadderUntouchedAgainstBaseline(): Boolean? {
+    /** 放弃阶梯的区域：scanUiStatus 函数体起，到 GalleryUnreadablePrefix 声明前止（行尾统一成 \n 再比） */
+    private fun ladderRegion(source: String): String {
+        val normalized = source.replace("\r\n", "\n")
+        val start = normalized.indexOf("internal fun scanUiStatus(")
+        check(start >= 0) { "找不到 scanUiStatus：阶梯判据挪过家的话这条守卫要跟着改" }
+        val end = normalized.indexOf("internal const val GalleryUnreadablePrefix", start)
+        check(end >= 0) { "找不到 GalleryUnreadablePrefix 声明：区域右界没了" }
+        return normalized.substring(start, end)
+    }
+
+    /** 基线提交里的阶梯区域；git 不在场/对象取不到 → null（守卫据此判失败，不静默通过） */
+    private fun gitShowBaselineLadder(): String? {
         val root = findRepoRoot() ?: return null
-        val exit = try {
+        val text = try {
             val process = ProcessBuilder(
-                "git", "diff", "--quiet", T64_BASELINE, "--", STATUS_FILE,
+                "git", "show", "$LADDER_BASELINE:$GIT_STATUS_PATH",
             ).directory(root).redirectErrorStream(true).start()
-            process.inputStream.readBytes() // 读干净再等：管道灌满会把子进程卡死在 waitFor 之前
-            process.waitFor()
+            val out = process.inputStream.readBytes() // 读干净再等：管道灌满会把子进程卡死在 waitFor 之前
+            if (process.waitFor() != 0) return null
+            String(out, Charsets.UTF_8)
         } catch (io: java.io.IOException) {
             return null
         }
-        return when (exit) {
-            0 -> true
-            1 -> false
-            else -> null
-        }
+        return runCatching { ladderRegion(text) }.getOrNull()
     }
 
     private fun findRepoRoot(): File? {
@@ -352,7 +377,10 @@ class ScanCameraAidWiringGuardTest {
         const val KERNEL_FILE = "com/buaa/schedule/ui/signin/ScanCameraAidPolicy.kt"
         const val STATUS_FILE = "com/buaa/schedule/ui/signin/ScanUiStatus.kt"
 
-        /** 本卡分支的 master 基线（反向钉的比较对象；T63 合并后守卫自行 assumeTrue 让位） */
-        const val T64_BASELINE = "03d6546"
+        /** [gitShowBaselineLadder] 用的仓库根相对路径（git show 只认这个口径） */
+        const val GIT_STATUS_PATH = "app/src/main/java/com/buaa/schedule/ui/signin/ScanUiStatus.kt"
+
+        /** 阶梯区域的比较基线（= 本分支的 master 基点；区域重钉时换成新的属主卡合并点） */
+        const val LADDER_BASELINE = "03d6546"
     }
 }

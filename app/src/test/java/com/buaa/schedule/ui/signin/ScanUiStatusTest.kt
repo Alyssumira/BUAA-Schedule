@@ -235,6 +235,8 @@ class ScanUiStatusTest {
         val code = withoutComments(readMainSource(SCAN_SCREEN_FILE))
         assertEquals("scanUiStatus 被调了 ${occurrences(code, "scanUiStatus(")} 处，只能一处", 1, occurrences(code, "scanUiStatus("))
         assertEquals("scanCameraLive 被调了 ${occurrences(code, "scanCameraLive(")} 处，只能一处", 1, occurrences(code, "scanCameraLive("))
+        // T65①：帧观测提示的措辞出口也只许一处（第二份=页面偷偷自算档位话术）
+        assertEquals("scanFrameAidText 被调了 ${occurrences(code, "scanFrameAidText(")} 处，只能一处", 1, occurrences(code, "scanFrameAidText("))
         // cameraLive：定义一处 + 取景框一处（手输那颗按钮曾用的第三处在 2026-09-21 随入口一起删了）
         // T64 起再加三处消费者；T65④ 撤手电时那一处（cameraPathLive 实参）整条消失，
         // T65① 补回一处新读者：帧观测提示条只在相机路径活着时说话。口径仍是这一颗 ——
