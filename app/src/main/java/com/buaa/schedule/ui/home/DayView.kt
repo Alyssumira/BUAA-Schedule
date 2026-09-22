@@ -64,10 +64,12 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -569,6 +571,15 @@ private fun buildDayRows(
  */
 private const val BlockTintAlpha = DesignTokens.dayBlockTintAlpha
 
+/**
+ * 色块的三层内边距：块本体两侧 2dp（描边/共享元素那层）、文字两侧 6dp、文字上下 3dp。
+ * 上下的那一层要从块高里先扣掉才是文字容量，所以它被钉成名字而不是散在 modifier 里——
+ * 行预算与摆放读的是同一枚数，改一处不会漏改另一处。
+ */
+private val BlockSidePadding = 2.dp
+private val BlockTextSidePadding = 6.dp
+private val BlockTextVerticalPadding = 3.dp
+
 /** 日视图时间网格：按真实时间线性定位的课程时间轴（T49 重做）
  *
  * 真机镜像实测（buaa36，周一 10:44、当天 5 节课）此前的问题逐条对位：
@@ -595,8 +606,11 @@ private fun DayTimelineCourseList(
     val window = remember(periodTimes) {
         dayTimelineWindow(periodTimes.values.minOf { it.first }, periodTimes.values.maxOf { it.second })
     }
-    // 1.05dp/分钟：45 分钟 ≈47dp，刚好贴着 48dp 触控下限——再矮就得靠补齐高度，
-    // 而补齐会让相邻两节课互相压住。推导见 [DesignTokens.dayHeightPerMinute]。
+    // 1.35dp/分钟：正常 45 分钟的一节课 60.75dp，装得下三行文字＋上下各 3dp 内边距
+    // （哪几行装得下由 planDayTimelineBlockLines 按量到的行高算，不再是 38/58 两档魔法数）。
+    // 块高与分钟数仍严格成正比，minTouchTarget 那道补齐只在 35.6 分钟以下的短块上生效，
+    // 比 1.05 档（45.7 分钟以下）吃掉的溢出量更小 ⇒ 相邻两节互相压住的空间是收窄的。推导见
+    // [DesignTokens.dayHeightPerMinute]。
     val heightPerMinute = DesignTokens.dayHeightPerMinute
     // 时高/总高都从 hourHeight 出发：刻度格、网格线、块定位共用同一把尺，
     // 周视图 24h 模式就是这么算的（WeekView 的 gridHeight 与卡片 top 同一来源）
@@ -683,6 +697,24 @@ private fun DayTimelineCourseList(
 
     val lineColor = MaterialTheme.colorScheme.outlineVariant
     val gapTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+
+    // —— 行预算要用的三份事实，全部在这里量好，内核只算账（见 DayTimelineBlockLines.kt）——
+    // 行高取排版表的 lineHeight：sp → dp 就是乘 fontScale（1sp = fontScale dp），
+    // 密度这一层在 dp 账里不产生信息。这两枚数**随系统字号长**，正是 38/58 那对定值做不到的一件事。
+    val fontScale = density.fontScale
+    val nameLineHeightDp = timelineLineHeightDp(MaterialTheme.typography.labelLarge, fontScale)
+    val metaLineHeightDp = timelineLineHeightDp(MaterialTheme.typography.labelMedium, fontScale)
+    // 一行可用的宽度（dp，粗算即可）：色块通栏，横向吃掉宽度的只有页边距、左侧刻度列与块的两层内边距。
+    // 它不是这里的限制项（每行都锁 maxLines = 1 + Ellipsis，超宽由省略号收口——T48 那笔宽度账
+    // 钉的是 Row 同排子节点互抢，时间轴是 Column，没有同排），递给内核只为"宽度量不到"那一档
+    // 有个明确行为：什么都量不到时不承诺任何附加行。
+    val blockContentWidthDp = (
+        LocalConfiguration.current.screenWidthDp -
+            DesignTokens.spaceL.value * 2f -
+            DesignTokens.weekTimeColumnWidth.value -
+            DesignTokens.spaceS.value -
+            (BlockSidePadding + BlockTextSidePadding).value * 2f
+        ).coerceAtLeast(0f).toDouble()
 
     Column(
         modifier = modifier
@@ -781,8 +813,9 @@ private fun DayTimelineCourseList(
                         hourHeight * ((block.endMin - block.startMin).coerceAtLeast(1) / 60f)
                         )
                         // 短节次按真实比例只有十几 dp，补到触控下限。
-                        // 因为比例已经是 1.05dp/分钟，正常的 45 分钟课只多出不到 1dp，
-                        // 不会出现"上一节的色块压住下一节"。
+                        // 1.35dp/分钟下这条溢出比旧档位更小：48dp 现在只相当于 35.6 分钟
+                        // （1.05 档是 45.7 分钟），正常的 45 分钟课（60.75dp）根本走不到这里，
+                        // 所以"上一节的色块压住下一节"的空间是收窄的，不是变大了。
                         .coerceAtLeast(DesignTokens.minTouchTarget)
                     val blockColor = courseColor(course)
                     // 文字要看**合成后**的亮度：BlockTintAlpha 的课程色透出了页面背景。
@@ -825,7 +858,7 @@ private fun DayTimelineCourseList(
                         // 放在 fillMaxWidth 之后、视觉层之前：共享的那块矩形=色块本体，
                         // 与周视图课程格的接法逐字一致。
                         .then(Modifier.courseSharedElementModifier(course.id))
-                        .padding(horizontal = 2.dp)
+                        .padding(horizontal = BlockSidePadding)
                         // 1dp 投影：块从"平贴网格线的色卡"变成浮在轴上的物体。
                         // 不套 GlassSurface——用户实测口径是大面积厚玻璃板丑，这里数量多、
                         // 尺寸中等，收口只做描边＋轻投影，对比度仍由 tint plate 推导链负责。
@@ -838,11 +871,46 @@ private fun DayTimelineCourseList(
                             shape = blockShape,
                         )
                         .clickable { onClick(course) }
-                        .padding(horizontal = 6.dp, vertical = 3.dp)
+                        .padding(
+                            horizontal = BlockTextSidePadding,
+                            vertical = BlockTextVerticalPadding,
+                        )
+                    // 装得下哪几行：把量好的三份事实（块高、两档行高、可用宽度）交给纯 JVM 内核，
+                    // 由它按容量逐行分。这里不再有 38/58dp 两档定值——那对数是按**一种**系统字号、
+                    // 一张排版表标定的：小字号下 45 分钟的课（47.25dp）永远够不到 58dp 那档，
+                    // 教室那一行从此绝迹（= 用户报的"文字内容有点少"）；大字号下行高按 fontScale 长
+                    // 而门槛不长，反过来把课名顶出去（T54 实测到的正是这一头）。
+                    val remark = course.remark?.takeIf { it.isNotBlank() }
+                    val linePlan = planDayTimelineBlockLines(
+                        blockHeightDp = blockHeight.value.toDouble(),
+                        contentVerticalPaddingDp = BlockTextVerticalPadding.value.toDouble(),
+                        availableWidthDp = blockContentWidthDp,
+                        specs = listOfNotNull(
+                            DayTimelineLineSpec(
+                                DayTimelineBlockLine.CourseName,
+                                nameLineHeightDp,
+                            ),
+                            DayTimelineLineSpec(
+                                DayTimelineBlockLine.TimeAndTeacher,
+                                metaLineHeightDp,
+                            ),
+                            DayTimelineLineSpec(
+                                DayTimelineBlockLine.Room,
+                                metaLineHeightDp,
+                            ),
+                            // 没有备注就连候选都不递：省下来的高度不会往后挪（后面也没东西了），
+                            // 但少递一枚比递一枚画不出来的行更诚实
+                            remark?.let {
+                                DayTimelineLineSpec(
+                                    DayTimelineBlockLine.Remark,
+                                    metaLineHeightDp,
+                                )
+                            },
+                        ),
+                    )
                     Box(modifier = blockModifier, contentAlignment = Alignment.TopStart) {
-                        // 色块按真实时长定位，装不下就不画那一行：
-                        // 挤出去的第三行会把课程名顶没，反而更看不清。
-                        // （38/58dp 两档是按 1.05dp/分钟标定的既有口径，本卡不动。）
+                        // 色块按真实时长定位，装不下就不画那一行：挤出去的下一行会把课名顶没，
+                        // 反而更看不清。课名是内核里唯一 pinned 的行，任何情况下都在。
                         Column {
                             Text(
                                 text = course.displayName,
@@ -851,21 +919,39 @@ private fun DayTimelineCourseList(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
-                            if (blockHeight >= 38.dp) {
+                            if (DayTimelineBlockLine.TimeAndTeacher in linePlan) {
                                 Text(
-                                    text = "${hhmm(block.start)}–${hhmm(block.end)} · " +
+                                    // 教师接在时间段后面，走列表模式同一套约定：缺项连同分隔符
+                                    // 一起缺席（joinMeta 的口径），不会出现悬空的 " · "
+                                    text = joinMeta(
+                                        "${hhmm(block.start)}–${hhmm(block.end)}",
                                         periodLabel(block.row.segment),
+                                        course.teacher,
+                                    ),
                                     style = MaterialTheme.typography.labelMedium,
                                     color = onBlock,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             }
-                            if (blockHeight >= 58.dp) {
+                            if (DayTimelineBlockLine.Room in linePlan) {
                                 Text(
-                                    text = course.location ?: "教室未定",
+                                    // 空白教室字段按"没有那一行"算会留下高低不齐的块，
+                                    // 统一成"教室未定"占位，与列表模式 ③C-05 同一口径
+                                    text = course.location?.takeIf { it.isNotBlank() } ?: "教室未定",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = plate.secondaryForeground,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            if (remark != null && DayTimelineBlockLine.Remark in linePlan) {
+                                Text(
+                                    // 备注走正文墨色而不是次级色：它是"带校园卡""雨天改室内馆"这种
+                                    // 不看到就会出事的字（与列表模式 ③C-05 的浓度分档同一条账）
+                                    text = remark,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = onBlock,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
@@ -1187,6 +1273,20 @@ private fun parsePeriodTimes(timeSlots: List<TimeSlot>): Map<Int, Pair<LocalTime
 /** LocalTime → "08:00"：节次表只到分钟，秒位显示出来只会让时间轴更挤 */
 private fun hhmm(time: LocalTime): String =
     time.truncatedTo(java.time.temporal.ChronoUnit.MINUTES).toString()
+
+/**
+ * 一枚文字样式的一行高度（dp）：排版表里 lineHeight 是 sp，而 1sp = fontScale dp，
+ * 乘一下就在 dp 账上了——密度这一层不进这条算式（分子分母都有它）。
+ * 行高从 MaterialTheme.typography 现取而不是抄常量：抄回来的就是下一对 38/58。
+ *
+ * lineHeight 未定义（TextUnit.Unspecified 的 value 是 -1）时退回字号 × 1.4：
+ * 这是**偏高**的方向，退让的结果是少承诺一行，绝不会反过来把画出来的行裁掉。
+ */
+private fun timelineLineHeightDp(style: TextStyle, fontScale: Float): Double {
+    val lineHeightSp = if (style.lineHeight.value > 0f) style.lineHeight.value
+    else style.fontSize.value * 1.4f
+    return (lineHeightSp * fontScale).toDouble()
+}
 
 /**
  * 日视图卡片最后一行：节次 · 教师 · 学分（纯函数，可单测）。
