@@ -286,20 +286,39 @@ fun HomeScreen(
     }
 
     // 顶栏左侧：当前浏览到第几周 + 这一周的日期（参考稿版式）
+    // 宽屏（≥breakpointWide）：周视图 | 日视图 双栏并排，平板不再来回切页签。
+    // 这枚判定从内容区搬到这里（T68b）：顶栏第二行也要知道"日视图到底画没画在屏上"，
+    // 而设备侧的宽度只许量一次——两处各读一遍 LocalConfiguration 就会各信各的答案。
+    // 判据本体在 dayViewOnScreen，这里只把页签/宽度/首帧标志三样事实递进去。
+    val isWideScreen =
+        androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp >=
+            DesignTokens.breakpointWide
+    // 日视图此刻在不在屏上（T68b）：窄屏周课表上它根本没渲染，顶栏第二行就不许报它那一天。
+    // 必须进下面 dateLabel 的 remember 键表：漏了这一维就是切页签时顶栏缓存住旧日期
+    // （翻到 9/24 再切回周课表，第二行还写着 9月24日 —— T41/T43 同一族坑，漏键＝不重算）。
+    val dayViewIsOnScreen = dayViewOnScreen(selectedTab, isWideScreen, tabDecided)
     val displayWeekNumber = browseWeek ?: state.currentWeek
     val weekHeadline = weekHeadline(
         hasSemester = state.semester != null,
         displayWeek = displayWeekNumber,
         currentWeek = state.currentWeek,
     )
-    // 第二行跟第一行同源：浏览别的周时显示那一周的周一，日视图真的画着别的那一天时显示那一天，
-    // 见 TopBarDateLabel.kt。
-    // 键必须把五个入参全列出来——漏 browseWeek 就是翻周时日期停在今天（T56 修的就是它），
+    // 第二行跟第一行同源：浏览别的周时显示那一周的周一，日视图**真的画在屏上**且画着别的那一天时
+    // 显示那一天，见 TopBarDateLabel.kt。
+    // 键必须把六个入参全列出来——漏 browseWeek 就是翻周时日期停在今天（T56 修的就是它），
     // 漏 browseDateOnScreen 就是顶栏写着今天、body 画着用户翻到的那一天（T68 修的就是它），
+    // 漏 dayViewIsOnScreen 就是切页签时顶栏缓存住旧日期（T68b 修的就是它），
     // 漏掉学期/今天则是换学期、跨午夜后仍显示旧日期（T41/T43 同类坑）。
     val semesterStart = state.semester?.startLocalDate
-    val dateLabel = remember(semesterStart, state.currentWeek, browseWeek, today, browseDateOnScreen) {
-        topBarDateLabel(semesterStart, state.currentWeek, browseWeek, today, browseDateOnScreen)
+    val dateLabel = remember(
+        semesterStart,
+        state.currentWeek,
+        browseWeek,
+        today,
+        browseDateOnScreen,
+        dayViewIsOnScreen,
+    ) {
+        topBarDateLabel(semesterStart, state.currentWeek, browseWeek, today, browseDateOnScreen, dayViewIsOnScreen)
     }
 
     // 冲突课程 id 集合：周视图/日视图两个分支各算一次（此前是两处重复的 flatMap+toSet），
@@ -578,10 +597,8 @@ fun HomeScreen(
             }
 
             Box(modifier = Modifier.weight(1f)) {
-                // 宽屏（≥breakpointWide）：周视图 | 日视图 双栏并排，平板不再来回切页签
-                val isWideScreen =
-                    androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp >=
-                        DesignTokens.breakpointWide
+                // 宽屏并排那一档的判定（isWideScreen）在顶栏那一段量好了带下来（T68b）：
+                // 第二行要知道日视图在不在屏上，两处必须读同一个答案
                 if (!tabDecided) {
                     // 页签还没定下来：先什么都不画（背景仍在），避免闪一下周课表再跳今日
                 } else if (isWideScreen && selectedTab == 0) {
