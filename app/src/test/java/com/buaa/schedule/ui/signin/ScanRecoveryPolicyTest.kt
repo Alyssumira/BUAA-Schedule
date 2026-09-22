@@ -3,6 +3,7 @@ package com.buaa.schedule.ui.signin
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -181,6 +182,44 @@ class ScanRecoveryPolicyTest {
         for ((health, expected) in table) {
             assertEquals("$health", expected, scannerWorkingOf(health))
         }
+    }
+
+    /**
+     * ④b（T59b②）scannerGiveUp 把 working == false 的两种病因分开：暂时 / 已判死。
+     *
+     * 界面文案与取景框都按这一颗分档（判据只留在这里，UI 侧不许读 giveUpReason 拼分支），
+     * 所以三档输入都要在这里钉出「输入 → 输出」：健康 → false，停用窗口内 → false
+     * （正在自动试回来，说"这台设备用不了"就是假话），已判死 → true。
+     */
+    @Test
+    fun giveUpTierSeparatesSuspendWindowFromDeadOnArrival() {
+        val suspending = failures(1L, 2L, 3L)
+        var givenUp = suspending
+        while (givenUp.giveUpReason == null) {
+            givenUp = healthAfterDecodeFailure(givenUp, givenUp.suspendUntilFrame.coerceAtLeast(0L))
+        }
+        val table = listOf(
+            // 健康：两档判据都不成立
+            ScanDecoderHealth() to false,
+            ScanDecoderHealth(consecutiveFailures = 1, framesAtLastFailure = 4L) to false,
+            // 停用窗口内：working 已经是 false，但那是"暂时"，不是"这台设备用不了"
+            suspending to false,
+            ScanDecoderHealth(suspendUntilFrame = 50L, suspensionCycles = 1) to false,
+            // 已判死：连错满 3 帧 × 试回 3 轮仍不成，走到这里才是既有那句措辞的事实
+            givenUp to true,
+            ScanDecoderHealth(giveUpReason = "回到前台额度用完") to true,
+            // 判死压倒停用：判死必然不 working，不 working 却未必判死 —— 这正是分档的意义
+            ScanDecoderHealth(suspendUntilFrame = 50L, giveUpReason = "x") to true,
+        )
+        for ((health, expected) in table) {
+            assertEquals("$health", expected, scannerGiveUp(health))
+        }
+        assertEquals(false, scannerWorkingOf(suspending))
+        assertEquals(false, scannerWorkingOf(givenUp))
+        assertTrue(
+            "working == false 的两档必须由这一颗分得开（分不开就等于 UI 侧继续共用一句假话）：",
+            !scannerGiveUp(suspending) && scannerGiveUp(givenUp),
+        )
     }
 
     // ---- ⑤ 绑定失败：分两支，只有瞬时那一支配重试 ----

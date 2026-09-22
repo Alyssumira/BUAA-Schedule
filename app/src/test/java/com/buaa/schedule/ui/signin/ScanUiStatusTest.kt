@@ -20,8 +20,9 @@ import org.junit.Test
  * `cameraLive` 还成立，取景框就画在一块永远不会有画面的黑 `PreviewView` 上，
  * 整页看起来"一切正常"。这是与 D1 结构同型的第二个「没反应」。
  *
- * 为什么这两条判据要抽成纯函数、而不是写一条扫源码的守卫：提示档位一共有五支、
- * `cameraLive` 有六个乘项，只有把判据本体拿到 JVM 里才能逐支跑（仓库口径，
+ * 为什么这两条判据要抽成纯函数、而不是写一条扫源码的守卫：提示档位一共有八支（T59b② 起
+ * "暂时停用/本轮判死"各算一支）、`cameraLive` 有六个乘项，只有把判据本体拿到 JVM 里才能
+ * 逐支跑一遍（仓库口径，
  * 见 [ScanSubmissionGateTest] 与 `WidgetSnapshotDirtyTest`）。接线本身另外用形状守卫钉住，
  * 保证页面没有偷偷再算一份自己的口径。
  *
@@ -33,6 +34,7 @@ class ScanUiStatusTest {
     private val healthy = mapOf(
         "decoderMissing" to false,
         "scannerUsable" to true,
+        "scannerGiveUp" to false,
         "galleryUsable" to true,
         "granted" to true,
         "cameraError" to null as String?,
@@ -44,6 +46,7 @@ class ScanUiStatusTest {
         return scanUiStatus(
             decoderMissing = s["decoderMissing"] as Boolean,
             scannerUsable = s["scannerUsable"] as Boolean,
+            scannerGiveUp = s["scannerGiveUp"] as Boolean,
             galleryUsable = s["galleryUsable"] as Boolean,
             granted = s["granted"] as Boolean,
             cameraError = s["cameraError"] as String?,
@@ -68,15 +71,19 @@ class ScanUiStatusTest {
         assertTrue("provider 挂了但解码器还在，话里该留着相册那条出口：$message", message.contains("相册"))
         // 手输入口已整条删除（2026-09-21），任何一档都不许再把它当成出路
         assertFalse("手输入口已经不在了，这一档还在指向它：$message", message.contains("手输"))
-        // 与其余每一档的文案都不同（复用同一支就等于把两种病因说成一种）
+        // 与其余每一档的文案都不同（复用同一支就等于把两种病因说成一种）。
+        // T59b② 起 !scannerUsable 按 scannerGiveUp 再分暂时/判死两档 —— 两档都必须有自己的
+        // 「输入 → 输出」正例，且谁也不许和谁重复。
         val others = listOf(
             statusOf("decoderMissing" to true),
-            statusOf("scannerUsable" to false),
+            statusOf("scannerUsable" to false, "scannerGiveUp" to false),
+            statusOf("scannerUsable" to false, "scannerGiveUp" to true),
+            statusOf("scannerUsable" to false, "galleryUsable" to false),
             statusOf("granted" to false),
             statusOf("cameraError" to "No back camera"),
         )
         others.forEach { assertNotNull(it) }
-        assertEquals("五档文案彼此都不能重复", 5, (others + message).distinct().size)
+        assertEquals("七档文案彼此都不能重复", 7, (others + message).distinct().size)
     }
 
     /** ③ 档位次序：谁能决定用户下一步，谁在前 */
@@ -96,29 +103,57 @@ class ScanUiStatusTest {
         // 绑定失败的原因要原文透出来，别被泛化的话吃掉
         assertEquals("相机不可用（绑定失败：x），请改用相册识别。",
             statusOf("cameraError" to "绑定失败：x", "cameraProviderMissing" to true))
-        // scanner 不可用（建不出来 / 跑起来坏了）压过权限
-        assertTrue(statusOf("scannerUsable" to false, "granted" to false)!!.contains("用不了相机扫码"))
+        // scanner 不可用压过权限 —— 暂时与判死两档都压过（相机那条的处境比权限更靠前）
+        assertTrue(statusOf("scannerUsable" to false, "scannerGiveUp" to true, "granted" to false)!!.contains("用不了相机扫码"))
+        assertTrue(
+            "暂时停用那一档也压过权限，但不许把「正在自动重试」说成没救：",
+            statusOf("scannerUsable" to false, "granted" to false)!!.contains("重试"),
+        )
     }
 
     /**
-     * ③c !scannerUsable 那一档必须按"相册还在不在"分两支（galleryUsable 参数）。
+     * ③c !scannerUsable 那一档的完整分叉：先按"相册还在不在"，相册还在再按"暂时/判死"。
      *
-     * 相机与相册共用同一颗 scanner：scanner **跑坏了**（scannerWorking=false）时相册还是真出路，
-     * 指相册；scanner **建不出来**（scanner==null）时相册那颗按钮 enabled 同键一起灭，
-     * 再指相册就是谎话 —— 那一支得与缺库同口径，点名两条都没了、不许指任何出路。
+     * 相机与相册共用同一颗 scanner：scanner **建不出来**（scanner==null）时相册那颗按钮
+     * enabled 同键一起灭，再指相册就是谎话 —— 那一支与缺库同口径，点名两条都没了、不许指
+     * 任何出路。scanner 在但相机这条不 working 时，T59b② 起必须再分两档：
+     * **停用窗口内**（正在按有界窗口自动试回，说"这台设备用不了"是假话）与
+     * **本轮判死**（额度用完，既有那句才成立）。两档各自的输入 → 输出都在这里钉死。
      */
     @Test
     fun scannerUnusableBranchesOnGalleryAvailability() {
-        val galleryAlive = requireNotNull(statusOf("scannerUsable" to false, "galleryUsable" to true))
-        assertTrue("相机跑坏而相册还在时，这一档必须把用户指向相册：$galleryAlive", galleryAlive.contains("改用相册"))
+        // —— 相册还在：暂时与判死两档必须说两种话 ——
+        val temporary = requireNotNull(
+            statusOf("scannerUsable" to false, "galleryUsable" to true, "scannerGiveUp" to false),
+        )
+        assertTrue("停用窗口内（暂时）也要把相册这条真出路留着：$temporary", temporary.contains("改用相册"))
+        assertTrue("暂时那一档没说出来在自动重试（内核正按 20/40/60 帧的窗口试回来）：$temporary", temporary.contains("重试"))
+        assertFalse("暂时被说成了判死（回到 T59b② 修掉的那句假话）：$temporary", temporary.contains("用不了"))
+        for (banned in listOf("设置", "秒")) {
+            assertFalse(
+                "暂时那一档指使去设置里找东西、或承诺了时间（$banned）—— 帧率不对时\"约 1 秒\"就是新的假话：$temporary",
+                temporary.contains(banned),
+            )
+        }
+        val givenUp = requireNotNull(
+            statusOf("scannerUsable" to false, "galleryUsable" to true, "scannerGiveUp" to true),
+        )
+        assertEquals(
+            "判死那一档沿用既有字面量（ScanUiStatusTest 与入口接线守卫都按它扫，不许漂移）：",
+            "这台设备用不了相机扫码，请改用相册识别。",
+            givenUp,
+        )
+        assertNotEquals("暂时与判死说成了同一句话，按 scannerGiveUp 分档等于没分", temporary, givenUp)
 
+        // —— 相册同死（scanner 建不出来）：不再分暂时/判死，只说实话 ——
         val galleryDead = requireNotNull(statusOf("scannerUsable" to false, "galleryUsable" to false))
         assertTrue("相册同死时得点名相机：$galleryDead", galleryDead.contains("相机"))
         assertTrue("相册同死时得点名相册（老实说两条都没了）：$galleryDead", galleryDead.contains("相册"))
         for (banned in listOf("改用相册", "从相册选", "请从相册", "手输", "输入签到码")) {
             assertFalse("scanner 建不出来时相册一起没，这一档还在把用户指向「$banned」：$galleryDead", galleryDead.contains(banned))
         }
-        assertNotEquals("两分支说成了同一句话，按 galleryUsable 分支等于没分", galleryAlive, galleryDead)
+        assertNotEquals("两分支说成了同一句话，按 galleryUsable 分支等于没分", temporary, galleryDead)
+        assertNotEquals("两分支说成了同一句话，按 galleryUsable 分支等于没分", givenUp, galleryDead)
     }
 
     /**
@@ -138,7 +173,14 @@ class ScanUiStatusTest {
         assertNotEquals("两个写点说成了同一句话，分支等于没分", bind, gallery)
     }
 
-    /** ④ cameraLive：六个乘项缺一就 false（D2 补的是前三个） */
+    /**
+     * ④ cameraLive：六个乘项缺一就 false（D2 补的是前三个）。
+     *
+     * T59b② 把"活不活"那一乘项从 `scannerWorking` 换成了 `scannerGiveUp`：停用窗口里
+     * scannerWorking 已经是 false 但相机**故意还绑着**（帧必须继续到达），收掉取景框就是
+     * 把暂时态演成新症状；只有判死才收。所以这里翻 scannerGiveUp→true 必须 false，
+     * 而"working 不在了但还没判死"要照旧 live（由 scannerGiveUp=false 的正例盖住）。
+     */
     @Test
     fun cameraLiveRequiresEveryOneOfItsSixTerms() {
         val live = scanCameraLive(
@@ -146,16 +188,16 @@ class ScanUiStatusTest {
             analyzerReady = true,
             cameraProviderReady = true,
             granted = true,
-            scannerWorking = true,
+            scannerGiveUp = false,
             cameraError = null,
         )
-        assertTrue(live)
+        assertTrue("停用窗口内（未判死）取景框必须留着：$live", live)
         val flips = mapOf(
             "scannerAvailable" to false,
             "analyzerReady" to false,
             "cameraProviderReady" to false,
             "granted" to false,
-            "scannerWorking" to false,
+            "scannerGiveUp" to true,
             "cameraError" to "boom",
         )
         flips.forEach { (key, value) ->
@@ -164,17 +206,17 @@ class ScanUiStatusTest {
                 "analyzerReady" to true,
                 "cameraProviderReady" to true,
                 "granted" to true,
-                "scannerWorking" to true,
+                "scannerGiveUp" to false,
                 "cameraError" to null as String?,
             ) + (key to value)
             assertFalse(
-                "$key 不参与 cameraLive 的话，取景框就会画在死掉的预览上",
+                "$key 不参与 cameraLive 的话，取景框就会画在死掉的预览上（判死之后照样收框）",
                 scanCameraLive(
                     scannerAvailable = all["scannerAvailable"] as Boolean,
                     analyzerReady = all["analyzerReady"] as Boolean,
                     cameraProviderReady = all["cameraProviderReady"] as Boolean,
                     granted = all["granted"] as Boolean,
-                    scannerWorking = all["scannerWorking"] as Boolean,
+                    scannerGiveUp = all["scannerGiveUp"] as Boolean,
                     cameraError = all["cameraError"] as String?,
                 ),
             )
@@ -204,6 +246,17 @@ class ScanUiStatusTest {
         // provider 那一档是**真的**传给了判据，而不是只写了个没人读的字段
         assertTrue(code.contains("cameraProviderMissing = cameraProviderMissing"))
         assertTrue(code.contains("cameraProviderReady = provider != null"))
+        // T59b②：暂时/判死的分档也必须由判据吃进去（文案 + 取景框各一处），而不是页面
+        // 自己拼分支 —— 档位由内核的 scannerGiveUp 判，UI 只存推进来的快照
+        assertEquals(
+            "scannerGiveUp 传给判据的地方应当是文案 + 取景框两处：",
+            2, occurrences(code, "scannerGiveUp = scannerGiveUp"),
+        )
+        assertTrue(
+            "判死翻面的 push 没接线（回到什么样就是坏了：判死时 scannerWorking 不再翻面，" +
+                "少了这一颗，文案会永远停在「正在自动重试」）：",
+            code.contains("onGiveUpChanged = { giveUp -> scannerGiveUp = giveUp }"),
+        )
     }
 
     /** ⑥ D3：回到前台重读权限，而且读的是系统那边的真值 */

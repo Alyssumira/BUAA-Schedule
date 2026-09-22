@@ -116,6 +116,18 @@ internal fun scannerWorkingOf(health: ScanDecoderHealth): Boolean =
     health.giveUpReason == null && health.suspendUntilFrame < 0L
 
 /**
+ * `scannerWorking == false` 的两种病因在这里分档（T59b②）：**暂时**（停用窗口内）还是**已判死**。
+ *
+ * 停用窗口内（`suspendUntilFrame >= 0` 且没判死）最多压 20/40/60 帧，窗口过完放一帧去探，
+ * 解出来一次就整枚清零 —— 这是暂时的，而且正在自己试回来；已判死（连错满
+ * [ConsecutiveDecodeFailureLimit] 帧 × 自动试回 [MaxDecodeSuspensionCycles] 轮仍不成，
+ * 或"这一档坏到额度用完"那类把 [ScanDecoderHealth.giveUpReason] 写上的路径）才是事实。
+ * 界面的文案与取景框按这一颗分档，⚠️ UI 侧不许绕过这里直接读 giveUpReason 拼分支 ——
+ * 判据一散，"暂时"就又会在整个界面上长成"这台设备用不了"。
+ */
+internal fun scannerGiveUp(health: ScanDecoderHealth): Boolean = health.giveUpReason != null
+
+/**
  * 第 [frameSerial] 帧该不该解。
  *
  * 停用期间帧**照旧到达**（分析流不解绑，只是不再喂解码器）：这是本判据的观测前提 ——

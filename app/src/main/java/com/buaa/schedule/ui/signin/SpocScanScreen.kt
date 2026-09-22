@@ -152,6 +152,12 @@ fun SpocScanScreen(
     // 写在下面 [QrCodeAnalyzer] 推进来的回调里 —— 停用期间故意不 unbind：帧必须继续到达，
     // 内核才有"窗口过完"这个观测量，也才分得清"解码器在坏"和"相机根本没送帧"。
     var scannerWorking by remember { mutableStateOf(true) }
+    // 相机这条是"本轮判死"还是"停用窗口内的暂时"（T59b②）：判据在 ScanRecoveryPolicy 的
+    // scannerGiveUp，这里只存内核档位翻面时推进来的**快照** —— 它翻面至多每绑定几次
+    // （暂时→判死、恢复归零），不按帧重写组合。为什么必须单独推进来而不是组合期读 health：
+    // 判死发生时 scannerWorking 已经是 false、不再翻面，没有这一颗 push 界面永远不知道
+    // 档位变了，"正在自动重试"那句就成了新的假话。
+    var scannerGiveUp by remember { mutableStateOf(false) }
     // 重试绑定这一档的令牌（T59②）。它不进 LaunchedEffect 的键表 —— 那颗 effect 的键串
     // 被 ScanUiStatusTest ⑥ 按字面钉着（"LaunchedEffect(granted, provider, scannerWorking, analyzer)"），
     // 所以令牌改藏在 analyzer 的**同一性**里：+1 就换一颗 analyzer，那颗 effect 照旧重跑。
@@ -203,6 +209,9 @@ fun SpocScanScreen(
                 // ① 双向：内核说停就停、说活就活。旧写法这颗回调只写 false，
                 // 一次抖动就把相机扫码判死到整页结束（用户报的「扫码没反应」第二条）
                 onWorkingChanged = { working -> scannerWorking = working },
+                // T59b② 的第二半：判死翻面时 scannerWorking 已经停在 false 不再动，
+                // 少了这一颗 push，界面分不清"暂时"与"判死"的那次换挡根本传不进组合
+                onGiveUpChanged = { giveUp -> scannerGiveUp = giveUp },
             )
         }
     }
@@ -250,7 +259,7 @@ fun SpocScanScreen(
         analyzerReady = analyzer != null,
         cameraProviderReady = provider != null,
         granted = granted,
-        scannerWorking = scannerWorking,
+        scannerGiveUp = scannerGiveUp,
         cameraError = cameraError,
     )
 
@@ -433,6 +442,7 @@ fun SpocScanScreen(
                 val hintText = scanUiStatus(
                     decoderMissing = decoderMissing,
                     scannerUsable = scanner != null && scannerWorking,
+                    scannerGiveUp = scannerGiveUp,
                     galleryUsable = scanner != null,
                     granted = granted,
                     cameraError = cameraError,
@@ -607,6 +617,14 @@ private class QrCodeAnalyzer(
      * 相机扫码判死到整页结束；现在取值由 [ScanRecoveryPolicy] 的内核判，两边都会写。
      */
     private val onWorkingChanged: (Boolean) -> Unit,
+    /**
+     * 相机这条是"暂时停用（窗口内自动试回）"还是"本轮判死"推进来（T59b②）。
+     *
+     * ⚠️ 判死翻面时 [onWorkingChanged] 不会跟着翻（它早就停在 false 上），少了这颗 push，
+     * 界面就没机会把"正在自动重试"改口成判死那一档 —— 那正是 T59b 要修的那类假话。
+     * 取值只由 [scannerGiveUp] 内核判，这里不自己读 giveUpReason 拼分支。
+     */
+    private val onGiveUpChanged: (Boolean) -> Unit,
 ) : ImageAnalysis.Analyzer {
 
     /**
@@ -690,6 +708,8 @@ private class QrCodeAnalyzer(
         val working = scannerWorkingOf(next)
         Log.i(TAG, "回到前台：给解码器第 ${next.pageVisibleRecoveries}/$MaxPageVisibleRecoveries 次机会（已收 $frameCount 帧）")
         onWorkingChanged(working)
+        // 判死被这一档归零时也要把话改回来（"这台设备用不了"不能挂在已经给新机会的界面上）
+        onGiveUpChanged(scannerGiveUp(next))
         return working
     }
 
@@ -812,6 +832,9 @@ private class QrCodeAnalyzer(
             )
         }
         onWorkingChanged(working)
+        // T59b②：判死可以在 working 不翻面的时候发生（false→false 的换挡），所以这一颗
+        // 单独推 —— 同值写入不触发重组，按帧路径依旧零重写
+        onGiveUpChanged(scannerGiveUp(next))
     }
 
     /** 一次正常返回：解码器自证还能用，停用与轮数一起清零（要不要换引用也是内核判） */
@@ -826,6 +849,7 @@ private class QrCodeAnalyzer(
             Log.i(TAG, "相机扫码从停用里自己回来了（已收 $frameCount 帧，绑定后 ${sinceBindMillis()}ms）")
         }
         onWorkingChanged(working)
+        onGiveUpChanged(scannerGiveUp(next))
     }
 
     private fun sinceBindMillis(): Long {
