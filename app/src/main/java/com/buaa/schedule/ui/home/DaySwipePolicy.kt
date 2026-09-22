@@ -40,8 +40,10 @@ internal enum class DaySwipeCommit {
 /**
  * 跟手只映 0.35 倍：整幅跟随会让正文与两侧的箭头脱开，读成"箭头没跟着走"。
  *
- * 这一档在 T70 之后只描述**未翻出去那一侧**的手感：翻出去那一侧的位移交给
- * [dayAxisTransition] 的共享轴，不再由拖拽位移与转场位移叠加（见 [dayDragShouldSettle]）。
+ * 拖拽期间它管的是**两侧共同**的那一段位移（那一刻还不知道这一滑会不会翻出去）；
+ * T70 改的是松手之后：翻出去那一侧的收回改挂 [dayDragSettleMode] 的
+ * `RideWithTransition` 一档，与 [dayAxisTransition] 的共享轴**同方向、同时长**
+ * —— 两套位移仍然叠加，只是不再"一根没有明确长度的弹簧对着一段 140ms 的转场"。
  */
 internal const val DAY_DRAG_FOLLOW_RATIO = 0.35f
 
