@@ -23,9 +23,11 @@ import org.junit.Test
  * ①②③④ 判据是**真去 `System.loadLibrary`**、三态摆得对、结论进程内缓存且只付一次、
  *   dlopen 不落在调用线程上。这四条只能注入着跑（宿主 JVM 里没有那颗 `.so`，
  *   present / missing 两条不注入就根本摆不出来）。
- * ⑤ 探针里那个库名与 `app/build.gradle.kts` 排除掉的三条 jniLibs **同源**：这条是
+ * ⑤ 探针里那个库名与 `app/build.gradle.kts` 排除掉的 jniLibs **同源**：这条是
  *   真去读脚本文本比对，不是注释提醒 —— 名字一漂，探针就退化成"永远回答可用"的空壳，
- *   非 arm64 的 release 包立刻回到启动即崩。
+ *   非 arm64 的 release 包立刻回到启动即崩。T66 起清单里有两颗库（ML Kit 的
+ *   libbarhopper_v3.so 与兜底的 libzxingcpp_android.so），于是这一条多钉一件事：
+ *   **清单里不许出现第三颗库的 .so**（那等于有谁的 .so 没人裁、release 白涨一档）。
  * ⑥ 全仓库只有探针那一处 `System.loadLibrary`：不许有第二处自己判断。
  * ⑦ 扫码页那四条纪律（scanner 以结论为键、绑定分析流之前先等判定、相册只放行"已判定
  *   可用"、缺库时文案不指向任何出路）—— 这一页的降级形状一旦漂走，用户就会被指到一条死路。
@@ -138,11 +140,29 @@ class BarhopperNativeLibProbeTest {
             setOf("armeabi-v7a", "x86", "x86_64"),
             excluded.map { it.first }.toSet(),
         )
+        // T66：清单里是**两颗**库，各裁三档、合计六条。
+        // 逐颗点名而不是一把 setOf 比总数：两颗库的失效面不同 ——
+        // barhopper 那一颗漂了 = 探针退化成"永远回答可用"的空壳（非 arm64 的包启动即崩）；
+        // zxing-cpp 那一颗漂了 = 兜底的 6.4MB 悄悄回到每一个非 arm64 的 release 包里（没人发现）。
+        val barhopper = excluded.filter { it.second == "lib$BARHOPPER_NATIVE_LIBRARY.so" }
         assertEquals(
-            "被排除的文件名与探针里的库名不是一件事了：探针会立刻退化成\"永远回答可用\"的空壳，" +
-                "非 arm64 的 release 包回到启动即崩。$excluded vs lib$BARHOPPER_NATIVE_LIBRARY.so",
-            setOf("lib$BARHOPPER_NATIVE_LIBRARY.so"),
-            excluded.map { it.second }.toSet(),
+            "被排除的 barhopper 文件名与探针里的库名不是一件事了：探针会立刻退化成\"永远回答可用\"的空壳，" +
+                "非 arm64 的 release 包回到启动即崩。$barhopper vs lib$BARHOPPER_NATIVE_LIBRARY.so",
+            setOf("armeabi-v7a", "x86", "x86_64"),
+            barhopper.map { it.first }.toSet(),
+        )
+        val fallback = excluded.filter { it.second == ZXINGCPP_SO_FILE }
+        assertEquals(
+            "T66 兜底引擎的 .so 没在 release 里裁全（少裁一档就是拿包体买一个本来没有解码路的 ABI）：" +
+                "\n$excluded",
+            setOf("armeabi-v7a", "x86", "x86_64"),
+            fallback.map { it.first }.toSet(),
+        )
+        assertEquals(
+            "排除清单里有 ${excluded.size} 条，应当是两颗库 × 三档 = 6 条；" +
+                "真要多出一颗库的 .so，先问它在非 arm64 的 release 里该不该存在，再改这一条：$excluded",
+            6,
+            excluded.size,
         )
         assertTrue("arm64-v8a 也被裁掉的话，探针在最主流的那档设备上也会判成不可用：$excluded", excluded.none { it.first == "arm64-v8a" })
     }
@@ -382,6 +402,16 @@ class BarhopperNativeLibProbeTest {
         const val SCAN_SCREEN_FILE = "com/buaa/schedule/ui/signin/SpocScanScreen.kt"
         const val SCAN_STATUS_FILE = "com/buaa/schedule/ui/signin/ScanUiStatus.kt"
         const val BUILD_SCRIPT = "app/build.gradle.kts"
+
+        /**
+         * T66 第二引擎（zxing-cpp Android wrapper v3.1.1）的那颗 `.so`。
+         *
+         * 名字来自 AAR 里的 `jni/<abi>/libzxingcpp_android.so`（四档同名），
+         * 也是 `BarcodeReader` 构造函数里那句 loadLibrary 对应的文件 —— 这一颗**没有**
+         * 对应的探针常量（它的可用性判据就是\"构造得起来吗\"，见 ZxingCppFallbackDecoder
+         * 的类注释），所以这里只能把文件名写死，由上面那条断言逼着 build 脚本与它同步。
+         */
+        const val ZXINGCPP_SO_FILE = "libzxingcpp_android.so"
         const val THREADS = 8
     }
 }

@@ -103,12 +103,14 @@ class ScanSubmissionGateTest {
     }
 
     /**
-     * ⑨ 接线形状（JVM 跑不到 analyzer，只能按源码核对）：三件事都必须成立。
+     * ⑨ 接线形状（JVM 跑不到 analyzer，只能按源码核对）：四件事都必须成立。
      *
      * a. **置位先于回调**：`handled = ScanHandled(...)` 排在 `onCode(...)` 前面 ——
      *    回调里就开始发请求，这期间新帧可能已经进来了，晚一步置位就是双重提交；
+     *    T66 起这一对写在两条引擎**共用**的那道闸门 `submitDecodedText()` 里，
+     *    于是这一条同时钉住了 a′：主力那一支不许自己再拼一份提交动作；
      * b. **resume 还连着那颗按钮**，而按钮的唯一入口是 Idle 那一档；
-     *    c. **失败留痕 + awaitingUserAction 一起写**，两条失败出口（ML Kit 的失败回调、
+     * c. **失败留痕 + awaitingUserAction 一起写**，两条失败出口（ML Kit 的失败回调、
      *    process() 同步抛）都要写，漏一条就是旧 consumed 的死锁在某一头复活。
      */
     @Test
@@ -118,14 +120,36 @@ class ScanSubmissionGateTest {
         val analyzer = balancedBlock(code, "private class QrCodeAnalyzer(")
 
         val success = balancedBlock(analyzer, ".addOnSuccessListener { codes ->")
-        val set = success.indexOf("handled = ScanHandled(")
-        val submit = success.indexOf("onCode(")
-        check(set >= 0 && submit >= 0) { "成功分支不再是「置位 + onCode」那一对了：\n$success" }
-        assertTrue("置位排到了回调后面（这期间进来的新帧会二次提交）：\n$success", set < submit)
+        // a′（T66）：主力解出原文那一支只许**调**共用的闸门，不许自己投 ——
+        // 兜底那一路（trySecondEngine）走的是同一个函数，两路各拼一份就是两本账，
+        // 而这一页修过三轮的那一种病恰恰叫"两份真相"。
+        check(success.contains("submitDecodedText(")) {
+            "成功分支不再走两条引擎共用的 submitDecodedText()：兜底与主力的提交口径会在这里分叉\n$success"
+        }
+        assertFalse(
+            "成功分支自己拼了第二份提交动作（置位与 onCode 该只在闸门那一处）：\n$success",
+            success.contains("onCode(") || success.contains("handled = ScanHandled("),
+        )
+        // 共用闸门本体：先读闸门 → 置位 → 回调，三步次序一个字都不许改
+        val gate = balancedBlock(analyzer, "private fun submitDecodedText(")
+        val judged = gate.indexOf("shouldSubmitScan(")
+        val set = gate.indexOf("handled = ScanHandled(")
+        val submit = gate.indexOf("onCode(")
+        check(judged >= 0 && set >= 0 && submit >= 0) { "闸门不再是「判据 + 置位 + onCode」那三句了：\n$gate" }
+        assertTrue("置位排到了回调后面（这期间进来的新帧会二次提交）：\n$gate", set < submit)
         // 判据本体必须在置位之前读过一次闸门
-        assertTrue(
-            "成功分支不再走 shouldSubmitScan 判据：\n$success",
-            success.indexOf("shouldSubmitScan(") in 0 until set,
+        assertTrue("闸门不再走 shouldSubmitScan 判据：\n$gate", judged in 0 until set)
+        // 递交原文的路只有两条：闸门定义一处 + 主力一处 + 兜底一处。
+        // 多一处 = 第三条路绕过闸门直接投；少一处 = 有一条引擎解出来也没人递交。
+        assertEquals(
+            "submitDecodedText( 的出现次数不是「定义 + 两条引擎」：",
+            3,
+            occurrences(analyzer, "submitDecodedText("),
+        )
+        assertEquals(
+            "onCode( 不止闸门那一处了（这就是绕过闸门的提交口）：",
+            1,
+            occurrences(analyzer, "onCode("),
         )
 
         // 两处失败留痕：ML Kit 的失败回调 + process() 同步抛，漏一条就是旧 consumed 的死锁在某一头复活
@@ -135,7 +159,8 @@ class ScanSubmissionGateTest {
             "失败分支没把闸门按在「只认新码」这一档（同一档失败会每 1500ms 重投一次）",
             occurrences(analyzer, "awaitingUserAction = true") >= 2,
         )
-        // 墙钟只在调用点读：analyzer 里读、判据函数里不读
+        // 墙钟只在调用点读：analyzer 里读、判据函数里不读。
+        // T66 加了第二条解码路、却没多出第四个取钟口（主力那一处搬进了共用闸门），数目仍是 3。
         assertEquals("analyzer 里没有 System.currentTimeMillis() 以外的取钟口", 3, occurrences(analyzer, "System.currentTimeMillis()"))
 
         // 布尔死锁不许复活
@@ -155,10 +180,10 @@ class ScanSubmissionGateTest {
         )
     }
 
-    /** ⑩ 仓库口径：这两份判据文件里一个 android import 都不许有（否则 JVM 单测跑不到） */
+    /** ⑩ 仓库口径：这四份判据文件里一个 import 都不许有（否则 JVM 单测跑不到，判据就得挪走） */
     @Test
     fun judgesStayPureJvm() {
-        for (file in listOf(GATE_FILE, STATUS_FILE)) {
+        for (file in listOf(GATE_FILE, STATUS_FILE, SECOND_ENGINE_FILE, CAMERA_AID_FILE)) {
             val imports = withoutComments(readMainSource(file)).lines().filter { it.startsWith("import ") }
             assertTrue(
                 "$file 里出现了 android/androidx 依赖，这段判据就到不了 JVM：\n$imports",
@@ -167,8 +192,11 @@ class ScanSubmissionGateTest {
             assertTrue("$file 的 import 只该是 junit 那些工具以外的东西：${imports.size}", imports.isEmpty())
         }
         // 时钟与设备事实留在调用点：判据函数不许自己读墙钟
-        val gate = withoutComments(readMainSource(GATE_FILE)) + withoutComments(readMainSource(STATUS_FILE))
-        assertFalse("判据本体自己去读了墙钟", gate.contains("System.currentTimeMillis"))
+        // T66 新增的两颗内核（第二引擎判据 + 帧观测判据）一起进这份清单：
+        // 「纯 JVM」是这一页能单测的前提，任何一颗沾上 android import 它就整片失效。
+        val judges = listOf(GATE_FILE, STATUS_FILE, SECOND_ENGINE_FILE, CAMERA_AID_FILE)
+            .joinToString(separator = "\n") { withoutComments(readMainSource(it)) }
+        assertFalse("判据本体自己去读了墙钟", judges.contains("System.currentTimeMillis"))
     }
 
     /** ⑪ 相册那条入口不受闸门影响（它是单次动作，本来就没有按帧重投的问题） */
@@ -251,5 +279,7 @@ class ScanSubmissionGateTest {
         const val SCAN_SCREEN_FILE = "com/buaa/schedule/ui/signin/SpocScanScreen.kt"
         const val GATE_FILE = "com/buaa/schedule/ui/signin/ScanSubmissionGate.kt"
         const val STATUS_FILE = "com/buaa/schedule/ui/signin/ScanUiStatus.kt"
+        const val SECOND_ENGINE_FILE = "com/buaa/schedule/ui/signin/ScanSecondEnginePolicy.kt"
+        const val CAMERA_AID_FILE = "com/buaa/schedule/ui/signin/ScanCameraAidPolicy.kt"
     }
 }
