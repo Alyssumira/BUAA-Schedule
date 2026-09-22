@@ -86,8 +86,10 @@ class CourseMetaWiringGuardTest {
     fun noLocaleSensitiveNumberFormatterAnywhere() {
         val root = findMainJavaDir()
         val hits = root.walkTopDown().filter { it.isFile && it.extension == "kt" }.filter { file ->
-            val text = file.readText()
-            Regex("""\b(DecimalFormat|NumberFormat)\b""").containsMatchIn(text)
+            // 注释要先抹掉再扫：CourseMetaFormat 自己的 KDoc 就写着"不许用 DecimalFormat"，
+            // 连注释一起扫会把这句禁令 itself 当成违规（第一版就红在了这上面）
+            val code = blankComments(file.readText())
+            Regex("""\b(DecimalFormat|NumberFormat)\b""").containsMatchIn(code)
         }.map { it.relativeTo(root).path }.toList()
         assertTrue(
             "main 源码里出现了 DecimalFormat/NumberFormat：$hits —— 学分/数值显示一律走 " +
