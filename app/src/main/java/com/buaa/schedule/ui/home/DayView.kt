@@ -55,7 +55,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -121,6 +123,7 @@ import com.buaa.schedule.ui.SpecialDayMark
 import com.buaa.schedule.ui.courseSharedElementModifier
 import com.buaa.schedule.ui.specialDayBadgeLabel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalTime
@@ -185,46 +188,95 @@ fun DayView(
     // 补上手势以后又留下第二个断裂：dragAmount 只累到阈值做判定，72dp 以内画面纹丝不动、
     // 松手整页硬切（H5），而翻周是 Pager 的跟手 + 惯性。这里补齐同一条因果链的两端：
     // 手势期间正文跟手位移，换天以后新的一天从同一方向滑入（§2.4 shared axis）。
+    //
+    // T70 治的是这条链补齐以后留下的三处白烧（口径与四组对照数见 [DaySwipePolicy] 的表）：
+    // ① `pointerInput(date)` 每翻一天把整条 `detectHorizontalDragGestures` 拆掉重装，
+    //    正在飞的那一次拖拽被直接取消 —— 连手快滑两下会掉一下；
+    // ② 每个 pointer 事件 `dragScope.launch { dragShift.snapTo(...) }`：一次协程分配 +
+    //    一次 Animatable 互斥锁 + 一次快照写，而这台镜像上一次 300ms 的滑动注入约 30 个事件、
+    //    实测帧时 79ms —— 一帧里挤 5 个事件，其中 4 次写在下一帧被覆盖掉；
+    // ③ 松手以后无论翻没翻出去都挂同一根没有明确长度的弹簧，于是翻出去那一侧
+    //    拖拽位移慢慢往回走 0、转场又把新的一天从同一方向滑进来，两套位移方向相反时长不同，
+    //    而整页正文（Hero 那块要重采样背景、加一根 1260dp 高不懒测的时间轴）
+    //    在整段弹簧里每帧重画一次。
+    // ⚠️ 这三处都在**滑动路径**上，所以本卡不换 HorizontalPager：同一次手势在周视图那条
+    // Pager 路上实测 p50 帧时 500ms（这里是 79ms），换过去是把它往更贵的方向推。
     val reduceMotion = LocalReduceMotion.current
     val haptics = LocalHapticFeedback.current
     val dragScope = rememberCoroutineScope()
-    val swipeThreshold = with(LocalDensity.current) { 72.dp.toPx() }
-    var swipeDrag by remember { mutableFloatStateOf(0f) }
+    val swipeThresholdPx = with(LocalDensity.current) { 72.dp.toPx() }
+    // 拖拽期那笔累计位移**不是 State**：它只被手势协程与帧回调协程读，没有任何一处组合读它，
+    // 做成 State 等于每个事件多付一次快照写（就是上面第 ② 条的一半）。
+    val drag = remember { DayDragAccumulator() }
+    var dragActive by remember { mutableStateOf(false) }
     val dragShift = remember { Animatable(0f) }
-    val settleDrag: () -> Unit = {
-        dragScope.launch { dragShift.animateTo(0f, motionSpringFor(reduceMotion)) }
+
+    // 最新的那一天与回调。改前写的是 `pointerInput(date)`：每翻一天把整条
+    // `detectHorizontalDragGestures` 拆掉重装，而拆的那一瞬间正在飞的手势被直接取消
+    // ——连手快滑两下会掉一下。换成 Unit 键 + rememberUpdatedState，识别器全程只装一次。
+    val latestDate by rememberUpdatedState(date)
+    val latestOnDateChange by rememberUpdatedState(onDateChange)
+
+    // 位移的唯一写者：松手以前每帧最多写一次（判据见 [dayDragShouldWriteOffset]）。
+    // 事件路径上从此只剩两次普通字段写，协程、互斥锁、快照写全部挪到帧边界上。
+    LaunchedEffect(dragActive, reduceMotion) {
+        if (!dragActive || !dayDragShouldFollow(reduceMotion)) return@LaunchedEffect
+        var writtenThroughEvent = -1L
+        while (dragActive && isActive) {
+            if (dayDragShouldWriteOffset(writtenThroughEvent, drag.events)) {
+                writtenThroughEvent = drag.events
+                dragShift.snapTo(dayDragFollowOffset(drag.totalPx, swipeThresholdPx, reduceMotion))
+            }
+            withFrameNanos { }
+        }
+    }
+
+    // 松手以后收回位移：翻出去那一侧改挂"与转场同起同落"的那一档，
+    // 不再让一根没有明确长度的弹簧拖着整页正文多画几百毫秒（判据见 [dayDragSettleMode]）
+    val settleDrag: (DaySwipeCommit) -> Unit = { commit ->
+        val spec = when (dayDragSettleMode(commit)) {
+            DayDragSettleMode.SpringBack -> motionSpringFor<Float>(reduceMotion)
+            DayDragSettleMode.RideWithTransition ->
+                motionSpecFor<Float>(reduceMotion, MotionTokens.DURATION_SNAP)
+        }
+        dragScope.launch { dragShift.animateTo(0f, spec) }
     }
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = DesignTokens.spaceL)
-            .pointerInput(date) {
+            .pointerInput(Unit) {
                 detectHorizontalDragGestures(
+                    onDragStart = { dragActive = true },
                     onDragEnd = {
-                        when {
-                            swipeDrag <= -swipeThreshold -> {
+                        dragActive = false
+                        val commit = daySwipeCommit(drag.totalPx, swipeThresholdPx)
+                        when (commit) {
+                            DaySwipeCommit.NextDay -> {
                                 haptics.performTick()
-                                onDateChange(date.plusDays(1))
+                                latestOnDateChange(latestDate.plusDays(1))
                             }
-                            swipeDrag >= swipeThreshold -> {
+                            DaySwipeCommit.PreviousDay -> {
                                 haptics.performTick()
-                                onDateChange(date.minusDays(1))
+                                latestOnDateChange(latestDate.minusDays(1))
                             }
+                            DaySwipeCommit.Stay -> Unit
                         }
-                        swipeDrag = 0f
-                        settleDrag()
+                        drag.totalPx = 0f
+                        drag.events = 0L
+                        settleDrag(commit)
                     },
                     onDragCancel = {
-                        swipeDrag = 0f
-                        settleDrag()
+                        dragActive = false
+                        drag.totalPx = 0f
+                        drag.events = 0L
+                        settleDrag(DaySwipeCommit.Stay)
                     },
                 ) { _, dragAmount ->
-                    swipeDrag += dragAmount
-                    // reduce-motion 下正文不做位移，阈值判定照旧
-                    if (!reduceMotion) {
-                        dragScope.launch { dragShift.snapTo(dampedDragOffset(swipeDrag, swipeThreshold)) }
-                    }
+                    // 事件只累加，不写 State、不起协程：位移由上面那颗帧回调协程按帧落地
+                    drag.totalPx += dragAmount
+                    drag.events += 1L
                 }
             },
     ) {
@@ -341,15 +393,20 @@ fun DayView(
     }
 }
 
-/** 跟手只映 0.35 倍：整幅跟随会让正文与两侧的箭头脱开，读成"箭头没跟着走" */
-private const val DayDragFollowRatio = 0.35f
-
 /**
- * 手势累计位移 → 正文位移。超过阈值的部分不再增加：
- * 继续拖已经不携带新信息，而松手回弹的距离一旦跟着变大，就成了新的干扰。
+ * 拖拽期的累加值：普通字段，不是 State。
+ *
+ * 这两个数只有两处在读 —— 手势协程里的松手判定、帧回调协程里的按帧落位，
+ * 没有任何一处组合读它们。做成 `mutableFloatStateOf` 就是让每个 pointer 事件
+ * 都付一次快照写，而这台镜像上一次滑动就 30 个事件（T70②）。
  */
-private fun dampedDragOffset(totalDrag: Float, threshold: Float): Float =
-    totalDrag.coerceIn(-threshold, threshold) * DayDragFollowRatio
+private class DayDragAccumulator {
+    /** 水平累计位移（左拖为负），px */
+    var totalPx: Float = 0f
+
+    /** 事件序号：只用来让帧回调判断"这一帧到底有没有新事件"，不参与方向判定 */
+    var events: Long = 0L
+}
 
 /**
  * 翻日期的共享轴：横向 1/8 屏宽 + 淡入淡出，进退方向相反（§2.4：两天之间有前后关系）。
@@ -521,14 +578,18 @@ private fun DayScreen(
             WeekCalculator.currentWeekOrNull(start, s.totalWeeks, date)
         }
     }
-    val dayCourses = when {
-        // 完全没设学期：按星期几降级展示，手动课程对新用户仍可见
-        semester == null -> courses.filter { it.dayOfWeek == date.dayOfWeek.value }
-        // 学期在、开学日期却解析失败（旧库脏数据）：TodayPlanner 此时返回 EMPTY，
-        // 列表不能再放行全部周次，否则"列表有课、Hero 与进度条全空"同屏打架
-        semesterStart == null || week == null -> emptyList()
-        else -> courses.filter { it.dayOfWeek == date.dayOfWeek.value && it.weeks.contains(week) }
-    }.sortedBy { it.startPeriod }
+    // 全量过滤 + 排序按 (这一天, 课表) 记忆：改前它挂在组合期裸算，而 AnimatedContent
+    // 转场那 140ms 里新旧两页每重组一次就走一遍 —— 转场期正是重组最密的时候
+    val dayCourses = remember(date, courses, semester, semesterStart, week) {
+        when {
+            // 完全没设学期：按星期几降级展示，手动课程对新用户仍可见
+            semester == null -> courses.filter { it.dayOfWeek == date.dayOfWeek.value }
+            // 学期在、开学日期却解析失败（旧库脏数据）：TodayPlanner 此时返回 EMPTY，
+            // 列表不能再放行全部周次，否则"列表有课、Hero 与进度条全空"同屏打架
+            semesterStart == null || week == null -> emptyList()
+            else -> courses.filter { it.dayOfWeek == date.dayOfWeek.value && it.weeks.contains(week) }
+        }.sortedBy { it.startPeriod }
+    }
     val plan = remember(date, courses, semester, timeSlots, now) {
         if (isToday) TodayPlanner.plan(courses, semester, timeSlots, date, now) else null
     }
