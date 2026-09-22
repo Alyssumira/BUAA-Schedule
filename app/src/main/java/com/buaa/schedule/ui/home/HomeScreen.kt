@@ -499,21 +499,6 @@ fun HomeScreen(
         reservedGapPx = statsEntryReservedGapPx,
     )
     val statsEntryPlacement = planStatsEntry(statsEntryBudgetPx, statsEntryLadder)
-    // T69 装机取数探针（只在这轮验收时用，取完删）
-    androidx.compose.runtime.LaunchedEffect(
-        statsEntryBudgetPx,
-        statsEntryPlacement,
-        segmentedWidthPx,
-        topRowWidthPx,
-    ) {
-        android.util.Log.d(
-            "StatsEntryBudget",
-            "row=$topRowWidthPx seg=$segmentedWidthPx col=$statsEntryLeftColumnWidthPx " +
-                "gap=$statsEntryReservedGapPx budget=$statsEntryBudgetPx " +
-                "ladder=${statsEntryLadder.joinToString(";") { "${it.tier.name}=${it.widthPx}" }} " +
-                "picked=${statsEntryPlacement.tier.name} fits=${statsEntryPlacement.fits}",
-        )
-    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
