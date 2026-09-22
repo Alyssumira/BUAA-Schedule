@@ -12,15 +12,18 @@ import org.junit.Test
  * [CourseTitleRowBudgetGuardTest]：先抹注释（字符串保留），再按函数体切块，
  * 找不到源码目录直接抛、一个靶子都没扫到也判红（跳过的守卫比没有守卫更糟）。
  *
- * 钉住六件事：
+ * 钉住七件事：
  * 1. 内核 DayTimelineBlockLines.kt **零 import**（比"零 android"更严：它连 java.time 都不该要，
  *    所有事实都得由调用点量成数字递进来）。
  * 2. 色块里画哪几行确实由 `planDayTimelineBlockLines(...)` 回答，
  *    而 `38.dp` / `58.dp` 那两枚定值已经从 DayView.kt 里彻底消失。
- * 3. 递给内核的行高是从 MaterialTheme.typography 现取、按 fontScale 换算的，不是抄的常量。
- * 4. 纵向容量是唯一限制项：三/四行仍各自锁 `maxLines = 1` + 省略号（横向由省略号收口）。
- * 5. 课名那一行不在任何 `if` 里——它是内核里唯一 pinned 的行，接线不许把它也判掉。
- * 6. 教师走 joinMeta（缺项连同分隔符一起缺席），备注只在内核点头时才画。
+ * 3. 递给内核的行高是**装机实测**的（TextMeasurer 量一行 CJK 样例、按样式记忆），
+ *    不是排版表里那枚标称 lineHeight 乘 fontScale——标称只是下限，按它记账只剩 1px 余量（T61b①）。
+ * 4. 真超了也不许越出内容区：块把自己的文字裁第二道（T61b② 的那条安全带）。
+ * 5. 纵向容量是唯一限制项：三/四行仍各自锁 `maxLines = 1` + 省略号（横向由省略号收口），
+ *    宽度那枚投机参数已经从内核与调用点一起摘掉（T61b③，连带 `LocalConfiguration` 那条 lint）。
+ * 6. 课名那一行不在任何 `if` 里——它是内核里唯一 pinned 的行，接线不许把它也判掉。
+ * 7. 教师走 joinMeta（缺项连同分隔符一起缺席），备注只在内核点头时才画。
  */
 class DayTimelineBlockLinesWiringGuardTest {
 
@@ -51,24 +54,77 @@ class DayTimelineBlockLinesWiringGuardTest {
         )
     }
 
+    /**
+     * ③：行高是**量**出来的。T61 头一版把排版表的 `lineHeight × fontScale` 当行高递进来，
+     * 而 Compose 的 lineHeight 只是下限：装机量到 labelMedium 17.14dp 而非标称 16，
+     * 三行 54.1dp 而不是 52dp —— 按标称挑的门槛就此只剩 1px 真余量（T61b① 修的就是它）。
+     */
     @Test
-    fun lineHeightsAreMeasuredFromTypographyAndFontScale() {
+    fun lineHeightsAreMeasuredFromTheFontNotReadFromTheTypographyToken() {
         val body = timelineBody()
         assertTrue("行高必须现取排版表，不许抄成常量", body.contains("MaterialTheme.typography.labelLarge"))
         assertTrue(body.contains("MaterialTheme.typography.labelMedium"))
         assertTrue("行高要按 fontScale 换算（dp 门槛不长、行高长，这就是 38/58 两头错的根）", body.contains("fontScale"))
         val dayView = blankComments(source(DAY_VIEW))
         assertTrue(
-            "换算 sp → dp 的那件小事要有名字，别散成四处各乘一遍",
+            "换算这件事要有名字，别散成四处各乘一遍",
             dayView.contains("private fun timelineLineHeightDp(") &&
                 dayView.contains("timelineLineHeightDp(MaterialTheme.typography.labelLarge") &&
                 dayView.contains("timelineLineHeightDp(MaterialTheme.typography.labelMedium"),
+        )
+        assertTrue(
+            "行高要下尺去量（TextMeasurer 量一行、取首行的行框），而不是读排版表那枚下限：" +
+                "标称 52dp vs 实画 54.1dp 的差就是 T61b① 那一px",
+            dayView.contains("textMeasurer.measure(") && dayView.contains("getLineBottom(0)"),
+        )
+        assertTrue(
+            "测量要按样式记忆、一台设备一枚样式一次：每块各量一次 = 一屏十几节课白排十几遍文本",
+            Regex("remember\\(style, fontScale, density").containsMatchIn(dayView) ||
+                dayView.contains("remember(style, fontScale"),
+        )
+        assertTrue(
+            "量的样例必须含汉字：拉丁样例在走 fallback 字体时少报行高，少的正是会被裁掉的那一行",
+            dayView.contains("TimelineLineSample"),
         )
         // 内边距与摆放读同一枚数：改了 .padding 忘了改预算 = 每块都差 3dp
         assertTrue(
             "块的上下内边距必须与递给内核的那枚同源（BlockTextVerticalPadding）",
             body.contains("vertical = BlockTextVerticalPadding") &&
                 body.contains("contentVerticalPaddingDp = BlockTextVerticalPadding.value"),
+        )
+    }
+
+    /** ②：真超了也不许越出内容区——块把自己的文字裁第二道 */
+    @Test
+    fun residualOvershootIsClippedToThePlate() {
+        val body = timelineBody()
+        val padAt = body.indexOf("vertical = BlockTextVerticalPadding")
+        val clipAt = body.indexOf(".clipToBounds()")
+        assertTrue(
+            "色块的文字没有第二道裁切：预算之外的残余会压在描边与圆角那一条带上，" +
+                "把「这块到哪儿结束」糊掉（T54 的形状）。块要 clipToBounds（T61b②）",
+            clipAt >= 0,
+        )
+        assertTrue(
+            "clipToBounds 要落在 .padding(vertical = BlockTextVerticalPadding) 之后：裁的才是行预算" +
+                "那枚内容上限（padding 之前裁就把内边距那一圈也算进去了），实际 clip@$clipAt pad@$padAt",
+            clipAt > padAt,
+        )
+    }
+
+    /** ③：宽度那枚投机参数——内核不许再收，调用点也不许再去读 screenWidthDp */
+    @Test
+    fun widthIsNotABudgetInputAnymore() {
+        val kernel = blankComments(source(KERNEL))
+        val dayView = blankComments(source(DAY_VIEW))
+        assertTrue(
+            "availableWidthDp 回来了：宽度从来不是这里的限制项（Column + 每行 maxLines=1 + 省略号），" +
+                "量它要读 LocalConfiguration.screenWidthDp，白多一条 ConfigurationScreenWidthHeight 警告",
+            !kernel.contains("availableWidthDp"),
+        )
+        assertTrue(
+            "DayView 不该再读 screenWidthDp / LocalConfiguration（T61b③ 摘掉的就是它）",
+            !dayView.contains("screenWidthDp") && !dayView.contains("LocalConfiguration"),
         )
     }
 
@@ -126,15 +182,16 @@ class DayTimelineBlockLinesWiringGuardTest {
         assertTrue("教室的占位口径要与列表模式一致（③C-05）", body.contains("?: \"教室未定\""))
     }
 
-    /** 令牌：1.05 那一档留着说明注释与代码已经分家 */
+    /** 令牌：按**实测行高**挑的那一档；旧的两档（1.05 挤不出第三行、1.35 只剩 1px）都不许回来 */
     @Test
     fun perMinuteHeightIsTheNewDerivedValue() {
         val tokens = blankComments(source(TOKENS))
         assertTrue(
-            "dayHeightPerMinute 该是 1.35.dp（45 分钟 → 60.75dp ≥ 三行 52dp + 上下内边距 6dp）",
-            Regex("val dayHeightPerMinute = 1\\.35\\.dp").containsMatchIn(tokens),
+            "dayHeightPerMinute 该是 1.40.dp（45 分钟 → 63dp ≥ 实测三行 54.10dp + 上下内边距 6dp + 2dp 真余量）",
+            Regex("val dayHeightPerMinute = 1\\.40\\.dp").containsMatchIn(tokens),
         )
         assertTrue("旧的 1.05 还留在令牌里", !tokens.contains("1.05.dp"))
+        assertTrue("1.35 是按标称行高挑的那一档，只剩 1px 余量，不许留着", !tokens.contains("1.35.dp"))
     }
 
     // ---- 靶子定位与词法小工具（与 DayTimelineStructureGuardTest 同一套） --------

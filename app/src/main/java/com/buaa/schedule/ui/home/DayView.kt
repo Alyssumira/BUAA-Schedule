@@ -58,23 +58,27 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFontFamilyResolver
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -606,11 +610,12 @@ private fun DayTimelineCourseList(
     val window = remember(periodTimes) {
         dayTimelineWindow(periodTimes.values.minOf { it.first }, periodTimes.values.maxOf { it.second })
     }
-    // 1.35dp/分钟：正常 45 分钟的一节课 60.75dp，装得下三行文字＋上下各 3dp 内边距
-    // （哪几行装得下由 planDayTimelineBlockLines 按量到的行高算，不再是 38/58 两档魔法数）。
-    // 块高与分钟数仍严格成正比，minTouchTarget 那道补齐只在 35.6 分钟以下的短块上生效，
-    // 比 1.05 档（45.7 分钟以下）吃掉的溢出量更小 ⇒ 相邻两节互相压住的空间是收窄的。推导见
+    // 1.40dp/分钟：正常 45 分钟的一节课 63dp，装得下实测三行（54.1dp）＋上下各 3dp 内边距，
+    // 装机复量到的真余量 2.71dp（哪几行装得下由 planDayTimelineBlockLines 按量到的行高算，
+    // 不再是 38/58 两档魔法数）。推导那笔账的是量出来的行高，不是排版表标称，见
     // [DesignTokens.dayHeightPerMinute]。
+    // 块高与分钟数仍严格成正比，minTouchTarget 那道补齐只在 34.3 分钟以下的短块上生效，
+    // 比 1.35 档（35.6 分钟）与 1.05 档（45.7 分钟）吃掉同样的溢出 ⇒ 相邻两节互相压住的空间是收窄的。
     val heightPerMinute = DesignTokens.dayHeightPerMinute
     // 时高/总高都从 hourHeight 出发：刻度格、网格线、块定位共用同一把尺，
     // 周视图 24h 模式就是这么算的（WeekView 的 gridHeight 与卡片 top 同一来源）
@@ -698,23 +703,18 @@ private fun DayTimelineCourseList(
     val lineColor = MaterialTheme.colorScheme.outlineVariant
     val gapTextColor = MaterialTheme.colorScheme.onSurfaceVariant
 
-    // —— 行预算要用的三份事实，全部在这里量好，内核只算账（见 DayTimelineBlockLines.kt）——
-    // 行高取排版表的 lineHeight：sp → dp 就是乘 fontScale（1sp = fontScale dp），
-    // 密度这一层在 dp 账里不产生信息。这两枚数**随系统字号长**，正是 38/58 那对定值做不到的一件事。
+    // —— 行预算要用的两份事实，全部在这里量好，内核只算账（见 DayTimelineBlockLines.kt）——
+    // 行高**实测**而非抄排版表：lineHeight 只是下限，字体自带行框更高时以字体为准。
+    // 装机量到的是 labelLarge 52px=19.81dp、labelMedium 45px=17.14dp（标称 20/16），
+    // 三行 54.10dp 而不是 52dp —— T61b① 退回的就是这一截：按标称记账时 1.35 那档的
+    // 54.75dp 容量只剩 1px 真余量，换一枚没量过的字体就穿。
+    // 一枚样式量一次（按 style + fontScale + density 记忆），不是每块量一次：
+    // 一次测量 ≈ 一次文本排版，块数乘上去就是白付的首帧账。fontScale 留在键上是必须的——
+    // 换系统字号时 Measurer 会换、量到的 dp 也会换，缓存不许跨它。
     val fontScale = density.fontScale
-    val nameLineHeightDp = timelineLineHeightDp(MaterialTheme.typography.labelLarge, fontScale)
-    val metaLineHeightDp = timelineLineHeightDp(MaterialTheme.typography.labelMedium, fontScale)
-    // 一行可用的宽度（dp，粗算即可）：色块通栏，横向吃掉宽度的只有页边距、左侧刻度列与块的两层内边距。
-    // 它不是这里的限制项（每行都锁 maxLines = 1 + Ellipsis，超宽由省略号收口——T48 那笔宽度账
-    // 钉的是 Row 同排子节点互抢，时间轴是 Column，没有同排），递给内核只为"宽度量不到"那一档
-    // 有个明确行为：什么都量不到时不承诺任何附加行。
-    val blockContentWidthDp = (
-        LocalConfiguration.current.screenWidthDp -
-            DesignTokens.spaceL.value * 2f -
-            DesignTokens.weekTimeColumnWidth.value -
-            DesignTokens.spaceS.value -
-            (BlockSidePadding + BlockTextSidePadding).value * 2f
-        ).coerceAtLeast(0f).toDouble()
+    val lineMeasurer = rememberTimelineTextMeasurer()
+    val nameLineHeightDp = timelineLineHeightDp(MaterialTheme.typography.labelLarge, lineMeasurer, fontScale)
+    val metaLineHeightDp = timelineLineHeightDp(MaterialTheme.typography.labelMedium, lineMeasurer, fontScale)
 
     Column(
         modifier = modifier
@@ -813,9 +813,9 @@ private fun DayTimelineCourseList(
                         hourHeight * ((block.endMin - block.startMin).coerceAtLeast(1) / 60f)
                         )
                         // 短节次按真实比例只有十几 dp，补到触控下限。
-                        // 1.35dp/分钟下这条溢出比旧档位更小：48dp 现在只相当于 35.6 分钟
-                        // （1.05 档是 45.7 分钟），正常的 45 分钟课（60.75dp）根本走不到这里，
-                        // 所以"上一节的色块压住下一节"的空间是收窄的，不是变大了。
+                        // 1.40dp/分钟下这条溢出比旧档位更小：48dp 现在只相当于 34.3 分钟
+                        // （1.35 档是 35.6 分钟、1.05 档是 45.7 分钟），正常的 45 分钟课（63dp）
+                        // 根本走不到这里，所以"上一节的色块压住下一节"的空间是收窄的，不是变大了。
                         .coerceAtLeast(DesignTokens.minTouchTarget)
                     val blockColor = courseColor(course)
                     // 文字要看**合成后**的亮度：BlockTintAlpha 的课程色透出了页面背景。
@@ -875,7 +875,16 @@ private fun DayTimelineCourseList(
                             horizontal = BlockTextSidePadding,
                             vertical = BlockTextVerticalPadding,
                         )
-                    // 装得下哪几行：把量好的三份事实（块高、两档行高、可用宽度）交给纯 JVM 内核，
+                        // T61b②：安全带。行预算是按**实测**行高算的，正常情况下这一道用不上；
+                        // 它挡的是"谁换了一枚没量过的字体"那一档（MiSans、厂商自定义行框、
+                        // 未来的排版表改动）。板子的轮廓上面那道 .clip(blockShape) 早就裁得住，
+                        // 漏不了页面背景，但残余会压在描边与圆角那一条带上、把"这块到哪儿结束"糊掉
+                        // ——那正是 T54 那一类"多出来的一行没地方去"的形状，所以这里补第二道。
+                        // 位置放在 .padding 之后：裁的就是行预算那枚"内容上限"，两条边界同源。
+                        // 每一行的高度是按实测行框记的账（含降部），字本身从来不出自己的行框，
+                        // 所以这道裁切正常情况下一毫米都碰不到字，只会削掉真超出内容区的那一整行。
+                        .clipToBounds()
+                    // 装得下哪几行：把量好的两份事实（块高、两档**实测**行高）交给纯 JVM 内核，
                     // 由它按容量逐行分。这里不再有 38/58dp 两档定值——那对数是按**一种**系统字号、
                     // 一张排版表标定的：小字号下 45 分钟的课（47.25dp）永远够不到 58dp 那档，
                     // 教室那一行从此绝迹（= 用户报的"文字内容有点少"）；大字号下行高按 fontScale 长
@@ -884,7 +893,6 @@ private fun DayTimelineCourseList(
                     val linePlan = planDayTimelineBlockLines(
                         blockHeightDp = blockHeight.value.toDouble(),
                         contentVerticalPaddingDp = BlockTextVerticalPadding.value.toDouble(),
-                        availableWidthDp = blockContentWidthDp,
                         specs = listOfNotNull(
                             DayTimelineLineSpec(
                                 DayTimelineBlockLine.CourseName,
@@ -1275,17 +1283,84 @@ private fun hhmm(time: LocalTime): String =
     time.truncatedTo(java.time.temporal.ChronoUnit.MINUTES).toString()
 
 /**
- * 一枚文字样式的一行高度（dp）：排版表里 lineHeight 是 sp，而 1sp = fontScale dp，
- * 乘一下就在 dp 账上了——密度这一层不进这条算式（分子分母都有它）。
- * 行高从 MaterialTheme.typography 现取而不是抄常量：抄回来的就是下一对 38/58。
+ * 量一行文字用的 Measurer。
  *
- * lineHeight 未定义（TextUnit.Unspecified 的 value 是 -1）时退回字号 × 1.4：
- * 这是**偏高**的方向，退让的结果是少承诺一行，绝不会反过来把画出来的行裁掉。
+ * 本仓钉住的那份 ui-text 里没有 `rememberTextMeasurer`（只有 [TextMeasurer] 本体与它的
+ * `measure`），所以自己造一枚、按 (resolver, density, direction) 记忆——density 里就带着
+ * fontScale，系统字号一变这一枚就换，跨字号的旧测量值不会留下来。
  */
-private fun timelineLineHeightDp(style: TextStyle, fontScale: Float): Double {
-    val lineHeightSp = if (style.lineHeight.value > 0f) style.lineHeight.value
-    else style.fontSize.value * 1.4f
-    return (lineHeightSp * fontScale).toDouble()
+@Composable
+private fun rememberTimelineTextMeasurer(): TextMeasurer {
+    val resolver = LocalFontFamilyResolver.current
+    val measurerDensity = LocalDensity.current
+    val direction = LocalLayoutDirection.current
+    return remember(resolver, measurerDensity, direction) {
+        TextMeasurer(resolver, measurerDensity, direction)
+    }
+}
+
+/**
+ * 量的样例：一个汉字。
+ *
+ * 必须是 CJK——色块里写的就是中文课程名，而拉丁样例在字体走 fallback 时会**少报**行高
+ * （西文自带行框比汉字浅），少报的那一截正好是要裁掉的那一行。量谁就写谁。
+ */
+private val TimelineLineSample = "课"
+
+/**
+ * 一枚文字样式的**实测**行高（dp），从 MaterialTheme.typography 现取样式、不抄常量
+ * （抄回来的就是下一对 38/58）。
+ *
+ * 记忆键 = 样式 + fontScale + density，也就是**一台设备一枚样式一次测量**，
+ * 不随色块数走：一次测量 = 一次文本排版，一天十几节课乘上去就是白付的首帧账。
+ */
+@Composable
+private fun timelineLineHeightDp(
+    style: TextStyle,
+    textMeasurer: TextMeasurer,
+    fontScale: Float,
+): Double {
+    val density = LocalDensity.current
+    return remember(style, fontScale, density, textMeasurer) {
+        measureTimelineLineHeightDp(style, textMeasurer, density, fontScale)
+    }
+}
+
+/**
+ * 真正下尺的那一处：首行行框的高度，进位到整 px 再折回 dp。
+ *
+ * 不再拿排版表的 `lineHeight × fontScale` 当这一枚数（T61 头一版那么算，被 T61b① 退回来）：
+ * Compose 的 lineHeight 是下限而不是定值，字体自带行框更高时以字体为准。装机量到的就是这两枚：
+ * labelLarge 52px=19.81dp（标称 20）、labelMedium 45px=17.14dp（标称 16）——
+ * 三行差出 2.1dp，而按标称挑的 1.35 那一档只留了 1px（0.38dp）真余量。
+ * 换一枚 MiSans 就把这一px吃穿，多出来的那一行去压色板自己的描边与圆角（第二道裁切 T61b② 就是为它准备的）。
+ *
+ * 取整到 px 的这一手不是洁癖：Compose 把每个子节点的量得高落在整 px 上，
+ * 三行各差不到 1px，这点累计不该由那 2dp 的真余量买单。
+ *
+ * 量不出来（字体没就绪、样例排版抛了）才退回**偏高**的一档：标称 lineHeight 与字号 × 1.4 取大——
+ * 少承诺一行，绝不会反过来把已经画出来的行裁掉。
+ *
+ * @param fontScale 只用于那条退让支路（实测那条吃的是 Measurer 自己那份 density）
+ */
+private fun measureTimelineLineHeightDp(
+    style: TextStyle,
+    textMeasurer: TextMeasurer,
+    density: Density,
+    fontScale: Float,
+): Double {
+    val measuredPx = runCatching {
+        val layout = textMeasurer.measure(TimelineLineSample, style)
+        if (layout.lineCount > 0) layout.getLineBottom(0) - layout.getLineTop(0) else 0f
+    }.getOrNull()
+    if (measuredPx != null && measuredPx > 0f) {
+        return with(density) { kotlin.math.ceil(measuredPx).toDp() }.value.toDouble()
+    }
+    val nominalSp = maxOf(
+        style.lineHeight.value.takeIf { it > 0f } ?: 0f,
+        style.fontSize.value * 1.4f,
+    )
+    return (nominalSp * fontScale).toDouble()
 }
 
 /**

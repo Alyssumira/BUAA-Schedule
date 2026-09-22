@@ -9,16 +9,22 @@ package com.buaa.schedule.ui.home
  * 同一对常数在系统字号调大时又反过来**过度承诺**（T54 实测到的正是"第三行把课名顶了出去"）：
  * 行高按 fontScale 长，而 dp 门槛不长，两头都错。
  *
- * 所以这里不量高度、只算账：调用点把已经量好的事实（块高、每行的行高、块的内边距、
- * 可用宽度）当数字递进来，内核回答"这一块的 Column 里按顺序该画哪几行"。
+ * 所以这里不量高度、只算账：调用点把已经量好的事实（块高、每行**实测**的行高、块的内边距）
+ * 当数字递进来，内核回答"这一块的 Column 里按顺序该画哪几行"。
  * 仓库口径（同 [com.buaa.schedule.ui.signin.ScanRecoveryPolicy] / [DayTimelineAxis]）：
  * 判据一旦自己去读 MaterialTheme / Density / Build / 量文本，JVM 表驱动单测就到位了。
  *
- * 行高取的是排版表里的 `lineHeight`（× fontScale 后按 dp 递进来），不是文本真测：
- * Compose 的 lineHeight 是**下限**而非定值，字体自带的行框更高时以字体为准
- * （本仓 12sp 的 labelMedium 实测 17.1dp > 标称 16sp）。差出来的那一截是**已知的余量**，
- * 装机逐块量过没有裁切（见 T61 的截图账）；要改成逐行实测就得把 TextMeasurer 搬进组合期，
- * 拿一次首帧抖动换 1dp 的精确度，不值。
+ * 递这里的行高**必须是量出来的，不能是排版表里那枚 `lineHeight`**（T61b① 退回来的原因）：
+ * Compose 的 lineHeight 是**下限**而不是定值，字体自带行框更高时以字体为准 ——
+ * 装机量到 labelMedium 标称 16 而实画 17.14dp，三行标称 52dp 实画 54.10dp，
+ * 于是"预算说装得下"与"画出来装得下"之间只剩 1px（0.38dp）的真余量。
+ * 换一枚 MiSans（HyperOS 自带，垂直度量与 Roboto 不同）就把这一px吃穿：Column 高出块，
+ * 多出来的那一行压在色板自己的描边与圆角上——块的 .clip(blockShape) 挡住了页面背景，
+ * 挡不住"这块到哪儿结束"那条下沿，读起来就是 T54 那一类形状。
+ * 所以两头一起补：这一头按**实测**记账（保证不该超的时候绝不超），
+ * 那一头 DayView 给块加了第二道 clipToBounds（保证真超了也出不去）。
+ * 调用点拿 TextMeasurer 量一行 CJK 样例的首行高（**一台设备一次，不是每块一次**），
+ * 进位到整 px 再折回 dp 递进来；差的那点首帧抖动是这条账的全部代价，值得付。
  */
 
 /**
@@ -47,7 +53,7 @@ internal enum class DayTimelineBlockLine(val pinned: Boolean) {
 /**
  * 一枚候选行连同它量好的行高。
  *
- * @param heightDp 该行占掉的 dp（排版 lineHeight × fontScale）。
+ * @param heightDp 该行占掉的 dp（**调用点实测**的一行高度，见文件头那条"不许抄标称"）。
  *   ≤0 当"这一行没有内容可摆"处理（调用点据此直接不递，递了也不画）。
  */
 internal data class DayTimelineLineSpec(
@@ -65,23 +71,22 @@ internal data class DayTimelineBlockPlan(val lines: List<DayTimelineBlockLine>) 
  * 第一次装不下就往后的行全部让位（行序 = 信息优先级，矮行不许插队）；
  * `pinned` 行始终在场（哪怕容量已经用光）。
  *
- * 横向只有一条规则：可用宽度量不到（≤0）时附加行一概不承诺。
- * 宽度在这里**不是**限制项——色块是通栏的、每行都锁 `maxLines = 1 + Ellipsis`，
- * 超宽由省略号收口（对照 T48 那笔真正的宽度账：Row 的同排子节点互抢，这里没有同排）。
- * 它留在这里是为了让"什么都量不到"那一档有个明确行为，而不是零宽也照画三行省略号。
+ * 横向没有规则可言（T61b③ 把 `availableWidthDp` 那个参数删了）：色块是通栏的、
+ * 每行都锁 `maxLines = 1 + Ellipsis`，超宽由省略号收口，宽度从来不是这里的限制项
+ * （对照 T48 那笔真正的宽度账：Row 的同排子节点互抢，时间轴是 Column，没有同排）。
+ * 留着那枚参数只买到一句"宽度量不到时不承诺附加行"，而把它量出来要多吃一次
+ * `LocalConfiguration.screenWidthDp`，多出一整条 lint 警告（ConfigurationScreenWidthHeight）——
+ * 为一个用不到的分支付一台设备的账，不划算。
  *
  * @param blockHeightDp 色块的高度（dp，已经过 minTouchTarget 补齐——补齐的意义就是"这里能多放东西"）
  * @param contentVerticalPaddingDp 块内文字的上下内边距（单侧）
- * @param availableWidthDp 一行可用的宽度（dp），0/负 = 没量到
  */
 internal fun planDayTimelineBlockLines(
     blockHeightDp: Double,
     contentVerticalPaddingDp: Double,
-    availableWidthDp: Double,
     specs: List<DayTimelineLineSpec>,
 ): DayTimelineBlockPlan {
     val capacity = (blockHeightDp - contentVerticalPaddingDp * 2.0).coerceAtLeast(0.0)
-    val widthKnown = availableWidthDp > 0.0
     val chosen = mutableListOf<DayTimelineBlockLine>()
     var used = 0.0
     var starved = false
@@ -95,7 +100,7 @@ internal fun planDayTimelineBlockLines(
         // 行序就是信息优先级：装不下之后不许让后面的矮行插队。
         // 教室(16) 换备注(16) 这种"塞得进就换一张牌"的读法，等于把内容顺序交回给高度，
         // 而这三行的取舍账是按"用户先该看到什么"排的。
-        if (starved || !widthKnown) continue
+        if (starved) continue
         if (used + spec.heightDp > capacity) {
             starved = true
             continue
