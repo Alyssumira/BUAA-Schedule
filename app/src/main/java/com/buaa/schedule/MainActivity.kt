@@ -760,6 +760,10 @@ private fun AppNavHost(
                     onImportBuaa = { navController.navigate("buaa_login") },
                     onCourseManagement = { navController.navigate("course_management") },
                     onSpocSignIn = openSpocSignIn,
+                    // 顶栏那枚「学期统计」胶囊与设置页那一行共用同一个回调：
+                    // 两处各写一份 `navigate("stats")` 迟早走岔（openStats 存在的理由），
+                    // 而这里漏传就是"界面上摆着入口、点下去没反应"（T41 那一族）。
+                    onOpenStats = openStats,
                     onCourseClick = { course -> navController.navigate("editor/${course.id}") },
                     bottomBarVisible = bottomBarVisible,
                     highlightCourseId = pulseCourseId,

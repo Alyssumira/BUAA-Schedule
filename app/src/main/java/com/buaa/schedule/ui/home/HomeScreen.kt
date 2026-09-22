@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -66,15 +68,22 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFontFamilyResolver
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import kotlin.math.ceil
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buaa.schedule.core.designsystem.DesignTokens
@@ -118,6 +127,15 @@ fun HomeScreen(
     /** 菜单里的「扫码签到」：智学北航课堂二维码 */
     onSpocSignIn: () -> Unit,
     onCourseClick: (Course) -> Unit,
+    /**
+     * 顶栏第一行那枚「学期统计」胶囊（T69）。
+     *
+     * ⚠️ **不许给默认值**。`= {}` 买到的是一个编译通过、运行时点了没反应的入口 ——
+     * 「学期统计进不去」当初就是这么漏出来的（T41），而它比"没有入口"更糟：
+     * 界面上明明摆着东西，用户按下去什么也不发生。接线由 `StatsEntryWiringGuardTest`
+     * 扫源码钉着（MainActivity 传的是真的 `openStats`、胶囊的 onClick 连到这颗参数）。
+     */
+    onOpenStats: () -> Unit,
     /** 手机端悬浮玻璃底栏是否显示：显示时 FAB / 菜单要在底部让位 */
     bottomBarVisible: Boolean = false,
     /** 刚从编辑器保存返回的课程：这张卡要做一次定位脉冲（④机会#4）；-1 = 无 */
@@ -433,6 +451,70 @@ fun HomeScreen(
             com.buaa.schedule.core.designsystem.floatingBottomBarClearance()
         } else 0.dp
 
+    // ── 顶栏「学期统计」入口的宽度账（T69）───────────────────────────────
+    // 那一行是 Row，左边的 Column 带 weight(1f)：非加权子节点先按声明顺序吃掉自己那一份，
+    // 剩下的才轮到它 —— 胶囊多要的一截全部从日期那一列的份里扣。扣穿了就是 T48 在设置页
+    // 犯过的同一笔账（长课名把状态胶囊整枚裁到卡外），只是这次被裁的是「9月22日 星期二」。
+    // 所以挑哪一档之前先把三段事实量出来，一处都不按「字符数 × 字号」估（T61 的账）：
+    //  · 行宽 —— 顶栏 Row 自己的 content-box（外边距已扣），onSizeChanged 读的是真画出来那一帧；
+    //  · 分段控件宽 —— 同一行最右边那位邻居，它按内容宽度排布、随系统字号一起长；
+    //  · 左列宽 —— Crossfade 两支里最宽那行文字的实宽。取两支的最大值而不是"当前页签那一支"：
+    //    过渡帧里两支同时在屏上，按当前那一支量就会在那 140ms 里把日期裁掉半截。
+    var topRowWidthPx by remember { mutableStateOf<Int?>(null) }
+    var segmentedWidthPx by remember { mutableStateOf<Int?>(null) }
+    val statsEntryMeasurer = rememberStatsEntryTextMeasurer()
+    val statsEntryDensity = LocalDensity.current
+    val statsEntryTypography = MaterialTheme.typography
+    // TextStyle 是 data class：每次重组现 copy 出来的实例与上一次的相等，记忆键照样命中
+    val statsEntryHeadlineStyle = statsEntryTypography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+    val statsEntryPillStyle = statsEntryTypography.labelLarge
+    val statsEntryLeftColumnWidthPx = maxOf(
+        statsEntryTextWidthPx(weekHeadline, statsEntryHeadlineStyle, statsEntryMeasurer),
+        statsEntryTextWidthPx(dateLabel, statsEntryTypography.labelMedium, statsEntryMeasurer),
+        statsEntryTextWidthPx(
+            dayTabHeadline(today, browseDateOnScreen),
+            statsEntryHeadlineStyle,
+            statsEntryMeasurer,
+        ),
+    )
+    // 胶囊自己的四枚 chrome：全部从 DesignTokens 换算，不裸写魔法数
+    val statsEntryPaddingPx = with(statsEntryDensity) { ceil(DesignTokens.spaceM.toPx() * 2f).toInt() }
+    val statsEntryIconBlockPx = with(statsEntryDensity) {
+        ceil((DesignTokens.iconSmall + DesignTokens.spaceMicro * 2f).toPx()).toInt()
+    }
+    val statsEntryMinWidthPx = with(statsEntryDensity) { ceil(DesignTokens.minTouchTarget.toPx()).toInt() }
+    // 胶囊两侧各留 spaceS：它不许贴着分段控件，也不许贴着日期那一列的省略号
+    val statsEntryReservedGapPx = with(statsEntryDensity) { ceil(DesignTokens.spaceS.toPx() * 2f).toInt() }
+    val statsEntryLadder = statsEntryCandidates(
+        fullLabelWidthPx = statsEntryTextWidthPx(StatsEntryTier.Full.label, statsEntryPillStyle, statsEntryMeasurer),
+        shortLabelWidthPx = statsEntryTextWidthPx(StatsEntryTier.Compact.label, statsEntryPillStyle, statsEntryMeasurer),
+        horizontalPaddingPx = statsEntryPaddingPx,
+        iconBlockPx = statsEntryIconBlockPx,
+        minPillWidthPx = statsEntryMinWidthPx,
+    )
+    val statsEntryBudgetPx = statsEntryBudgetPx(
+        rowWidthPx = topRowWidthPx,
+        segmentedWidthPx = segmentedWidthPx,
+        leftColumnWidthPx = statsEntryLeftColumnWidthPx,
+        reservedGapPx = statsEntryReservedGapPx,
+    )
+    val statsEntryPlacement = planStatsEntry(statsEntryBudgetPx, statsEntryLadder)
+    // T69 装机取数探针（只在这轮验收时用，取完删）
+    androidx.compose.runtime.LaunchedEffect(
+        statsEntryBudgetPx,
+        statsEntryPlacement,
+        segmentedWidthPx,
+        topRowWidthPx,
+    ) {
+        android.util.Log.d(
+            "StatsEntryBudget",
+            "row=$topRowWidthPx seg=$segmentedWidthPx col=$statsEntryLeftColumnWidthPx " +
+                "gap=$statsEntryReservedGapPx budget=$statsEntryBudgetPx " +
+                "ladder=${statsEntryLadder.joinToString(";") { "${it.tier.name}=${it.widthPx}" }} " +
+                "picked=${statsEntryPlacement.tier.name} fits=${statsEntryPlacement.fits}",
+        )
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             // ── 紧凑顶栏（参考稿布局）──
@@ -445,7 +527,9 @@ fun HomeScreen(
                         start = DesignTokens.spaceL,
                         end = DesignTokens.spaceS,
                         top = DesignTokens.spaceXS,
-                    ),
+                    )
+                    // 行宽读的是这一行自己的 content-box（padding 已扣）：预算的第一段事实
+                    .onSizeChanged { topRowWidthPx = it.width },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(
@@ -494,10 +578,24 @@ fun HomeScreen(
                         }
                     }
                 }
+                // 学期统计入口（T69）：改前它只有设置页第三层那一条通路，而里面是一整屏
+                // 内容（周次覆盖甘特、空档热力格、负载趋势）。摆在这里两个页签都看得见、
+                // 都点得到，不要求用户先切页签；档位在实测宽度预算里挑（见上面那一段账）。
+                StatsEntryPill(
+                    tier = statsEntryPlacement.tier,
+                    capWidthPx = if (statsEntryPlacement.fits) null else statsEntryBudgetPx,
+                    onClick = onOpenStats,
+                    modifier = Modifier.padding(
+                        start = DesignTokens.spaceS,
+                        end = DesignTokens.spaceS,
+                    ),
+                )
                 GlassSegmentedControl(
                     options = listOf("周课表", "今日"),
                     selectedIndex = selectedTab,
                     onSelect = { selectedTab = it },
+                    // 预算的第二段事实：它按内容宽度排布，宽度随系统字号与文案变
+                    modifier = Modifier.onSizeChanged { segmentedWidthPx = it.width },
                 )
             }
 
@@ -1046,4 +1144,132 @@ internal fun weekHeadline(
     displayWeek == null -> "假期中"
     displayWeek == currentWeek -> "第${displayWeek}周"
     else -> "第${displayWeek}周（浏览）"
+}
+
+/**
+ * 顶栏第一行那枚「学期统计」玻璃胶囊（T69）。
+ *
+ * 为什么是胶囊而不是一颗裸图标按钮：用户要的是"看得出里面有什么"，图标回答不了
+ * （设置页那一行靠的是「学期统计」四个字 + 一句 summary，图标只是装饰）。
+ * 为什么不用 `TextButton`：这一行里立着的每一块可点的东西都是玻璃（分段控件、
+ * 第二行的学期/校区选择器），一块 M3 文字按钮落在中间会读成"这是段文字"。
+ *
+ * 高度只吃到 [DesignTokens.minTouchTarget]（48dp）：这一行的高度本来就是分段控件定的
+ * （COMPACT 的 4dp 内衬 + 48dp 段 = 56dp），胶囊再高就把顶栏垫厚一层，
+ * 而顶栏历史上因为吃掉三行高度被打回过。
+ *
+ * @param capWidthPx null = 这一档实测放得下，按自然宽度画；非 null = 一枚都放不下，
+ *   把胶囊夹进预算、文字走省略号（T48 的最后一道防线），此时图标先让出去 ——
+ *   三档里唯一不许没的是文字标签。下限仍托到 minTouchTarget，不许夹出一颗点不到的东西。
+ */
+@Composable
+private fun StatsEntryPill(
+    tier: StatsEntryTier,
+    capWidthPx: Int?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val ink = LocalSemanticPlate.current?.foreground ?: MaterialTheme.colorScheme.onSurface
+    val showIcon = tier.withIcon && capWidthPx == null
+    GlassSurface(
+        variant = GlassVariant.COMPACT,
+        shape = RoundedCornerShape(DesignTokens.cornerPill),
+        onClick = onClick,
+        // 内衬交给下面那一层：GlassSurface 的外层 Box 是 TopStart 对齐的，
+        // 用它的 contentPadding 撑高度会把字吊在上沿（第二行「课次」那颗真机反馈过偏上）
+        contentPadding = 0.dp,
+        modifier = modifier.then(
+            if (capWidthPx != null) {
+                Modifier.widthIn(max = with(density) { capWidthPx.coerceAtLeast(0).toDp() })
+            } else {
+                Modifier
+            },
+        ),
+    ) {
+        Box(
+            modifier = Modifier.defaultMinSize(
+                minWidth = DesignTokens.minTouchTarget,
+                minHeight = DesignTokens.minTouchTarget,
+            ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = DesignTokens.spaceM),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (showIcon) {
+                    Icon(
+                        imageVector = Icons.Filled.Insights,
+                        // 图标不另起名字：读屏念的是下面那颗 label 的 contentDescription（全称），
+                        // 这里再给一个就是「统计，图表图标，学期统计」三截
+                        contentDescription = null,
+                        tint = ink,
+                        modifier = Modifier.size(DesignTokens.iconSmall),
+                    )
+                    Spacer(modifier = Modifier.width(DesignTokens.spaceMicro * 2f))
+                }
+                Text(
+                    text = tier.label,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.semantics { contentDescription = tier.contentDescription },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 量顶栏那几行文字用的 Measurer。
+ *
+ * 本仓钉住的那份 ui-text 里没有 `rememberTextMeasurer`，所以自己造一枚、
+ * 按 (resolver, density, direction) 记忆 —— density 里就带着 fontScale，
+ * 系统字号一变这一枚就换，跨字号的旧测量值不会留下来（口径同 DayView 那份）。
+ */
+@Composable
+private fun rememberStatsEntryTextMeasurer(): TextMeasurer {
+    val resolver = LocalFontFamilyResolver.current
+    val measurerDensity = LocalDensity.current
+    val direction = LocalLayoutDirection.current
+    return remember(resolver, measurerDensity, direction) {
+        TextMeasurer(resolver, measurerDensity, direction)
+    }
+}
+
+/**
+ * 一枚文字样式的**实测**宽度（px，向上取整到整 px）。
+ *
+ * 取整的这一手不是洁癖：预算与实宽最后要在整数 px 上比大小，两头各留半 px 的
+ * 累计误差，就足以让"以为放得下"变成"把日期裁掉半个字"。
+ *
+ * 记忆键 = 文案 + 样式 + measurer + density。样式是 data class，每次重组现
+ * `copy(fontWeight = ...)` 出来的实例与上一次的相等 ⇒ 同一段字不会被重排两遍。
+ *
+ * 量不出来（字体没就绪、排版抛了）才退回**偏高**的一档：按全角字宽 × 字数估。
+ * 退让的方向一律挑"少占"那一头 —— 落在左列上是"以为它很窄"，于是胶囊多要一截、
+ * 把日期裁了；落在胶囊上是"以为它很宽"，于是白降一档。两害相权，宁可入口降档。
+ */
+@Composable
+private fun statsEntryTextWidthPx(
+    text: String,
+    style: TextStyle,
+    textMeasurer: TextMeasurer,
+): Int {
+    val density = LocalDensity.current
+    return remember(text, style, textMeasurer, density) {
+        val measuredPx = runCatching {
+            // 本仓钉住的 ui-text 里 TextLayoutResult 没有 getLineWidth，取右沿减左沿
+            // （LTR 下单行的左沿就是 0，取两个是免得哪天从右往左排就量出负数）
+            val layout = textMeasurer.measure(text, style, maxLines = 1)
+            layout.getLineRight(0) - layout.getLineLeft(0)
+        }.getOrNull()
+        if (measuredPx != null && measuredPx.isFinite() && measuredPx > 0f) {
+            ceil(measuredPx).toInt()
+        } else {
+            ceil(with(density) { style.fontSize.toPx() } * text.length).toInt()
+        }
+    }
 }
