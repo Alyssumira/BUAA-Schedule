@@ -40,7 +40,7 @@ class SpecialDayBadgeWiringGuardTest {
             assertFalse("判据自己去碰了日历/主题/设备（$banned）—— 这些事实必须是参数", code.contains(banned))
         }
         assertTrue("内核文件是空的？", code.length > 800)
-        // 三处界面共用的那几个入口都必须在内核里
+        // 两处界面共用的那几个入口都必须在内核里
         for (entry in listOf("specialDayDateKey", "specialDayIsWeekend", "specialDayBadgeAt", "specialDayBadgeLabel")) {
             assertTrue("内核少了 $entry 这一档：", code.contains(entry))
         }
@@ -107,6 +107,15 @@ class SpecialDayBadgeWiringGuardTest {
     // ---- ③ 今日页跟着"在看的日期"，不跟 today ----
     // 顶栏那两行**不在本卡范围**（与日头信息重复，调度定死不做）：这里特意不钉顶栏，
     // 而 `topBarDateLabel` 保持 T56 落地的原样——哪天要接顶栏，改这条决定连同卡一起开。
+    // 并且钉一句反例：顶栏不许偷偷把共用渲染口接回去（接了就是第三处真相的起点）。
+    @Test
+    fun topBarStaysOutOfThisCardsBadgeWiring() {
+        for (file in listOf(HOME_SCREEN_FILE, TOP_BAR_LABEL_FILE)) {
+            val ui = blankComments(readMainSource(file))
+            assertEquals("$file 偷偷把徽标接回顶栏了（本卡定死不做，与日头重复）：", 0, occurrences(ui, "SpecialDayBadgeText("))
+            assertEquals("$file 顶栏分支自己折算标注了：", 0, occurrences(ui, "specialDayMarksOf("))
+        }
+    }
 
     @Test
     fun dayViewBadgeFollowsTheBrowsedDate() {
@@ -122,8 +131,80 @@ class SpecialDayBadgeWiringGuardTest {
         assertTrue("今日页没有折算标注：", dayView.contains("specialDayMarksOf(specialDays)"))
         // HomeScreen 两处分栏/页签布局都要把数据传进去：漏一处就是那条布局下没标注
         val home = blankComments(readMainSource(HOME_SCREEN_FILE))
-        assertEquals("HomeScreen 里 `specialDays = specialDays` 该出现 4 次（周视图两处 + 日视图两处）：",
-            4, occurrences(home, "specialDays = specialDays"))
+        assertEquals(
+            "HomeScreen 里 `specialDays = specialDays` 该出现 4 次（周视图两处 + 日视图两处）：",
+            4,
+            occurrences(home, "specialDays = specialDays"),
+        )
+    }
+
+    // ---- ③b 页头那一行是"先量后摆"：宽度实测走版面内核，不是一律摆整句 ----
+
+    @Test
+    fun dayHeaderPlacesBadgeThroughSurfaceKernel() {
+        val dayView = blankComments(readMainSource(DAY_VIEW_FILE))
+        assertTrue(
+            "页头没问版面内核该摆哪一档（先量后摆这条断了）：",
+            occurrences(dayView, "specialDayHeaderSurface(") == 1,
+        )
+        assertTrue("页头没有实测宽度（又回去拍脑袋定 showNote 了）：", dayView.contains("measure(text, metaStyle)"))
+        assertTrue("可用宽度没从这一列的约束里拿：", dayView.contains("constraints.maxWidth.toDp()"))
+        assertTrue(
+            "整句摆不摆又写成了常量 true（内核给的结论没接上）：",
+            dayView.contains("showNote = surface is SpecialDayHeaderSurface.Full"),
+        )
+        // T48 那手摆法：徽标拿自然宽、前导周次文字吃剩下的并 ellipsis——
+        // 省略号能吃到的只有周次文字，「休」那枚字排不到被裁的位置
+        assertTrue("前导文字没走 weight(1f, fill = false)：", dayView.contains("weight(1f, fill = false)"))
+        assertTrue("前导文字没有 ellipsis 兜底：", dayView.contains("overflow = TextOverflow.Ellipsis"))
+        // 无数据那一天不许多出任何东西：副行有一条与改前同形的直出支路
+        assertTrue("页头不再按'有没有标注'分支（无数据那天会多出占位）：", dayView.contains("if (badge == null)"))
+    }
+
+    @Test
+    fun surfaceKernelStaysPureJvm() {
+        val raw = readMainSource(SURFACE_KERNEL_FILE)
+        val code = blankComments(raw)
+        val imports = code.lines().filter { it.trim().startsWith("import ") }
+        assertTrue("$SURFACE_KERNEL_FILE 里出现了 import，这段判据就到不了 JVM：\n$imports", imports.isEmpty())
+        for (
+            banned in listOf(
+                "android.", "androidx.", "java.time", "LocalDate", "MaterialTheme", "colorScheme",
+                "LocalConfiguration", "DisplayMetrics", "LocalDensity", "Density", "Compose",
+            )
+        ) {
+            assertFalse("版面内核自己去碰了设备/主题/排版（$banned）—— 宽度必须是参数", code.contains(banned))
+        }
+        for (entry in listOf("SpecialDayHeaderSurface", "specialDayHeaderSurface", "specialDayHiddenNoteDescription")) {
+            assertTrue("版面内核少了 $entry 这一档：", code.contains(entry))
+        }
+        // 三档结论都在：None（无数据一个字节不多）、Full（整句）、BadgeOnly（只留本体）
+        for (variant in listOf("data object None", "class Full", "class BadgeOnly")) {
+            assertTrue("版面内核的结论少了一档（$variant）：", code.contains(variant))
+        }
+    }
+
+    // ---- ④ 被版面省下的全称必须进得了读屏（周表头那一格是主要现场） ----
+
+    @Test
+    fun hiddenNoteIsSpokenToAccessibility() {
+        val badgeUi = blankComments(readMainSource(BADGE_UI_FILE))
+        assertTrue(
+            "共用渲染口不再给隐藏的全称挂语义（全称又只剩画面一份了）：",
+            badgeUi.contains("specialDayHiddenNoteDescription("),
+        )
+        assertTrue("语义没落到 contentDescription 上：", badgeUi.contains("contentDescription = hiddenNote"))
+        assertTrue("semantics 修饰符没挂上：", badgeUi.contains(".semantics {"))
+        // 措辞（节假日/调休上班两种说法）只在版面内核那一份，界面侧不许各写一种
+        val surface = blankComments(readMainSource(SURFACE_KERNEL_FILE))
+        assertEquals("「节假日」说法的份数：", 1, occurrences(surface, "\"节假日\""))
+        assertEquals("「调休上班」说法的份数：", 1, occurrences(surface, "\"调休上班\""))
+        for (file in listOf(WEEK_VIEW_FILE, DAY_VIEW_FILE, HOME_SCREEN_FILE, BADGE_UI_FILE)) {
+            val ui = blankComments(readMainSource(file))
+            for (wording in listOf("\"节假日\"", "\"调休上班\"")) {
+                assertEquals("$file 自己写了一份读屏措辞（第二处真相）：", 0, occurrences(ui, wording))
+            }
+        }
     }
 
     // ---- ④ 小组件那一档仍然没接（本卡③的结论，别悄悄半接） ----
@@ -141,35 +222,16 @@ class SpecialDayBadgeWiringGuardTest {
         assertTrue("找不到组件目录：${widgetDir.path}", widgetDir.isDirectory)
         val offenders = widgetDir.walkTopDown().filter { it.isFile && it.extension == "kt" }
             .filter { blankComments(it.readText()).contains("SpecialDay") }
-            .map { it.name }
+            .map { it.name }.toList()
         assertTrue("组件侧出现了 SpecialDay（本卡③定的是另立一卡）：\n$offenders", offenders.isEmpty())
     }
 
-    // ---- 工具：读源码、抹注释、配平取块 ----
+    // ---- 工具：读源码、抹注释 ----
 
     private fun readMainSource(relativeFromJava: String): String {
         val file = File(findMainJavaDir(), relativeFromJava)
         assertTrue("找不到 ${file.path}：文件挪过家的话这条守卫要跟着改路径", file.isFile)
         return file.readText()
-    }
-
-    /** 从 [signature] 之后第一个 `{` 起配平到对应右括号（含）；找不到锚点就抛 */
-    private fun balancedBlock(source: String, signature: String): String {
-        val at = source.indexOf(signature)
-        check(at >= 0) { "找不到 $signature：写法换过了，这条守卫要跟着改" }
-        val open = source.indexOf('{', at)
-        check(open >= at) { "$signature 之后找不到左括号" }
-        var depth = 0
-        for (index in open until source.length) {
-            when (source[index]) {
-                '{' -> depth++
-                '}' -> {
-                    depth--
-                    if (depth == 0) return source.substring(at, index + 1)
-                }
-            }
-        }
-        throw IllegalStateException("$signature 的花括号没配平")
     }
 
     /** 注释里写着禁令本身（"不碰 `LocalDate`"），所以匹配前先抹掉；字符串保留 */
@@ -244,10 +306,12 @@ class SpecialDayBadgeWiringGuardTest {
 
     private companion object {
         const val BADGE_KERNEL_FILE = "com/buaa/schedule/ui/SpecialDayBadgePolicy.kt"
+        const val SURFACE_KERNEL_FILE = "com/buaa/schedule/ui/home/SpecialDaySurface.kt"
         const val BADGE_UI_FILE = "com/buaa/schedule/ui/home/SpecialDayBadge.kt"
         const val SPECIAL_DAY_MODEL_FILE = "com/buaa/schedule/domain/model/SpecialDay.kt"
         const val WEEK_VIEW_FILE = "com/buaa/schedule/ui/home/WeekView.kt"
         const val DAY_VIEW_FILE = "com/buaa/schedule/ui/home/DayView.kt"
         const val HOME_SCREEN_FILE = "com/buaa/schedule/ui/home/HomeScreen.kt"
+        const val TOP_BAR_LABEL_FILE = "com/buaa/schedule/ui/home/TopBarDateLabel.kt"
     }
 }
