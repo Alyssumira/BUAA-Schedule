@@ -4,7 +4,13 @@
 > "哪些已经落地、哪些还没做、哪些明确不做"的贡献者，所以条目按开发顺序而不是使用顺序排。
 > 带 ⚠️ 的条目有平台限制或使用前提。
 >
-> 最后整理：2026-09-22（「节假日没有标注出来」+「时间轴模式显示的文字内容有点少」两条 ——
+> 最后整理：2026-09-22（扫码「码小不会自动放大」这一层先收 T64：真账是 `ImageAnalysis` 从没声明
+> 分辨率、按 CameraX 文档落在 640×480，装机实测改后交付 **1280×960**；同轮把"这一页开不出来"那道
+> 自认的门推翻（`EXTRA_ROUTE spoc_scan` 不查会话），并订正两条依赖层事实 —— ML Kit 的
+> `setZoomSuggestionOptions` 在 bundled 实现里是**静默 no-op**、`enableAllPotentialBarcodes()` 真生效。
+> 在跑：T65（potential 分档 + 检测框驱动变焦阶梯 + 对焦成功留痕 + 按用户决定拆掉手电）、
+> T66（zxing-cpp 只当兜底第二引擎）。
+> 再往前是「节假日没有标注出来」+「时间轴模式显示的文字内容有点少」两条 ——
 > 前者分两层都收了：数据侧 T60（三个触发点 + 跨月 + 每一档停法留一行取证）、渲染侧 T62
 > （今日页页头先量后摆、全称走读屏语义；真账是数据就算到位了也只有一格单字在画它）；
 > 后者 T61/T61b，真账是 45 分钟块的行高预算永远过不去那道 58dp 门，
@@ -811,3 +817,53 @@
       又写回 worktree 两轮（15:03 与 15:11–15:14，六个文件、未提交），我第一遍门禁因此被污染、
       作废重跑。处置：`git checkout -- .` 复原到 HEAD，那份写回留在 `.tmp/T62/ghost-final.patch`
       （不入库）。**派下一支卡之前先确认上一支真的退了。**
+- [x] 扫码取帧密度与 3A（T64，2026-09-22，`16eb262`…`d2f479a`）：「码小不会自动放大」的第一层
+      不在解码器，在**送进解码器的那幅画有多大**。此前 `ImageAnalysis` 一颗 `ResolutionSelector`
+      都没声明 ⇒ 按 CameraX 文档落在 640×480（0.31MP），而 ML Kit 的门槛是"最小可辨识单元 ≥2px"、
+      同行实测要到 **≥3px/模块** 才爬到 0.9 识别率 —— 模块数在降采样那一刻就没了，
+      后面换任何引擎、加任何重试都救不回来。这一半根因从 T44 起一直没人动过。
+      收了五件：① 分析流请求 1280×720 + `FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER`；
+      ② **每绑定一条交付尺寸取证行**（"请求了 720p"与"拿到了 720p"必须能在 logcat 里分开，
+      措辞与"够不够"的判定全出自内核 `analysisFrameLogText`，调用点不拼字符串数学），
+      且它排在停用判断**之前** —— 停用窗口里的帧也是帧，不能变成盲区；
+      ③ 点按对焦：`SurfaceOrientedMeteringPointFactory` 显式用**分析流**构造（两参构造默认按活跃
+      Preview 的画幅换算，两者画幅可以不同），FILL_CENTER 那次"放大 + 居中裁切"的逆变换收在
+      `analysisMeteringPointForTap`，落在裁切带外的点击**拒映射**而不是夹到边缘代答，
+      `FLAG_AF` + `setAutoCancelDuration(3s)`，`isFocusMeteringSupported` 排在 `startFocusAndMetering`
+      之前；④ 手电一档（**用户随后拍板「不要闪光灯，我们的场景不用」⇒ T65 整条拆**）；
+      ⑤ 缩放缝：`clampedZoomRatio` 判"这台有没有缩放控制"，null 档一句话不动，非 null 档过钳制。
+      判据全在新增的 `ScanCameraAidPolicy.kt`（**零 import**，帧够不够 / 点击映射 / 缩放钳制三块），
+      11 条表驱动单测 + `ScanCameraAidWiringGuardTest` 8 条源码形状守卫 —— 其中两枚反向钉值得记：
+      一枚钉 `setZoomSuggestionOptions` 不许被接进来，一枚钉 `ScanUiStatus.kt` 与基线**逐字节同**
+      （它跑过、0 skipped，不是被假设过去的）。
+      门禁（`assembleRelease` 先行）：**1277 单测 / 158 套件 / 0 失败 / 0 skipped**，
+      lint 0 error / 14 warning（地板 1258/156，差值恰为 +19/+2）。
+      **装机取证：这一页的链路第一次在设备上跑出来了**，而且门是被推翻的 —— `MainActivity` 的
+      `ROUTABLE_FROM_INTENT` 里有 `spoc_scan`，而 `routeFrom` **只做集合成员判断、不查 `hasSession()`**
+      ⇒ `adb shell am start -n com.buaa.schedule/.MainActivity --es com.buaa.schedule.EXTRA_ROUTE spoc_scan`
+      不带教务会话就能开页（此前记忆写着"这是唯一那道门"，错了）。⚠️ 必须装 **debug** 包：
+      release 裁了三个非 arm64 ABI，x86_64 模拟器上探针判"解码库不可用"、两条入口一起不 bind。
+      实测四行：`相机 provider 第 1 次取值未成功` → `第 2 次取值成功`（T59 的重试第一次可见）；
+      `本轮绑定的首帧已到达分析器：第 1 帧（绑定后 922ms）`；
+      **`本轮绑定交付的分析帧：1280×960 / 旋转 90° —— 请求 1280×720、实际 1280×960`**
+      （CameraX 落在 4:3 的 1.23MP 档 = 旧默认的 **4 倍像素**）；
+      `这台设备没有可用的缩放控制（ZoomState 没报出 min/max 或区间固定），视场保持原样`
+      —— 模拟器无变焦，钳制的 null 档不是假想分支；截图里底栏**只有「相册识别」没有手电按钮**
+      （模拟器无闪光灯 ⇒ `hasFlashUnit` 那道显示闸生效）。
+      复核抓到一处**本卡自己的静默档**：点按对焦把"被忽略 / 拒映射 / 不支持 / 抛出 / 启动失败"
+      四档都留了行，**唯独成功那一档不打日志** ⇒ 我按了两次中心点 logcat 全静默，
+      "手势没接住"与"点对成功"在设备上读不出区别。这一族修到第三轮了，转 T65③。
+      同一轮的研究订正（两条都影响下一卡）：`ZoomSuggestionOptions` / `setZoomSuggestionOptions`
+      **只存在于** `play-services-mlkit-barcode-scanning:18.3.1`（bundled 的 pom 以 compile 传进来，
+      所以编得过），而 bundled 实现那 362 个类里 `zoom` 大小写**零命中**、驱动 zoom 建议的类在
+      play-services 自己的内部包 ⇒ 在我们这条离线路线上它是**静默 no-op**，不许接；
+      反过来 `enableAllPotentialBarcodes()` 在 bundled 字节码里有引用 ⇒ **真能在设备上生效**，
+      它就是 T65 用来把"框里没码"与"码太小"分开的量具。
+      有意未做 / 残账：**解码成功率仍验不到**（二维码喂不进虚拟场景，见 #98 真机回归）；
+      `ProjectorZoomRatio = 1.5f` 每次绑定固定抬 1.5× 这个**形态不对**（可查证的做法是
+      按检测框尺寸估码、驱动变焦、持续无效就回滚基准 —— 微信那套"放大"是超分 + 多尺度重试，
+      代价 9.2MB + 757ms/图，我们出局；支付宝那篇一手资料全文没有变焦策略，"支付宝会智能放大"是讹传），
+      T65② 换成检测框驱动的阶梯；zxing-cpp 当**第二引擎**（用户点头"加"，arm64 0.73MB deflated，
+      只在 ML Kit 连续失败或只回 potential 时用 `tryHarder/tryInvert` 再解一次，
+      ⚠️ 不许换主力：我们 468 帧私有基准里它反光 79.5% / 糊码 64.1%，差于 ML Kit 的 96.2% / 74.4%）
+      另立 T66。
