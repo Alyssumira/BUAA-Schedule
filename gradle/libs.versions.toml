@@ -24,6 +24,11 @@ work = "2.9.1"
 # 只保 arm64-v8a 的裁剪写在 app/build.gradle.kts 的 packaging.jniLibs 里。
 camera = "1.4.2"
 mlkitBarcode = "17.3.0"
+# T66 第二解码引擎（zxing-cpp 的 Android 包装，Apache-2.0，非 MPL）：
+# 只在 ML Kit 判定「有码但解不开」的那几帧上补解一次，不换主引擎、不逐帧双解。
+# 它的 POM 依赖 camera-core 1.5.2 / kotlin-stdlib 2.3.20，两枚都在 app/build.gradle.kts
+# 里被 exclude 掉（本工程相机那一族钉在 1.4.2，单独抬 core 会造成同族版本错位）。
+zxingcppAndroid = "3.1.1"
 junit = "4.13.2"
 androidxJunit = "1.2.1"
 espressoCore = "3.6.1"
@@ -82,6 +87,7 @@ androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", 
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camera" }
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camera" }
 mlkit-barcode-scanning = { group = "com.google.mlkit", name = "barcode-scanning", version.ref = "mlkitBarcode" }
+zxingcpp-android = { group = "io.github.zxing-cpp", name = "android", version.ref = "zxingcppAndroid" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJunit" }
 androidx-benchmark-macro-junit4 = { group = "androidx.benchmark", name = "benchmark-macro-junit4", version.ref = "benchmarkMacro" }

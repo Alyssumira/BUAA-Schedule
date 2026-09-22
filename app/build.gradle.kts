@@ -240,13 +240,21 @@ androidComponents {
         // 于是相机分析器不建、相册识别（用的是同一个 process()）也一并不再承诺 ——
         // 相机与相册两条一起没，那一页在这种设备上用不了扫码签到、没有兜底入口
         // （「手输签到码」入口已于 2026-09-21 整条删除）。
-        // 这三个文件名与探针里那个常量必须同源，漂移由 BarhopperNativeLibProbeTest
+        // 这四个文件名与探针里那个常量必须同源，漂移由 BarhopperNativeLibProbeTest
         // 读这份脚本文本比对钉住（不是注释提醒）：改一边不改另一边，测试就红。
+        // T66 起清单里是**两颗**库：libbarhopper_v3.so（ML Kit，主力）与
+        // libzxingcpp_android.so（zxing-cpp，兜底）。裁法逐字照搬上面那三条的理由 ——
+        // 两颗都必须按文件名点名裁，而且 arm64-v8a 那一档一颗都不许动。
+        // 第二颗的 4 份 .so 合计 6.4MB（未压缩），不裁的话 release 包等于把兜底引擎
+        // 买到每一个非 arm64 的设备上，而那些设备的扫码链路本来就已经整条不可用。
         variant.packaging.jniLibs.excludes.addAll(
             setOf(
                 "lib/armeabi-v7a/libbarhopper_v3.so",
                 "lib/x86/libbarhopper_v3.so",
                 "lib/x86_64/libbarhopper_v3.so",
+                "lib/armeabi-v7a/libzxingcpp_android.so",
+                "lib/x86/libzxingcpp_android.so",
+                "lib/x86_64/libzxingcpp_android.so",
             )
         )
         // 默认 .so 不压缩入库（为了免解压直接 mmap）。这里换成分包体积：
@@ -345,6 +353,25 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.mlkit.barcode.scanning)
+    // T66 第二解码引擎（zxing-cpp，Apache-2.0）：**只在 ML Kit 连续「看见候选码却解不出原文」
+    // 的帧上补解一次**，主力不换、不逐帧双解（468 帧私有基准里它反光 79.5% / 糊码 64.1%，
+    // 两项都低于 ML Kit 的 96.2% / 74.4% —— 当主力是拿包体买更低的识别率）。
+    // 触发与节流的全部判据在 ui/signin/ScanSecondEnginePolicy.kt，接线在 SpocScanScreen。
+    //
+    // 两个 exclude 都是**必须**的，不是卫生问题：
+    // · camera-core 1.5.2 —— 它的 POM 带着这一档。本工程相机那一族按 catalog 钉在 1.4.2
+    //   （camera-core/camera2/lifecycle/view 四件同源），只把 core 抬上去就是让 1.5.2 的
+    //   API 面去接 1.4.2 的 lifecycle 实现体：这类同族错位不会在编译期红，只会在绑定相机
+    //   或分析帧流转时抛，而那正是扫码页最不该出事的路段。
+    //   去掉这一条依赖边是安全的：wrapper 用到的是 ImageProxy.format/planes/cropRect/
+    //   imageInfo.rotationDegrees（v3.1.1 源码逐行核过），1.4.2 里四个都在。
+    // · kotlin-stdlib 2.3.20 —— 编译器与全仓 stdlib 都在 2.3.10（KGP 会给 :app 自己补上
+    //   stdlib，所以exclude 之后 stdlib 不会消失，只是不再被这一条边抬到 2.3.20）。
+    //   代价是零：zxing-cpp 那 200 行 Kotlin 用的语言特性不会超过 2.3.10。
+    implementation(libs.zxingcpp.android) {
+        exclude(group = "androidx.camera", module = "camera-core")
+        exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
+    }
     // Baseline Profile 的**运行时**这一半：profileinstaller 负责在冷启动时把包内那份
     // profile 写进设备的 curated 目录。API 31+ 平台自己会读 asset、这枚依赖近乎空转，
     // 但 26–30 只有靠它才有效（本应用 minSdk 26）。
