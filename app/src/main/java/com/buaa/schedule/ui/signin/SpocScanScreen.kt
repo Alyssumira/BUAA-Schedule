@@ -3,6 +3,7 @@ package com.buaa.schedule.ui.signin
 import android.Manifest
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import androidx.activity.compose.BackHandler
@@ -70,7 +71,9 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -142,8 +145,17 @@ fun SpocScanScreen(
     var cameraProviderMissing by remember { mutableStateOf(false) }
     var cameraError by remember { mutableStateOf<String?>(null) }
     // 解码器"跑起来之后"坏了（analyzer 收到 ML Kit 的失败回调）：相机这条先停用，
-    // scanner 还在，所以相册识别仍然承诺得起
+    // scanner 还在，所以相册识别仍然承诺得起。
+    // ⚠️ 这一颗以前只关不开（T59①）：两条失败出口都只写 false、没有任何一处写回 true，
+    // 于是一帧瞬时失败就把相机扫码判死到整页结束。现在它的取值由 [ScanRecoveryPolicy]
+    // 的内核决定（连错几帧才停用、停用几轮才算没救、回到前台给不给再试），
+    // 写在下面 [QrCodeAnalyzer] 推进来的回调里 —— 停用期间故意不 unbind：帧必须继续到达，
+    // 内核才有"窗口过完"这个观测量，也才分得清"解码器在坏"和"相机根本没送帧"。
     var scannerWorking by remember { mutableStateOf(true) }
+    // 重试绑定这一档的令牌（T59②）。它不进 LaunchedEffect 的键表 —— 那颗 effect 的键串
+    // 被 ScanUiStatusTest ⑥ 按字面钉着（"LaunchedEffect(granted, provider, scannerWorking, analyzer)"），
+    // 所以令牌改藏在 analyzer 的**同一性**里：+1 就换一颗 analyzer，那颗 effect 照旧重跑。
+    var bindGeneration by remember { mutableIntStateOf(0) }
     // 解码器"根本不在包里"（T24）：探针**已判定**不可用才 true —— 未判定不是不可用，
     // 那样会把 arm64 上预热还没跑到那一档的窗口变成一帧降级页。
     // 这一档比 scannerWorking 更彻底：相册识别用的是同一个 scanner，所以它一起没。
@@ -183,9 +195,15 @@ fun SpocScanScreen(
         onDispose { scanner?.close() }
     }
 
-    val analyzer = remember(scanner) {
+    val analyzer = remember(scanner, bindGeneration) {
         scanner?.let {
-            QrCodeAnalyzer(it, onCode = { text -> viewModel.signIn(text) }, onFailure = { scannerWorking = false })
+            QrCodeAnalyzer(
+                it,
+                onCode = { text -> viewModel.signIn(text) },
+                // ① 双向：内核说停就停、说活就活。旧写法这颗回调只写 false，
+                // 一次抖动就把相机扫码判死到整页结束（用户报的「扫码没反应」第二条）
+                onWorkingChanged = { working -> scannerWorking = working },
+            )
         }
     }
 
@@ -238,27 +256,75 @@ fun SpocScanScreen(
         if (barhopperNativeLib.awaitDecided() != NativeLibVerdict.Available) return@LaunchedEffect
         val cameraProvider = provider ?: return@LaunchedEffect
         val activeAnalyzer = analyzer ?: return@LaunchedEffect
+        // 停用中故意**不解绑**（也不绑）：帧还得继续到达，内核才有"窗口过完"这个观测量。
+        // 这一句排在 unbindAll 之前不是随手写的，排到后面去就把 T59① 唯一的自动活路掐了。
         if (!granted || !scannerWorking) return@LaunchedEffect
         // unbindAll 必须先于 bind：重复绑定同一个 Preview 会抛 IllegalArgumentException
         cameraProvider.unbindAll()
-        runCatching {
-            val preview = Preview.Builder().build().apply {
-                setSurfaceProvider(previewView.surfaceProvider)
+        // ② 绑定失败过去是"这一页到此为止"：`cameraError` 不是这颗 effect 的键，抛一次之后
+        // 没有任何东西会再跑一次绑定，用户只能退出重进。现在就地重试，次数（3）、退避
+        // （400ms/800ms）、哪一类失败才配重试都由 [ScanRecoveryPolicy] 判 —— 有界，
+        // 而"这台设备根本没有后置摄像头"那一档一次都不许多试（重试治不好它）。
+        var attempt = 1
+        while (true) {
+            val bound = runCatching {
+                val preview = Preview.Builder().build().apply {
+                    setSurfaceProvider(previewView.surfaceProvider)
+                }
+                val analysis = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setTargetRotation(targetRotation)
+                    .build()
+                    .apply { setAnalyzer(analysisExecutor, activeAnalyzer) }
+                cameraProvider.bindToLifecycle(
+                    lifecycleOwner,
+                    CameraSelector.Builder().requireLensFacing(CameraSelector.LENS_FACING_BACK).build(),
+                    preview,
+                    analysis,
+                )
             }
-            val analysis = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setTargetRotation(targetRotation)
-                .build()
-                .apply { setAnalyzer(analysisExecutor, activeAnalyzer) }
-            cameraProvider.bindToLifecycle(
-                lifecycleOwner,
-                CameraSelector.Builder().requireLensFacing(CameraSelector.LENS_FACING_BACK).build(),
-                preview,
-                analysis,
-            )
-        }.onFailure {
-            // 没有后置摄像头（平板/模拟器）：这一页只剩相册一条路，不算错误
-            cameraError = it.message
+            if (bound.isSuccess) {
+                activeAnalyzer.markBindStarted(SystemClock.elapsedRealtime())
+                // 绑上了就要把上一轮的旧错收回去：cameraError 不清的话文案永远停在
+                // "相机不可用"，而它已经不成立 —— 重试机制也就白做了
+                if (cameraError != null) cameraError = null
+                break
+            }
+            val error = bound.exceptionOrNull()
+            // runCatching 会把协程取消也一并接住：那一档必须原样抛出去，不然这颗 effect
+            // 被键表换页掐掉之后还会接着写 cameraError（仓库口径见 lint 的 SwiftCancellationException）
+            if (error is CancellationException) throw error
+            val reason = error?.message?.takeIf { it.isNotBlank() } ?: error?.javaClass?.simpleName ?: "未知失败"
+            val kind = classifyCameraBindFailure(reason)
+            if (!cameraBindRetryAllowed(attempt, kind)) {
+                cameraError = reason
+                Log.w(
+                    TAG,
+                    "相机绑定失败，第 $attempt 次之后不再重试（判类 $kind，上限 $MaxCameraBindAttempts）：$reason" +
+                        " —— 这一页只剩相册一条路",
+                )
+                break
+            }
+            Log.w(TAG, "相机绑定失败第 $attempt 次（判类 $kind），${cameraBindBackoffMillis(attempt)}ms 后重试：$reason")
+            delay(cameraBindBackoffMillis(attempt))
+            attempt++
+        }
+    }
+
+    // ①② 回到前台 = 有界地再给一次机会（额度在 [healthAfterPageVisible]，2 次）。
+    // 这一档盖的是"帧一帧都不到"的那种坏：按帧的判据在这种情况下永远推不动自己。
+    // 权限弹框回来也走这里（它本来就是一次 ON_RESUME），所以放行之后一定会有人再试一次绑定。
+    LaunchedEffect(permissionResumeTick) {
+        if (permissionResumeTick == 0) return@LaunchedEffect
+        val working = analyzer?.recoverOnPageVisible() ?: true
+        scannerWorking = working
+        // 绑定那一档的旧错也一起给一次重试：键表被形状守卫钉着（见 bindGeneration 的注释），
+        // 所以换 analyzer 来驱动重绑，而不是往键表里塞新东西
+        val bindErrorToRetry = cameraError?.startsWith(GalleryUnreadablePrefix) == false
+        if (bindErrorToRetry) {
+            Log.i(TAG, "回到前台：重试相机绑定（上一次的失败原因是「$cameraError」）")
+            cameraError = null
+            bindGeneration++
         }
     }
 
@@ -503,11 +569,21 @@ private val analysisExecutor = Executors.newSingleThreadExecutor()
  * 而正常取景时（还没扫到码）本来就在按帧解码，两者是同一份账 —— 何况旧写法省下的那份开销
  * 换来的是整页失效。按帧的节奏仍由 `STRATEGY_KEEP_ONLY_LATEST` + 单线程 executor 压着，
  * 同一时刻最多一帧在 ML Kit 手里。
+ *
+ * 上面那句"在解码之后才拦"只说提交闸门。解码器自己坏了那一档（[health]）走的是**入口拦**：
+ * 停用窗口里的帧直接 close、一次也不喂给解码器 —— 但分析流**故意不 unbind**。
+ * 这是 T59① 的一条要紧取舍：unbindAll 会掐断帧流，而"窗口过完没有"这件事的唯一观测量
+ * 就是到达的帧数；掐了帧流就等于把这一档唯一的自动活路也掐掉，剩下只有退出重进那一条
+ * （旧写法犯的正是这个错：它把"停用"说成永久，却什么证据都不留）。
  */
 private class QrCodeAnalyzer(
     private val scanner: BarcodeScanner,
     private val onCode: (String) -> Unit,
-    private val onFailure: () -> Unit,
+    /**
+     * 解码这一档"还活着吗"推进来（T59①）。旧写法这颗回调只写 false，所以一帧抖动就把
+     * 相机扫码判死到整页结束；现在取值由 [ScanRecoveryPolicy] 的内核判，两边都会写。
+     */
+    private val onWorkingChanged: (Boolean) -> Unit,
 ) : ImageAnalysis.Analyzer {
 
     /**
@@ -519,6 +595,55 @@ private class QrCodeAnalyzer(
 
     /** 屏幕上是否挂着等用户按的结果卡（`Failed` / `Signed`），由组合侧推进来，见 [markAwaitingUserAction] */
     @Volatile private var awaitingUserAction = false
+
+    /**
+     * 解码器的健康度（T59①）：写它的是分析流/ML Kit 那几颗线程，读它的是主线程
+     * （回到前台那一颗 effect 问它还能不能给机会）。整枚换引用，理由同 [handled]。
+     */
+    @Volatile private var health = ScanDecoderHealth()
+
+    /**
+     * 到达过分析器的帧数：既是内核算停用窗口的时间轴，也是⑤「帧确实到过」的那份证据本体。
+     * Long 自增 + 只在跨越阈值时说话 ⇒ 按帧零分配。
+     */
+    @Volatile private var frameCount = 0L
+
+    /** 绑定完成的时刻（`elapsedRealtime`），0 = 还没绑上。主线程写、分析线程读 */
+    @Volatile private var bindElapsedMillis = 0L
+
+    /** 绑定成功后调一次：健康度那几行取证要报"这是绑定后第多少毫秒发生的事" */
+    fun markBindStarted(elapsedRealtimeMillis: Long) {
+        bindElapsedMillis = elapsedRealtimeMillis
+    }
+
+    /**
+     * 回到前台（ON_RESUME）：还配不给一次新的机会，额度在 [healthAfterPageVisible] 里判。
+     *
+     * 这一档盖的是"帧一帧都不到"的那种坏（切后台再回来、相机被别家占过）——
+     * 那种时候任何按帧的判据都推不动自己，没有这条路就只剩退出重进。
+     *
+     * @return 相机扫码这一档现在是否可用（调用点照它写 `scannerWorking`）
+     */
+    fun recoverOnPageVisible(): Boolean {
+        val next = healthAfterPageVisible(health)
+        if (next === health) {
+            // 额度用完了也留一行：否则"回来过"和"没回来过"在读证据时一模一样
+            if (!scannerWorkingOf(health)) {
+                Log.w(
+                    TAG,
+                    "回到前台但不再给解码器机会（额度 " +
+                        "${health.pageVisibleRecoveries}/$MaxPageVisibleRecoveries 已用完，已收 $frameCount 帧）：" +
+                        health.giveUpReason ?: "停用窗口内",
+                )
+            }
+            return scannerWorkingOf(health)
+        }
+        health = next
+        val working = scannerWorkingOf(next)
+        Log.i(TAG, "回到前台：给解码器第 ${next.pageVisibleRecoveries}/$MaxPageVisibleRecoveries 次机会（已收 $frameCount 帧）")
+        onWorkingChanged(working)
+        return working
+    }
 
     /** 回到待扫状态：整枚闸门清掉，连同一张码也重新允许（「重新扫码 / 继续扫码」那一颗按钮） */
     fun resume() {
@@ -540,6 +665,14 @@ private class QrCodeAnalyzer(
     // 必须是 androidx 那个 @OptIn —— lint 的 UnsafeOptInUsageError 只认它，kotlin.OptIn 压不住
     @androidx.annotation.OptIn(markerClass = [androidx.camera.core.ExperimentalGetImage::class])
     override fun analyze(image: ImageProxy) {
+        // ⑤① 同一个计数器干两件事：给内核当时间轴，兼当"帧到过"的证据。
+        // 停用窗口里帧**照旧到达**（分析流不 unbind，只是不再喂解码器）—— 这正是
+        // [decoderFrameAction] 能算出"窗口过完了"的前提。
+        val frame = ++frameCount
+        if (decoderFrameAction(health, frame) == DecoderFrameAction.Skip) {
+            image.close()
+            return
+        }
         val mediaImage = image.image
         if (mediaImage == null) {
             image.close()
@@ -552,6 +685,9 @@ private class QrCodeAnalyzer(
             // 「这台设备用不了相机扫码」而永久关掉整页的扫码能力。
             scanner.process(InputImage.fromMediaImage(mediaImage, image.imageInfo.rotationDegrees))
                 .addOnSuccessListener { codes ->
+                    // 任务正常返回本身就是"这颗解码器还能用"的证据：先记健康度的账，
+                    // 再管这一帧解出了什么（解不出东西是常态，不该改判据）
+                    noteDecodeSucceeded()
                     codes.firstOrNull()?.rawValue?.let { raw ->
                         // 墙钟在调用点读、判据是纯函数（仓库口径）
                         val now = System.currentTimeMillis()
@@ -568,9 +704,11 @@ private class QrCodeAnalyzer(
                     // 但连 MLKit 都报错时继续按帧重试只是白耗电，交给界面提示换入口。
                     // 留痕用 [DecodeFailurePayload] 占位（这次解码没有原文可记），并把闸门按在
                     // "只认新码"这一档：与旧 consumed 的口径一致，只是不再排斥以后真解出来的码。
+                    // ⚠️ 这个词的零命中由形状守卫盯着（ScanSubmissionGateTest ⑨）：
+                    // 布尔死锁不许从任何一头复活，所以这里只记账、不再写那颗布尔。
                     handled = ScanHandled(DecodeFailurePayload, System.currentTimeMillis())
                     awaitingUserAction = true
-                    onFailure()
+                    noteDecodeFailed(frame)
                 }
                 .addOnCompleteListener { image.close() }
         } catch (e: Throwable) {
@@ -583,8 +721,52 @@ private class QrCodeAnalyzer(
             image.close()
             handled = ScanHandled(DecodeFailurePayload, System.currentTimeMillis())
             awaitingUserAction = true
-            onFailure()
+            noteDecodeFailed(frame)
         }
+    }
+
+    /**
+     * 一次解码失败的记账（①）。判据全在 [healthAfterDecodeFailure]，这里只做两件事：
+     * 换引用、以及在档位真的翻面时留一行说得出原因的日志。
+     *
+     * 取时一律用 `elapsedRealtime`：分析器里读墙钟的口子被钉死成三处
+     * （[ScanSubmissionGateTest] ⑨），那三处要的是提交闸门的账，不是这一档的。
+     */
+    private fun noteDecodeFailed(frame: Long) {
+        val wasWorking = scannerWorkingOf(health)
+        val next = healthAfterDecodeFailure(health, frame)
+        if (next === health) return
+        health = next
+        val working = scannerWorkingOf(next)
+        if (working != wasWorking || next.giveUpReason != null) {
+            Log.w(
+                TAG,
+                "相机扫码这一档" + (if (working) "恢复" else "停用") + "：连错 ${next.consecutiveFailures} 帧" +
+                    "（阈值 $ConsecutiveDecodeFailureLimit）/ 自动试回 ${next.suspensionCycles}" +
+                    "/$MaxDecodeSuspensionCycles 轮 / 已收 $frame 帧 / 绑定后 ${sinceBindMillis()}ms" +
+                    " / 原因 ${next.giveUpReason ?: "停用窗口 ${suspendWindowFrames(next.suspensionCycles)} 帧后放一帧去探"}",
+            )
+        }
+        onWorkingChanged(working)
+    }
+
+    /** 一次正常返回：解码器自证还能用，停用与轮数一起清零（要不要换引用也是内核判） */
+    private fun noteDecodeSucceeded() {
+        val wasWorking = scannerWorkingOf(health)
+        val next = healthAfterDecodeSuccess(health)
+        if (next === health) return
+        health = next
+        val working = scannerWorkingOf(next)
+        if (!wasWorking && working) {
+            // 这一行就是 T59① 的正面证据：以前这一档是从回不去的
+            Log.i(TAG, "相机扫码从停用里自己回来了（已收 $frameCount 帧，绑定后 ${sinceBindMillis()}ms）")
+        }
+        onWorkingChanged(working)
+    }
+
+    private fun sinceBindMillis(): Long {
+        val at = bindElapsedMillis
+        return if (at > 0L) SystemClock.elapsedRealtime() - at else -1L
     }
 }
 
