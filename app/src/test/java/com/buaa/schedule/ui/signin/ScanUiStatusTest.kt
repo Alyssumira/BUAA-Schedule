@@ -309,6 +309,30 @@ class ScanUiStatusTest {
         )
     }
 
+    /**
+     * ⑨ T65① 「有码但解不开」两档的措辞：各有专属的话、都只给做得到的动作。
+     *
+     * 判档在帧质量内核（[frameCodeRung]），这里钉的是话术的四条纪律：
+     * 读到的/没看见两档禁声（后者按帧闪的提示只是噪音）；两档的话不许说成同一句
+     * （太小与没解开是两种下一步）；不许指向已经不存在的硬件（本页没有补光手段，
+     * 「照亮/打灯」那类话从这一卡起是谎话）；不许承诺时间、不许指使去设置。
+     */
+    @Test
+    fun frameAidRungsSpeakTheirOwnSentences() {
+        val tooSmall = requireNotNull(scanFrameAidText(FrameCodeRung.CodeTooSmall))
+        val undecodable = requireNotNull(scanFrameAidText(FrameCodeRung.CodeUndecodable))
+        assertNull("读到码那一档不许再催：", scanFrameAidText(FrameCodeRung.CodeReadable))
+        assertNull("什么都没看见那一档由取景框回答，提示条禁声：", scanFrameAidText(FrameCodeRung.NothingDetected))
+        assertNotEquals("太小与解不开说成了同一句话，分档等于没分", tooSmall, undecodable)
+        assertTrue("太小那一档没给下一步（走近/对准正中是用户做得到的）：$tooSmall", tooSmall.contains("走近一点"))
+        assertTrue("解不开那一档没给下一步（拿稳是焦点问题的正解）：$undecodable", undecodable.contains("拿稳"))
+        for (aid in listOf(tooSmall, undecodable)) {
+            for (banned in listOf("手电", "补光", "照亮", "闪光", "灯", "手输", "设置", "秒")) {
+                assertFalse("取景提示指向了不存在的硬件/入口/承诺（$banned）：$aid", aid.contains(banned))
+            }
+        }
+    }
+
     // ---- 源码核对工具（与 ColdStartRebuildWiringTest 同一套手法）----
 
     private fun readMainSource(relativeFromJava: String): String {

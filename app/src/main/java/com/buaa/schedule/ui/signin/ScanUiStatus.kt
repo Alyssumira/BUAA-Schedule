@@ -122,3 +122,26 @@ internal fun scanCameraLive(
     cameraError: String?,
 ): Boolean =
     scannerAvailable && analyzerReady && cameraProviderReady && granted && !scannerGiveUp && cameraError == null
+
+/**
+ * T65① 新增：「画面里有码、但还没解开」两档的提示措辞，唯一来源。
+ *
+ * 与 [scanUiStatus] 的分工：那颗说**结构性**降级（哪条路没了、没权限、绑定失败），
+ * 这一颗说**当前取景**的可救处境（帧里有一枚候选码却没解开，是太小还是没解开）。
+ * 调用点排他使用：提示条已经由 [scanUiStatus] 说话时这一颗禁声（结构性降级面前
+ * 讲"走近一点"是让人对着死相机凑距离）。档位判据在 [frameCodeRung]（帧质量内核），
+ * 这里只负责话怎么说 —— 页面扣不住任何一份措辞字面量，`ScanUiStatusTest` ⑤ 盯着。
+ *
+ * 措辞纪律：两档都得给出用户下一步真做得到的动作（凑近 / 拿稳对住），不承诺时间、
+ * 不指使去设置、不提任何不存在的硬件（本页已无补光手段，「照亮」那类话从这里起不许出现）。
+ *
+ * @param rung 已过滞后的屏上观测档位（[ScanAssistState.shownRung] 的取值）
+ * @return null = 这一档不需要说话（读到了码 / 什么都没看见 —— 后者是瞄的问题，
+ *   由取景框本身回答，提示条对着空画面说"没看见"只会按帧闪）
+ */
+internal fun scanFrameAidText(rung: FrameCodeRung): String? = when (rung) {
+    FrameCodeRung.CodeTooSmall -> "看见二维码了，但它小到解不出来：请走近一点，或把码对准取景框正中。"
+    FrameCodeRung.CodeUndecodable -> "看见二维码了，但一时解不开：请拿稳对准它，或换一张更清晰的码。"
+    FrameCodeRung.CodeReadable -> null
+    FrameCodeRung.NothingDetected -> null
+}
