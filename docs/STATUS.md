@@ -4,7 +4,9 @@
 > "哪些已经落地、哪些还没做、哪些明确不做"的贡献者，所以条目按开发顺序而不是使用顺序排。
 > 带 ⚠️ 的条目有平台限制或使用前提。
 >
-> 最后整理：2026-09-22（学分显示补全 + 体育课显示体育项目 T58；同日往前是学期统计页
+> 最后整理：2026-09-22（扫码「没反应」第二轮 T59/T59b——查到底是**装机版本停在 T44 之前**、
+> 而更新链按 versionName 比所以永远不会提示；仓库侧另收两条"只关不开"的开关与三条裸静默支路。
+> 同日往前是学分显示补全 + 体育课显示体育项目 T58、学期统计页
 > 三张增密图 T51/T54、课次卡片进场动画 T52、掉帧自动降档死链修好 T53；
 > 上一轮整理是 2026-09-21 的「去掉手输签到码」入口，T45；
 > v0.1.0 之前的整理见对应条目）。
@@ -120,9 +122,10 @@
       旧的备份 / 分享口令缺这个键照常恢复
 - [x] 智学北航（SPOC）扫码签到：首页加号菜单进，先登录（WebView 走统一身份认证，凭证
       KeyStore 加密落盘）再扫码；**扫到即自动提交**，无确认页，他班的码交服务端判定；
-      相册选图与手输签到码两条兜底；课前提醒可带「扫码签到」按钮（设置 → 通知与提醒）
+      扫码自动提交，无确认页，他班的码交服务端判定；兜底只剩相册选图一条（手输签到码整条入口
+      已由 T45 拆除）；课前提醒可带「扫码签到」按钮（设置 → 通知与提醒）
       ⚠️ 解码库只打进 **arm64-v8a**（换取 +3.70MB 而非 +20.2MB），其余 ABI 与 x86_64
-      模拟器上进这一页会自动降级为相册 + 手输，没有实时取景
+      模拟器上进这一页两条解码路一起没有实时取景，只剩相册识别
       ⚠️ **真机联调未跑过**：老师端二维码的字面内容是唯一没取到证的环节，解析器按三形态
       兼容。偏差与待答问题见 `docs/BUAA_SPOC_SIGNIN_PLAN.md` §11、`docs/KNOWN_ISSUES.md` §11
 - [x] 扫码页「扫码没反应」三条（T44）：三条都是"界面看着活着、链路其实已经停了"。
@@ -147,7 +150,7 @@
       现在 ON_RESUME 撞一次 tick 就重读真权限（口径抄设置页），取 provider 那颗 effect 的键
       也从 `Unit` 换成 `granted`。
       两条判据（`ScanSubmissionGate.kt` / `ScanUiStatus.kt`）零 `android` import、时钟与权限
-      都在调用点读，`ScanSubmissionGateTest`（11 条）+ `ScanUiStatusTest`（8 条）逐支跑；
+      都在调用点读，`ScanSubmissionGateTest`（11 条）+ `ScanUiStatusTest`（当时 8 条，T59b② 起 10 条）逐支跑；
       「置位先于回调」「resume 还连着那颗按钮」「页面没有另算一份口径」这几条 JVM 跑不到的
       按源码形状钉住。门禁：**979 单测 / 125 套件 / 2 跳过 / 0 失败**，lint **0 error / 14 warning**。
       ⚠️ 三条都**没上设备验过**（本卡只有 JVM 单测 + lint），待复验的三件观测：
@@ -157,7 +160,8 @@
 - [x] 去掉「手输签到码」整条入口（T45，2026-09-21）：产品拍板 —— 现实里老师端只有那张
       二维码，**不存在一个可以抄下来的签到码短码**，扫码页那条入口（底部按钮 + 输入弹窗 +
       `showManualInput`/`manualCode` 两枚 state）是按假想需求做的，整条拆除。
-      拆的不只是 UI：`scanUiStatus` 六档降级文案里有三档的出口是手输，逐条改口径 ——
+      拆的不只是 UI：`scanUiStatus` 降级文案里有三档的出口是手输，逐条改口径（当时是**七档**，
+      不是这条早先写的"六档"—— 少算的是 T44 新加的 provider 那一档）——
       scanner 不可用 / provider 缺失两档只指相册，无权限一档留"放行 + 相册"（相册不需要
       相机权限，那条出口仍然成立）；**缺库那一档从此不许指向任何出路** —— 相机与相册共用
       同一颗 scanner，两条一起没，这是以前被手输盖住、现在盖不住的新事实（`BarhopperNativeLibProbeTest`
@@ -615,3 +619,89 @@
       管理页「张强 · 周五 5 · 1 段」缺学分时无悬挂分隔符；临时把大学物理改成 2.5 学分复测
       小数渲染（「2.5学分」）后**已改回 4**。时间轴模式复核仍是三行。
       门禁（顺序合规）：**1171 单测 / 146 套件 / 0 失败 / 0 skipped**，lint **0 error / 14 warning**。
+- [x] 扫码「没反应」第二轮：两条只关不开的开关 + 三条裸静默支路（T59 + T59b，2026-09-22，
+      `1633651`…`6191471`）：**用户第二次报同一条 bug，这一次查到底层不是这一页的代码**。
+      **先说真账**（dex 字符串取证，2026-09-22 01:53 从那台 Redmi 上 `adb pull` 下来的
+      `base.apk`（6,436,048 B，sha256 `ccd0cd31…`）vs 同日 08:42 从干净 master 产的
+      `app-release.apk`）：
+      | 标记串 | 手机上那份 | 最新那份 |
+      |---|---|---|
+      | `手输` | **3 处** | 0 |
+      | `签到码` | 7 | 1 |
+      | `相机服务没把摄像头交给这一页`（T44 那一档） | **0** | 1 |
+      | `相册识别` | 1 | 7 |
+      ⇒ 手机上跑的是 **T44（`e29bd87`，09-21 11:18）之前**的构建，那颗 `consumed` 布尔死闸
+      还在（扫过一次之后每一帧在 `analyze` 入口被丢掉、预览照旧活着 = 字面意义的"没反应"）。
+      **第二层**才是机制：`gradle.properties` 的 `VERSION_NAME` 自 09-16 起一直是 `0.1.1`、
+      `VERSION_CODE=3`，而 `UpdateCheck` 按 `compareVersions(versionName)` 比 —— 那 35 枚提交
+      没进过任何发布渠道，**装机那份永远收不到"有更新"**。所以"还是没反应"不是回归，是分发断了。
+      **本轮仓库侧收口**（判据全在新增的零 import 内核 `ui/signin/ScanRecoveryPolicy.kt`）：
+      ① `scannerWorking` 与 T44 拆掉的 `consumed` 同型：ML Kit 的 `onFailure` 与 `process()`
+      同步抛两条出口都只写 `false`，**全仓没有任何一处写回 `true`** ⇒ 一帧瞬时失败就把相机
+      判死到整页结束，还对用户说"这台设备用不了相机扫码"。现在是按帧推进的健康度
+      （`ScanDecoderHealth`，整枚换引用），三道界都在内核里：连错 `ConsecutiveDecodeFailureLimit=3`
+      帧才停用、停用窗口 `20/40/60` 帧随轮数线性变长、自动试回满 `MaxDecodeSuspensionCycles=3`
+      轮才判死，外加"回到前台再给一次机会"额度 `MaxPageVisibleRecoveries=2`。
+      **用完就是用完**，那一档界面继续显示既有降级文案、不假装还有救。
+      ⚠️ 一条要紧取舍写死在注释里：停用期间**故意不 `unbindAll`** —— 帧必须继续到达，
+      "窗口过完没有"这件事的唯一观测量就是到达的帧数；掐了帧流就等于把这一档唯一的自动活路
+      也掐掉。因此 `analyze()` 里 `val frame = ++frameCount` 必须排在停用判断**之前**（守卫钉着）。
+      ② 绑定失败过去是"这一页到此为止"：`cameraError` 不是那颗 effect 的键，抛一次之后再没
+      有任何东西会重跑绑定。现在有界重试（`MaxCameraBindAttempts=3`、退避 `400ms/800ms`），
+      且 `classifyCameraBindFailure` 按失败原因**原文**分两支 —— "这台设备没有后置摄像头"
+      那一档 `NoBackCamera` **一次都不许多试**（重试治不好它）；`runCatching` 吞掉的
+      `CancellationException` 原样抛出（不然换页之后还会写 `cameraError`）。绑成功要把
+      `cameraError` 收回 null，否则文案永远停在已经不成立的那一句。
+      ③ 三条裸静默支路留痕：相册选图被取消（`uri == null`，以前连一行都没有）、
+      相册识别被解码器状态挡住（以前 `if (a && b && c)` 捏在一起，按钮 `enabled` 只看
+      `scanner`，所以"判定没到手"那一档**点得动、点下去什么都没有** ⇒ 拆出来走
+      `reportGalleryBlocked()`，话与"那张图里没认出二维码"分开）、解出条码却读不出原文
+      （以前 `?.let {}` 吞掉，与"这一帧什么都没看见"在证据上完全同形 ⇒ 只数不弹，
+      `shouldLogValuelessBarcode` 第一次必说、之后每 50 次一次）。
+      另外把三颗会吞动作的按钮（相册识别 / 重新扫码 / 继续扫码）从 `!busy` 换成
+      `enabled = !inFlight`，`inFlight` 从裸 `Boolean` 换成 ViewModel 的单一 `StateFlow`：
+      吞动作是状态机的事，**让用户看见"现在点不动"**才是修"按了没反应"的那一半。
+      ④ 入口接线：`SettingsScreen.onOpenSpocSignIn` 的 `= {}` **默认值摘掉**（T41 那条
+      「学期统计」静默 no-op 就是这么漏出来的），新增 `SpocSignInEntryWiringGuardTest` 6 条
+      钉住路由注册、两处调用点都真传回调、参数不许再有静默默认值，以及「手输 / 输入签到码 /
+      手动输入」连同 `TextField(`/`OutlinedTextField(`/`BasicTextField(`/`TextFieldValue`
+      不许再回到这一页（先 `blankComments` 再匹配 —— T58 红在自己 KDoc 上的教训直接复用）。
+      ⑤ 取证钩子：每次绑定一行「本轮绑定的首帧已到达分析器：第 N 帧」，把「相机没送帧」
+      与「送帧了但解不出/被判停用」分开（没有这一行这两种处境读证据时长得一模一样）。
+      **T59b 是主线程复核抓出来的两处"说得出、做不到"**：
+      ① `firstFrameLogged` 从不复位，而 analyzer 实例的存活期比一次绑定长得多
+      （`remember(scanner, bindGeneration)`；`scannerWorking` 翻回 true 那条自动恢复路径会
+      重跑绑定却不换实例）⇒ 第二次绑定起再也没有首帧行，⑤ 想买的那份区分恰恰买不到。
+      复位点收在 `markBindStarted`（绑定成功必调一次 = 天然的每绑定钩子），
+      `frameCount` **不跟着清**（那是内核算窗口的时间轴）。
+      ② `scannerWorking == false` 有两种病因却共用一句「这台设备用不了相机扫码」——
+      停用窗口（最多 20/40/60 帧、正在自己试回来）被说成设备事实，正是本卡要拆的那类假话的
+      最后一处。内核加 `scannerGiveUp(health)`，`scanUiStatus` 加同名参数把那一档分成
+      建不出来 / 判死 / 暂时三档（暂时那句只说"正在自动重试"，**不承诺时间、不指使去设置**；
+      判死那档字面量一字不动，两处守卫按它扫），`scanCameraLive` 的"活不活"那一乘项从
+      `scannerWorking` 换成 `!scannerGiveUp` ⇒ 停用窗口里取景框不再陪闪 1~3 秒。
+      判据单独用 `onGiveUpChanged` push 进组合，不能"组合期读 health 快照"：判死发生时
+      `scannerWorking` 早已停在 false 不再翻面，不 push 就没人知道换挡了。提示档位 7 → **8 档**。
+      守卫：`ScanRecoveryPolicyTest` 14 条（三档界限 + 同帧二次报错不重复计 +
+      暂时/判死对照表）、`ScanSilentBranchGuardTest` 9 条（按源码形状钉：置位次序、
+      复位点、三处支路、`inFlight` 单一来源、内核文件 `import` 行为 0）、
+      `SpocSignInEntryWiringGuardTest` 6 条。
+      门禁（顺序合规：`assembleRelease` 先行并真产出 `app-release-unsigned.apk`，
+      产物层那三行没跳过）：**1200 单测 / 149 套件 / 0 失败 / 0 skipped**，lint **0 error / 14 warning**
+      （基线 T58 是 1171/146）。
+      ⚠️ **仍未装机验证，且这一页在现有两台设备上开不出来**（别把"合了"读成"验了"）：
+      AVD 那个实例 `CameraX` 起手就报 `IllegalArgumentException: No available camera can be found`
+      （这台镜像此刻根本没有后置摄像头），而更前面的门是首页「扫码签到」走
+      `SpocSession.hasSession()`，AVD 上 SPOC 会话是空的 ⇒ 那一下被送进 `spoc_login`
+      而到不了扫码页；token 由 `KeystoreBlobStore` 封存，**外部播种不进去**。
+      二维码喂不进虚拟场景那条既有结论不变（见 [[buaa-emulator-testing]]）。
+      所以 T44/T45/T59 三代扫码修复**至今没有一次真机回归**，欠的观测仍然是那三件
+      （无效码→重新扫码→换一张要有反应 / `pm revoke` 后放行要翻面 / 造一次 provider 拿不到）。
+      ⚠️ 记一笔新发现的**残余债务**（不属本卡范围，下轮单独拍）：判死之后相机**仍然绑着**、
+      帧照收照丢，这一页剩下的时间里 sensor 一直在转 —— 想省电就得 `unbindAll`，但预览会
+      整个黑掉，那是 UX 决策不是机制决策，别顺手带进别的卡。
+      顺带订正本页三处过期口径：`[x] 智学北航（SPOC）扫码签到` 那两条还在教"相册 + 手输两条兜底"
+      （T45 已整条删掉手输）、T45 那条的"六档降级文案"实为**七档**（少算了 T44 新加的
+      provider 那一档）、T44 那条的 `ScanUiStatusTest`（8 条）现已 10 条。
+      `docs/BUAA_SPOC_SIGNIN_PLAN.md` §计划 里另有三条与代码不符（intent-filter、
+      "扫码成功即 close 分析流"、手输兜底），已在同批改注。
