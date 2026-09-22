@@ -4,9 +4,13 @@
 > "哪些已经落地、哪些还没做、哪些明确不做"的贡献者，所以条目按开发顺序而不是使用顺序排。
 > 带 ⚠️ 的条目有平台限制或使用前提。
 >
-> 最后整理：2026-09-22（扫码「没反应」第二轮 T59/T59b——查到底是**装机版本停在 T44 之前**、
-> 而更新链按 versionName 比所以永远不会提示；仓库侧另收两条"只关不开"的开关与三条裸静默支路。
-> 同日往前是学分显示补全 + 体育课显示体育项目 T58、学期统计页
+> 最后整理：2026-09-22（「节假日没有标注出来」+「时间轴模式显示的文字内容有点少」两条 ——
+> 前者数据侧 T60（三个触发点 + 跨月 + 每一档停法留一行取证），渲染侧另开一卡；
+> 后者 T61/T61b，真账是 45 分钟块的行高预算永远过不去那道 58dp 门，
+> 修完又打回一次，因为预算吃的是 `TextStyle.lineHeight` 那个**名义值**而不是排版真正吐出来的行盒。
+> 同日往前是扫码「没反应」第二轮 T59/T59b（查到底是**装机版本停在 T44 之前**、
+> 而更新链按 versionName 比所以永远不会提示；仓库侧另收两条"只关不开"的开关与三条裸静默支路）、
+> 学分显示补全 + 体育课显示体育项目 T58、学期统计页
 > 三张增密图 T51/T54、课次卡片进场动画 T52、掉帧自动降档死链修好 T53；
 > 上一轮整理是 2026-09-21 的「去掉手输签到码」入口，T45；
 > v0.1.0 之前的整理见对应条目）。
@@ -709,3 +713,62 @@
       provider 那一档）、T44 那条的 `ScanUiStatusTest`（8 条）现已 10 条。
       `docs/BUAA_SPOC_SIGNIN_PLAN.md` §计划 里另有三条与代码不符（intent-filter、
       "扫码成功即 close 分析流"、手输兜底），已在同批改注。
+- [x] 节假日标注·数据链路（T60，2026-09-22，`431f71a`…`724d381`）：用户「节假日没有标注出来」
+      有**两层**，这一卡只管第一层。真账（读代码读出来的，不是猜的）：
+      ① 全应用只有**一个**触发点 —— `HomeScreen` 那个 `LaunchedEffect(Unit)`，而它跑在
+      Cookie 恢复**之前**，于是第一次冷启动必然抓不到；② `BuaaWebSession.fetchTeachingSchedule`
+      在同进程没有教务 WebView 时直接 `return null`，**一条日志都不留** —— 用户那边是"从没标注"，
+      我们这边是"什么都没说过"；③ 该不该重抓的判据埋在 `SpecialDayCache.staleMonths`（读文件系统那一层），
+      JVM 单测完全碰不到；④ 待抓月份写死"本月 + 下月"，**翻到 10 月永远不会去抓 10 月**。
+      收法沿用本仓那条收单硬判据：新增零 import 内核 `ui/SpecialDayRefreshPolicy.kt`
+      （`decideSpecialDayFetch` 答"抓不抓 / 抓哪几个月 / 停在哪一档"，四档 skip 与三档 trigger
+      都在这里，连日志文案 `specialDaySkipLog` 也是纯函数），调用点只递事实
+      （月龄、屏幕上看得见的月份、有没有会话、有没有人在飞）。
+      四个动作：`staleMonths` 删掉换成 `cachedMonthAges`（只报"哪个月有文件、它多少天大"，
+      mtime 在未来夹 0 —— 负数在判据那头与"刚抓的"同形，会让那一整月永远不再补抓）；
+      `BuaaWebSession` 加**单边沿**的 `sessionRetained`（`tryEmit` 收在 `retain()` 最后一行，
+      刻意不做电平：`hasSession()` 仍是唯一真相）⇒ 登录成功后自动补一趟 `SessionReady`；
+      `HomeScreen` 把屏幕上那几个月（浏览周的周一~周日 + 正在看的这一天）喂给
+      `onSpecialDayVisibleMonths` ⇒ `BrowseMonth` 那一档；单飞闸门 `compareAndSet` 在起协程**之前**
+      领，`finally` 只在 `claimed` 时放 ⇒ 一趟没完不再叠第二趟，也不会把别人还在跑的标志误清。
+      每一档停法一行 `Log.i(SpecialDays, …)`（Info 级：HyperOS 把 logcat 截在 Info、
+      release 剥掉 verbose，这条约定见 `buaa-device-and-publish`）。
+      顺手订正一处我自己在卡面上写错的前提：`LaunchedEffect(Unit)` **不是**每进程一次 ——
+      NavHost 每次导航回首页都会重组它，所以它现在是 `PageResume` 那一档，不是"起手一次"。
+      门禁（`assembleRelease` 先行）：**1218 单测 / 151 套件 / 0 失败 / 0 skipped**，
+      lint 0 error / 14 warning（基线 T59b 是 1200/149；新增 12 条表驱动 + 6 条接线守卫）。
+      装机取证（buaa36，`logcat -s SpecialDays`）两档真话都到位：
+      「上一次补抓还在进行中 触发=浏览到新月份」/「无可用教务会话 触发=回首页 待补月份=2026-09/2026-10」
+      —— 后者正是这台 AVD 的处境（没登录教务，抓取这一档在模拟器上永远走不到，
+      跨月与新鲜判据只有单测撑腰）。⚠️ **数据到位之后能不能看见，不属本卡**：全应用只有
+      `WeekView` 日头那一格在消费 `specialDays`，今日页/顶栏/组件一律不认它 —— 那是 T62。
+
+- [x] 时间轴文字密度（T61 + T61b，2026-09-22，`2963653`…`2be5b6b`）：「时间轴模式显示的文字内容
+      有点少」**不是观感问题，是算式问题**：`DesignTokens.dayHeightPerMinute` 是 1.05dp，
+      一节 45 分钟的课只有 47.25dp，而"教室内那一行"门口诀写着 58dp ⇒ **单节课永远没有教室行**，
+      教师、备注同理。原来那三道 `if (blockHeightDp > 38/58…)` 是散在 `DayView` 里的魔法数，
+      每道的判据还各不相同。
+      收法：新增零 import 内核 `ui/home/DayTimelineBlockLines.kt` —— 一张"这个块装得下哪几行"的
+      表（`DayTimelineBlockLine` 带 `pinned` 位：课名必留，其余按序扣容量；**第一次扣不动就置
+      `starved`，后面更短的行不许插队**，否则四行的出现顺序会随节次长度乱跳）；`DayView` 补上
+      第 2 行的教师（`08:00–09:35 · 第1-2节 · 李娜`）、第 3 行的教室（空则老实写「教室未定」，
+      不静默删行）、第 4 行的备注；`dayHeightPerMinute` 1.05 → **1.40**。
+      **T61 我收下之后又打回自己一次**（这一笔值得留着）：① 预算吃的是 `TextStyle.lineHeight`
+      的名义值，而排版真正吐出来的行盒更高 —— 实测 `labelLarge` 19.81dp（名义 20）、
+      `labelMedium` 17.14dp（名义 16）；`lineHeight` 是**下限，不是行盒**。结果 45 分钟块的
+      真余量只剩 0.38dp，而没有任何东西裁它 ⇒ 换 MiSans 那多出来的一行会直接画到板外面。
+      ② 没有第二道裁切。③ 卡面上我给的 `availableWidthDp` 是个没人量的猜测入参，还换来第 15 条
+      lint warning（`ConfigurationScreenWidthHeight`）。
+      T61b 三件一起收：行高改由 `TextMeasurer` **实测**（`getLineBottom(0) - getLineTop(0)` 向上
+      取整再转 dp，采样字符必须是 CJK ——「课」，拉丁字母量不出中文字体的行盒；记档 key 要带上
+      `fontScale` 与 measurer），`.clipToBounds()` 收在竖直 padding **之后**（早于 padding 等于没裁），
+      宽度参数整个删掉。⚠️ 本项目的 ui-text 那份**没有** `rememberTextMeasurer` 可用，
+      得自己 `TextMeasurer(LocalFontFamilyResolver, LocalDensity, LocalLayoutDirection)`。
+      装机（buaa36，9/22 那一块）：三行齐 ——「大学英语读写译(1)」「08:00–09:35 · 第1-2节 · 李娜」
+      「外天楼305」；把系统字号拉到 2.0 复测，行是**往下掉**而不是往外溢（末行底 2017px < 块底 2077px），
+      复量完已把 `font_scale` 放回 1.0。⚠️ 录帧包络量不出 260ms 级动画那条既有结论不变。
+      门禁（顺序合规）：**1233 单测 / 153 套件 / 0 失败 / 0 skipped**，lint 0 error / 14 warning
+      （新增 5 条内核表驱动 + 9 条源码形状守卫；守卫钉住"行集必须走内核、38/58 那两枚魔法数不许回来"、
+      `1.35.dp` 那笔中间账不许被滚回来、内核里不许出现宽度入参）。
+      有意未做：「现在」线那一格的时间胶囊还归共享的 `NowLine` / `NowGlideLine` 管，
+      两处守卫钉着它们，不为这一卡去动。
