@@ -22,12 +22,17 @@ private val TopBarDateFormat = DateTimeFormatter.ofPattern("M月d日 EEEE", Loca
  *
  * 学期读不到（未设置学期 / 开学日期写坏）时退回今天：这一行宁可停在旧口径，
  * 也不该显示一个凭空算出来的日期。
+ *
+ * [browseDate] 是日视图**真正在画的那一天**（已经过 T68 的过期判定，没在浏览就传 null）。
+ * ⚠️ 本枚提交里这个入参还没被函数体读 —— 那是 `HomeScreen` 现状的逐字转录，
+ * 顶栏那一行与 body 那一天各说一天正是 T68 要修的第二处，测试先红一次。
  */
 internal fun topBarDateLabel(
     semesterStart: LocalDate?,
     currentWeek: Int?,
     browseWeek: Int?,
     today: LocalDate,
+    browseDate: LocalDate? = null,
 ): String {
     val browsingWeek = browseWeek?.takeIf { it != currentWeek }
     val monday = if (browsingWeek != null && semesterStart != null) {
