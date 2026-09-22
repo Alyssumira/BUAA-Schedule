@@ -169,4 +169,94 @@ class TopBarDateLabelTest {
             topBarDateLabel(semesterStart, currentWeek = 4, browseWeek = 3, today = today, dateOnScreen = LocalDate.of(2026, 9, 16)),
         )
     }
+
+    // ---- T68b：第一档只认「日视图真的在屏上」的那一天 ----
+
+    /**
+     * 缺陷本体（T68 自己带来的那笔账）：`dateLabel` 只活在 `Crossfade` 的 isWeekTab 那一支，
+     * 也就是**只有周课表页签才渲染这一行** —— 而人在周课表时窄屏上根本没有日视图，
+     * 把 `browseDateOnScreen` 端给第二行就是报一个屏上没有的日子。
+     * 真机 f128bc02：网格里高亮的今天是 9/22 周二，第二行写「9月24日 星期四」。
+     */
+    @Test
+    fun `日视图不在屏上时这一行回到今天`() {
+        assertEquals(
+            "闸关掉（= 窄屏周课表页签）以后第二行不许还写着翻到的那一天：" +
+                "dateOnScreen=2026-09-24 而今天=2026-09-21",
+            "9月21日 星期一",
+            topBarDateLabel(
+                semesterStart, currentWeek = 4, browseWeek = null, today = today,
+                dateOnScreen = today.plusDays(3), dayViewDrawnOnScreen = false,
+            ),
+        )
+        // 同一份输入把闸放行（宽屏并排 / 今日页签）：跟着 body 那一天的那一档一个字都不许漂
+        assertEquals(
+            "9月24日 星期四",
+            topBarDateLabel(
+                semesterStart, currentWeek = 4, browseWeek = null, today = today,
+                dateOnScreen = today.plusDays(3), dayViewDrawnOnScreen = true,
+            ),
+        )
+    }
+
+    /** 闸只管第一档：浏览别的周那一档（T56）与日视图在不在屏上无关，不许被顺手关掉 */
+    @Test
+    fun `闸关掉时浏览别的周那一档照旧赢`() {
+        for (screen in listOf(today, today.plusDays(3))) {
+            assertEquals(
+                "body=$screen、闸关着，第二行仍该说第 3 周的周一",
+                "9月14日 星期一",
+                topBarDateLabel(
+                    semesterStart, currentWeek = 4, browseWeek = 3, today = today,
+                    dateOnScreen = screen, dayViewDrawnOnScreen = false,
+                ),
+            )
+        }
+        // 第 3 周里的那一天：闸开着才认（与上面那档同一判据的另一侧）
+        assertEquals(
+            "9月14日 星期一",
+            topBarDateLabel(
+                semesterStart, currentWeek = 4, browseWeek = 3, today = today,
+                dateOnScreen = LocalDate.of(2026, 9, 16), dayViewDrawnOnScreen = false,
+            ),
+        )
+        assertEquals(
+            "9月16日 星期三",
+            topBarDateLabel(
+                semesterStart, currentWeek = 4, browseWeek = 3, today = today,
+                dateOnScreen = LocalDate.of(2026, 9, 16), dayViewDrawnOnScreen = true,
+            ),
+        )
+    }
+
+    /** 缺省值 = 放行：老的 5 参调用点（含上面 8 档）连一个字符都不漂，闸是加出来的不是换掉的 */
+    @Test
+    fun `不传闸时与显式放行逐字相同`() {
+        for (screen in listOf(today, today.plusDays(1), today.minusDays(1), nextWeekSameSlot)) {
+            assertEquals(
+                "dateOnScreen=$screen",
+                topBarDateLabel(semesterStart, 4, null, today, screen),
+                topBarDateLabel(semesterStart, 4, null, today, screen, dayViewDrawnOnScreen = true),
+            )
+        }
+        // 跟随模式（dateOnScreen 缺省就是今天）关着闸也仍是今天
+        assertEquals(
+            "9月21日 星期一",
+            topBarDateLabel(semesterStart, 4, null, today, today, dayViewDrawnOnScreen = false),
+        )
+    }
+
+    /** 越出第一行那一周 + 闸开着：仍然越出（闸不会把「认不认」这件事反过来） */
+    @Test
+    fun `闸开着也不许把越出那一周的那一天端上来`() {
+        assertEquals(
+            "9月21日 星期一",
+            topBarDateLabel(
+                semesterStart, currentWeek = 4, browseWeek = null, today = today,
+                dateOnScreen = nextWeekSameSlot, dayViewDrawnOnScreen = true,
+            ),
+        )
+    }
+
+    private val nextWeekSameSlot = LocalDate.of(2026, 9, 28) // 第 5 周周一，越出第一行说的那一周
 }

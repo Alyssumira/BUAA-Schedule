@@ -24,6 +24,10 @@ import java.time.LocalDate
  * ⚠️ 只让**日**视图的浏览位置让位。「浏览到哪一**周**」不在本卡范围里：那一维在顶栏第一行
  * 明写着「（浏览）」、并有「跳到本周」这个显式入口，读到的是"我在看第 3 周"而不是"今天在第 3 周"，
  * 不构成谎话；跨午夜把它一起清了反而会让人半夜查下节课时莫名丢回本周。
+ *
+ * T68b 在本文件里补了第二维：[dayViewOnScreen] 回答的是「日视图此刻**在不在屏上**」。
+ * 上面那一份真相讲的是"画哪一天"，讲的是**假如**画出来该画哪天 —— 而周课表页签上它根本没画，
+ * 把同一个值端给只在周页签渲染的顶栏第二行，就成了「写着 9月24日、屏上没有 9月24日」这笔新账。
  */
 
 /**
@@ -63,3 +67,45 @@ internal fun dayViewDate(
  */
 internal fun dayTabHeadline(today: LocalDate, dateOnScreen: LocalDate): String =
     if (dateOnScreen == today) "今日课表" else "课表（浏览）"
+
+/**
+ * 「今日」页签的下标：与 `HomeScreen` 分段控件 `options = listOf("周课表", "今日")` 的次序、
+ * 以及内容区 `when (tab) { 0 -> WeekView ; 1 -> DayView }` 的分支同源。
+ * 由调用点把 `selectedTab` 原样递进来，内核只做比较、不猜语义。
+ */
+internal const val DAY_TAB_INDEX = 1
+
+/**
+ * 日视图此刻**真的画在屏上**吗（T68b）——「顶栏第二行能不能讲 body 那一天」的唯一闸。
+ *
+ * 这笔账是 T68 自己带来的：那一卡把 [dayViewDate] 算出的 `browseDateOnScreen` 喂给四个消费方，
+ * 其中顶栏第二行 `topBarDateLabel(..., dateOnScreen = browseDateOnScreen)` 接错了一档 ——
+ * `dateLabel` 只活在 `Crossfade(targetState = selectedTab == 0)` 的 `isWeekTab` 那一支，
+ * 人在周课表页签时**日视图根本没渲染**，那一行却报日视图翻到的那一天。
+ * 真机装机实测（f128bc02）：网格里高亮的今天是 9/22 周二，第二行写「9月24日 星期四」。
+ * 于是 `OnScreen` 这个名字在这一档是假的：这句文案读的是一个屏上没有的日子。
+ *
+ * 三档输入合起来就是"日视图在不在屏上"这件事的全部：
+ * - [selectedTab] == [DAY_TAB_INDEX]：窄屏的今日页签，日视图就是 body 本身 ⇒ 在屏上；
+ * - [wideSplitLayout]：≥breakpointWide 那一档是「周 | 日」并排，两个页签下日视图都画着 ⇒ 在屏上；
+ *   这一档正是 T68 传 `dateOnScreen` 唯一成立的场合，必须保住。
+ * - [tabDecided]：首帧页签还没定下来时内容区**什么都不画**（`if (!tabDecided) { }`），
+ *   此时 `browseDateOnScreen` 可能是从 saved-state 里恢复出来的旧浏览日，屏上并没有它 ⇒ 不在屏上。
+ *
+ * ⚠️ 页签、宽度、首帧标志这三样全是设备/表现层事实，一律由调用点读出来当参数传进来：
+ * 内核不碰 `LocalConfiguration`（宽度换算留在 HomeScreen 那一行）、不读时钟、
+ * 也不许"返回布尔以后调用点再各判一次 selectedTab"——判据本体只在这里写一遍，
+ * 调用点只负责递参数与消费结论（仓库口径，见 [daySwipeCommit]）。
+ *
+ * ⚠️ 本卡只闸顶栏第二行这一处消费方。`dayTabHeadline`（今日页签那一行）不许走这道闸：
+ * 人在今日页签时那一行本来就在屏上、日视图也本来就在屏上，它是 T68 修对的那一半。
+ */
+internal fun dayViewOnScreen(
+    selectedTab: Int,
+    wideSplitLayout: Boolean,
+    tabDecided: Boolean,
+): Boolean {
+    // 首帧页签未定：内容区是空的，屏上没有任何一份课表可讲
+    if (!tabDecided) return false
+    return selectedTab == DAY_TAB_INDEX || wideSplitLayout
+}

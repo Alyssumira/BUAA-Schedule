@@ -2,7 +2,9 @@ package com.buaa.schedule.ui.home
 
 import java.time.LocalDate
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -15,6 +17,9 @@ import org.junit.Test
  *
  * 全部日期由参数注入：没有时钟、没有 Robolectric、没有 runTest 赌时序。
  * 学期起点 2026-08-31（周一），今天取 2026-09-23（周三，第 4 周）——装机那台机器的日子。
+ *
+ * T68b 在同一个文件里补了第二维（④）：[dayViewOnScreen] 讲的是「日视图此刻在不在屏上」，
+ * 输入换成页签下标 / 是否宽屏并排 / 首帧页签定没定，同样全部由参数注入。
  */
 class DayBrowsePolicyTest {
 
@@ -149,4 +154,73 @@ class DayBrowsePolicyTest {
             ),
         )
     }
+
+    // ─────────────── ④ 日视图到底在不在屏上（T68b，顶栏第二行那一档） ───────────────
+
+    /**
+     * [dayViewOnScreen] 的真值表。三档输入都是 `HomeScreen` 里真存在的事实（页签、
+     * 是否 ≥breakpointWide 并排、首帧页签定没定），全部由参数注入：
+     * 内核不碰 `LocalConfiguration`、不读时钟，与上面几档同一个口径。
+     */
+    @Test
+    fun `日视图在不在屏上 三档输入逐个摆`() {
+        val cases = listOf(
+            // ← 本卡修的就是这一行：窄屏 + 周课表页签 ⇒ 日视图没画，第二行只能讲今天
+            OnScreenCase(weekTab, narrow, decided, expected = false, "窄屏周课表页签"),
+            // ↓ T68 传 dateOnScreen 唯一成立的场合：宽屏「周 | 日」并排，日视图就在右栏
+            OnScreenCase(weekTab, wide, decided, expected = true, "宽屏并排：日视图在右栏"),
+            OnScreenCase(dayTab, narrow, decided, expected = true, "窄屏今日页签：日视图就是 body"),
+            OnScreenCase(dayTab, wide, decided, expected = true, "宽屏今日页签：只剩日视图"),
+            // 首帧页签还没定下来时内容区什么都不画（if (!tabDecided) { }），
+            // 而 browseDateOnScreen 可能已经从 saved-state 里恢复了旧浏览日 ⇒ 屏上没有它
+            OnScreenCase(weekTab, narrow, undecided, expected = false, "未定页签·窄屏"),
+            OnScreenCase(weekTab, wide, undecided, expected = false, "未定页签·宽屏"),
+            OnScreenCase(dayTab, narrow, undecided, expected = false, "未定页签·页签已是今日"),
+            OnScreenCase(dayTab, wide, undecided, expected = false, "未定页签·宽屏·今日"),
+            // 页签值越界（分段控件只有两档，防一手写歪）：只认 wideSplitLayout 那一维
+            OnScreenCase(2, wide, decided, expected = true, "越界页签 + 宽屏并排"),
+            OnScreenCase(2, narrow, decided, expected = false, "越界页签 + 窄屏"),
+        )
+        for (case in cases) {
+            assertEquals(
+                "${case.why}（tab=${case.tab} wide=${case.wide} decided=${case.decided}）",
+                case.expected,
+                dayViewOnScreen(case.tab, case.wide, case.decided),
+            )
+        }
+    }
+
+    /**
+     * 反向钉 T68：宽屏并排那一档日视图**本来就在屏上**，闸必须放行 —— 把它关掉就是
+     * 把 T68 唯一成立的那一档也拆了（第二行改回恒写今天）。
+     * 窄屏今日页签同理放行（那一档 dateLabel 不渲染，但结论必须是对的，
+     * 见 [topBarDateLabel] 的 `dayViewDrawnOnScreen`）。
+     */
+    @Test
+    fun `宽屏并排与今日页签两道都放行`() {
+        assertTrue("宽屏并排时闸必须放行，否则 T68 那一档被本卡顺手拆了",
+            dayViewOnScreen(weekTab, wide, decided))
+        assertTrue("今日页签上日视图就是 body，必须放行", dayViewOnScreen(dayTab, narrow, decided))
+        assertTrue(dayViewOnScreen(dayTab, wide, decided))
+        // 只有"窄屏 + 周课表"这一道关门：本卡修的正是它
+        assertFalse(dayViewOnScreen(weekTab, narrow, decided))
+    }
+
+    // ────────────────────────── 表驱动用的小件 ──────────────────────────
+
+    private val weekTab = 0
+    private val dayTab = DAY_TAB_INDEX
+    private val narrow = false
+    private val wide = true
+    private val decided = true
+    private val undecided = false
+
+    /** 真值表的一行：三档输入 + 期望结论 + 这一行为什么存在 */
+    private class OnScreenCase(
+        val tab: Int,
+        val wide: Boolean,
+        val decided: Boolean,
+        val expected: Boolean,
+        val why: String,
+    )
 }
