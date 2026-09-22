@@ -176,8 +176,15 @@ fun SettingsScreen(
     onOpenCourseManagement: () -> Unit = {},
     /** 通往「学期统计」：学分总数/每周负载这类量以前只存在域层，从没露过面 */
     onOpenStats: () -> Unit = {},
-    /** 通往智学北航的登录/扫码页：签到开关不开账户入口的话，用户看完说明只能回首页找加号 */
-    onOpenSpocSignIn: () -> Unit = {},
+    /**
+     * 通往智学北航的登录/扫码页：签到开关不开账户入口的话，用户看完说明只能回首页找加号。
+     *
+     * ⚠️ 这一颗**不许有 `= {}` 默认值**（T59④ 拆掉的就是它）。这一族回调里其余几颗带着默认值，
+     * 那是"可选入口"的写法；而默认值一旦挂在真入口上，接线被漏掉时编译器不响、界面照旧画得出，
+     * 那一行设置项就永远点不动 —— 本仓的「学期统计」入口静默 no-op（T41）栽的就是这个。
+     * 有守卫钉着：`SpocSignInEntryWiringGuardTest`。
+     */
+    onOpenSpocSignIn: () -> Unit,
     /** 手机端悬浮玻璃底栏是否在本页显示：显示时滚动内容要在底部让位 */
     bottomBarVisible: Boolean = false,
     viewModel: ScheduleViewModel = viewModel(
