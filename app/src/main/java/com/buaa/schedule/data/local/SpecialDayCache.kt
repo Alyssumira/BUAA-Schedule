@@ -17,8 +17,11 @@ import java.time.YearMonth
  */
 object SpecialDayCache {
 
-    /** 缓存超过这么多天就重新抓：教务的调休安排常在月中/次月才公布或改动 */
-    private const val STALE_AFTER_DAYS = 7L
+    /**
+     * 月龄换算基数。**"多大算该重抓"不在这里判** —— 那条判据（连同 7 天这个口径）
+     * 收在纯 JVM 的 `SpecialDayRefreshPolicy.SpecialDayCacheStaleAfterDays` 里，
+     * 本文件只报「哪个月有文件、它有多少天大」这一份设备侧事实（T60）。
+     */
     private const val MILLIS_PER_DAY = 24 * 60 * 60_000L
 
     /** 缓存文件名：`yyyy-MM.json`。用 padStart 而不是 String.format("%02d")，
@@ -55,19 +58,29 @@ object SpecialDayCache {
     }
 
     /**
-     * 需要补抓的月份：没有缓存文件，**或**文件已超过 [STALE_AFTER_DAYS] 天。
+     * 已缓存月份 → **月龄**（天，向上取整：不足一天算一天）。没列出的月份就是没有缓存文件。
      *
-     * 此前只按文件名判定「这个月有没有缓存」，于是本月第一次抓取成功后就永久跳过 ——
-     * 而教务的调休安排往往临近才公布或修改，迟发的标注再也进不来（R5 F-44）。
+     * T60 之前这里直接判「哪些月份该重抓」（`staleMonths`），于是 7 天那条判据也落在这份
+     * 读文件系统的代码里，JVM 单测完全碰不到它 —— "缓存新鲜 / 过期 / 半新半旧"这几档
+     * 从来没有被打过表。现在这里只报事实，判过期在 `SpecialDayRefreshPolicy`。
+     * 口径与旧写法等价：满 7 天向上取整成 7，判据那一头 `<= 7` 仍算新鲜，第 8 天才过期。
+     *
+     * ⚠️ 月龄下限夹 0：mtime 落在未来（设备时钟回摆过、或手工调过时间）时，
+     * 负数在判据那一头与"刚抓的"同形，会让这一整月永远不再补抓。
      */
-    suspend fun staleMonths(context: Context, wanted: Collection<YearMonth>): Set<YearMonth> =
-        withContext(Dispatchers.IO) {
-            val cutoff = System.currentTimeMillis() - STALE_AFTER_DAYS * MILLIS_PER_DAY
-            wanted.filter { month ->
-                val file = file(context, month)
-                !file.exists() || file.lastModified() < cutoff
-            }.toSet()
-        }
+    suspend fun cachedMonthAges(context: Context): Map<YearMonth, Long> = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val files = dir(context).listFiles { f -> f.isFile && f.name.endsWith(".json") }
+            ?: return@withContext emptyMap()
+        files.mapNotNull { f ->
+            // 文件名本身就是月份（`2026-10.json`）。解析不出来的（半截写入、外部塞进来的东西）
+            // 跳过，让那个月按"没有缓存"处理 —— 方向与 loadAll 读到坏文件时一致：补抓一次就好。
+            val month = runCatching { YearMonth.parse(f.name.removeSuffix(".json")) }.getOrNull()
+                ?: return@mapNotNull null
+            val ageMillis = (now - f.lastModified()).coerceAtLeast(0L)
+            month to (ageMillis + MILLIS_PER_DAY - 1) / MILLIS_PER_DAY
+        }.toMap()
+    }
 
     suspend fun clear(context: Context) = withContext(Dispatchers.IO) {
         dir(context).listFiles()?.forEach { it.delete() }
