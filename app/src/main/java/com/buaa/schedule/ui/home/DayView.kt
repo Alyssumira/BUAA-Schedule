@@ -98,6 +98,7 @@ import com.buaa.schedule.core.designsystem.motionSpringFor
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.model.creditLabel
 import com.buaa.schedule.domain.model.joinMeta
 import com.buaa.schedule.domain.model.periodGapMinutesOf
 import com.buaa.schedule.domain.model.periodLabel
@@ -1188,14 +1189,18 @@ private fun hhmm(time: LocalTime): String =
     time.truncatedTo(java.time.temporal.ChronoUnit.MINUTES).toString()
 
 /**
- * 日视图卡片最后一行：节次 · 教师（纯函数，可单测）。
+ * 日视图卡片最后一行：节次 · 教师 · 学分（纯函数，可单测）。
  *
  * 以前是 `append(节次); append(" · $教师")`：教师那一跳无条件带分隔符，
  * 于是没有节次的课这一行以悬空的 " · " 开头（教师是空串时则以它结尾）。
  * 与 [placeTimeLine] 同一条约定，交给 [joinMeta] 一处实现。
+ *
+ * 学分排在教师之后：它是这门课的"分量"注脚，抢在教师前面会把"去哪找谁"这个
+ * 主诉求挤后。没有学分数据时 [creditLabel] 给 null，joinMeta 连分隔符一起丢——
+ * 这一行从不为学分留空槽，也不印「未设置」（缺失与 0 学分的分界见 CourseMetaFormat）。
  */
 internal fun dayCourseMetaLine(course: Course, timeSlots: List<TimeSlot>): String =
-    joinMeta(periodLabelOf(course.periods, timeSlots), course.teacher)
+    joinMeta(periodLabelOf(course.periods, timeSlots), course.teacher, creditLabel(course.credit))
 
 /**
  * 「地点 · 08:00–09:40」一行摘要。地点为空（教务系统没抓到、走读课）时要连分隔符一起丢掉：

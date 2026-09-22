@@ -24,7 +24,9 @@ import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.model.creditLabel
 import com.buaa.schedule.domain.model.joinMeta
+import com.buaa.schedule.domain.model.peProjectOf
 import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.schedule.WeekParser
 
@@ -72,6 +74,14 @@ internal fun CourseDetailSheet(
             DetailRow("教师", course.teacher)
             DetailRow("地点", course.location)
             DetailRow("校区", course.campus)
+            // 学分：null 时**整行缺席**，不走 DetailRow 的「未设置」占位——那占位是给
+            // 教师/地点这种"用户没填"准备的；学分没有是"教务就没给"（手动/文本/ICS 导入
+            // 或字段缺失），写「未设置」会让人以为是数据坏了。0 学分是真值，会照常画出来。
+            creditLabel(course.credit)?.let { DetailRow("学分", it) }
+            // 体育项目：一律从 course.name 判、从 course.name 剥——displayName 是别名优先
+            // （Course.kt:84），用户把别名改成「体育课」项目就被自己的显示层弄丢了。
+            // 非体育课 peProjectOf 返回 null，整行同样不出现。
+            peProjectOf(course.name)?.let { DetailRow("体育项目", it) }
             if (!course.remark.isNullOrBlank()) DetailRow("备注", course.remark)
             Spacer(modifier = Modifier.height(DesignTokens.spaceM))
             Button(

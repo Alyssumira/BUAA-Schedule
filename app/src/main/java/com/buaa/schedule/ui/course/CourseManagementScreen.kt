@@ -73,6 +73,7 @@ import com.buaa.schedule.core.designsystem.motionSpec
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.CourseSaveOptions
 import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.model.creditLabel
 import com.buaa.schedule.domain.model.joinMeta
 import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.model.unwrappedPeriodLabel
@@ -300,6 +301,11 @@ private fun CourseGroupCard(
                             // 别名生效时才提一句原名：管理页得能看出这个别名挂在哪门课上
                             if (group.name != group.displayName) "原名 ${group.name}" else null,
                             fragmentSummary(group.fragments, timeSlots),
+                            // 学分是课程级的（解析器按周合并时整组取同一个最大值，片段间不该分歧），
+                            // 但手动/部分导入的组里确实可能出现"只有某个片段带学分"——
+                            // 取第一个非空片段的就是这门课的学分，全空则 null，
+                            // joinMeta 让整段连同分隔符一起缺席（缺项不占位）。
+                            creditLabel(group.fragments.firstNotNullOfOrNull { it.credit }),
                             "${group.fragments.size} 段",
                         ),
                         // 空串也要滤：只判 null 的话，摘要为空就拼出「 · 5 段」这种悬空分隔符
