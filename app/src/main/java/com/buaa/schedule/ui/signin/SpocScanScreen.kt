@@ -1203,7 +1203,7 @@ private fun applyProjectorZoom(context: android.content.Context, camera: Camera)
     }
     val future = runCatching { camera.cameraControl.setZoomRatio(ratio) }.getOrNull()
     if (future == null) {
-        Log.w(TAG, "setZoomRatio($ratio) 直接抛出（最坏=视场没变）")
+        Log.w(TAG, "缩放设置直接抛出（目标 $ratio×，最坏=视场没变）")
         return
     }
     Log.i(TAG, "投影缩放已下发：请求 $ProjectorZoomRatio×，钳制到 ${ratio}×（这台的区间 ${zoomState?.minZoomRatio}×..${zoomState?.maxZoomRatio}×）")
