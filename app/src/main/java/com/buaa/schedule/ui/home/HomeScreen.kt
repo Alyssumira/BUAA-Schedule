@@ -201,27 +201,48 @@ fun HomeScreen(
         browseWeekState = week ?: -1
     }
     var browseDateEpochDay by rememberSaveable { mutableLongStateOf(-1L) }
+    // 这一笔浏览是**哪一天按下的**：与浏览日成对落盘，跨午夜以后判据靠它把旧浏览日作废。
+    // 只存浏览日、不存按下日，就没有任何输入能区分「今天刚翻的」与「昨天翻的」——
+    // 于是 rememberSaveable（它比进程活得长）把昨天那一屏一直活到今天早上，
+    // 用户读到的就是「凌晨还是显示前一天的课表」（T68）。
+    var browseDateAnchorEpochDay by rememberSaveable { mutableLongStateOf(-1L) }
     val browseDate: LocalDate? =
         if (browseDateEpochDay < 0L) null else LocalDate.ofEpochDay(browseDateEpochDay)
-    fun setBrowseDate(date: LocalDate?) {
+    val browseDateAnchoredOn: LocalDate? =
+        if (browseDateAnchorEpochDay < 0L) null else LocalDate.ofEpochDay(browseDateAnchorEpochDay)
+    fun setBrowseDate(date: LocalDate?, on: LocalDate = today) {
         browseDateEpochDay = date?.toEpochDay() ?: -1L
+        // 两个槽位在同一处写完：绕过去单写浏览日，就会留下一笔永不过期的浏览
+        browseDateAnchorEpochDay = if (date == null) -1L else on.toEpochDay()
     }
+    // 全页唯一一份「body 这一帧画哪一天」：日视图的 date、顶栏第二行、今日页标题、屏上月份
+    // 都读它，不再各自 `browseDate ?: today` 算一遍——各算一遍就是各说一天（T56 那一族的另一半）。
+    val browseDateOnScreen = dayViewDate(today, browseDateAnchoredOn, browseDate)
     // 屏上月份 → 标注补抓（T60）。周视图那一周可以横跨两个自然月，日视图又是单独一个月，
     // 所以是"至多三个"而不是一个。
     // 为什么这件事要界面上报：补抓判据以前只看"本月 + 下月"，用户翻到跨月的那一周
     // （或寒假那一周）时那个月从没进过缓存、也从没被请求过，表头上的「休/班」就一直不出，
     // 而这一档在日志里连一行痕迹都没有。"看得见"本身就是唯一可靠的触发条件。
     // 键必须把浏览状态全列出来：漏 browseWeek 就是翻出跨月的那一周不补抓，
-    // 漏 browseDate 是日视图翻月不补抓（同一颗坑的另一半）。学期没读到时算不出周区间，
+    // 漏 browseDate / browseDateOnScreen 是日视图翻月不补抓（同一颗坑的另一半）——
+    // 报的必须是**真的画在屏上**的那一天，读没过期判据管过的 raw browseDate 会替一个
+    // 界面上根本没有的月份去补抓。学期没读到时算不出周区间，
     // 就只报今天那一个月 —— 与 WeekView 没有 weekStartDate 就不画标注的降级方向一致。
-    val specialDayMonths = remember(state.semester, browseWeek, state.currentWeek, browseDate, today) {
+    val specialDayMonths = remember(
+        state.semester,
+        browseWeek,
+        state.currentWeek,
+        browseDate,
+        browseDateOnScreen,
+        today,
+    ) {
         buildList {
             val span = SemesterWeekDates.spanOf(state.semester, browseWeek ?: state.currentWeek)
             span?.let { (monday, sunday) ->
                 add(java.time.YearMonth.from(monday))
                 add(java.time.YearMonth.from(sunday))
             }
-            add(java.time.YearMonth.from(browseDate ?: today))
+            add(java.time.YearMonth.from(browseDateOnScreen))
         }.distinct()
     }
     LaunchedEffect(specialDayMonths) {
@@ -271,12 +292,14 @@ fun HomeScreen(
         displayWeek = displayWeekNumber,
         currentWeek = state.currentWeek,
     )
-    // 第二行跟第一行同源：浏览别的周时显示那一周的周一，见 TopBarDateLabel.kt。
-    // 键必须把四个入参全列出来——漏掉 browseWeek 就是翻周时日期停在今天（本卡修的就是它），
+    // 第二行跟第一行同源：浏览别的周时显示那一周的周一，日视图真的画着别的那一天时显示那一天，
+    // 见 TopBarDateLabel.kt。
+    // 键必须把五个入参全列出来——漏 browseWeek 就是翻周时日期停在今天（T56 修的就是它），
+    // 漏 browseDateOnScreen 就是顶栏写着今天、body 画着用户翻到的那一天（T68 修的就是它），
     // 漏掉学期/今天则是换学期、跨午夜后仍显示旧日期（T41/T43 同类坑）。
     val semesterStart = state.semester?.startLocalDate
-    val dateLabel = remember(semesterStart, state.currentWeek, browseWeek, today) {
-        topBarDateLabel(semesterStart, state.currentWeek, browseWeek, today)
+    val dateLabel = remember(semesterStart, state.currentWeek, browseWeek, today, browseDateOnScreen) {
+        topBarDateLabel(semesterStart, state.currentWeek, browseWeek, today, browseDateOnScreen)
     }
 
     // 冲突课程 id 集合：周视图/日视图两个分支各算一次（此前是两处重复的 flatMap+toSet），
@@ -438,7 +461,11 @@ fun HomeScreen(
                             }
                         } else {
                             Text(
-                                text = "今日课表",
+                                // 标题与 body 同源：画着别的那一天时不许自称「今日」（T68）。
+                                // 措辞沿用本仓「（浏览）」这一记号，不写具体日期 ——
+                                // 日视图页头紧挨着下面就写着那一天，再摆一遍是以前那张
+                                // 「三个第 N 周 + 两个日期」返工单要治的东西。
+                                text = dayTabHeadline(today, browseDateOnScreen),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurface,
@@ -580,7 +607,7 @@ fun HomeScreen(
                             courses = visibleCourses,
                             semester = state.semester,
                             timeSlots = state.timeSlots,
-                            date = browseDate ?: today,
+                            date = browseDateOnScreen,
                             today = today,
                             onDateChange = { setBrowseDate(it) },
                             onCourseClick = onCourseClick,
@@ -618,7 +645,7 @@ fun HomeScreen(
                                 courses = visibleCourses,
                                 semester = state.semester,
                                 timeSlots = state.timeSlots,
-                                date = browseDate ?: today,
+                                date = browseDateOnScreen,
                                 today = today,
                                 onDateChange = { setBrowseDate(it) },
                                 onCourseClick = onCourseClick,
