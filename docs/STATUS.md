@@ -4,15 +4,17 @@
 > "哪些已经落地、哪些还没做、哪些明确不做"的贡献者，所以条目按开发顺序而不是使用顺序排。
 > 带 ⚠️ 的条目有平台限制或使用前提。
 >
-> 最后整理：2026-09-22（扫码这一族当天连收两卡。**T64** 的真账是 `ImageAnalysis` 从没声明分辨率、
+> 最后整理：2026-09-22（扫码这一族当天连收三卡。**T64** 的真账是 `ImageAnalysis` 从没声明分辨率、
 > 按 CameraX 文档落在 640×480，装机实测改后交付 **1280×960**；**T65** 收 T64 复核点名的三条欠账 ——
 > potential 框分档 + 检测驱动的四档变焦阶梯（含"抬了没用就回滚且本轮不再试"）替掉"每次绑定固定抬 1.5×"
-> 那个错形态、点按对焦**成功档**补上留痕、并按用户决定「不要闪光灯，我们的场景不用」把手电整条撤走。
+> 那个错形态、点按对焦**成功档**补上留痕、并按用户决定「不要闪光灯，我们的场景不用」把手电整条撤走；
+> **T66** 把用户点头"加"的那一半落地：zxing-cpp 以**兜底第二引擎**进包（ML Kit 仍是主力、不逐帧双解、
+> 四道上界节流、两引擎共用一道提交闸门），代价实测 **+741,224 B**。
 > 装机第一次拿到**正解码**（虚拟场景棋盘格被 ML Kit 误检成一枚有原文的码 → 本地判否、零请求），
 > 于是"帧→解码→原文→提交闸门→界面"整条端到端第一次有证据，同时也记下 ML Kit 的误检这笔新账。
 > 同轮推翻两条依赖层事实：ML Kit 的 `setZoomSuggestionOptions` 在 bundled 实现里是**静默 no-op**（已反向钉死）、
-> `enableAllPotentialBarcodes()` 真生效（它就是本卡的量具）。
-> 在跑：T66（zxing-cpp 只当兜底第二引擎）。
+> `enableAllPotentialBarcodes()` 真生效（它就是本族的量具）。
+> 在跑：无（这一族三卡都合了，欠的都在真机那一侧）。
 > 再往前是「节假日没有标注出来」+「时间轴模式显示的文字内容有点少」两条 ——
 > 前者分两层都收了：数据侧 T60（三个触发点 + 跨月 + 每一档停法留一行取证）、渲染侧 T62
 > （今日页页头先量后摆、全称走读屏语义；真账是数据就算到位了也只有一格单字在画它）；
@@ -295,14 +297,15 @@
       `WidgetBackgroundRenderer`；受同样的 Android 14 壁纸限制，该版本上回退纯色圆角底）
 - [ ] 图片 / PDF 导入
 - [ ] 完整个性化外观（壁纸取景 / 横竖屏独立配置；模糊/亮度/缩放/面板磨砂半径已完成）
-- [ ] 扫码第二引擎 zxing-cpp（T66，按用户「加」的点头）：**只当兜底**，在 ML Kit 一帧只回 potential
-      或连续失败时再解一次（`tryHarder` / `tryInvert` 那类免费的多重试是它的强项）；
+- [x] 扫码第二引擎 zxing-cpp（T66，已落地，见上面那条条目）：**只当兜底**，在 ML Kit 连续只回 potential
+      / 解不出原文时再解一次（`tryHarder` / `tryInvert` / `tryDownscale` 那类免费重试是它唯一强过主力的地方）；
       ⚠️ 不许换主力（468 帧私有基准：它反光 79.5% / 糊码 64.1%，差于 ML Kit 的 96.2% / 74.4%）。
-      开工前知道的两件事：包体要按 arm64 单 ABI + `useLegacyPackaging` 口径实测增量报数；
-      该依赖**不在本机 gradle 缓存里**，`--offline` 门禁跑不通，要先联网解析一次。
-- [ ] ML Kit 误检的收口（T65⑤ 装机新发现）：虚拟场景那面**高对比棋盘格**被解成一枚有原文的码并自动提交，
+      实测代价 **+741,224 B**（包 6,494,971 → 7,236,195）。
+- [ ] ML Kit 误检的收口（T65⑤ 装机新发现 + T66 新添的一笔）：虚拟场景那面**高对比棋盘格**被解成一枚有原文的码并自动提交，
       靠 `SpocQrParser` 本地判否才没打成请求。真教室里没有棋盘，但黑板花纹 / 表格线 / 投影摩尔纹同类；
-      要不要在提交前加一道"这枚码的框稳不稳 / 原文像不像 URL"的本地闸门，未定。
+      T66 之后又多一条：**兜底命中时投出去的是兜底的原文**，而提交闸门的冷却只按"同一份原文"算 ⇒
+      兜底误检 + 主力随后解出**不同**原文时会放行第二份。要不要在提交前加一道本地闸门
+      （框稳不稳 / 原文像不像 URL / 同一枚码连续 N 帧复现才提交），未定 = #107。
 - [x] Baseline Profile 接线（T16）：`:app` 与 `:benchmark` 各应用 `androidx.baselineprofile` 1.4.1，
       `:app` 侧补 `baselineProfile(project(":benchmark"))` 与显式 `implementation(libs.androidx.profileinstaller)`。
       这枚插件不是独立产品线，它就是 androidx.benchmark 那次发布里的
@@ -925,3 +928,52 @@
       291 px 阈值没对过一张真实签到码；阶梯在**有**缩放控制的设备上怎么走完全未测（模拟器没有）；
       帧数→秒数按 30fps 估（30/60/12 帧 ≈ 1s/2s/0.5s），实际送帧率未量；
       开了 potential 之后解码率是否变化未测。
+- [x] 第二解码引擎 zxing-cpp 进包（T66，2026-09-22，`6de9944`…`917f774`）：用户那句「加，然后不要闪光灯」里
+      "加"的那一半。**定位是红线不是口味**：ML Kit 仍是主力，zxing-cpp 只在它**连续**报「看见候选码却解不出原文」
+      的帧上补一刀 —— 468 帧私有基准里它反光 79.5% / 糊码 64.1%，两项都低于 ML Kit 的 96.2% / 74.4%，
+      当主力等于拿包体去买更低的识别率；它值回票价的是 `tryHarder` / `tryInvert` / `tryDownscale`
+      这一类 ML Kit 不给我们而它内置免费的重试（`tryDenoise` 故意不开，那是按帧的代价）。
+      **判据内核** `ScanSecondEnginePolicy.kt`（零 import，仓库口径）：`retryableRung` 只认
+      `CodeTooSmall` / `CodeUndecodable` 两档（`NothingDetected` 是瞄不准，双解只是烧电）；
+      四道上界全在一颗 `secondEngineDecision` 里 —— 连击 `SecondEngineStreakFrames=6` 帧才许第一次发火、
+      两次之间隔 `SecondEngineFrameGap=15` 帧、每轮绑定封顶 `SecondEngineMaxFiresPerBind=8` 发、
+      连续 `SecondEngineGiveUpAfterMisses=3` 次空手就本轮不再请它；终局三档排在"有没有必要"之前，
+      否则永远听不到"这一轮为什么不再试了"。`secondEngineStopText` 是四句停法的唯一措辞来源，
+      调用点只在**换挡**时留一行（按帧重复同一句等于把 logcat 冲干净，那种留痕和没有是一回事）。
+      T66 还在 `ScanAssistState` 上另开了一本账 `retryableStreak`：它与 `tooSmallStreak` **只看一处不同** ——
+      不看这台有没有缩放控制（缩放抬不动是相机的事，兜底解不解得开是解码器的事，两本账不许共用一个计数器）。
+      **薄壳** `ZxingCppFallbackDecoder.kt`：探针就是"构造那一下"（`System.loadLibrary` 写在 wrapper 的
+      `init` 块里 ⇒ 构造成功 ≡ 这颗 `.so` 在这台设备上加载得起来），未判定当可用放行、第一次真用现场把
+      结论做出来；`IllegalStateException` / `IllegalArgumentException` 判整颗引擎不可用（帧格式是每绑定
+      都不变的设备事实），其余异常只算这一发失手 —— 拿一次抽风判死一整轮是这一页修过三轮的"把暂时说成永久"。
+      **接线**：补解排在 `scanner.process()` **之前**、跑在分析线程上，吃**截至上一帧为止**的连击
+      （拿不到未来的结论是既定形状不是疏忽：代价最晚晚一帧，换来零拷贝、`image.close()` 时机一个字不动、
+      零跨线程账本）；两条引擎**共用同一道提交闸门**（`submitDecodedText` 从 ML Kit 成功分支里抽出来，
+      一人一份闸门就是两份真相）；兜底坏了**一行都不写进 ML Kit 那本健康度账**（那会把主力判死，
+      是 T59① 刚修完的那类失效从另一头复活）；兜底**故意不进预热**（`.so` 一旦 dlopen 就常驻，不给罕见路径付这个）。
+      **依赖与包体**：`io.github.zxing-cpp:android:3.1.1`（POM 原文 `<name>The Apache License, Version 2.0</name>`，
+      **Apache-2.0 不是 MPL**）。它的 POM 带 camera-core 1.5.2 与 kotlin-stdlib 2.3.20，两条都**必须 exclude**：
+      只把 core 抬上去就是让 1.5.2 的 API 面去接 1.4.2 的 lifecycle 实现体，编译期不红、只在绑定相机时抛。
+      AAR 里四档 .so 合计 6,643,356 B 未压缩 ⇒ 点名裁掉非 arm64 那三档（省 4,896,508 B），
+      清单从"三颗文件名"变成"两颗库 × 三档 = 六颗"，同源由 `BarhopperNativeLibProbeTest` ⑤ 读脚本文本比对钉住。
+      实测 release 包 **7,236,195 B**（改前 6,494,971 ⇒ **+741,224 B**，其中兜底那颗 .so deflated 726,435、
+      余下约 14.8 KB 是 dex），逐条目核过：`lib/arm64-v8a/libzxingcpp_android.so` 全包只此一份、DEFLATED、
+      非 arm64 三档零命中、barhopper 仍只 arm64（4,946,720→2,105,673）、dex 里 `zxingcpp/BarcodeReader`
+      17 命中（AAR 自带 `-keep` 生效，R8 没把兜底静默掉）。
+      **我从字节码独立复核的三条地基**（不采信代理自述）：`BarcodeReader` 整类里 `ImageProxy.close()`
+      **零调用** ⇒ 兜底不碰帧生命周期；`read(ImageProxy)` 的出路只有 `planes[0].buffer` + `rowStride` +
+      `cropRect` + `imageInfo.rotationDegrees` → `readYBuffer(...)` 一条 native 同步调用 ⇒ 零拷贝就地读完
+      成立，且它用的那四个 API 在 camera-core 1.4.2 里都在（exclude 的依据）；`loadLibrary` 在 `<init>` 偏移 72
+      ⇒ "构造即探针"成立。
+      门禁：`assembleRelease` 先行 → **1314 tests / 160 suites / 0 失败 / 0 skipped**（地板 1285/158，
+      +29/+2 = 表驱动 15 条 + 接线守卫 14 条）/ lint **0 error / 14 warning**（家族与地板同一张票）。
+      **装机（合并后的 master、debug 包）**：第二引擎全程**沉默**是这一轮的正观测 —— 5 行取证
+      （provider 重试两行 / 无缩放控制一行 / 首帧 309ms / 交付 1280×960）之外零发火行、零停法行、
+      零按帧刷屏，45 秒后进程健在；虚拟场景给不出"有候选码却解不开"的帧，所以 `retryableStreak` 攒不到 6。
+      有意未做 / 残账：发火节奏、命中/失手/判死/额度四行留痕的实文、`EngineUnusable` 那一档、
+      真码解出、真机 arm64 行为**整档未验**；⚠️ 一条新账 —— 兜底命中时投出去的是**兜底的原文**，
+      而 `shouldSubmitScan` 的冷却只按"同一份原文"算 ⇒ 真机上若兜底误检、ML Kit 随后解出**不同**原文，
+      这道闸门会放行第二份，目前只靠下游 `SpocQrParser` 判否兜底（与 #107 同族）。
+      ⚠️ 这一卡的来历要记一句：第一支代理跑到 150 轮上限被强杀、**一枚提交没落**，全部工作停在未提交盘面里；
+      接手判读后确认**接线其实接完了**，真正欠的是"完整门禁从没跑过 + 产物层从没逐条目核过"
+      （外加一行掐断残留的重复注释、一处把"三颗文件名"写错的构建脚本注释）。
