@@ -318,7 +318,8 @@ internal fun zoomLadderRatio(stepIndex: Int): Float =
  * @param shownRung 已过滞后的**在显示**档位（UI 措辞唯一读者）
  * @param candidateRung 正在计帧的候选档位
  * @param candidateFrames 候选档位已连续站住的帧数
- * @param tooSmallStreak [FrameCodeRung.CodeTooSmall] 的连续帧数（任何其他档清它 —— 阶梯只在「有码且太小」连续成立时走）
+ * @param tooSmallStreak [FrameCodeRung.CodeTooSmall] 的连续帧数（任何其他档、以及「这台没有缩放控制」都清它 ——
+ *                      阶梯只在「有码且太小」连续成立且真抬得动视场时走）
  * @param stepIndex 当前阶梯档位（0 = 基线，[ZoomLadderRatios].size = 顶档）
  * @param rolledBack 本轮是否已回滚过（回滚 = 这一轮绑定不再试缩放，视场是用户的了）
  */
@@ -375,7 +376,8 @@ internal fun advanceScanAssist(
     var rolledBack = state.rolledBack
     var zoomRatio: Float? = null
     var zoomRollback = false
-    val streak = if (rung == FrameCodeRung.CodeTooSmall) state.tooSmallStreak + 1L else 0L
+    // 没有缩放控制时连击都不计（见 KDoc）：计了也永远走不到命令分支，只会在状态里攒假账
+    val streak = if (rung == FrameCodeRung.CodeTooSmall && zoomControlAvailable) state.tooSmallStreak + 1L else 0L
     if (rung == FrameCodeRung.CodeTooSmall && !rolledBack && zoomControlAvailable) {
         if (step < ZoomLadderRatios.size) {
             if (streak >= ZoomStepFrames) {
