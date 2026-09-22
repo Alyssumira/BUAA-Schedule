@@ -5,6 +5,9 @@
 
 ## 已确认接口
 
+> 生产在用的核心几条列在下面；homeapp 全部 69 个 `.do` 的实测状态见后文
+> 「homeapp 全接口清单（2026-09-22 登录态实扫）」。
+
 - 登录：`https://sso.buaa.edu.cn/login`
 - 学期周次：`/jwapp/sys/homeapp/api/home/getTermWeeks.do`
   - 参数：`termCode=2026-2027-1`
@@ -25,6 +28,86 @@
 
 原生网络栈之所以必 401：统一身份认证发的是页面上下文里的会话凭证，脱离 WebView 复刻不出同一套
 Cookie / 跳转链，所以正式导入只在 byxt 页面里发请求。
+
+## homeapp 全接口清单（2026-09-22 登录态实扫）
+
+前端包（`/jwapp/sys/homeapp/home/umi.9f77300f.js`）内嵌 69 个 `.do`，下面按实测状态分类。
+除注明外全部为 `GET`、base 省略 `/jwapp/sys/homeapp/api/home/` 前缀，凭证走页面 Cookie。
+状态口径：✅=实抓到数据；⭕=接口通但返回空（该账号真实如此，不是接口坏）；❌=服务端"系统异常"
+（缺参/该部署未启用）；🚫=404；✍️=写操作或登录辅助，未动。
+
+### 课表核心（生产在用）
+
+| 接口 | 参数 | 状态 | 能拿到的东西 |
+| --- | --- | --- | --- |
+| `student/getMyScheduleDetail.do` | `termCode` `campusCode` `type=week\|term` `week` | ✅ | `arrangedList[]` 每门课：课程号/名/课序号/学分、起止节次+真实时间、`dayOfWeek`、`weeksAndTeachers`、`teachClassId`、`teachingTarget`、`placeName`、`titleDetail`（校区/楼/教室全路径）、`cellDetail`、`color`；另有 `notArrangeList`（未排课）、`practiceList`（实践课）。页面自己发的是 POST form，GET 同样通 |
+| `getTermWeeks.do` | `termCode` | ✅ | 20 周：`startDate/endDate/serialNumber/curWeek` |
+| `student/getSections.do` | `termCode` `campusCode` | ✅ | 14 个节次；**`campusCode` 传空时 `startTime/endTime` 全空**，要真实校区码 |
+| `kb/xnxq.do` | — | ✅ | 全部可选学期 47 个（2009 秋→2028 夏） |
+| `scheduleTip.do` | `termCode` | ✅ | 今日有课提示：`sfhj/tip/today/week0/week1` |
+| `getMyScheduleConfig.do` | — | 🚫 | code=404，该部署未启用 |
+
+### 今日日程（teachingSchedule 三件套，比拉整周课表轻）
+
+| 接口 | 参数 | 状态 | 能拿到的东西 |
+| --- | --- | --- | --- |
+| `teachingSchedule/list.do` | `rq=yyyy-MM-dd` `lxdm=student` | ✅ | 日程分类（上课课程/校历…）+ `days[]` + 启用开关 `sfqy` |
+| `teachingSchedule/detail.do` | 同上 | ✅ | 当日逐条：`bizKey` `bizName` `place` `time`（如 09:50-11:25） |
+| `teachingSchedule/classWeek.do` | `rq` | ✅ | 任意日期的 `classWeek` |
+| `teachingSchedule/display_range.do` | — | ✅ | 可查日期范围 2016-08-29～2028-01-09 |
+| `teachingSchedule/schoolCalendar.do` | — | ✅ | 只回一个 `fileToken`，校历图要再 POST `sys/emapcomponent/file/getUploadedAttachment/<token>.do` 取 |
+
+### 学生数据
+
+| 接口 | 参数 | 状态 | 能拿到的东西 |
+| --- | --- | --- | --- |
+| `currentUser.do` | — | ✅ | 学号、姓名、角色（本科生）、`userType`、当前学期+周次 |
+| `student/courses.do` | `termCode` | ⭕ | 本学期课程列表（新生第一学期为空） |
+| `student/scores.do` | `termCode` | ⭕ | 成绩（空为真实） |
+| `student/exams.do` | `termCode` | ⭕ | 考试安排（空为真实） |
+| `student/schoolCalendars.do` | — | ✅ | 可选学期 3 个 |
+| `student/educational-program.do` | `termCode` | ✅ | 培养方案：`planId/planName/totalCredit/alreadyGainCredit/major` |
+| `student/config.do` | — | ✅ | 功能开关 + **`careerConfig.careerId`**（下面两个接口要用） |
+| `student/academic-career-term.do` | `termCode` `termIndex` `careerId` | ✅ | 学业生涯按学期分组，每学期挂 5 个阶段 |
+| `student/academic-career-matter.do` | 同上 | ✅ | 阶段明细：`fullName/shortName/description/relateApp/times` |
+| `student/applys.do` | `termCode` | ⭕ | 申请事项（datas=null） |
+| `student/checkuser.do` | — | ✅ | ⚠️ **返回注册手机号 `sjh` 和验证状态**，纯登录辅助，别往 App 里带 |
+| `student/academic-status.do`（+2 子接口）、`academic-career-navigation.do` | — | ❌ | 服务端异常；`config.do` 里 `academicStatusEnable:false`，未启用 |
+| `student/sendVerifyCode.do` / `checkVerifyCode.do` | — | ✍️ | 短信验证辅助，未测 |
+
+### 门户/杂项
+
+| 接口 | 参数 | 状态 | 能拿到的东西 |
+| --- | --- | --- | --- |
+| `menus.do` | `userType=student` | ✅ | **全系统地图**：9 大区 30+ 子模块 URL（见下节） |
+| `others/myBusiness.do` | — | ✅ | 17 个常用业务 + 各自 pages |
+| `announcement.do` | `userType=student` | ✅ | 公告列表 + `unreadCount` |
+| `messages_pc.do` | `userType=student` | ⭕ | 站内消息（空） |
+| `ggxxpz.do` | `userType=student` | ✅ | 公告/个人信息/系统消息三个开关 |
+| `commonLink/queryCommonLink.do` | `USERTYPE=student`（大写） | ⭕ | 常用链接（空数组） |
+| `config/global.do` | — | ✅ | `firstDayOfWeek`、`byFlag` 等全局显示配置 |
+| `config/yssz/config.do` | — | ✅ | 门户皮肤/页脚/欢迎语配置（含图片 token） |
+| `logout_url.do` | — | ✅ | 登出跳转 `/sys/yjsrzfwapp/logout/forceLogoutBy.do` |
+| `kb/bynj.do` | — | ✅ | 毕业年级码表 11 项；`kb/kkdw.do` ⭕ 空 |
+| `myApps.do`、`myDashboardSettings.do`、`kb.do`、`confirmSchedule.do`、`scheduleConfirmationSetting.do`、`homeSchoolCalendar.do`、`artificialMessage.do`、`myTodo.do`、`todo/pendingTasks.do`、`todo/completedTasks.do`、`tjyy.do`、`ywjz.do`、`config/wdjxkb`、`kb/bkpc`、`kb/xspjwj` | 各种 | ❌ | 一律"系统异常"，GET/POST 都试过——该部署未启用或参数无法从前端包还原，别再浪费时间 |
+| `todo/apps.do` | — | ⭕ | code=0 空数组 |
+| `saveUserSetting.do`、`changeAppRole.do`、`todo/generate_tododetails.do`、其余 `kb/*` 码表 | — | ✍️ | 写操作/未测 |
+| `teacher/*` 8 个 | — | — | 学生角色不适用 |
+
+### 课表 Excel 导出（FineReport，实测可用）
+
+`GET /jwapp/sys/frReport2/show.do?reportlet=homeapp%2Fxskb_buaa.cpt&format=excel&xnxqdm=<termCode>&campusCode=`
+→ 200，`application/x-excel`，整学期课表 xlsx（实测 6.7KB）。前端包里的导出按钮走的就是它
+（参数名是 `xnxqdm` 不是 `termCode`）。可作为 JSON 链路坏掉时的兜底数据源候选。
+
+### menus.do 里的子模块（各自是独立子应用，未逐个实扫）
+
+`/sys/` 前缀、`*default/index.do#/<页>` 形式：xsjbxxgl 学生基本信息（含学生证申请）、xjxxbg 信息变更、
+xjydyy 学籍异动、syxkapp 实验选课、mtxkbl 免听免修、kbapp 我的课表、wdkwapp 我的考试、hksq 缓考、
+cjzhcxapp 成绩综合查询、jljhglbuaa 交流交换、kctdjrdapp 课程认定、xyjctjapp 个人学业进度、
+xyyj 学业预警、xxzxapp 通知公告、xsfacx 我的培养方案、qxfacx 全校方案查询、kxjas 空闲教室查询、
+jsjy 教室借用、syjxapp 实验报告、cxcyxljhgl 大创、jsxmjlgl 竞赛、zyxzxtbuaa 专业选择志愿、
+kcdgglbuaa 教学大纲。外链：byxk.buaa.edu.cn 学生选课、bykc.buaa.edu.cn 博雅、CNKI 毕设/实习。
 
 ## 智学北航（SPOC）签到链路
 
