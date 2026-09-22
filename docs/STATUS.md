@@ -690,10 +690,14 @@
       产物层那三行没跳过）：**1200 单测 / 149 套件 / 0 失败 / 0 skipped**，lint **0 error / 14 warning**
       （基线 T58 是 1171/146）。
       ⚠️ **仍未装机验证，且这一页在现有两台设备上开不出来**（别把"合了"读成"验了"）：
-      AVD 那个实例 `CameraX` 起手就报 `IllegalArgumentException: No available camera can be found`
-      （这台镜像此刻根本没有后置摄像头），而更前面的门是首页「扫码签到」走
-      `SpocSession.hasSession()`，AVD 上 SPOC 会话是空的 ⇒ 那一下被送进 `spoc_login`
-      而到不了扫码页；token 由 `KeystoreBlobStore` 封存，**外部播种不进去**。
+      门只有一道 —— 首页「扫码签到」走 `SpocSession.hasSession()`，AVD 上 SPOC 会话是空的
+      ⇒ 那一下被送进 `spoc_login` 而到不了扫码页；token 由 `KeystoreBlobStore` 封存，
+      **外部播种不进去**，也没有 scheme 深链可绕（intent-filter 从未开）。
+      （本卡一度把这归结为"这台镜像没有后置摄像头"，**量错了改回来**：`dumpsys media.camera`
+      数到 `Number of camera devices: 1` / `Device 10 … Facing: Back`，起手那三行
+      `CameraValidator$CameraIdListIncorrectException: Expected camera missing from device`
+      是 CameraX 在模拟器上的已知 quirk，它自己 `Retry init`；这一页 09-18 起就是在这台 AVD 上
+      跑通过 80 秒实时取景的。⇒ 摄像头这条**不是**阻塞项，别再去修它。）
       二维码喂不进虚拟场景那条既有结论不变（见 [[buaa-emulator-testing]]）。
       所以 T44/T45/T59 三代扫码修复**至今没有一次真机回归**，欠的观测仍然是那三件
       （无效码→重新扫码→换一张要有反应 / `pm revoke` 后放行要翻面 / 造一次 provider 拿不到）。
