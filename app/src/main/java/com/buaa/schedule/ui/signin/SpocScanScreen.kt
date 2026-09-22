@@ -244,6 +244,9 @@ fun SpocScanScreen(
                 // setZoomRatio 会拿 OperationCanceledException 掐掉前一发 pending future；
                 // 阶梯最小间隔 [ZoomStepFrames] 帧已经保证不刷屏，下发与取证在 applyScanAssistZoom。
                 onZoomCommand = { targetRatio, rollback -> applyScanAssistZoom(context, boundCamera, targetRatio, rollback) },
+                // T66：第二引擎取进程内那一份（[zxingCppFallback]）。显式写出来而不是吃默认值：
+                // 它是这一页的**第二条**解码路，接线必须能在这一处被读到（守卫也钉这一处）。
+                secondEngine = zxingCppFallback,
             )
         }
     }
@@ -810,6 +813,15 @@ private class QrCodeAnalyzer(
      * 钳制、下发、取证都在那里，本类不碰 CameraControl。
      */
     private val onZoomCommand: (targetRatio: Float, rollback: Boolean) -> Unit,
+    /**
+     * T66：第二引擎（zxing-cpp 兜底解码器）。
+     *
+     * 本类只通过 [ZxingCppFallbackDecoder] 那三个口子看它（可用档 / 就地解一帧 / 最近一次失败
+     * 原文），**什么时候叫它、叫几次、什么时候不再叫**全在 [secondEngineDecision] 那一颗纯判据里。
+     * 主力仍是 ML Kit：这一颗只在 ML Kit 连续报「看见了候选码却没解出原文」的帧上补一刀，
+     * 定位与代价的账写在 [ScanSecondEnginePolicy] 的文件注释里。
+     */
+    private val secondEngine: ZxingCppFallbackDecoder,
 ) : ImageAnalysis.Analyzer {
 
     /**
@@ -893,15 +905,37 @@ private class QrCodeAnalyzer(
     @Volatile var zoomControlAvailable = false
 
     /**
+     * T66：第二引擎的补解账本（发过几次 / 连续几次没解出 / 上一次是第几帧）。
+     *
+     * ⚠️ **不加 `@Volatile`、也不整枚跨线程换**是刻意的：这一枚只由分析流那一颗 executor 读写
+     * （发火在 [trySecondEngine]、记账在同一条路上），与 [assist]（ML Kit 回调线程写、这里读）
+     * 不是一个线程模型。挪成两个写者就会让「本轮第几次」与「连续第几次失手」各说各话 ——
+     * 要挪线程，先把它换成 `@Volatile` 整枚引用并把这条注释改掉。
+     */
+    private var secondEngineLedger = SecondEngineLedger()
+
+    /**
+     * 上一条已经报过的「停法」（[secondEngineStopText] 那四档之一）。
+     *
+     * 存在的唯一理由：这一页的病名叫静默 no-op，而治它的代价不能是把 logcat 冲干净。
+     * 判据给出的停法每帧都给同一句 ⇒ 只在**换档**时留一行；复位点在 [markBindStarted]
+     * （新绑定 = 新的视场与新的额度，上一轮为什么闭嘴对不上这一轮的画面）。
+     */
+    private var secondEngineStopReported: SecondEngineDecision? = null
+
+    /**
      * 绑定成功后调一次：健康度那几行取证要报"这是绑定后第多少毫秒发生的事"。
-     * 顺带把首帧标志、交付尺寸标志与帧观测账本一起复位（T59b① / T64② / T65①②）——
-     * 每一轮绑定都该重新报一次"首帧已到达"和"交付的是多大的帧"，也都该从基线视场重新数档。
+     * 顺带把首帧标志、交付尺寸标志、帧观测账本与补解账本一起复位（T59b① / T64② / T65①② / T66）——
+     * 每一轮绑定都该重新报一次"首帧已到达"和"交付的是多大的帧"，也都该从基线视场重新数档、
+     * 从满额重新花第二引擎那几发。
      */
     fun markBindStarted(elapsedRealtimeMillis: Long) {
         bindElapsedMillis = elapsedRealtimeMillis
         firstFrameLogged = false
         frameSizeLogged = false
         assist = ScanAssistState()
+        secondEngineLedger = SecondEngineLedger()
+        secondEngineStopReported = null
     }
 
     /**
@@ -986,6 +1020,15 @@ private class QrCodeAnalyzer(
             image.close()
             return
         }
+        // T66：第二引擎（zxing-cpp）的补解，排在把帧交给 ML Kit **之前**。
+        // 三个理由都在这一句的位置上：
+        // ① 那一帧的像素此刻只有一个读者（proxy 还没交出去，planes[0].buffer 没被第二个线程摸），
+        //    不用为了喂兜底而复制一份 1.2 MB 的亮度面，也不用改 close 的时机；
+        // ② 它坏掉的后果必须只是"这一次没兜住底"—— 整段待在自己的 runCatching 里，
+        //    一行都不许写进 [health]（ML Kit 那一本健康度账），也不许把异常抛到 analyze 外面；
+        // ③ 判据吃的是**截至上一帧为止**的连击（[ScanAssistState.retryableStreak]），
+        //    拿不到这一帧的未来结论 —— 这是本设计的既定形状，不是疏忽，账写在 [trySecondEngine]。
+        trySecondEngine(image, frame)
         try {
             // close 只能挂到任务结束之后：InputImage 只持有 mediaImage 的引用，MLKit 是在
             // 自己的工作线程上才去读 getPlanes() 的。放在 finally 里立即 close，那一帧就报
@@ -1008,14 +1051,10 @@ private class QrCodeAnalyzer(
                         // 判据（要不要说话、多久说一次）在 [shouldLogValuelessBarcode]。
                         noteNoReadableValue(sawBarcodeWithoutText = first != null, frame = frame)
                     } else {
-                        // 墙钟在调用点读、判据是纯函数（仓库口径）
-                        val now = System.currentTimeMillis()
-                        if (shouldSubmitScan(handled, raw, now, awaitingUserAction)) {
-                            // 先置位再回调：回调里就会开始发请求，这期间新帧可能已经进来了
-                            // （这一句次序钉在 ScanSubmissionGateTest 的形状守卫里）
-                            handled = ScanHandled(raw, now)
-                            onCode(raw)
-                        }
+                        // T66 起这一句走的是**两条引擎共用**的那道闸门（[submitDecodedText]）：
+                        // 兜底解出来的原文与主力解出来的原文在"投不投"这件事上没有任何区别，
+                        // 一人一份闸门就是两份真相。
+                        submitDecodedText(raw)
                     }
                 }
                 .addOnFailureListener {
@@ -1162,6 +1201,119 @@ private class QrCodeAnalyzer(
         val ratio = outcome.zoomRatio
         if (ratio != null) onZoomCommand(ratio, outcome.zoomRollback)
         if (outcome.shownRungChanged) onFrameRungChanged(outcome.state.shownRung)
+    }
+
+    /**
+     * 两条解码引擎共用的那一道提交闸门（T66 从 ML Kit 的成功分支里抽出来）。
+     *
+     * 为什么必须共用：兜底解出来的原文与主力解出来的原文，在"这一份投不投得出去"这件事上
+     * 没有任何区别 —— 同一张码的冷却期、结果卡挂着不许重投、换一张码立刻放行，
+     * 两本账各有各的写法就是两份真相，而这一页修过三轮的病恰恰叫"两份真相"。
+     * 抽出来之后按帧路径的墙钟读点还是三处（这里 + 两条失败留痕），
+     * 那个数目由 `ScanSubmissionGateTest` ⑨ 钉着。
+     *
+     * @return true = 真的递交了；false = 被闸门压住（调用点据此说实话，不许自称投出去了）
+     */
+    private fun submitDecodedText(raw: String): Boolean {
+        // 墙钟在调用点读、判据是纯函数（仓库口径）
+        val now = System.currentTimeMillis()
+        if (!shouldSubmitScan(handled, raw, now, awaitingUserAction)) return false
+        // 先置位再回调：回调里就会开始发请求，这期间新帧可能已经进来了
+        // （这一句次序钉在 ScanSubmissionGateTest 的形状守卫里）
+        handled = ScanHandled(raw, now)
+        onCode(raw)
+        return true
+    }
+
+    /**
+     * T66：第二引擎（zxing-cpp）在该出声的那一帧上补一刀。
+     *
+     * 跑在**分析线程**上、`scanner.process()` 把帧交出去之前（三条理由写在 [analyze] 里那句
+     * 注释上）。判据一行都不在这里：[secondEngineDecision] 吃账本 + 可重试连击 + 帧号 +
+     * 闸门状态 + 引擎可用档，返回这一帧的处境；这里只做四件事 —— 递参数、按结论发不发、
+     * 记账、留痕。
+     *
+     * ⚠️ 三处要紧的"不做"：
+     * - **不写 [health]**：兜底坏了只说明"这次没兜住"，把它记进 ML Kit 的健康度账就是把
+     *   主力判死 —— 那是 T59① 刚修完的那类失效从另一头复活；
+     * - **不 catch 之后重抛**：[ZxingCppFallbackDecoder.decode] 自己已经接住了一切，
+     *   这里再套一层 `runCatching` 是**双保险**（构造/解码路径以外的一切意外都不该带走整页）；
+     * - **不在主线程**：这一句的调用点在 analyze 里，那一头是 CameraX 的分析 executor；
+     *   ML Kit 的回调线程（默认主线程）上一行兜底的活都没派。
+     *
+     * 代价说清：一发补解在 1280×720 的帧上是几十到一两百 ms 的**同步**开销，全花在分析线程
+     * 那唯一的一颗 worker 上，最坏的样子是预览掉帧（`STRATEGY_KEEP_ONLY_LATEST` 在后面顶着，
+     * 不会堆队列）。上界由 [SecondEngineFrameGap] / [SecondEngineMaxFiresPerBind] /
+     * [SecondEngineGiveUpAfterMisses] 三道一起夹在"每轮绑定至多 8 发、每发之间隔 15 帧"。
+     */
+    private fun trySecondEngine(image: ImageProxy, frame: Long) {
+        // ML Kit 回调线程整枚换进来的那份快照：截至**上一帧**为止的帧观测
+        val seen = assist
+        val decision = secondEngineDecision(
+            ledger = secondEngineLedger,
+            streak = seen.retryableStreak,
+            frame = frame,
+            codeInHand = handled != null || awaitingUserAction,
+            engineUsable = secondEngine.mayTry(),
+        )
+        reportSecondEngineStop(decision, frame)
+        if (decision !is SecondEngineDecision.Fire) return
+        // 未判定（Pending）就在这一发里现场判掉：构造那一下就是判定本体（缺库的
+        // UnsatisfiedLinkError 落在我们自己的 try 里，见 ZxingCppFallbackDecoder 的类注释）
+        if (secondEngine.ensureReady() == SecondEngineProbe.Unusable) {
+            secondEngineLedger = secondEngineAfterResult(secondEngineLedger, decoded = false, usable = false)
+            Log.w(
+                TAG,
+                "第二引擎在这台设备上起不来（构造 zxing-cpp 解码器就失败了）：${secondEngine.lastFailure} " +
+                    "—— 这一页只剩 ML Kit 一条解码路，兜底从未上线过",
+            )
+            return
+        }
+        secondEngineLedger = secondEngineAfterFire(secondEngineLedger, frame)
+        val text = runCatching { secondEngine.decode(image) }.getOrNull()
+        val usable = secondEngine.verdict() != SecondEngineProbe.Unusable
+        val fired = secondEngineLedger
+        if (text == null) {
+            secondEngineLedger = secondEngineAfterResult(fired, decoded = false, usable = usable)
+            val after = secondEngineLedger
+            Log.i(
+                TAG,
+                "第二引擎补解没解出：第 $frame 帧（本轮第 ${after.fires}/$SecondEngineMaxFiresPerBind 发，" +
+                    "连续第 ${after.misses}/$SecondEngineGiveUpAfterMisses 次失手，zxing-cpp 计时 " +
+                    "${secondEngine.lastReadMillis()}ms）—— 上游档位 ${seen.shownRung}、可重试连击 " +
+                    "${seen.retryableStreak} 帧" +
+                    (secondEngine.lastFailure?.let { "；它抛的那一下：$it" } ?: ""),
+            )
+            return
+        }
+        secondEngineLedger = secondEngineAfterResult(fired, decoded = true, usable = usable)
+        val submitted = submitDecodedText(text)
+        Log.i(
+            TAG,
+            "第二引擎补解命中：第 $frame 帧（本轮第 ${secondEngineLedger.fires}/$SecondEngineMaxFiresPerBind 发，" +
+                "zxing-cpp 计时 ${secondEngine.lastReadMillis()}ms，原文 ${text.length} 字）—— " +
+                "ML Kit 在同一段画面上已连续 ${seen.retryableStreak} 帧没解出原文，" +
+                if (submitted) "这一份按同一道闸门递交签到" else "这一份被提交闸门压住（同一份原文刚投过，或结果卡正等用户按）",
+        )
+    }
+
+    /**
+     * 「这一帧为什么不出声」的留痕，每档只说一次（[secondEngineStopReported] 管换挡）。
+     *
+     * 这一句是本卡对"静默 no-op"那三轮病的答卷：四种停法（额度用完 / 连续失手判死 /
+     * 引擎不在这台设备上 / 闸门里已有原文）都必须读得出**是哪一种、从第几帧起闭嘴的**；
+     * 而按帧重复同一句等于把 logcat 冲干净，那种"留痕"和没有留痕是一回事。
+     * [SecondEngineDecision.Fire] 与 [SecondEngineDecision.Waiting] 不出声：前者由结果那一行
+     * 说话，后者是绝大多数帧的常态（措辞唯一来源在 [secondEngineStopText]，这里不写第二份）。
+     */
+    private fun reportSecondEngineStop(decision: SecondEngineDecision, frame: Long) {
+        val text = secondEngineStopText(decision) ?: return
+        if (decision == secondEngineStopReported) return
+        secondEngineStopReported = decision
+        val line = "第二引擎这一帧不出声（第 $frame 帧）：$text"
+        // 闸门那一档是正常流程里的常态（结果卡挂着等用户按）⇒ Info；
+        // 其余三档都是"本轮到此为止"的终局判据 ⇒ Warn，好让读日志的人一眼扫到
+        if (decision is SecondEngineDecision.CodeInHand) Log.i(TAG, line) else Log.w(TAG, line)
     }
 
     /**
