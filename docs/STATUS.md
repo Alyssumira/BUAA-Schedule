@@ -4,12 +4,15 @@
 > "哪些已经落地、哪些还没做、哪些明确不做"的贡献者，所以条目按开发顺序而不是使用顺序排。
 > 带 ⚠️ 的条目有平台限制或使用前提。
 >
-> 最后整理：2026-09-22（扫码「码小不会自动放大」这一层先收 T64：真账是 `ImageAnalysis` 从没声明
-> 分辨率、按 CameraX 文档落在 640×480，装机实测改后交付 **1280×960**；同轮把"这一页开不出来"那道
-> 自认的门推翻（`EXTRA_ROUTE spoc_scan` 不查会话），并订正两条依赖层事实 —— ML Kit 的
-> `setZoomSuggestionOptions` 在 bundled 实现里是**静默 no-op**、`enableAllPotentialBarcodes()` 真生效。
-> 在跑：T65（potential 分档 + 检测框驱动变焦阶梯 + 对焦成功留痕 + 按用户决定拆掉手电）、
-> T66（zxing-cpp 只当兜底第二引擎）。
+> 最后整理：2026-09-22（扫码这一族当天连收两卡。**T64** 的真账是 `ImageAnalysis` 从没声明分辨率、
+> 按 CameraX 文档落在 640×480，装机实测改后交付 **1280×960**；**T65** 收 T64 复核点名的三条欠账 ——
+> potential 框分档 + 检测驱动的四档变焦阶梯（含"抬了没用就回滚且本轮不再试"）替掉"每次绑定固定抬 1.5×"
+> 那个错形态、点按对焦**成功档**补上留痕、并按用户决定「不要闪光灯，我们的场景不用」把手电整条撤走。
+> 装机第一次拿到**正解码**（虚拟场景棋盘格被 ML Kit 误检成一枚有原文的码 → 本地判否、零请求），
+> 于是"帧→解码→原文→提交闸门→界面"整条端到端第一次有证据，同时也记下 ML Kit 的误检这笔新账。
+> 同轮推翻两条依赖层事实：ML Kit 的 `setZoomSuggestionOptions` 在 bundled 实现里是**静默 no-op**（已反向钉死）、
+> `enableAllPotentialBarcodes()` 真生效（它就是本卡的量具）。
+> 在跑：T66（zxing-cpp 只当兜底第二引擎）。
 > 再往前是「节假日没有标注出来」+「时间轴模式显示的文字内容有点少」两条 ——
 > 前者分两层都收了：数据侧 T60（三个触发点 + 跨月 + 每一档停法留一行取证）、渲染侧 T62
 > （今日页页头先量后摆、全称走读屏语义；真账是数据就算到位了也只有一格单字在画它）；
@@ -292,6 +295,14 @@
       `WidgetBackgroundRenderer`；受同样的 Android 14 壁纸限制，该版本上回退纯色圆角底）
 - [ ] 图片 / PDF 导入
 - [ ] 完整个性化外观（壁纸取景 / 横竖屏独立配置；模糊/亮度/缩放/面板磨砂半径已完成）
+- [ ] 扫码第二引擎 zxing-cpp（T66，按用户「加」的点头）：**只当兜底**，在 ML Kit 一帧只回 potential
+      或连续失败时再解一次（`tryHarder` / `tryInvert` 那类免费的多重试是它的强项）；
+      ⚠️ 不许换主力（468 帧私有基准：它反光 79.5% / 糊码 64.1%，差于 ML Kit 的 96.2% / 74.4%）。
+      开工前知道的两件事：包体要按 arm64 单 ABI + `useLegacyPackaging` 口径实测增量报数；
+      该依赖**不在本机 gradle 缓存里**，`--offline` 门禁跑不通，要先联网解析一次。
+- [ ] ML Kit 误检的收口（T65⑤ 装机新发现）：虚拟场景那面**高对比棋盘格**被解成一枚有原文的码并自动提交，
+      靠 `SpocQrParser` 本地判否才没打成请求。真教室里没有棋盘，但黑板花纹 / 表格线 / 投影摩尔纹同类；
+      要不要在提交前加一道"这枚码的框稳不稳 / 原文像不像 URL"的本地闸门，未定。
 - [x] Baseline Profile 接线（T16）：`:app` 与 `:benchmark` 各应用 `androidx.baselineprofile` 1.4.1，
       `:app` 侧补 `baselineProfile(project(":benchmark"))` 与显式 `implementation(libs.androidx.profileinstaller)`。
       这枚插件不是独立产品线，它就是 androidx.benchmark 那次发布里的
@@ -867,3 +878,50 @@
       只在 ML Kit 连续失败或只回 potential 时用 `tryHarder/tryInvert` 再解一次，
       ⚠️ 不许换主力：我们 468 帧私有基准里它反光 79.5% / 糊码 64.1%，差于 ML Kit 的 96.2% / 74.4%）
       另立 T66。
+- [x] 扫码帧观测分档 + 检测驱动变焦阶梯 + 拆手电（T65，2026-09-22，`32bdb14`…`003bbdc`）：
+      T64 复核点名的三条欠账一次结清（阶梯形态、对焦**成功档**无日志，以及按用户决定
+      「加，然后不要闪光灯，我们的场景不用」把手电整条撤走）。
+      **内核**（`ScanCameraAidPolicy.kt`，仍零 import）：`frameCodeRung(读到原文的码数, 候选数,
+      最大候选框短边px)` → 四档 {`CodeReadable` / `NothingDetected` / `CodeTooSmall` / `CodeUndecodable`}，
+      阈值 `MinUsefulCandidateBoxPx = UsefulModulePx(3) × QrModuleSideBudget(97) = `**`291 px`**
+      （吃的是同一枚 v20 模块预算，不另起炉灶；3 px/模块取同行实测的识别率口径，不是 ML Kit 文档
+      那个 2 px 的**存在性**下限）；退化框（缺失/非正）落 Undecodable 不落 TooSmall ——
+      "太小"是一句要驱动抬视场的断言，拿不可信的测量抬视场，错的就是画面。
+      **阶梯**：`ZoomLadderRatios = [1.25, 1.5, 1.75, 2.0]` + 基线 1f；`advanceScanAssist(状态, 档位,
+      有没有缩放控制)` 每帧推一次 —— TooSmall 连续 30 帧升一档、到顶档再连续 60 帧仍太小 ⇒ 退回基线并
+      **本轮绑定不再试**；屏上措辞另走 12 帧滞后窗（提示条不许被单帧噪声打得直闪）。
+      `zoomControlAvailable == false` 时**连连击都不计**（计了也只是攒一发注定落空的命令），但
+      "太小、走近一点"那句话照说 —— 在没有缩放控制的设备上它同样是实话。
+      **接线**：scanner 加 `enableAllPotentialBarcodes()`（bundled 实现真兑现这颗开关，它是把
+      "有码解不开"与"没码"分开测量的唯一仪器）；`noteFrameRung` 排在提交分支**之前**（闸门吞掉的帧也要记账）；
+      缩放命令经回调出分析器、执行侧仍过 `clampedZoomRatio`、全页 `setZoomRatio(` 一处；
+      绑定成功处探一次设备能力，账本随 `markBindStarted` 复位（重绑定 = 视场回基线，旧 `stepIndex`
+      说"已经在 1.75×"而画面其实是 1×，那就是这一页修过三轮的"说了没做"）。
+      **措辞唯一来源** `scanFrameAidText`：「看见二维码了，但它小到解不出来：请走近一点，或把码对准取景框正中。」/
+      「看见二维码了，但一时解不开：请拿稳对准它，或换一张更清晰的码。」两档都不许提灯、提设置、承诺秒数。
+      **反向钉两条**：`ZoomSuggestionOptions` / `setZoomSuggestionOptions` / `minAspectRatioToEnlarge`
+      在页面源码零命中（bundled 路径上它是静默 no-op，谁接回来谁红）；`torch/Torch/手电/enableTorch/hasFlashUnit`
+      在页面与内核零命中（撤走的东西不许留壳）。守卫 ③ 由"整文件逐字节未动"改为**区域比较**
+      （`internal fun scanUiStatus(` 起、到 `GalleryUnreadablePrefix` 声明前止，比较基线仍 `03d6546`），
+      因为本卡合法地给 `ScanUiStatus.kt` 添了 `scanFrameAidText`。
+      门禁：`assembleRelease` 先行 → **1285 tests / 158 suites / 0 失败 / 0 skipped**（地板 1277/158，+8 全在本族）
+      / lint **0 error / 14 warning**（地板不变）；release 包 **6,494,827 B**（改前 6,484,525，**+10,302**，
+      拆手电省下的代码抵掉了阶梯与 potential 开关的大半）。
+      **装机取证（buaa36 / debug 包 / 沿用 `EXTRA_ROUTE spoc_scan` 配方）**：
+      ① 动作条只剩「相册识别」一颗，手电按钮从界面上消失（截图 `.tmp/T65v/scan_after.png`）；
+      ② 两次点击各出一行 `点按对焦已受理：视口 (540.0, 764.0) → 测光点 (0.5, 0.33745584)`，
+      且**没有**「被忽略 / 拒映射 / 不支持 / 抛出 / 启动失败」任一行 ⇒ T64 复核那条"成功档不打日志，
+      所以'手势没接住'与'点对成功'读不出区别"的欠账结清，手势确实到达了 `CameraControl`；
+      ③ `这台设备没有可用的缩放控制（ZoomState 没报出 min/max 或区间固定），视场保持原样` 绑定处一行，
+      本轮**零条**升档行 ⇒ "没有缩放控制就闭嘴"在设备上兑现；
+      ④ 交付帧仍是 `1280×960 / 旋转 90°`（T64 那本账没漂）；
+      ⑤ **第一次拿到设备侧的正解码**：虚拟场景里那面棋盘格被 ML Kit 解成一枚**有原文**的码 → 自动提交 →
+      `SpocQrParser` 本地判否（界面弹出「这不是一张智学北航的签到码」）。这条是双面的：
+      好的一面是链路端到端活（帧→解码→原文→提交闸门→界面，此前只到过"帧到了"那一层）；
+      坏的一面是 **ML Kit 在高对比棋盘上会误检**。⚠️ 已核 `SignInViewModel.kt:77-81` —— parse 返回 null
+      时直接 return，**没有向服务端发出任何请求**，误检不会变成误签；真实教室里没有棋盘，
+      但黑板花纹 / 表格线 / 投影摩尔纹属同一类风险，未估（转待实现）。
+      有意未做 / 残账：potential 框自身的可靠性与每帧开销未测（这台没有可对照的真码）；
+      291 px 阈值没对过一张真实签到码；阶梯在**有**缩放控制的设备上怎么走完全未测（模拟器没有）；
+      帧数→秒数按 30fps 估（30/60/12 帧 ≈ 1s/2s/0.5s），实际送帧率未量；
+      开了 potential 之后解码率是否变化未测。

@@ -365,7 +365,6 @@ fun SpocScanScreen(
                 // T65②：缩放不再在绑定时固定抬一档（T64 的 ProjectorZoomRatio 整条撤了），
                 // 改由帧观测驱动。这里只探一次设备能力：钳制缝还是 [clampedZoomRatio]，
                 // null 档 = 这台没有缩放控制，一句话保持原样、阶梯整轮闭嘴（档位喂给分析器）。
-                // 帧观测也随绑定复位：新绑定 = 视场回到基线，旧阶梯账本对不上新画面。
                 // 帧观测也随绑定复位（账本在 markBindStarted 里清，界面快照在这一行清）：
                 // 新绑定 = 视场回到基线，旧阶梯账本对不上新画面。
                 frameRung = FrameCodeRung.NothingDetected
