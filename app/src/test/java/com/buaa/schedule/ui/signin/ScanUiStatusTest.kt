@@ -236,14 +236,22 @@ class ScanUiStatusTest {
         assertEquals("scanUiStatus 被调了 ${occurrences(code, "scanUiStatus(")} 处，只能一处", 1, occurrences(code, "scanUiStatus("))
         assertEquals("scanCameraLive 被调了 ${occurrences(code, "scanCameraLive(")} 处，只能一处", 1, occurrences(code, "scanCameraLive("))
         // cameraLive：定义一处 + 取景框一处（手输那颗按钮曾用的第三处在 2026-09-21 随入口一起删了）
-        // T64 起再加三处消费者，都是「相机这条在不在跑」的正当判据入口：点按对焦的键表 +
-        // 未活时忽略那一句、手电档位里 cameraPathLive 的实参。口径仍是这一颗 —— 三处新读者
-        // 都吃同一个 val，没有第二份自算的 cameraLive（那才是本守卫要拦的）。
-        assertEquals("cameraLive 出现 ${occurrences(code, "cameraLive")} 次（定义 + 取景框 + 对焦两处分身 + 手电一处）", 5, occurrences(code, "cameraLive"))
+        // T64 起再加三处消费者；T65④ 撤手电时那一处（cameraPathLive 实参）整条消失，
+        // T65① 补回一处新读者：帧观测提示条只在相机路径活着时说话。口径仍是这一颗 ——
+        // 各处都吃同一个 val，没有第二份自算的 cameraLive（那才是本守卫要拦的）。
+        assertEquals(
+            "cameraLive 出现 ${occurrences(code, "cameraLive")} 次（定义 + 取景框 + 对焦两处分身 + 帧观测提示一处）",
+            5,
+            occurrences(code, "cameraLive"),
+        )
         // 手输入口的整条痕迹（按钮 / 弹窗 / state）都不许回来
         assertFalse("页面里还留着「手输」：弹窗或按钮没拆干净", code.contains("手输"))
+        // T65④：手电整条撤走（用户决策「场景不用」），任何残壳都不许留在页面上
+        for (torchRemnant in listOf("torch", "Torch", "手电", "enableTorch", "hasFlashUnit")) {
+            assertFalse("手电的残壳回来了（$torchRemnant）：要么死代码要么壳，两个都不许", code.contains(torchRemnant))
+        }
         // 页面里不许还藏着文案原文：那就是第二份口径
-        for (lit in listOf("没有相机权限", "CameraX 起不来", "这份安装包没带")) {
+        for (lit in listOf("没有相机权限", "CameraX 起不来", "这份安装包没带", "走近一点", "拿稳对准")) {
             assertFalse("提示文案还在页面里另写一份（$lit），判据就被绕过了", code.contains(lit))
         }
         // provider 那一档是**真的**传给了判据，而不是只写了个没人读的字段

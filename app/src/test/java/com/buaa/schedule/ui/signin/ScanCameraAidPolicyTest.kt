@@ -8,7 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * T64/T65 判据内核的表驱动单测：交付帧够不够、点击→测光点映射、手电档位、缩放钳制，
+ * T64/T65 判据内核的表驱动单测：交付帧够不够、点击→测光点映射、缩放钳制，
  * 以及 T65①② 的画面档位（[frameCodeRung]）与检测驱动缩放阶梯（[advanceScanAssist]）。
  *
  * 全文件零 android 依赖 —— 这正是将判据抽成 [ScanCameraAidPolicy] 的全部理由：
@@ -157,45 +157,7 @@ class ScanCameraAidPolicyTest {
         assertEquals(0f, p.y, 1e-4f)
     }
 
-    // ---- ③ 手电档位 ----
-
-    @Test
-    fun torchAffordanceTable() {
-        val cases = listOf(
-            // hasFlash, state, live, givenUp → expected
-            Quad(false, TorchStateOff, true, false, TorchAffordance.HiddenNoFlash),
-            Quad(false, TorchStateOn, false, true, TorchAffordance.HiddenNoFlash),   // 没灯排最前
-            Quad(true, TorchStateOff, true, true, TorchAffordance.HiddenDecoderDead), // 判死压过"还活着"
-            Quad(true, TorchStateOn, false, false, TorchAffordance.HiddenCameraNotLive),
-            Quad(true, TorchStateUndefined, false, true, TorchAffordance.HiddenDecoderDead),
-            Quad(true, TorchStateOff, true, false, TorchAffordance.ShowTurnOn),
-            Quad(true, TorchStateUndefined, true, false, TorchAffordance.ShowTurnOn), // 状态未知按"开"起步
-            Quad(true, TorchStateOn, true, false, TorchAffordance.ShowTurnOff),
-        )
-        for ((hasFlash, state, live, givenUp, expected) in cases) {
-            assertEquals(
-                "hasFlash=$hasFlash state=$state live=$live givenUp=$givenUp：",
-                expected,
-                torchAffordance(hasFlash, state, live, givenUp),
-            )
-        }
-    }
-
-    @Test
-    fun hiddenTorchAffordancesCarryNoLabelAndShownOnesDo() {
-        for (hidden in listOf(TorchAffordance.HiddenNoFlash, TorchAffordance.HiddenDecoderDead, TorchAffordance.HiddenCameraNotLive)) {
-            assertFalse("$hidden 不许画按钮", hidden.show)
-            assertEquals("$hidden 不许带文案", "", hidden.label)
-        }
-        assertTrue(TorchAffordance.ShowTurnOn.show)
-        assertTrue(TorchAffordance.ShowTurnOff.show)
-        assertTrue("开关两颗的话不许一样：", TorchAffordance.ShowTurnOn.label != TorchAffordance.ShowTurnOff.label)
-        // 按下去的目标态：关着的那颗按下去开、开着的那颗按下去关
-        assertTrue(torchTargetState(TorchAffordance.ShowTurnOn))
-        assertFalse(torchTargetState(TorchAffordance.ShowTurnOff))
-    }
-
-    // ---- ④ 缩放钳制 ----
+    // ---- ③ 缩放钳制 ----
 
     @Test
     fun zoomClampTable() {
@@ -222,7 +184,7 @@ class ScanCameraAidPolicyTest {
         assertEquals(1f, clampedZoomRatio(Float.NaN, 1f, 8f))
     }
 
-    // ---- ⑤ T65① 画面档位：阈值可复算 + 全表 ----
+    // ---- ④ T65① 画面档位：阈值可复算 + 全表 ----
 
     /** 阈值不许漂成魔数：291 = 3 px/模块 × 97 模块预算，每一半都有出处 */
     @Test
@@ -256,7 +218,7 @@ class ScanCameraAidPolicyTest {
         }
     }
 
-    // ---- ⑤ T65② 缩放阶梯：走档、回滚、滞后、无缩放控制 ----
+    // ---- ④ T65② 缩放阶梯：走档、回滚、滞后、无缩放控制 ----
 
     /** 连续喂 n 帧同一档位，返回末状态 */
     private fun feed(
@@ -386,6 +348,5 @@ class ScanCameraAidPolicyTest {
         val expected: FrameCodeRung,
     )
 
-    private data class Quad<A, B, C, D, E>(val a: A, val b: B, val c: C, val d: D, val e: E)
     private data class ZoomRow(val requested: Float, val min: Float?, val max: Float?, val expected: Float?)
 }

@@ -1,8 +1,8 @@
 package com.buaa.schedule.ui.signin
 
 /**
- * 扫码页「喂给解码器的帧」这一侧的判据内核（T64）。纯判据，零 import（仓库口径，
- * 见 [ScanRecoveryPolicy] 与 `SpecialDayBadgePolicy`）：相机能力（有没有闪光灯、缩放范围、
+ * 扫码页「喂给解码器的帧」这一侧的判据内核（T64，T65 扩到档位与阶梯）。纯判据，零 import
+ * （仓库口径，见 [ScanRecoveryPolicy] 与 `SpecialDayBadgePolicy`）：相机能力（缩放范围、
  * 支不支持测光）、权限、帧的真实尺寸、视口与视图的实测尺寸 —— 一律由调用点读出来当参数传进来，
  * 本文件只吃参数、只翻档位，绝不自己去碰设备。
  *
@@ -12,12 +12,11 @@ package com.buaa.schedule.ui.signin
  * 至少 2 px 宽（二维码是二维的，还要 2 px 高），并建议喂 1280×720 或 1920×1080 ——
  * 只有在「码几乎占满画面」时才允许用更低档。1–3 米外看投影仪上的签到二维码，恰恰是
  * 「码只占画面一小部分」的场景：模块在被降采样那一刻就毁了，之后任何解码器都救不回来。
- * 本内核管五件事：
+ * 本内核管四件事：
  * ① 交付的帧够不够（[analysisFrameVerdict] / [analysisFrameLogText]，取证行的措辞唯一来源）；
  * ② 点哪对哪：把取景画面上的点击映射成分析流坐标系里的测光点（[analysisMeteringPointForTap]）；
- * ③ 手电按钮该不该出现、写什么（[torchAffordance]）；
- * ④ 用户要的缩放比值钳到这台机器的合法区间（[clampedZoomRatio]）；
- * ⑤ 画面里到底有没有码、有的话为什么解不开（[frameCodeRung]），以及据此驱动的检测缩放阶梯
+ * ③ 用户要的缩放比值钳到这台机器的合法区间（[clampedZoomRatio]）；
+ * ④ 画面里到底有没有码、有的话为什么解不开（[frameCodeRung]），以及据此驱动的检测缩放阶梯
  *    （[advanceScanAssist] / [zoomLadderRatio] —— 取代 T64「每次绑定固定抬一档」的判据本体）。
  */
 
@@ -186,62 +185,7 @@ internal fun analysisMeteringPointForTap(
     return MeteringNormalized(u, v)
 }
 
-// ---- ③ 手电按钮该不该出现、写什么 ----
-
-/** 与 TorchState 的三个取值同码（0/1/2），这样调用点把 `cameraInfo.torchState` 的 Int 原样传进来即可 */
-internal const val TorchStateUndefined = 0
-
-/** 同上：关 */
-internal const val TorchStateOff = 1
-
-/** 同上：开 */
-internal const val TorchStateOn = 2
-
-/** 手电档位：show = 按钮画不画，label = 按钮上的话。UI 可见性判据，不是设备读取。 */
-internal enum class TorchAffordance(val show: Boolean, val label: String) {
-    /** 这台没有闪光灯 LED：按钮根本不该存在（TorchControl 在没有灯的单位上会以 IllegalStateException 失败 future，绝不能让它复活） */
-    HiddenNoFlash(false, ""),
-
-    /** 相机这条已经判死（本轮不再自动试回）：开灯照不亮一颗死掉的解码器，别演「还能救」 */
-    HiddenDecoderDead(false, ""),
-
-    /** 相机路径没在跑（没权限 / provider 没拿到 / 绑定失败 / 停用窗口）：灯开了也没有帧可照 */
-    HiddenCameraNotLive(false, ""),
-
-    /** 现在关着（含状态未知）：按下去是「开」 */
-    ShowTurnOn(true, "开手电"),
-
-    /** 现在开着：按下去是「关」 */
-    ShowTurnOff(true, "关手电"),
-}
-
-/**
- * 手电按钮的档位。次序是有讲的：没有灯 ⇒ 永远隐藏；本轮判死排在「路径活不活」之前 ⇒
- * 停用窗口里路径是活的（故意不 unbind），用户仍然可以开灯试试；判死了就不用试了。
- *
- * @param hasFlashUnit `cameraInfo.hasFlashUnit()` 的原文
- * @param torchStateCode `cameraInfo.torchState` 最新值（[TorchStateUndefined]/[TorchStateOff]/[TorchStateOn]）
- * @param cameraPathLive 相机这条路径现在是否在跑（调用点与取景框用同一颗判据）
- * @param roundGivenUp 本轮是否已判死（[ScanRecoveryPolicy] 那一档的快照）
- */
-internal fun torchAffordance(
-    hasFlashUnit: Boolean,
-    torchStateCode: Int,
-    cameraPathLive: Boolean,
-    roundGivenUp: Boolean,
-): TorchAffordance = when {
-    !hasFlashUnit -> TorchAffordance.HiddenNoFlash
-    roundGivenUp -> TorchAffordance.HiddenDecoderDead
-    !cameraPathLive -> TorchAffordance.HiddenCameraNotLive
-    torchStateCode == TorchStateOn -> TorchAffordance.ShowTurnOff
-    else -> TorchAffordance.ShowTurnOn
-}
-
-/** 这一档按下去要把手电置成什么。隐藏档没有按钮，取值无意义（给 false 让它至少是个确定的）。 */
-internal fun torchTargetState(affordance: TorchAffordance): Boolean =
-    affordance == TorchAffordance.ShowTurnOn
-
-// ---- ④ 缩放比值钳制 ----
+// ---- ③ 缩放比值钳制 ----
 
 /**
  * 把用户要的缩放比值钳到这台机器的合法区间。返回 null = **这台没有缩放控制**（显式档，
@@ -266,7 +210,7 @@ internal fun clampedZoomRatio(
     return safeRequest.coerceIn(min, max)
 }
 
-// ---- ⑤ 画面里有没有码、有码为什么解不开 ----
+// ---- ④ 画面里有没有码、有码为什么解不开 ----
 
 /**
  * 判档采用的 px/模块：3。

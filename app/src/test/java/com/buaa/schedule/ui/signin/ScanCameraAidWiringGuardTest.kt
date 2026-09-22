@@ -40,13 +40,18 @@ class ScanCameraAidWiringGuardTest {
         assertTrue("内核文件是空的？", code.length > 2_000)
         for (entry in listOf(
             "minUsefulAnalysisShortEdgePx", "analysisFrameVerdict", "analysisFrameLogText",
-            "analysisMeteringPointForTap", "torchAffordance", "torchTargetState", "clampedZoomRatio",
+            "analysisMeteringPointForTap", "clampedZoomRatio",
+            "frameCodeRung", "advanceScanAssist", "zoomLadderRatio",
         )) {
             assertTrue("内核少了 $entry 这一档：", code.contains("fun $entry"))
         }
+        // T65④：手电档位整条撤走（用户决策「场景不用」），内核里不许留壳也不许等它回来
+        for (gone in listOf("torchAffordance", "torchTargetState", "TorchAffordance", "TorchState")) {
+            assertFalse("手电的判据壳残留在内核里（$gone）：", code.contains(gone))
+        }
     }
 
-    /** ①b 下限必须能从推导链复算：常数一个字都不许漂成魔数 */
+    /** ①b 下限与候选框阈值必须能从推导链复算：常数一个字都不许漂成魔数 */
     @Test
     fun frameFloorStaysDerivedFromTheTwoPixelReasoning() {
         val code = withoutComments(readMainSource(KERNEL_FILE))
@@ -55,6 +60,13 @@ class ScanCameraAidWiringGuardTest {
         assertTrue("远距占洞系数漂了：", code.contains("DistantCodeHoleFill = 0.5f"))
         assertTrue("请求目标不是 720p 了：", code.contains("RequestAnalysisHeightPx = 720"))
         assertTrue("下限不再由推导算出：", code.contains("MinModuleSizePx * QrModuleSideBudget"))
+        // T65①：档位阈值 = 实测可用档 3 px/模块 × 同一枚 v20 预算，两处都不许漂
+        assertTrue("实测可用档漂了（同行口径 ≥3px/模块）：", code.contains("UsefulModulePx = 3"))
+        assertTrue("候选框阈值不再由推导算出：", code.contains("UsefulModulePx * QrModuleSideBudget"))
+        // T65②：阶梯常数住在内核（设备区间由调用点钳制），帧数口径全在表驱动单测里钉
+        for (cadence in listOf("ZoomStepFrames", "ZoomRollbackFrames", "RungSettleFrames")) {
+            assertTrue("阶梯的帧数口径 $cadence 不在内核里：", code.contains(cadence))
+        }
     }
 
     /** ②a 分辨率请求真的挂在 builder 上，而 KEEP_ONLY_LATEST / setTargetRotation 一颗没掉 */
@@ -118,42 +130,76 @@ class ScanCameraAidWiringGuardTest {
         val start = gesture.indexOf("startFocusAndMetering(")
         check(support >= 0 && start >= 0) { "支持性守卫或 startFocusAndMetering 调用没了：\n$gesture" }
         assertTrue("先问支持再发（不支持 AF 的设备上必须不抛）：", support < start)
+        // T65③：受理行的排印位置就是它的语义 —— 支持性守卫之后（不支持的那按没受理，
+        // 不许谎报受理）、下发之前（先记账再发，future 失败另有监听兜着）
+        val accepted = gesture.indexOf("点按对焦已受理")
+        check(accepted >= 0) { "受理路径的留痕被删了（这一页修过三轮的病：静默 no-op 复活）：\n$gesture" }
+        val acceptedLine = gesture.lineSequence().first { it.contains("点按对焦已受理") }
+        assertTrue("受理行不许是 Log.d（HyperOS 砍到 Info，等于没写）：$acceptedLine", acceptedLine.contains("Log.i("))
+        assertTrue("受理行没带视口点（tap.x，读不出按在哪）：$acceptedLine", acceptedLine.contains("tap.x"))
+        assertTrue("受理行没带映射后的测光点（读不出内核拿这次点击干了什么）：$acceptedLine", acceptedLine.contains("mapped.x"))
+        assertTrue("受理行排到了守卫/下发之外（说假或漏说）：", accepted in support until start)
         assertTrue("startFocusAndMetering 没包 runCatching（同步抛能穿出去）：\n$gesture", gesture.contains("runCatching { camera.cameraControl.startFocusAndMetering"))
         assertTrue("路径不活时这一按连一句话都不留（静默吞点击是本页修过三轮的病）：\n$gesture", gesture.contains("cameraLive"))
     }
 
-    /** ②d 手电：显示判据在内核、hasFlashUnit 排在 enableTorch 之前、future 的失败有人认领 */
+    /**
+     * ②d T65①：帧观测的接线 —— 测量真从帧里抠、档位与阶梯真走内核、命令只许经回调出去。
+     *
+     * 这一档守的是整类「写了内核没人喂」的失效（本页三次「扫码没反应」里两次的形状）：
+     * enableAllPotentialBarcodes 不打开，CodeTooSmall/CodeUndecodable 永远测不出来；
+     * noteFrameRung 不排在提交分支之前，闸门吞掉的帧就不记账；内核自己一行 Log 都不该写。
+     */
     @Test
-    fun torchIsShownByKernelAndItsFailedFutureIsHandled() {
+    fun frameObservationIsFedByEverySuccessFrame() {
         val code = withoutComments(readMainSource(SCAN_SCREEN_FILE))
-        val toggle = balancedBlock(code, "private fun toggleScanTorch(")
-        assertTrue("档位判定没吃内核：\n$toggle", toggle.contains("torchTargetState(affordance)"))
-        assertTrue("隐藏的档位（没灯/判死/不活）点得到也直接返回：\n$toggle", toggle.contains("if (!affordance.show) return"))
-        assertTrue("enableTorch 没包 runCatching：\n$toggle", toggle.contains("runCatching { control.enableTorch("))
-        val listener = toggle.indexOf("future.addListener(")
-        check(listener >= 0) { "future 的失败没人读（IllegalStateException(\"No flash unit\") 会无声沉底）：\n$toggle" }
-        assertTrue("监听里没读 future.get 的失败：\n${toggle.substring(listener)}", toggle.substring(listener).contains("future.get()"))
-        val callSite = balancedFrom(code, "val torchAffordanceNow = torchAffordance(", "roundGivenUp = scannerGiveUp,")
-        assertTrue("hasFlashUnit 没当参数喂给内核（按钮会在没灯的设备上复活）：\n$callSite", callSite.contains("hasFlashUnit"))
-        assertTrue("show 档位没接住：", code.contains("if (torchAffordanceNow.show)"))
-        // 设备事实 → 参数 → 内核：页面自己不许再判一次灯
-        assertEquals("hasFlashUnit 的读取只许一处（当参数喂内核）：", 1, occurrences(code, "hasFlashUnit()"))
+        // 仪器开关必须开在 scanner 上（bundled 实现认这颗；反向钉见下面 noZoomSuggestionIsPinnedOut）
+        val options = balancedFrom(code, "BarcodeScannerOptions.Builder()", ".build(),")
+        assertTrue("没开 enableAllPotentialBarcodes：「有码解不开」与「没码」在测量上不可分：\n$options", options.contains("enableAllPotentialBarcodes()"))
+        assertTrue("格式收窄丢了（每帧多解一种格式的开销回来了）：\n$options", options.contains("setBarcodeFormats(Barcode.FORMAT_QR_CODE)"))
+        val analyzer = balancedBlock(code, "private class QrCodeAnalyzer(")
+        val success = balancedBlock(analyzer, ".addOnSuccessListener { codes ->")
+        val note = balancedBlock(analyzer, "private fun noteFrameRung(")
+        assertTrue("成功帧没喂测量（内核成了没人读的字典）：\n$success", success.contains("noteFrameRung(codes)"))
+        assertTrue("测量必须排在提交分支之前（闸门吞帧不记账就永远缺样本）：\n$success", success.indexOf("noteFrameRung(") < success.indexOf("val first ="))
+        for (entry in listOf("frameCodeRung(", "advanceScanAssist(", "code.boundingBox", "code.rawValue")) {
+            assertTrue("紧凑测量没抠 $entry：\n$note", note.contains(entry))
+        }
+        assertTrue("档位翻面没推 UI（措辞内核白写）：\n$note", note.contains("onFrameRungChanged("))
+        assertTrue("缩放命令没经回调出去（分析器自己摸 CameraControl 就是第二份接线）：\n$note", note.contains("onZoomCommand("))
+        assertEquals("按帧路径直接写日志了（换挡的话在执行侧说）：", 0, occurrences(note, "Log."))
+        // 账本随绑定复位：重绑定 = 视场回基线，旧 stepIndex 说假话
+        val mark = balancedBlock(analyzer, "fun markBindStarted(")
+        assertTrue("绑定钩子没复位帧观测账本（旧阶梯账对不上新画面）：\n$mark", mark.contains("assist = ScanAssistState()"))
     }
 
-    /** ②e 缩放：先钳制后设置，"这台没缩放控制"必须排 in setZoomRatio 之前 */
+    /**
+     * ②e T65②：缩放改由检测驱动 —— 命令侧先钳后设、全页一处 setZoomRatio，
+     * 能力探测在绑定成功处一次；T64 的固定档不许以任何形态回来。
+     */
     @Test
-    fun zoomGoesThroughTheClampAndHasExactlyOneCallSite() {
+    fun zoomIsDetectionDrivenAndStillGoesThroughTheClamp() {
         val code = withoutComments(readMainSource(SCAN_SCREEN_FILE))
-        val zoom = balancedBlock(code, "private fun applyProjectorZoom(")
-        assertTrue("比值没走内核钳制：\n$zoom", zoom.contains("clampedZoomRatio(ProjectorZoomRatio"))
+        val zoom = balancedBlock(code, "private fun applyScanAssistZoom(")
+        assertTrue("命令侧没走内核钳制：\n$zoom", zoom.contains("clampedZoomRatio(targetRatio"))
         assertTrue("min/max 是从 zoomState 当参数读的：\n$zoom", zoom.contains("zoomState?.minZoomRatio") && zoom.contains("zoomState?.maxZoomRatio"))
         val nullBranch = zoom.indexOf("if (ratio == null)")
         val setter = zoom.indexOf("setZoomRatio(")
         check(nullBranch >= 0 && setter >= 0) { "null 档或 setZoomRatio 调用没了（缝拆了）：\n$zoom" }
         assertTrue("null 档没排在设置之前（越界的 IllegalArgumentException 就是这么来的）：", nullBranch < setter)
         assertEquals("setZoomRatio 的调用点全页只许一处：", 1, occurrences(code, "setZoomRatio("))
-        assertEquals("applyProjectorZoom 的触发点只许绑定成功那一个：", 1, occurrences(code, "applyProjectorZoom(context, camera)"))
-        assertTrue("触发常量没文档化（不许漂成「静默缩放」）：", code.contains("private const val ProjectorZoomRatio"))
+        assertTrue("句柄死档没留痕（命令静默蒸发是本页修过三轮的病）：\n$zoom", zoom.contains("相机句柄已失效"))
+        // 能力探测：绑定成功处一次，null 档的那一句维持原字面量（取证口径不许漂）
+        val bind = balancedBlock(code, "if (bound.isSuccess)")
+        assertTrue("绑定处没探缩放能力（阶梯会在没缩放控制的设备上白攒命令）：\n$bind", bind.contains("zoomControlAvailable = "))
+        assertTrue("探测也走同一颗钳制缝：\n$bind", bind.contains("clampedZoomRatio(zoomLadderRatio(1)"))
+        assertEquals(
+            "「这台没有缩放控制」那句话全页只许一种说法：", 2,
+            occurrences(code, "这台设备没有可用的缩放控制（ZoomState 没报出 min/max 或区间固定），视场保持原样"),
+        )
+        // T64 的固定档整条撤走：每次绑定不问青红皂白抬 1.5× 的形态不许复活
+        assertFalse("固定投影缩放档回来了（T65② 已改检测驱动）：", code.contains("ProjectorZoomRatio"))
+        assertFalse("绑定里还有无条件 setZoomRatio 的旧缝：", bind.contains("applyProjectorZoom"))
     }
 
     /**
