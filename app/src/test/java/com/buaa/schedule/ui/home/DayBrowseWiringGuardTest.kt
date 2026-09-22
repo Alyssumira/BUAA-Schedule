@@ -2,6 +2,7 @@ package com.buaa.schedule.ui.home
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -176,6 +177,56 @@ class DayBrowseWiringGuardTest {
                 "还替它补抓一个月＝界面上根本没有这个月：\n$months",
             months.contains("YearMonth.from(browseDateOnScreen)"),
         )
+    }
+
+    // ---- ⑦ 写这一维的入口只有一处，四个调用点全走它 ----
+
+    @Test
+    fun everyBrowseDateWriteGoesThroughThePairedSetter() {
+        assertEquals(
+            "setBrowseDate 的调用点应当恰好四处（日视图两处回调 + 桌面组件跳格 + 跳到本周清零），" +
+                "每一处都会把锚定日一起刷成当天：",
+            4,
+            Regex("setBrowseDate\\(").findAll(home).count() - 1, // 减掉声明那一处
+        )
+        // 桌面组件点格子那一路：键表与 setter 一起钉（改形的话锚定日就不跟了）
+        val widgetJump = balancedBlock(home, "LaunchedEffect(widgetDayOfWeek, state.loading)")
+        assertTrue("组件跳格不再走 setBrowseDate（绕过配对写入的那一笔浏览永不过期）：\n$widgetJump",
+            widgetJump.contains("setBrowseDate(jumpedDate"))
+        assertTrue("组件跳格把首帧页签决策的兜底拆了（跳完又被改回周视图）：",
+            widgetJump.contains("tabDecided = true"))
+    }
+
+    // ---- ⑧ 「宁可少动」：周那一维不许被顺手一起清 ----
+
+    /**
+     * 本卡只让**日**视图的浏览位置跨午夜让位。「浏览到哪一周」不在此列：那一维在顶栏第一行
+     * 明写着「（浏览）」、且有「跳到本周」这个显式入口，读到的是"我在看第 3 周"而不是
+     * "今天在第 3 周"，不构成谎话；顺手把它一起清了，会让人半夜查下节课时莫名丢回本周。
+     */
+    @Test
+    fun weekBrowseStateStaysUntouchedByTheMidnightRule() {
+        val setter = balancedBlock(home, "fun setBrowseWeek(")
+        assertEquals("setBrowseWeek 的函数体仍应只有一行赋值（不许顺手写锚定日）：",
+            1, setter.lines().count { it.trim().startsWith("browseWeekState =") })
+        assertFalse("周那一维被顺手加进了过期判据：\n$setter", setter.contains("browseDateAnchor"))
+        assertTrue("顶栏第一行的周号仍直接读 browseWeek（不该绕一圈过期判据）：",
+            home.contains("val displayWeekNumber = browseWeek ?: state.currentWeek"))
+    }
+
+    // ---- ⑨ T56 那一档不能被新加的这一档吃掉 ----
+
+    @Test
+    fun weekRungStillOwnsTheSecondLine() {
+        val label = blankComments(source("com/buaa/schedule/ui/home/TopBarDateLabel.kt"))
+        assertTrue("T56 那一档没了（浏览别的周时第二行不再跟着那一周）：", label.contains("browsingWeek"))
+        assertTrue("周→周一的换算必须走 SemesterWeekDates，别在 UI 层再写一遍：",
+            label.contains("SemesterWeekDates.mondayOf("))
+        // 日期→所在自然周周一的换算走那份唯一公式，不许本地再搭一套（plusWeeks / dayOfWeek 算术）
+        assertTrue("日期归一没走 WeekCalculator.mondayOf：", label.contains("WeekCalculator.mondayOf("))
+        val offenders = label.lines().map { it.trim() }
+            .filter { it.contains("plusWeeks(") || it.contains("plusDays(") || Regex("\\- 1\\) \\* 7").containsMatchIn(it) }
+        assertTrue("顶栏那一行长出了第二套周算术：\n" + offenders.joinToString("\n"), offenders.isEmpty())
     }
 
     // ---- 靶子定位与词法小工具 ---------------------------------------------------

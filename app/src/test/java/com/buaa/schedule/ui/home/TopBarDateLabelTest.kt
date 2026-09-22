@@ -98,5 +98,75 @@ class TopBarDateLabelTest {
             "9月14日 星期一",
             topBarDateLabel(semesterStart, currentWeek = null, browseWeek = 3, today = today),
         )
+        // T68 新加的那一档同理：算不出「哪一周」就没有判断依据，不许跟着 body 走
+        assertEquals(
+            "9月21日 星期一",
+            topBarDateLabel(null, currentWeek = 4, browseWeek = null, today = today, dateOnScreen = today.plusDays(1)),
+        )
+        assertEquals(
+            "9月21日 星期一",
+            topBarDateLabel(semesterStart, currentWeek = null, browseWeek = null, today = today, dateOnScreen = today.plusDays(1)),
+        )
+    }
+
+    // ---- T68：顶栏那一行与 body 那一天同源 ----
+
+    /**
+     * 缺陷本体（T56 那一族没修的另一半）：日视图翻到别的那一天时，顶栏第二行恒写今天，
+     * 于是「写着今天、画着用户翻到的那一天」。装机在 360dp 窄屏上量的是今日页标题那一行，
+     * 宽屏（周 | 日 并排）量的就是这一行。
+     */
+    @Test
+    fun `日视图真的画着本周别的那一天时 第二行跟着那一天`() {
+        assertEquals(
+            "body 画的是 9月22日，顶栏第二行不许还写着今天",
+            "9月22日 星期二",
+            topBarDateLabel(semesterStart, currentWeek = 4, browseWeek = null, today = today, dateOnScreen = today.plusDays(1)),
+        )
+        // 本周最后一天仍然算本周（周一开头那一档整周都认）
+        assertEquals(
+            "9月27日 星期日",
+            topBarDateLabel(semesterStart, currentWeek = 4, browseWeek = null, today = today, dateOnScreen = today.plusDays(6)),
+        )
+        // 往前翻到上周日：它属于第 3 周，而第一行说的是第 4 周 ⇒ 不认（见下面那档）
+        assertEquals(
+            "9月21日 星期一",
+            topBarDateLabel(semesterStart, currentWeek = 4, browseWeek = null, today = today, dateOnScreen = today.minusDays(1)),
+        )
+    }
+
+    /** 跟随模式一字不变：dateOnScreen 缺省就是 today，跟随档连一个字符都不该漂 */
+    @Test
+    fun `跟随模式下这一行连一个字符都不漂`() {
+        assertEquals(
+            "9月21日 星期一",
+            topBarDateLabel(semesterStart, currentWeek = 4, browseWeek = null, today = today, dateOnScreen = today),
+        )
+        // 翻回今天（body == today）也不算"在浏览别的日子"
+        assertEquals(
+            "9月21日 星期一",
+            topBarDateLabel(semesterStart, currentWeek = 4, browseWeek = 4, today = today, dateOnScreen = today),
+        )
+    }
+
+    /**
+     * 反向钉 T56：新加的一档不许把「浏览别的周」那一档吃掉。
+     * 第一行写「第3周（浏览）」时第二行跟着第 3 周 —— 两行自相矛盾就是 T56 那张单的原文。
+     */
+    @Test
+    fun `越出第一行说的那一周时 周那一档赢`() {
+        // 浏览第 3 周、日视图还画着第 4 周里的那一天（含今天本身）
+        for (screen in listOf(today, today.plusDays(7), semesterStart.plusDays(21))) {
+            assertEquals(
+                "body=$screen 越出第 3 周，第二行仍该说那一周的周一",
+                "9月14日 星期一",
+                topBarDateLabel(semesterStart, currentWeek = 4, browseWeek = 3, today = today, dateOnScreen = screen),
+            )
+        }
+        // 落在第 3 周里的那一天才认：两行同时成立
+        assertEquals(
+            "9月16日 星期三",
+            topBarDateLabel(semesterStart, currentWeek = 4, browseWeek = 3, today = today, dateOnScreen = LocalDate.of(2026, 9, 16)),
+        )
     }
 }
