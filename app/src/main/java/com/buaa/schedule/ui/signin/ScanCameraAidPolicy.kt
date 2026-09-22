@@ -18,6 +18,10 @@ package com.buaa.schedule.ui.signin
  * ③ 用户要的缩放比值钳到这台机器的合法区间（[clampedZoomRatio]）；
  * ④ 画面里到底有没有码、有的话为什么解不开（[frameCodeRung]），以及据此驱动的检测缩放阶梯
  *    （[advanceScanAssist] / [zoomLadderRatio] —— 取代 T64「每次绑定固定抬一档」的判据本体）。
+ *
+ * T66 在这一本账上多挂了一枚 [ScanAssistState.retryableStreak]（「ML Kit 看见了候选码却没解出
+ * 原文」的连续帧数）：它是第二引擎（zxing-cpp 兜底）唯一的触发量，节流与停法在
+ * [ScanSecondEnginePolicy]，这一边只负责把观测量数准。
  */
 
 // ---- ① 交付帧够不够 ----
@@ -320,6 +324,10 @@ internal fun zoomLadderRatio(stepIndex: Int): Float =
  * @param candidateFrames 候选档位已连续站住的帧数
  * @param tooSmallStreak [FrameCodeRung.CodeTooSmall] 的连续帧数（任何其他档、以及「这台没有缩放控制」都清它 ——
  *                      阶梯只在「有码且太小」连续成立且真抬得动视场时走）
+ * @param retryableStreak [retryableRung]（[FrameCodeRung.CodeTooSmall] 或 [FrameCodeRung.CodeUndecodable]，
+ *                       即「ML Kit 看见了候选码却没解出原文」）的连续帧数。T66 加的第二引擎唯一
+ *                       触发量：与 [tooSmallStreak] 不同，它**不看这台有没有缩放控制** ——
+ *                       缩放抬不动是相机的事，兜底解不解得开是解码器的事，两本账不许共用一个计数器。
  * @param stepIndex 当前阶梯档位（0 = 基线，[ZoomLadderRatios].size = 顶档）
  * @param rolledBack 本轮是否已回滚过（回滚 = 这一轮绑定不再试缩放，视场是用户的了）
  */
@@ -328,6 +336,7 @@ internal data class ScanAssistState(
     val candidateRung: FrameCodeRung = FrameCodeRung.NothingDetected,
     val candidateFrames: Long = 0L,
     val tooSmallStreak: Long = 0L,
+    val retryableStreak: Long = 0L,
     val stepIndex: Int = 0,
     val rolledBack: Boolean = false,
 )
@@ -358,6 +367,10 @@ internal class ScanAssistOutcome(
  * - `zoomControlAvailable == false`（调用点用 [clampedZoomRatio] 探出来的设备事实）时
  *   **连连击都不计**：这台抬不动，计数只会攒出一发注定落空的命令。提示档位照给 ——
  *   「太小、走近一点」这句话在没有缩放控制的设备上同样是实话。
+ *
+ * T66 加的 [ScanAssistState.retryableStreak] 走的是**另一本账**：它数的是「ML Kit 在帧里看见了
+ * 候选码却没解出原文」的连续帧（[retryableRung] 两档），与缩放能不能抬**无关** ——
+ * 那是第二引擎（zxing-cpp 兜底）的唯一触发量，判据与节流都在 [ScanSecondEnginePolicy]。
  */
 internal fun advanceScanAssist(
     state: ScanAssistState,
@@ -394,11 +407,17 @@ internal fun advanceScanAssist(
     }
     // 发过命令的这一帧连击清零（下一档的预算从这一步之后重数），没发则原样带走
     val tooSmallStreak = if (zoomRatio != null) 0L else streak
+    // T66：第二引擎的触发量。与上面那本账**只有一处**不同 —— 它不看 zoomControlAvailable，
+    // 因为「这台抬不动视场」与「另一个解码器救不救得回来」是两件事（没缩放控制的设备上
+    // 兜底反而更是唯一还能出声的手段）。同一枚 rung 在这里被两本账各数一次是刻意的，
+    // 不是重复：清账的条件不同，合成一枚就会有一本账说谎。
+    val retryableStreak = if (retryableRung(rung)) state.retryableStreak + 1L else 0L
     val next = state.copy(
         shownRung = shownRung,
         candidateRung = candidateRung,
         candidateFrames = candidateFrames,
         tooSmallStreak = tooSmallStreak,
+        retryableStreak = retryableStreak,
         stepIndex = step,
         rolledBack = rolledBack,
     )
