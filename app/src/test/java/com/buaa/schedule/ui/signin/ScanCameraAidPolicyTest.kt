@@ -8,11 +8,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * T64 判据内核的表驱动单测：交付帧够不够、点击→测光点映射、手电档位、缩放钳制。
+ * T64/T65 判据内核的表驱动单测：交付帧够不够、点击→测光点映射、手电档位、缩放钳制，
+ * 以及 T65①② 的画面档位（[frameCodeRung]）与检测驱动缩放阶梯（[advanceScanAssist]）。
  *
  * 全文件零 android 依赖 —— 这正是将判据抽成 [ScanCameraAidPolicy] 的全部理由：
- * 640×480 到底够不够、点在 FILL_CENTER 裁切后的哪儿，都必须能在 JVM 里逐支打表，
- * 而不是只能在真机上"扫一枪看看"。
+ * 640×480 到底够不够、点在 FILL_CENTER 裁切后的哪儿、一枚 290 px 的候选框算不算"太小"、
+ * 连 30 帧太小该不该抬一档，都必须能在 JVM 里逐支打表，而不是只能在真机上"扫一枪看看"。
  */
 class ScanCameraAidPolicyTest {
 
@@ -220,6 +221,170 @@ class ScanCameraAidPolicyTest {
         // NaN 请求按"不动"处理而不是对设备说"你没缩放控制"
         assertEquals(1f, clampedZoomRatio(Float.NaN, 1f, 8f))
     }
+
+    // ---- ⑤ T65① 画面档位：阈值可复算 + 全表 ----
+
+    /** 阈值不许漂成魔数：291 = 3 px/模块 × 97 模块预算，每一半都有出处 */
+    @Test
+    fun candidateBoxFloorIsDerivedNotMagic() {
+        assertEquals("实测可用档不是 3 px/模块：", 3, UsefulModulePx)
+        assertEquals("候选框阈值不再由推导算出：", UsefulModulePx * QrModuleSideBudget, MinUsefulCandidateBoxPx)
+        assertEquals(291, MinUsefulCandidateBoxPx)
+    }
+
+    @Test
+    fun frameCodeRungTable() {
+        val rows = listOf(
+            // readable, candidates, largestBoxEdge → expected（边读边有原文时框多大都不重要）
+            RungRow(1, 0, -1, FrameCodeRung.CodeReadable),
+            RungRow(2, 5, 10, FrameCodeRung.CodeReadable),
+            RungRow(0, 0, -1, FrameCodeRung.NothingDetected),   // 一枚候选都没有：瞄的问题
+            RungRow(0, 1, 290, FrameCodeRung.CodeTooSmall),     // 291 差一像素就是太小
+            RungRow(0, 1, 291, FrameCodeRung.CodeUndecodable),  // 到线：连 v20 预算都放得下，不该再怪尺寸
+            RungRow(0, 3, 1200, FrameCodeRung.CodeUndecodable), // 框大到顶也解不开：焦点/抖动的事
+            RungRow(0, 1, 0, FrameCodeRung.CodeUndecodable),    // 框退化：不敢据此抬视场
+            RungRow(0, 1, -7, FrameCodeRung.CodeUndecodable),   // 同上，负数
+            RungRow(0, -2, 500, FrameCodeRung.NothingDetected), // 计数退化按没看见处理（宁不说谎）
+            RungRow(-1, 1, 100, FrameCodeRung.CodeTooSmall),    // 负原文计数不算"读到了"
+        )
+        for (row in rows) {
+            assertEquals(
+                "readable=${row.readable} candidates=${row.candidates} edge=${row.edge}：",
+                row.expected,
+                frameCodeRung(row.readable, row.candidates, row.edge),
+            )
+        }
+    }
+
+    // ---- ⑤ T65② 缩放阶梯：走档、回滚、滞后、无缩放控制 ----
+
+    /** 连续喂 n 帧同一档位，返回末状态 */
+    private fun feed(
+        start: ScanAssistState,
+        rung: FrameCodeRung,
+        frames: Int,
+        zoomAvailable: Boolean = true,
+    ): Pair<ScanAssistState, List<ScanAssistOutcome>> {
+        var state = start
+        val outcomes = mutableListOf<ScanAssistOutcome>()
+        repeat(frames) {
+            val outcome = advanceScanAssist(state, rung, zoomAvailable)
+            state = outcome.state
+            outcomes += outcome
+        }
+        return state to outcomes
+    }
+
+    /** 阶梯档位表本体：4 档、单调升、顶 2.0×、基线 1f 不在表里 */
+    @Test
+    fun zoomLadderIsMonotonicAndBounded() {
+        assertEquals(4, ZoomLadderRatios.size)
+        assertEquals(1.25f, ZoomLadderRatios.first(), 0f)
+        assertEquals("顶档不许越过 2.0×（视场滚雪球的界）：", 2.0f, ZoomLadderRatios.last(), 0f)
+        assertTrue("阶梯必须单调升：", ZoomLadderRatios.zipWithNext().all { (a, b) -> b > a })
+        assertTrue("T64 的固定 1.5× 必须在表里（现在是路径的一站）：", ZoomLadderRatios.contains(1.5f))
+        assertEquals(ZoomBaselineRatio, zoomLadderRatio(0))
+        assertEquals(1.25f, zoomLadderRatio(1))
+        assertEquals(2.0f, zoomLadderRatio(4))
+        // 越界钳到表尾：取证路径不抛
+        assertEquals(2.0f, zoomLadderRatio(9))
+    }
+
+    /** 走档的正身：每连满足 ZoomStepFrames 上一档，一次一个命令、比值对表 */
+    @Test
+    fun tooSmallStreakClimbsOneStepPerWindow() {
+        var state = ScanAssistState()
+        val commands = mutableListOf<Float>()
+        repeat((ZoomStepFrames * ZoomLadderRatios.size).toInt()) {
+            val outcome = advanceScanAssist(state, FrameCodeRung.CodeTooSmall, true)
+            state = outcome.state
+            outcome.zoomRatio?.let { commands += it }
+        }
+        assertEquals("四档预算里只许发四发：", ZoomLadderRatios, commands)
+        assertEquals(ZoomLadderRatios.size, state.stepIndex)
+        assertFalse("还没到回滚判据：", state.rolledBack)
+    }
+
+    /** 顶档之后再连满 ZoomRollbackFrames 帧仍太小 ⇒ 回基线 + 本轮封口（"stopped helping" 的帧数定义） */
+    @Test
+    fun stalledLadderRollsBackOnceAndStaysRolledBack() {
+        var state = ScanAssistState()
+        fun run(frames: Int): List<Float?> =
+            (1..frames).map {
+                val outcome = advanceScanAssist(state, FrameCodeRung.CodeTooSmall, true)
+                state = outcome.state
+                outcome.zoomRatio
+            }
+        run((ZoomStepFrames * ZoomLadderRatios.size).toInt()) // 爬到顶
+        val toTop = state.stepIndex
+        val rollbackWindow = run(ZoomRollbackFrames.toInt())
+        assertEquals("顶档预算内不该提前回滚：", listOf(ZoomBaselineRatio), rollbackWindow.filterNotNull())
+        assertTrue("顶档站满 ${ZoomRollbackFrames} 帧仍太小，必须判回滚：", state.rolledBack)
+        assertEquals(0, state.stepIndex)
+        assertEquals(toTop, ZoomLadderRatios.size)
+        // 回滚之后无论再喂多少太小帧，一发射不出（视场还给用户）
+        val after = run((ZoomStepFrames * 3).toInt())
+        assertTrue("回滚后本轮不再试缩放：", after.none { it != null })
+    }
+
+    /** 连击只认 CodeTooSmall：中间夹一帧别的（读到码/太大/没码）就重新数 */
+    @Test
+    fun anyOtherRungClearsTheTooSmallStreak() {
+        for (interrupt in listOf(FrameCodeRung.CodeReadable, FrameCodeRung.CodeUndecodable, FrameCodeRung.NothingDetected)) {
+            val (state, outcomes) = feed(ScanAssistState(), FrameCodeRung.CodeTooSmall, (ZoomStepFrames - 1).toInt())
+            assertTrue("差一帧就已经发过命令了：", outcomes.none { it.zoomRatio != null })
+            val afterInterrupt = advanceScanAssist(state, interrupt, true)
+            assertEquals("$interrupt 没把连击清零：", 0L, afterInterrupt.state.tooSmallStreak)
+            val resumed = feed(afterInterrupt.state, FrameCodeRung.CodeTooSmall, (ZoomStepFrames - 1).toInt())
+            assertTrue("$interrupt 之后重新数还不够发命令：", resumed.second.none { it.zoomRatio != null })
+            val final = advanceScanAssist(resumed.first, FrameCodeRung.CodeTooSmall, true)
+            assertEquals("$interrupt 之后补满一窗没抬档：", ZoomLadderRatios.first(), final.zoomRatio)
+        }
+    }
+
+    /** 这台没有缩放控制：一帧都不许多动视场，但提示档位照说（"太小、走近点"在无缩放设备上是实话） */
+    @Test
+    fun noZoomControlMeansNoCommandsButHintsStillSpeak() {
+        val (state, outcomes) = feed(ScanAssistState(), FrameCodeRung.CodeTooSmall, 300, zoomAvailable = false)
+        assertTrue("没有缩放控制的设备收到了命令：", outcomes.none { it.zoomRatio != null })
+        assertEquals(0, state.stepIndex)
+        assertFalse(state.rolledBack)
+        assertEquals("提示档位不该被设备能力噎住：", FrameCodeRung.CodeTooSmall, state.shownRung)
+    }
+
+    /** 屏上档位的滞后：单帧噪声不许打得提示条闪 */
+    @Test
+    fun shownRungNeedsASettledWindowToChange() {
+        var state = ScanAssistState()
+        // 5 帧太小 + 5 帧没码，反复三遍：候选永远攒不满 12 帧窗口
+        repeat(3) {
+            feed(state, FrameCodeRung.CodeTooSmall, 5).let { state = it.first }
+            feed(state, FrameCodeRung.NothingDetected, 5).let { state = it.first }
+        }
+        assertEquals("抖动把屏上档位翻面了：", FrameCodeRung.NothingDetected, state.shownRung)
+        // 站稳：第 12 帧恰好翻一次，之后不重翻
+        val outcomes = (1..20).map {
+            val outcome = advanceScanAssist(state, FrameCodeRung.CodeTooSmall, true)
+            state = outcome.state
+            outcome
+        }
+        assertEquals("换挡只许在第 12 帧发生一次：", listOf(12), outcomes.mapIndexedNotNull { i, o -> if (o.shownRungChanged) i + 1 else null })
+        // 回到没码那一档同样要攒满窗口
+        val back = (1..20).map {
+            val outcome = advanceScanAssist(state, FrameCodeRung.NothingDetected, true)
+            state = outcome.state
+            outcome
+        }
+        assertEquals("回落也该有滞后：", listOf(12), back.mapIndexedNotNull { i, o -> if (o.shownRungChanged) i + 1 else null })
+        assertEquals(FrameCodeRung.NothingDetected, state.shownRung)
+    }
+
+    private data class RungRow(
+        val readable: Int,
+        val candidates: Int,
+        val edge: Int,
+        val expected: FrameCodeRung,
+    )
 
     private data class Quad<A, B, C, D, E>(val a: A, val b: B, val c: C, val d: D, val e: E)
     private data class ZoomRow(val requested: Float, val min: Float?, val max: Float?, val expected: Float?)

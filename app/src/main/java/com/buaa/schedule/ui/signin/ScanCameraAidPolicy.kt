@@ -12,11 +12,13 @@ package com.buaa.schedule.ui.signin
  * 至少 2 px 宽（二维码是二维的，还要 2 px 高），并建议喂 1280×720 或 1920×1080 ——
  * 只有在「码几乎占满画面」时才允许用更低档。1–3 米外看投影仪上的签到二维码，恰恰是
  * 「码只占画面一小部分」的场景：模块在被降采样那一刻就毁了，之后任何解码器都救不回来。
- * 本内核管四件事：
+ * 本内核管五件事：
  * ① 交付的帧够不够（[analysisFrameVerdict] / [analysisFrameLogText]，取证行的措辞唯一来源）；
  * ② 点哪对哪：把取景画面上的点击映射成分析流坐标系里的测光点（[analysisMeteringPointForTap]）；
  * ③ 手电按钮该不该出现、写什么（[torchAffordance]）；
- * ④ 用户要的缩放比值钳到这台机器的合法区间（[clampedZoomRatio]）。
+ * ④ 用户要的缩放比值钳到这台机器的合法区间（[clampedZoomRatio]）；
+ * ⑤ 画面里到底有没有码、有的话为什么解不开（[frameCodeRung]），以及据此驱动的检测缩放阶梯
+ *    （[advanceScanAssist] / [zoomLadderRatio] —— 取代 T64「每次绑定固定抬一档」的判据本体）。
  */
 
 // ---- ① 交付帧够不够 ----
@@ -262,4 +264,197 @@ internal fun clampedZoomRatio(
     if (!min.isFinite() || !max.isFinite()) return null
     if (min <= 0f || max <= min) return null
     return safeRequest.coerceIn(min, max)
+}
+
+// ---- ⑤ 画面里有没有码、有码为什么解不开 ----
+
+/**
+ * 判档采用的 px/模块：3。
+ *
+ * 出处分两层：ML Kit 文档的 2 px 是「最小有意义单元」的**存在性下限**，不是识别率下限；
+ * 同行实测（经审阅的度量口径）把可用识别推到 **≥3 px/模块**。档位判据按严的那条取：
+ * 已经小到 2 px 的码本来就解不开，把「按 3 px 才算数」错判成「还能救」只会让用户多举着手机
+ * 白等 —— 这一档判错的代价是文案，[MinUsefulCandidateBoxPx] 判错的代价是白抬视场，两笔都要算。
+ */
+internal const val UsefulModulePx = 3
+
+/**
+ * 「看见了码但太小」的候选框短边阈值（px，**已旋转的分析画面坐标系**）：
+ *
+ * `UsefulModulePx × QrModuleSideBudget` = 3 × 97 = **291 px**。
+ *
+ * 推导链（与 ① 那本账同一个预算，不另起炉灶）：交付帧实测 1280×960（旋转后 960×1280 档）、
+ * 取景洞短边占比 [ViewfinderSideRatio 档位 0.62] ⇒ 洞映射进帧约 595 px 短边；一枚按预算
+ * 取满 v20（97 模块/边）的签到码要填满整个洞才够 3 px/模块（595÷97≈6.1，占洞六成以下就掉到
+ * 3 px 以下）。短边不足 291 px 的候选框连 v20 预算的三分之一都撑不满 —— 这种帧里没解开，
+ * 第一现行犯是**尺寸**，缩放有得救。到线以上的框连最坏的预算码都放得下，还没解开就不该再
+ * 怪尺寸（对不上焦或被抖动糊掉），抬视场只是白抬。
+ */
+internal const val MinUsefulCandidateBoxPx = UsefulModulePx * QrModuleSideBudget
+
+/** 一帧观测的档位。UI 措辞（[scanFrameAidText]）与缩放阶梯都只许按这四档说话。 */
+internal enum class FrameCodeRung {
+    /** 这一帧至少解开了一枚有原文的码：什么都不用帮 */
+    CodeReadable,
+
+    /** 一枚候选都没看见：是瞄的问题，不是帧的问题，不许据此抬缩放 */
+    NothingDetected,
+
+    /** 看见了候选码但框太小（[MinUsefulCandidateBoxPx] 以下）：缩放阶梯唯一真正的那一档 */
+    CodeTooSmall,
+
+    /** 框已经够大（或候选框尺寸不可信）却还没解开：焦点/抖动问题，抬缩放帮不上，只出文案 */
+    CodeUndecodable,
+}
+
+/**
+ * 一帧的紧凑测量 → 档位。测量由调用点从 ML Kit 的结果里抠出来当参数传（仓库口径：
+ * [Barcode.boundingBox] 只在调用点读，本文件不认识 Barcode 这个类）。
+ *
+ * 前提是 scanner 开了 `enableAllPotentialBarcodes()`： bundled 实现真的兑现这颗开关
+ * （其字节码引用 PotentialBarcode），「检测到但解不开」的候选会带着框进来 —— 而 ML Kit 的
+ * 自动缩放建议（ZoomSuggestionOptions）只活在 play-services 薄壳里，我们这条 bundled 路径
+ * 上它是**静默 no-op**，所以测量与阶梯都得上在这里。
+ *
+ * ⚠️ 框坐标在**已旋转**的分析画面空间（`InputImage.fromMediaImage(media, rotationDegrees)`
+ * 之后那幅），调用点原样报短边即可，这里不再做任何几何变换。
+ * 退化档（有候选但框缺失/非正数）落 [CodeUndecodable] 而不是 [CodeTooSmall]：
+ * 「太小」是一个要驱动抬视场的断言，拿不可信的测量抬视场，错的就是画面。
+ */
+internal fun frameCodeRung(
+    readableCodeCount: Int,
+    candidateCodeCount: Int,
+    largestCandidateBoxShortEdgePx: Int,
+): FrameCodeRung {
+    if (readableCodeCount > 0) return FrameCodeRung.CodeReadable
+    if (candidateCodeCount <= 0) return FrameCodeRung.NothingDetected
+    if (largestCandidateBoxShortEdgePx <= 0) return FrameCodeRung.CodeUndecodable
+    if (largestCandidateBoxShortEdgePx >= MinUsefulCandidateBoxPx) return FrameCodeRung.CodeUndecodable
+    return FrameCodeRung.CodeTooSmall
+}
+
+/**
+ * 检测驱动缩放阶梯的档位表（×）。基线（不抬）是 step 0，不在表里；表长就是最大档数。
+ *
+ * 步长 +0.25 的账：每上一档码的线性尺寸约 +20%（框面积 ×1.44+），恰好是「差半档到一档」
+ * 的量级 —— [MinUsefulCandidateBoxPx] 那本账从 291 px 到洞满 595 px 之间只够走四档，
+ * 步长再大就会一步跨过线、退回来时永远差一点。上界 2.0× 的理由：再收视场，取景洞
+ * （短边占比 0.62）就盖过整块投影，瞄不准的直接后果是 [FrameCodeRung.NothingDetected]
+ * —— 阶梯自己把证据源抬出画面，那是比不放大更坏的失效。
+ * 1.5×（T64 的固定档）在表里：那是实测过「投影场景有效」的那一档，现在它是路径上的
+ * 一站，而不是每次绑定不问青红皂白就落下去的默认。
+ */
+internal val ZoomLadderRatios = listOf(1.25f, 1.5f, 1.75f, 2.0f)
+
+/** 阶梯基线比值：不抬。退回基线就是把视场还给用户默认的宽画面。 */
+internal const val ZoomBaselineRatio = 1f
+
+/** 连续多少帧 [FrameCodeRung.CodeTooSmall] 才上一档（30 帧 ≈ 20–30fps 下 1–1.5 秒）：再短就是单帧噪声在举着视场抖 */
+internal const val ZoomStepFrames = 30L
+
+/**
+ * 「抬了没用」的可判定义：已到顶档之后，再连续这么多帧仍然 [FrameCodeRung.CodeTooSmall]
+ * ⇒ 缩放停止帮忙 ⇒ 退回基线并本轮不再尝试（工程实录里「持续缩放仍失败就回滚基线」那条
+ * 的帧数化版本）。给两倍于单档预算，是因为顶档之上没有更多余量可试，判早一档只是把
+ * 「用户再凑近一点就可能成」的那半秒抢走。
+ */
+internal const val ZoomRollbackFrames = 60L
+
+/** 屏上档位要连续站住这么多帧才换（12 帧 ≈ 半秒）：提示条不许被单帧的瞄偏/噪声打得闪 */
+internal const val RungSettleFrames = 12L
+
+/** 第 [stepIndex] 档（0 = 基线）要的缩放比值。越界一律钳到表尾而不是抛：这是取证路径，不是断言路径。 */
+internal fun zoomLadderRatio(stepIndex: Int): Float =
+    if (stepIndex <= 0) ZoomBaselineRatio else ZoomLadderRatios[(stepIndex - 1).coerceAtMost(ZoomLadderRatios.lastIndex)]
+
+/**
+ * 阶梯与档位滞后的状态。整枚换引用、字段全不可变（[ScanDecoderHealth] 同一口径）：
+ * 写它的是 ML Kit 的成功回调线程，复位它的是绑定路径的主线程。
+ *
+ * @param shownRung 已过滞后的**在显示**档位（UI 措辞唯一读者）
+ * @param candidateRung 正在计帧的候选档位
+ * @param candidateFrames 候选档位已连续站住的帧数
+ * @param tooSmallStreak [FrameCodeRung.CodeTooSmall] 的连续帧数（任何其他档清它 —— 阶梯只在「有码且太小」连续成立时走）
+ * @param stepIndex 当前阶梯档位（0 = 基线，[ZoomLadderRatios].size = 顶档）
+ * @param rolledBack 本轮是否已回滚过（回滚 = 这一轮绑定不再试缩放，视场是用户的了）
+ */
+internal data class ScanAssistState(
+    val shownRung: FrameCodeRung = FrameCodeRung.NothingDetected,
+    val candidateRung: FrameCodeRung = FrameCodeRung.NothingDetected,
+    val candidateFrames: Long = 0L,
+    val tooSmallStreak: Long = 0L,
+    val stepIndex: Int = 0,
+    val rolledBack: Boolean = false,
+)
+
+/**
+ * [advanceScanAssist] 的返回值。
+ *
+ * @param state 下一帧要带上的状态
+ * @param zoomRatio 非 null = 调用点要把视场设到这个比值（经 [clampedZoomRatio] 钳制后下发；
+ *                  这台没有缩放控制时调用点自己按 null 档处理，本函数不知道设备的存在）
+ * @param zoomRollback 这一发是不是回滚（调用点用它选取证行的措辞）
+ * @param shownRungChanged 屏上档位是否翻面（调用点据此推 UI + 留一行换挡痕）
+ */
+internal class ScanAssistOutcome(
+    val state: ScanAssistState,
+    val zoomRatio: Float?,
+    val zoomRollback: Boolean,
+    val shownRungChanged: Boolean,
+)
+
+/**
+ * 每帧推进一次阶梯与滞后。判据全在这里，调用点只做三件事：喂紧凑测量、下发比值、翻 UI。
+ *
+ * 阶梯只认 [FrameCodeRung.CodeTooSmall] 的**连续帧**：
+ * - [FrameCodeRung.CodeReadable] / [FrameCodeRung.CodeUndecodable] / [FrameCodeRung.NothingDetected]
+ *   都清连击 —— 前者不需要帮，中者是焦点的事（抬视场只会把焦点问题放大得更清楚），
+ *   后者是码出了画面（瞄不准时继续收视场就是滚雪球）。
+ * - `zoomControlAvailable == false`（调用点用 [clampedZoomRatio] 探出来的设备事实）时
+ *   **连连击都不计**：这台抬不动，计数只会攒出一发注定落空的命令。提示档位照给 ——
+ *   「太小、走近一点」这句话在没有缩放控制的设备上同样是实话。
+ */
+internal fun advanceScanAssist(
+    state: ScanAssistState,
+    rung: FrameCodeRung,
+    zoomControlAvailable: Boolean,
+): ScanAssistOutcome {
+    // 档位滞后：同一档连续站满 [RungSettleFrames] 帧的那一刻换一次屏上档（恰好相等才翻，
+    // 站更久不重翻；跳来跳去的单帧永远攒不满窗口）
+    val sameCandidate = rung == state.candidateRung
+    val candidateRung = if (sameCandidate) state.candidateRung else rung
+    val candidateFrames = if (sameCandidate) state.candidateFrames + 1L else 1L
+    val shownRungChanged = candidateFrames == RungSettleFrames && candidateRung != state.shownRung
+    val shownRung = if (shownRungChanged) candidateRung else state.shownRung
+
+    var step = state.stepIndex
+    var rolledBack = state.rolledBack
+    var zoomRatio: Float? = null
+    var zoomRollback = false
+    val streak = if (rung == FrameCodeRung.CodeTooSmall) state.tooSmallStreak + 1L else 0L
+    if (rung == FrameCodeRung.CodeTooSmall && !rolledBack && zoomControlAvailable) {
+        if (step < ZoomLadderRatios.size) {
+            if (streak >= ZoomStepFrames) {
+                step += 1
+                zoomRatio = zoomLadderRatio(step)
+            }
+        } else if (streak >= ZoomRollbackFrames) {
+            // 顶档又站满两档预算还是「有码、太小」⇒ 缩放停止帮忙：一次回滚，本轮不再试
+            step = 0
+            rolledBack = true
+            zoomRatio = ZoomBaselineRatio
+            zoomRollback = true
+        }
+    }
+    // 发过命令的这一帧连击清零（下一档的预算从这一步之后重数），没发则原样带走
+    val tooSmallStreak = if (zoomRatio != null) 0L else streak
+    val next = state.copy(
+        shownRung = shownRung,
+        candidateRung = candidateRung,
+        candidateFrames = candidateFrames,
+        tooSmallStreak = tooSmallStreak,
+        stepIndex = step,
+        rolledBack = rolledBack,
+    )
+    return ScanAssistOutcome(next, zoomRatio, zoomRollback, shownRungChanged)
 }
