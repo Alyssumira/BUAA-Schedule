@@ -232,20 +232,15 @@ fun WeekView(
     }
     val isBrowsingCurrentWeek = displayWeek == currentWeek
 
-    // 假期/调休标注：按当前浏览周推算每天的日期，再匹配「学习日程」数据
+    // 假期/调休标注：整张表只剩一份「折算后的标注」，按日期键现问现答（T62②）。
+    // 以前这里自己按浏览周算出 7 个日期、再 `firstOrNull { it.date == date }` 压成
+    // `Map<列下标, SpecialDay>` 交给表头 —— 那是判据的一份**局部复制**：同一天的重复条目
+    // 谁赢、周末上那枚「班」算不算数，两处界面各答一遍就会各错一遍。
+    // 折算只做形态（LocalDate → 整数键），决定权在 `SpecialDayBadgePolicy`。
     val displayWeekNumber = displayWeek ?: currentWeek ?: 1
     val weekStartDate = semester?.startLocalDate?.plusDays((displayWeekNumber - 1).toLong() * 7L)
-    val specialDaysOfWeek: Map<Int, com.buaa.schedule.domain.model.SpecialDay> = remember(
-        weekStartDate, specialDays,
-    ) {
-        if (weekStartDate == null) {
-            emptyMap()
-        } else {
-            (0..6).mapNotNull { index ->
-                val date = weekStartDate.plusDays(index.toLong())
-                specialDays.firstOrNull { it.date == date }?.let { index to it }
-            }.toMap()
-        }
+    val specialDayMarks: List<com.buaa.schedule.ui.SpecialDayMark> = remember(specialDays) {
+        specialDayMarksOf(specialDays)
     }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
@@ -282,7 +277,7 @@ fun WeekView(
                 compactScroll = compactScroll,
                 compactDayWidth = compactDayWidth,
                 dayScrollState = dayScrollState,
-                specialDays = specialDaysOfWeek,
+                specialDayMarks = specialDayMarks,
                 weekStartDate = weekStartDate,
             )
             // 横滑翻周：有周次信息时走 HorizontalPager，手势、惯性与无障碍滚动语义都由
@@ -1748,7 +1743,7 @@ private fun DayHeader(
     compactScroll: Boolean,
     compactDayWidth: Dp,
     dayScrollState: ScrollState,
-    specialDays: Map<Int, com.buaa.schedule.domain.model.SpecialDay> = emptyMap(),
+    specialDayMarks: List<com.buaa.schedule.ui.SpecialDayMark> = emptyList(),
     /** 当前展示周的周一；用于在表头显示每一天的日期（参考稿是「周二 / 9/15」两行） */
     weekStartDate: LocalDate? = null,
 ) {
@@ -1786,7 +1781,6 @@ private fun DayHeader(
             Row(modifier = Modifier.fillMaxWidth()) {
                 dayNames.forEachIndexed { index, dayName ->
                     val isToday = highlightToday && today.dayOfWeek.value == index + 1
-                    val special = specialDays[index]
                     val cellModifier = if (compactScroll) {
                         Modifier.width(compactDayWidth)
                     } else {
@@ -1823,23 +1817,15 @@ private fun DayHeader(
                                     maxLines = 1,
                                     softWrap = false,
                                 )
-                                // 假期（休）/ 调休（班）标注：只做视觉提示，不影响任何计算
-                                special?.let { day ->
-                                    val badge = com.buaa.schedule.domain.model.SpecialDay.badgeOf(day)
-                                    Text(
-                                        text = badge,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isToday) {
-                                            MaterialTheme.colorScheme.onPrimary
-                                        } else if (day.isHoliday) {
-                                            MaterialTheme.colorScheme.error
-                                        } else {
-                                            MaterialTheme.colorScheme.primary
-                                        },
-                                        modifier = Modifier.padding(start = 2.dp),
-                                    )
-                                }
+                                // 假期（休）/ 调休（班）标注：只做视觉提示，不影响任何计算。
+                                // 字、色、字距全由 `SpecialDayBadgeText` 那一份决定（T62②）：
+                                // 今日页与顶栏吃的是同一段代码，所以三处不会各写一种红。
+                                // 这一格的版面事实只有"压不压在主题色胶囊上"，故传 onAccentSurface。
+                                SpecialDayBadgeText(
+                                    date = cellDate,
+                                    marks = specialDayMarks,
+                                    onAccentSurface = isToday,
+                                )
                             }
                             if (cellDate != null) {
                                 Text(

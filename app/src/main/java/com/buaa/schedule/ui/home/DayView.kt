@@ -129,6 +129,9 @@ import java.time.LocalTime
  *   组合期读时钟不是快照订阅，跨过零点没有任何东西会因此重组，
  *   「回到今天」与日/周两视图的今日高亮会一起停在昨天。
  * @param onDateChange 用户翻页时回调
+ * @param specialDays 「学习日程」的假期/调休标注（T62②）：页头那一行日期跟着
+ *   正在看的那一天挂徽标。今日页以前完全不认这份数据，用户在今天=中秋那天
+ *   看到的只有"没有课"，看不出这是节假日。
  */
 @Composable
 fun DayView(
@@ -140,6 +143,7 @@ fun DayView(
     modifier: Modifier = Modifier,
     onDateChange: (LocalDate) -> Unit = {},
     onCourseClick: (Course) -> Unit = {},
+    specialDays: List<com.buaa.schedule.domain.model.SpecialDay> = emptyList(),
 ) {
     // Hero 与倒计时每分钟刷新；后台（低于 STARTED）自动停表，避免不可见时继续跑协程。
     // **醒来第一件事是发布、第二件事才是等下一次边界**：顺序反过来（旧写法先 delay
@@ -163,6 +167,9 @@ fun DayView(
     val semesterStart = remember(semester?.startDate) {
         semester?.run { startLocalDate }
     }
+    // 标注折算成判据要的形态，一次一份（键只有 specialDays：它换了才要重算，
+    // 与在看哪一天无关 —— 那一维留给徽标自己去问）
+    val specialDayMarks = remember(specialDays) { specialDayMarksOf(specialDays) }
     // 「列表 / 时间轴」的选择落在 Personalization（同 weekGridMode 一条链）：
     // 此前它是 rememberSaveable，旋转/返回能活，但杀进程冷启动就回到「列表」——
     // 用户明确点出来的模式被当成一次性界面状态丢掉了。
@@ -246,13 +253,26 @@ fun DayView(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        Text(
-                            text = if (day == today) "今天 · ${weekTextFor(semester, semesterStart, day)}"
-                            else weekTextFor(semester, semesterStart, day),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                        )
+                        // 徽标挂在副行而不是日期那一行：titleMedium 下
+                        // 「9月25日 · 星期五」+「休· 中秋节」在 360dp 屏上会挤掉日期本身
+                        // （页头左右各有一个 48dp 箭头，中间只剩 ~230dp），
+                        // 而 labelMedium 那一行放得下，且周次与节假日本来就是同一句话的两半。
+                        // 键用 `day`：这一格在 Crossfade 里，翻页过程中新旧两天并存，
+                        // 读外层 `date` 就会让滑出去那一屏先换成新日期的徽标（同 AnimatedContent 的理由）。
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = if (day == today) "今天 · ${weekTextFor(semester, semesterStart, day)}"
+                                else weekTextFor(semester, semesterStart, day),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                            SpecialDayBadgeText(
+                                date = day,
+                                marks = specialDayMarks,
+                                showNote = true,
+                            )
+                        }
                     }
                 }
             }

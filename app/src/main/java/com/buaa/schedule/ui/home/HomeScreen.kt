@@ -278,6 +278,14 @@ fun HomeScreen(
     val dateLabel = remember(semesterStart, state.currentWeek, browseWeek, today) {
         topBarDateLabel(semesterStart, state.currentWeek, browseWeek, today)
     }
+    // 顶栏那枚「休/班」挂在哪一天 = **这一行字说的那一天**，不是 today（T62②）。
+    // 解析与上面的 dateLabel 共用 topBarDisplayDate 那一份：两行同源这条约定（T56）
+    // 一旦让徽标自己去读 today 就破了——翻到第 3 周时顶栏写「9月14日 星期一」，
+    // 旁边却挂今天（9/25）的休，读起来是 app 算错了。键与上面逐字一致。
+    val dateLabelDay = remember(semesterStart, state.currentWeek, browseWeek, today) {
+        topBarDisplayDate(semesterStart, state.currentWeek, browseWeek, today)
+    }
+    val specialDayMarks = remember(specialDays) { specialDayMarksOf(specialDays) }
 
     // 冲突课程 id 集合：周视图/日视图两个分支各算一次（此前是两处重复的 flatMap+toSet），
     // 而且每次重组都重算。这里派生为一个 remember 值，两个分支共用同一份。
@@ -429,12 +437,21 @@ fun HomeScreen(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
-                                Text(
-                                    text = dateLabel,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                )
+                                // 副行是一"行"而不是一个 Text：徽标要贴着日期，
+                                // 而这一列（Column）里的第二个子节点会另起一行、
+                                // 把顶栏再垫高一层（真机反馈"顶栏有点厚"就是这一类）
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = dateLabel,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                    )
+                                    // 节假日在这一行报一次就够，别等用户翻到周表头那一格才看见（T62②）。
+                                    // 不带说明：这一行左边还压着「第 N 周」，右边就是分段控件，
+                                    // 一格「休」是提醒、一句「国庆节调休上班」就成挤占
+                                    SpecialDayBadgeText(date = dateLabelDay, marks = specialDayMarks)
+                                }
                             }
                         } else {
                             Text(
@@ -584,6 +601,7 @@ fun HomeScreen(
                             today = today,
                             onDateChange = { setBrowseDate(it) },
                             onCourseClick = onCourseClick,
+                            specialDays = specialDays,
                             modifier = Modifier.weight(2f),
                         )
                     }
@@ -621,6 +639,7 @@ fun HomeScreen(
                                 today = today,
                                 onDateChange = { setBrowseDate(it) },
                                 onCourseClick = onCourseClick,
+                                specialDays = specialDays,
                             )
                         }
                     }
