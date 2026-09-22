@@ -11,10 +11,10 @@ import org.junit.Test
  *
  * 用户两句投诉是同一件事的两半：第一句「节假日没有标注出来」由 T60 接了数据侧，
  * 第二句仍然是同一句 —— 因为数据到位之后，全应用只有周课表表头那一格在画它。
- * 而"三处共用一份判据"这种修法最容易得的病恰恰是**接完就散**：
+ * 而"多处共用一份判据"这种修法最容易得的病恰恰是**接完就散**：
  * - 某处把共享件又内联回自己的 `if (isHoliday)`（下次改配色就只改了一处），
- * - 某处拿 `today` 当依据而那一行字说的是别的日期（顶栏第一行/第二行/徽标三处各说一天，
- *   这正是 T56 刚修完的那个形状），
+ * - 某处拿 `today` 当依据而那一行字说的是别的日期（页头 Crossfade 滑出去那一屏
+ *   先换成新日期的标注，正是 T56 顶栏刚修完的那个形状），
  * - 判据内核偷偷去读 `LocalDate` / `MaterialTheme`（那就再也没法在 JVM 里打表）。
  *
  * 手法照抄 [SpecialDayRefreshWiringGuardTest] / [TopBarDateWiringGuardTest]：读源码文本、
@@ -65,13 +65,13 @@ class SpecialDayBadgeWiringGuardTest {
         assertFalse("SpecialDay 又自带徽标文案了（判据应只在内核一份）：", model.contains("badgeOf"))
     }
 
-    // ---- ② 三处界面都真的走共用件 ----
+    // ---- ② 两处界面都真的走共用件（周表头 / 今日页页头；顶栏那两行按本卡口径不接） ----
 
-    /** 周表头 / 今日页页头 / 顶栏：三处都得调用同一件渲染口，一处不落 */
+    /** 周表头与今日页页头都得调用同一件渲染口，一处不落 */
     @Test
-    fun allThreeSurfacesDrawThroughTheSharedBadge() {
+    fun bothSurfacesDrawThroughTheSharedBadge() {
         for (
-            file in listOf(WEEK_VIEW_FILE, DAY_VIEW_FILE, HOME_SCREEN_FILE)
+            file in listOf(WEEK_VIEW_FILE, DAY_VIEW_FILE)
         ) {
             val ui = blankComments(readMainSource(file))
             assertTrue("$file 不再调用共用徽标（它又自己画了一遍）：", occurrences(ui, "SpecialDayBadgeText(") >= 1)
@@ -104,25 +104,9 @@ class SpecialDayBadgeWiringGuardTest {
         }
     }
 
-    // ---- ③ 顶栏与今日页都跟着"在看的日期"，不跟 today ----
-
-    @Test
-    fun topBarBadgeFollowsTheDateTheLabelShows() {
-        val home = blankComments(readMainSource(HOME_SCREEN_FILE))
-        val call = Regex("SpecialDayBadgeText\\(([^)]*)\\)").findAll(home).toList()
-        assertEquals("顶栏这一处渲染口应当恰好一处（今日页那份在 DayView 里）：", 1, call.size)
-        val args = call.single().groupValues[1]
-        assertTrue("顶栏徽标又去读 today 了（它得跟着这一行字说的那一天，T56 那条约定）：$args", args.contains("date = dateLabelDay"))
-        val dayKey = balancedBlock(home, "val dateLabelDay = remember(")
-        for (key in listOf("semesterStart", "currentWeek", "browseWeek", "today")) {
-            assertTrue("dateLabelDay 的 remember 键漏了 $key：\n$dayKey", dayKey.contains(key))
-        }
-        assertTrue("dateLabelDay 没走 topBarDisplayDate（那就是另算了一遍哪一天）：", dayKey.contains("topBarDisplayDate("))
-        // 文案与日期同源：格式化那一侧必须复用同一份解析，否则两行会各说一天
-        val label = blankComments(readMainSource(TOP_BAR_LABEL_FILE))
-        assertTrue("topBarDateLabel 不再由 topBarDisplayDate 派生（第二份「哪一天」就回来了）：", label.contains("topBarDisplayDate("))
-        assertEquals("周 → 周一的换算在顶栏这一页只许出现一次：", 1, occurrences(label, "SemesterWeekDates.mondayOf("))
-    }
+    // ---- ③ 今日页跟着"在看的日期"，不跟 today ----
+    // 顶栏那两行**不在本卡范围**（与日头信息重复，调度定死不做）：这里特意不钉顶栏，
+    // 而 `topBarDateLabel` 保持 T56 落地的原样——哪天要接顶栏，改这条决定连同卡一起开。
 
     @Test
     fun dayViewBadgeFollowsTheBrowsedDate() {
@@ -265,6 +249,5 @@ class SpecialDayBadgeWiringGuardTest {
         const val WEEK_VIEW_FILE = "com/buaa/schedule/ui/home/WeekView.kt"
         const val DAY_VIEW_FILE = "com/buaa/schedule/ui/home/DayView.kt"
         const val HOME_SCREEN_FILE = "com/buaa/schedule/ui/home/HomeScreen.kt"
-        const val TOP_BAR_LABEL_FILE = "com/buaa/schedule/ui/home/TopBarDateLabel.kt"
     }
 }

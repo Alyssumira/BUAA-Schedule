@@ -1819,7 +1819,7 @@ private fun DayHeader(
                                 )
                                 // 假期（休）/ 调休（班）标注：只做视觉提示，不影响任何计算。
                                 // 字、色、字距全由 `SpecialDayBadgeText` 那一份决定（T62②）：
-                                // 今日页与顶栏吃的是同一段代码，所以三处不会各写一种红。
+                                // 今日页吃的是同一段代码，所以两处不会各写一种红。
                                 // 这一格的版面事实只有"压不压在主题色胶囊上"，故传 onAccentSurface。
                                 SpecialDayBadgeText(
                                     date = cellDate,

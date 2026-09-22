@@ -27,7 +27,8 @@ import java.time.LocalDate
  * 以前这三样东西散在 `WeekView` 表头那 16 行里（`badgeOf` 挑字、`isHoliday` 挑色、
  * `padding(start = 2.dp)` 挑位置），于是"今日页要不要标""顶栏要不要标"这两个问题的答案
  * 一直是"再抄一遍"——而抄一遍的结果就是字与色从此分叉（同一枚「休」在两处一个红一个蓝，
- * 用户读成 app 出了 bug，而不是"这里没接上"）。这一档把三处接进同一个渲染口，
+ * 用户读成 app 出了 bug，而不是"这里没接上"）。这一档把周表头与今日页页头接进同一个渲染口
+ * （顶栏那两行按本卡口径不接，与日头重复），
  * 判据本身（哪一天挂哪枚、冲突怎么取舍）在纯 JVM 的 `SpecialDayBadgePolicy` 里，
  * 本文件只负责两件事：把 `LocalDate` 折成判据要的整数键，以及把结论画出来。
  *
@@ -48,7 +49,7 @@ internal fun specialDayMarksOf(days: List<SpecialDay>): List<SpecialDayMark> =
         )
     }
 
-/** 这一天挂哪枚徽标（null = 不挂）。三处界面问的都是这一个问题，所以只留这一个问法 */
+/** 这一天挂哪枚徽标（null = 不挂）。几处界面问的都是这一个问题，所以只留这一个问法 */
 internal fun specialDayBadgeOn(date: LocalDate, marks: List<SpecialDayMark>): SpecialDayBadge? =
     specialDayBadgeAt(
         dateKey = dateKeyOf(date),
@@ -81,8 +82,8 @@ internal fun SpecialDayBadgeText(
         color = specialDayBadgeColor(badge.kind, onAccentSurface),
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        // 字距取 spaceMicro（2dp）——正是从前表头那枚徽标的实测值，改成三处共用之后
-        // 把它写死在这里，免得"离日期远了一格"这种微调在三处各调一次
+        // 字距取 spaceMicro（2dp）——正是从前表头那枚徽标的实测值，改成几处共用之后
+        // 把它写死在这里，免得"离日期远了一格"这种微调在各处各调一次
         modifier = modifier.padding(start = DesignTokens.spaceMicro),
     )
 }
