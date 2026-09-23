@@ -943,12 +943,13 @@ private fun ScheduleToolbarRow(
         termSlot?.invoke()
         // 切到日视图时这一整簇会消失。原本是 `if` 硬切——下方的内容区在淡入，
         // 顶栏却整块闪现/消失，两个节奏不同步就被读成"卡了一下"。
-        // 横向展开收的是自己那一份宽度，所以收起时校区选择器会顺势滑回来，
-        // 这正是想要的：SpaceBetween 的分布变了，就得有人补位。
         // 权重挂在簇**外面**（#113 的账）：这一枚是 Row 的加权子节点 ⇒ 只吃 termSlot 与
         // campusSlot 拿完固有宽之后剩下的那一份。写进簇内部时 AnimatedVisibility 自己是枚
         // 无权重子节点，按整份可用宽（装机量到 1038px）量一次，簇里那枚 weight 就把这一份全吃了，
         // 后面的 campusSlot 于是拿到 maxWidth = 0 —— 周课表页签上「校区切换」整块不在屏上。
+        // 代价要说清楚：加权的是簇的**布局位**而不是画出来的宽度，所以校区从此稳稳占住右端、
+        // 不再跟着簇滑动；展开/收起本身仍是逐帧的（装机一次切页签 UI 线程画 15 帧、反向 14 帧，
+        // 260ms @60fps；对照空转 1s 画 0 帧）。
         AnimatedVisibility(
             visible = showWeekNav,
             modifier = Modifier.weight(1f),
