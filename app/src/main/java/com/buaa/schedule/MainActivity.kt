@@ -91,6 +91,10 @@ import com.buaa.schedule.core.designsystem.liquid.LiquidBottomTab
 import com.buaa.schedule.ui.editor.CourseEditorScreen
 import com.buaa.schedule.ui.course.CourseManagementScreen
 import com.buaa.schedule.core.FirstRun
+import com.buaa.schedule.core.LaunchRequests
+import com.buaa.schedule.core.NO_COURSE_ID
+import com.buaa.schedule.core.NO_DAY_OF_WEEK
+import com.buaa.schedule.core.launchRequestsOf
 import com.buaa.schedule.ui.home.HomeScreen
 import com.buaa.schedule.ui.onboarding.OnboardingScreen
 import com.buaa.schedule.ui.importing.BuaaLoginScreen
@@ -148,9 +152,16 @@ class MainActivity : ComponentActivity() {
                 android.util.Log.d("GlassDiag", "$name=$value")
             }
         }
-        requestedCourseId.value = courseIdFrom(intent)
-        requestedRoute.value = routeFrom(intent)
-        requestedDayOfWeek.value = dayOfWeekFrom(intent)
+        // 三枚一次性导航请求只在这次启动真的是用户按出来的时候才认（T71，台账 #112）。
+        // 判据本体在 core/LaunchRequestPolicy.kt：MainActivity 是 launcher 页，而这三枚 extra
+        // 的生产方全是 PendingIntent.getActivity（组件格子 / 组件行 / 通知按钮），
+        // 那一路的 intent 会留在任务栈根上 —— 进程被杀后只点桌面图标，系统会把它重放一遍。
+        // 装机实测：重放那一趟 onCreate 拿到的是 saved=true + 陈旧的那枚 extra，
+        // 而真正的新请求（进程被杀后再点格子）走的是下面的 onNewIntent。
+        val launch = launchRequestsFrom(intent, hasSavedState = savedInstanceState != null)
+        requestedCourseId.value = launch.courseId
+        requestedRoute.value = launch.route
+        requestedDayOfWeek.value = launch.dayOfWeek
         // 老用户（引导已完成）没有自检步可走，通知权限仍在启动时补申请一次
         if (FirstRun.onboardingCompleted(this)) maybeRequestNotificationPermission()
         setContent {
@@ -220,13 +231,22 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    /** launchMode=singleTop：应用已在前台时点组件不会重建 Activity，请求从这里进来 */
+    /**
+     * launchMode=singleTop：应用已在前台时点组件不会重建 Activity，请求从这里进来。
+     *
+     * 进程被杀、任务还活着的时候也是这里 —— 那一趟 onCreate 拿到的是重放的陈旧 intent
+     * （saved=true，内核按「无请求」处理），而用户这一次真正按下去的那枚新 extra 带着
+     * onNewIntent 进来。装机实测（第 1 格）：onCreate `day=5`（陈旧）+ onNewIntent `day=1`（新）
+     * ⇒ 落周一。所以"重建那一档不认"不会把组件那一跳关掉。
+     */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        courseIdFrom(intent)?.let { requestedCourseId.value = it }
-        routeFrom(intent)?.let { requestedRoute.value = it }
-        dayOfWeekFrom(intent)?.let { requestedDayOfWeek.value = it }
+        // 与 onCreate 同一份判据，只有那个布尔不同：新送来的 intent 就是用户刚刚按的那一次
+        val fresh = launchRequestsFrom(intent, hasSavedState = false)
+        fresh.courseId?.let { requestedCourseId.value = it }
+        fresh.route?.let { requestedRoute.value = it }
+        fresh.dayOfWeek?.let { requestedDayOfWeek.value = it }
     }
 
     override fun onStart() {
@@ -278,25 +298,28 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    /** 从启动 Intent 里取组件行点击携带的课程 id；非法/缺失返回 null */
-    private fun courseIdFrom(intent: Intent?): Long? =
-        intent?.getLongExtra(EXTRA_COURSE_ID, -1L)?.takeIf { it >= 0L }
-
     /**
-     * 从启动 Intent 里取 4×2 网格格子的星期序号（ISO 1..7）。
-     * 模板缺省值是 0，非组件进来的普通启动则完全没有这个键 —— 两者都按"无请求"处理。
-     */
-    private fun dayOfWeekFrom(intent: Intent?): Int? =
-        intent?.getIntExtra(WidgetNavigation.EXTRA_DAY_OF_WEEK, 0)?.takeIf { it in 1..7 }
-
-    /**
-     * 从启动 Intent 里取「要打开哪个页内路由」。
+     * 把启动 Intent 上那三枚**原始值**抽出来交给判据内核（T71）。
      *
-     * MainActivity 是 launcher 页，外部应用可以直接带 extra 进来，所以这里过白名单：
-     * 只认通知链路真正会发的那几条。
+     * 全文件读 extras 的写法只许有这三处、且只在这一个函数体内（守卫 ④ 钉着）：
+     * 解析设备对象留在调用点，「什么算一次请求」「重建那一档认不认」全在
+     * [com.buaa.schedule.core.launchRequestsOf] 里说一遍，onCreate 与 onNewIntent 共用。
+     * 缺省哨兵与生产方同源：星期几 0 是 4×2 网格模板预置的那枚（`WidgetCommon.kt:770`），
+     * 课程 id -1L 是组件列表模板预置的那枚（:316）；普通启动没有这些键，`getXExtra` 给的
+     * 也正是这两个数 —— 两种来源都按「无请求」处理。
      */
-    private fun routeFrom(intent: Intent?): String? =
-        intent?.getStringExtra(EXTRA_ROUTE)?.takeIf { it in ROUTABLE_FROM_INTENT }
+    private fun launchRequestsFrom(intent: Intent?, hasSavedState: Boolean): LaunchRequests {
+        return launchRequestsOf(
+            rawCourseId = intent?.getLongExtra(EXTRA_COURSE_ID, NO_COURSE_ID) ?: NO_COURSE_ID,
+            rawRoute = intent?.getStringExtra(EXTRA_ROUTE),
+            rawDayOfWeek = intent?.getIntExtra(
+                WidgetNavigation.EXTRA_DAY_OF_WEEK,
+                NO_DAY_OF_WEEK,
+            ) ?: NO_DAY_OF_WEEK,
+            routableRoutes = ROUTABLE_FROM_INTENT,
+            hasSavedState = hasSavedState,
+        )
+    }
 
     /** Android 13+ 需要运行时申请通知权限；仅申请一次（后续由设置页引导） */
     private fun maybeRequestNotificationPermission() {
@@ -320,7 +343,7 @@ class MainActivity : ComponentActivity() {
          */
         internal const val EXTRA_ROUTE = "com.buaa.schedule.EXTRA_ROUTE"
 
-        /** [EXTRA_ROUTE] 承认的路由：见 [routeFrom] */
+        /** [EXTRA_ROUTE] 承认的路由：成员判定在 [com.buaa.schedule.core.launchRequestsOf] */
         private val ROUTABLE_FROM_INTENT = setOf("spoc_scan", "spoc_login")
     }
 }
