@@ -398,12 +398,18 @@ class CourseFluidService : Service() {
          * `not allowed due to mAllowStartForeground false` —— 未授权时
          * [ClassProgressScheduler.scheduleClassStartBell] 换的是 `setAndAllowWhileIdle`，
          * 它不是 `setAlarmClock`，AMS 不给 `ALARM_MANAGER_ALARM_CLOCK` 那一档豁免。
+         *
+         * **整段包住 `runCatching`，判不出来时按"没豁免"答**（2026-09-23 复核第 2 件事时补的）：
+         * `getSystemService` 收的是调用点递来的 Context，而 `SITE_START_SERVICE` 那一处递的是广播的
+         * Context（[ClassProgressReceiver] 的临时收件上下文），它站在这条唯一不许抛的路上。
+         * 判不出来时答 `false` = 这一档判成 [LiveFgsRetry.SkipStructural]（少排一次铃），
+         * 而让它抛出去 = 广播或服务主线程当场崩 —— 两害相权取前者。
          */
-        private fun keepsAlarmClockExemption(context: Context): Boolean {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
-            val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return false
-            return runCatching { alarmManager.canScheduleExactAlarms() }.getOrDefault(false)
-        }
+        private fun keepsAlarmClockExemption(context: Context): Boolean = runCatching {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return@runCatching true
+            val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return@runCatching false
+            alarmManager.canScheduleExactAlarms()
+        }.getOrDefault(false)
 
         /**
          * 启动一段课程实况。

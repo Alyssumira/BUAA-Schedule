@@ -16,7 +16,7 @@ import org.junit.Test
  * 源文件文本、匹配前先 `blankComments` 抹注释（钉的是接线，不是白话）、括号配平取实参表与
  * 内容块、**找不到锚点就抛**、不许用 `assumeTrue` 跳过 —— 跳过与没有守卫是同一件事。
  *
- * 五档各自钉一条已经付过学费的约束：
+ * 前面五档各自钉一条已经付过学费的约束：
  * 1. `postProgressNotification()` 里 `startForeground` 那处 onFailure（当前源码 `:163`）与
  *    `start()` 里 `ContextCompat.startForegroundService` 那处（`:429`）**两处都过 reportLiveDegrade**
  *    （台账 #119 记的是改前基线上的 `:159` / `:310`）：有人嫌取证烦、退回"只留一行 WARN"，
@@ -29,6 +29,16 @@ import org.junit.Test
  *    会把下课铃广播（[ClassProgressReceiver] 整段 runCatching 之内）或服务主线程直接打崩；
  * 5. 降级这条路不产生任何**新的**用户可见打扰：通知 id 仍是 `20_260_002`，不加渠道、
  *    不弹 toast、不动勿扰、不排 WorkManager、不开新 Handler 线程，设置页也不加说明行。
+ *
+ * T78b 复核时补的三档（钉的是上面五条各自"漏判"的那一面）：
+ * 6. 取证那一行**必须在源码里活着**（前四条只钉"没人退回 WARN"，不钉这行本身）——
+ *    [ReleaseForensicLogSurvivalTest] 的产物层也读它，但那一层没有 release 产物时会跳过；
+ * 7. 降级这条路**不许多出一台调度器**：本卡换的是"触发源"，走的是既有的
+ *    `ClassProgressScheduler.rescheduleNextWindow`，不是新写一枚 AlarmManager / WorkRequest /
+ *    Handler —— 后者会把这台机器上量到的豁免档判据换成一张没人量过的排程表；
+ * 8. `reportLiveDegrade` **整条路不许把异常抛回调用方**：凡碰 android 框架的调用
+ *    （`getSystemService` / `applicationContext` / `applicationScope`）都得站在 `runCatching` 里，
+ *    这条路本身也不许出现 `throw`。
  */
 class LiveFgsDegradeWiringGuardTest {
 
@@ -261,6 +271,153 @@ class LiveFgsDegradeWiringGuardTest {
                 assertFalse("${text.second} 里出现了「$banned」：#119 要的是 logcat 取证 + 自动重排，不是设置页加一行说明", text.first.contains(banned))
             }
         }
+    }
+
+    // ---- ⑥ 取证那一行本身活着（第 1~5 档只钉"没人退回 WARN"，不钉这行）--------------------------------
+
+    /**
+     * `liveFgsDegraded site=… action=…` 这行必须在 [reportLiveDegrade] 里、级别是 `w`、
+     * 带 site 与 action 两格，而且**全服务只此一枚**。
+     *
+     * 它是 #119 从"用户完全看不境"里换回来的唯一东西：`ReleaseForensicLogSurvivalTest` 的产物层
+     * 也读它，但那一层没有 release 产物时会 `assumeTrue` 跳过 —— 恒跑的下限只能钉在这里。
+     * 第二枚同名行也不许出现：两行取证迟早只剩一行还有人读，分档就又是猜的。
+     */
+    @Test
+    fun theForensicLineItselfIsStillThereAndIsTheOnlyOne() {
+        val svc = blankComments(source(SERVICE))
+        val reporter = balancedBlock(svc, "private fun reportLiveDegrade(")
+        assertTrue(
+            "reportLiveDegrade 里那行 `Log.w(TAG, \"liveFgsDegraded site=…\")` 没了或换名了：" +
+                "`logcat -d -s CourseFluidService | grep liveFgsDegraded` 是这张卡唯一的取证口\n$reporter",
+            Regex("""Log\.w\(\s*TAG,\s*"liveFgsDegraded site=""").containsMatchIn(reporter),
+        )
+        assertEquals(
+            "全服务 liveFgsDegraded 取证行只许一枚（多一枚就是分档换了口径、少一枚就是回到静默）",
+            1,
+            Regex(""""liveFgsDegraded""").findAll(svc).count(),
+        )
+        // 两格都得在：site 分两枚站点，action 分六档
+        for (column in listOf("site=$", "action=$")) {
+            assertTrue("取证行丢了「$column」那一格：logcat 里就分不出档了", reporter.contains(column))
+        }
+        assertTrue(
+            "取证文案搬进了资源条目：那样它就改由 R8 的资源收缩负责删除，产物层守卫的判据要整个重写",
+            !reporter.contains("getString(R.string"),
+        )
+    }
+
+    // ---- ⑦ 这条路不许多出一台调度器 ---------------------------------------------------------------------
+
+    /**
+     * 本卡换的是**触发源**，出口只有既有的 [ClassProgressScheduler.rescheduleNextWindow] 一条：
+     * 降级这条路里不许新写 AlarmManager 排程、不许排 WorkManager、不许开 Handler/线程。
+     *
+     * 为什么值得钉死：`Handler(` / `Looper` 在服务里本来就有 2/3 枚（进度条自己滴答用的，
+     * 基点 `69f7b3a` 就在），所以"整份文件没有 Handler"是假判据 —— 靶子只能是这条路本身。
+     * 新造一台调度器等于把这台机器上量到的豁免档判据换成一张没人量过的排程表。
+     */
+    @Test
+    fun theDegradePathAddsNoNewScheduler() {
+        val svc = blankComments(source(SERVICE))
+        val path = balancedBlock(svc, "private fun reportLiveDegrade(") +
+            balancedBlock(svc, "private fun keepsAlarmClockExemption(")
+        for (banned in listOf(
+            "WorkRequest", "WorkManager", "enqueue(", "JobScheduler", "AlarmScheduler",
+            "setAlarmClock(", "setExact(", "setExactAndAllowWhileIdle(", "setAndAllowWhileIdle(",
+            "alarmManager.set", ".set(", "Handler(", "Looper", "Thread(", "postDelayed",
+            "startForegroundService(", "startForeground(",
+        )) {
+            assertFalse(
+                "降级这条路上出现了「$banned」：这一档的出路只有『走既有的 rescheduleNextWindow 换触发源』" +
+                    "一条，新排一台调度器 / 重投同一发都不在读数支持的范围里\n$path",
+                path.contains(banned),
+            )
+        }
+        // 唯一的出口，而且走的是那个既有的类（不是自己另起一份排程）
+        val exits = Regex("""ClassProgressScheduler\.rescheduleNextWindow\(""").findAll(path).count()
+        assertEquals("降级这条路排出去的窗口只许一枚，且必须是 ClassProgressScheduler.rescheduleNextWindow", 1, exits)
+        // AlarmManager 只许用来"读授权"，一次都不许用它排
+        assertEquals("AlarmManager 在全服务只出现两枚（import + getSystemService 读授权）", 2, svc.countOf("AlarmManager"))
+        assertEquals(
+            "拿到的 AlarmManager 上只许调 canScheduleExactAlarms（读授权），多一枚 set 就是在这里偷偷排了个闹钟",
+            listOf("alarmManager.canScheduleExactAlarms"),
+            Regex("""alarmManager\.\w+""").findAll(svc).map { it.value }.distinct().sorted().toList(),
+        )
+    }
+
+    // ---- ⑧ 整条路不许把异常抛回调用方 ---------------------------------------------------------------------
+
+    /**
+     * `reportLiveDegrade` 与它调的 `keepsAlarmClockExemption` 站在 `onFailure` 里面：
+     * 凡碰 android 框架的调用（`getSystemService` / `applicationContext` / `applicationScope` /
+     * `canScheduleExactAlarms` / `rescheduleNextWindow`）都必须落在某枚 `runCatching` 的块里，
+     * 这两块自身也不许出现 `throw`。
+     *
+     * 2026-09-23 复核时这一条是真的漏的：`keepsAlarmClockExemption` 当时只把
+     * `canScheduleExactAlarms()` 包进 runCatching，`context.getSystemService(...)` 是裸的 ——
+     * 而 `SITE_START_SERVICE` 那一处递来的正是广播的临时 Context。现在整段包住，判不出来按
+     * "没豁免"答（少排一次铃），而不是把下课铃广播打崩。
+     */
+    @Test
+    fun nothingOnTheDegradePathEscapesToTheCaller() {
+        val svc = blankComments(source(SERVICE))
+        val bodies = listOf(
+            "reportLiveDegrade" to functionRange(svc, "private fun reportLiveDegrade("),
+            "keepsAlarmClockExemption" to functionRange(svc, "private fun keepsAlarmClockExemption("),
+        )
+        // 每条 runCatching 的绝对区间：只认落在这两枚函数里的那些
+        val guarded = Regex("""runCatching\s*\{""").findAll(svc)
+            .map { open -> open.range.last until (open.range.last + balancedBraces(svc, open.range.last).length) }
+            .filter { range -> bodies.any { range.first in it.second } }
+            .toList()
+        val needles = listOf(
+            "getSystemService", "applicationContext", "applicationScope",
+            "canScheduleExactAlarms", "rescheduleNextWindow",
+        )
+        val offenders = ArrayList<String>()
+        for ((label, range) in bodies) {
+            for (needle in needles) {
+                var from = range.first
+                while (true) {
+                    val at = svc.indexOf(needle, from)
+                    if (at < 0 || at > range.last) break
+                    if (guarded.none { it.contains(at) }) offenders += "$needle @$label"
+                    from = at + needle.length
+                }
+            }
+            val body = svc.substring(range.first, range.last + 1)
+            assertFalse("$label 里出现了 throw：这一档的契约就是绝不往外抛\n$body", body.contains("throw "))
+        }
+        assertEquals(
+            "降级这条路上有碰框架的调用没被 runCatching 包住：它抛出去就是把 ClassProgressReceiver 的广播" +
+                "或服务主线程当场打崩（#119 修的是「看不见降级」，不是「引入崩溃」）：\n$offenders",
+            emptyList<String>(),
+            offenders,
+        )
+        // 判不出来时的兜底方向必须是「保守不排」（false ⇒ SkipStructural），不许是「乐观重排」
+        assertTrue(
+            "keepsAlarmClockExemption 判不出来时必须按「没豁免」答（getOrDefault(false)）：" +
+                "排出去一发不带豁免的只是白跑，反过来则是把同一枚 DENIED 再撞一遍",
+            svc.substringAfter("private fun keepsAlarmClockExemption(").lineSequence().take(12)
+                .any { it.contains(".getOrDefault(false)") },
+        )
+        // 本卡是新写这枚系统服务读取的唯一一处：多一枚就是又有人在这条路上碰框架
+        assertEquals(
+            "全服务 getSystemService 只许一枚（本卡 keepsAlarmClockExemption 读精确闹钟授权那一处）：" +
+                "每多一处就多一枚站在 onFailure 里可能抛的框架调用",
+            1,
+            Regex("""getSystemService""").findAll(svc).count(),
+        )
+    }
+
+    /** 一枚函数声明的绝对区间：签名的起点到与之配平的右花括号（含两端） */
+    private fun functionRange(code: String, signature: String): IntRange {
+        val at = code.indexOf(signature)
+        check(at >= 0) { "找不到 $signature：写法换过了，这条守卫要跟着改" }
+        val open = code.indexOf('{', at)
+        check(open >= 0) { "$signature 之后找不到左花括号" }
+        return at until (open + balancedBraces(code, open).length)
     }
 
     // ---- 源码核对工具（与各 *WiringGuardTest 同一套刀法）--------------------------------------------------

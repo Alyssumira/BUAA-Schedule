@@ -275,4 +275,141 @@ class LiveFgsRetryDecisionTest {
         // 靶子不能是空的：一行都没扫到说明上面那张表被谁整段删了
         assertEquals("窗口身份表应当恰好五行", 5, rows.size)
     }
+
+    // ---- 反向档：把每一枚入参都单独"拔线"，证明判据不是空转 ------------------------------------------------
+
+    /**
+     * 从"该发的那一档"出发，每次只把一枚入参改成拦住它的样子，期望判据必须**换档**；
+     * 再改回来，必须回到 [LiveFgsRetry.ArmOnce]。
+     *
+     * 这张表存在的理由：正向那十七行即便全绿，也拦不住"某一枚参数其实没被读"的实现 ——
+     * 参数没被读，那一档就永远放行（自激回路正是这么开的）。这里逐枚拔线，谁没被读谁当场红。
+     * 两两组合的顺序由 [everyTierOfTheRetryTable] 的相邻档行与 [windowOverOutranksEverything] 钉，
+     * 本方法只管"每一枚单独成立时拦得住"。
+     */
+    @Test
+    fun everyGuardIsLoadBearing() {
+        // 放行档：四枚布尔都在"允许重试"的那一侧，额度没用过
+        val clear = Row(
+            case = "反向档基线",
+            windowStillLive = true, inClassPhase = true, bellAlreadyRung = true,
+            exemptionKept = true, attemptsAlreadyArmed = 0, maxAttempts = 1,
+            expected = LiveFgsRetry.ArmOnce,
+        )
+        assertEquals("基线本身就应当放行（不然下面全绿是假的）", LiveFgsRetry.ArmOnce, clear.decide())
+        val blocks = listOf(
+            "windowStillLive" to clear.copy(windowStillLive = false, case = "窗口已过"),
+            "inClassPhase" to clear.copy(inClassPhase = false, case = "课前那一档"),
+            "bellAlreadyRung" to clear.copy(bellAlreadyRung = false, case = "铃未响"),
+            "exemptionKept" to clear.copy(exemptionKept = false, case = "结构性拒绝"),
+            "attemptsAlreadyArmed" to clear.copy(attemptsAlreadyArmed = 1, case = "已经重排过一次"),
+        )
+        val expected = mapOf(
+            "windowStillLive" to LiveFgsRetry.SkipWindowOver,
+            "inClassPhase" to LiveFgsRetry.SkipBeforeClass,
+            "bellAlreadyRung" to LiveFgsRetry.SkipBellNotRung,
+            "exemptionKept" to LiveFgsRetry.SkipStructural,
+            "attemptsAlreadyArmed" to LiveFgsRetry.SkipExhausted,
+        )
+        val offenders = ArrayList<String>()
+        for ((name, row) in blocks) {
+            val got = row.decide()
+            if (got != expected.getValue(name)) offenders += "只把 $name 改成拦住的形状：期望 ${expected.getValue(name).token}，实得 ${got.token}"
+            // 拔线要拔得回去：把这一枚改回放行的形状，必须重新ArmOnce（否则它拦的不是这一档）
+            val restored = row.copy().let {
+                when (name) {
+                    "windowStillLive" -> it.copy(windowStillLive = true)
+                    "inClassPhase" -> it.copy(inClassPhase = true)
+                    "bellAlreadyRung" -> it.copy(bellAlreadyRung = true)
+                    "exemptionKept" -> it.copy(exemptionKept = true)
+                    else -> it.copy(attemptsAlreadyArmed = 0)
+                }
+            }
+            if (restored.decide() != LiveFgsRetry.ArmOnce) offenders += "$name 改回放行形状之后仍不ArmOnce（实得 ${restored.decide().token}）：那一档判的不是它"
+        }
+        assertEquals("有入参没被内核读，或者读了却拦不住：\n" + offenders.joinToString("\n"), emptyList<String>(), offenders)
+        assertEquals("反向档必须五枚入参各拔一次线", 5, blocks.size)
+    }
+
+    /**
+     * 最后一道闸是"次数对上限"，不是"次数对一枚写死的 1"：
+     * attempts 0..3 × max 0..3 全组合扫，放行当且仅当 `attempts < max`。
+     *
+     * 为什么单独扫：调用点的 `MAX_LIVE_FGS_RETRY` 现在写死 1，表里那些行在"1"这一个取值上全绿；
+     * 有人把它改成 2 或 0 时，只有这张全组合表能当场说出"内核认的是参数，不是抄的那份数"。
+     */
+    @Test
+    fun theAttemptCeilingIsJudgedAgainstTheParameterNotAHardcodedOne() {
+        val offenders = ArrayList<String>()
+        for (attempts in 0..3) {
+            for (max in 0..3) {
+                val got = nextLiveFgsRetry(
+                    windowStillLive = true,
+                    inClassPhase = true,
+                    bellAlreadyRung = true,
+                    nextAttemptKeepsAlarmClockExemption = true,
+                    attemptsAlreadyArmed = attempts,
+                    maxAttempts = max,
+                )
+                val want = if (attempts < max) LiveFgsRetry.ArmOnce else LiveFgsRetry.SkipExhausted
+                if (got != want) offenders += "attempts=$attempts max=$max：期望 ${want.token}，实得 ${got.token}"
+            }
+        }
+        assertEquals("额度这一档判错了（判据应当是 attempts < max）：\n" + offenders.joinToString("\n"), emptyList<String>(), offenders)
+    }
+
+    /**
+     * 调用点的真实走法：`liveFgsAttemptsAlreadyArmed` 的读数直接喂 `nextLiveFgsRetry`。
+     *
+     * 同一节课连着两发降级 ⇒ 第一发 armed、第二发 skip:exhausted（挡住自激回路）；
+     * 中间换成另一节课 ⇒ 归零，那一节课自己还有一次额度（挡住"一次降级把所有课的救济都用光"）。
+     * 这两半合起来才是 `MAX_LIVE_FGS_RETRY = 1` 的真实语义 —— 单独判任何一枚都对不上号。
+     */
+    @Test
+    fun theLedgerResetsOnlyForANewWindowThroughTheRealPath() {
+        var recordedCourse = 0L
+        var recordedEnd = 0L
+        var recordedTimes = 0
+        val seen = ArrayList<String>()
+        fun arrive(courseId: Long, endMillis: Long) {
+            val attempts = liveFgsAttemptsAlreadyArmed(
+                recordedCourseId = recordedCourse,
+                recordedEndMillis = recordedEnd,
+                courseId = courseId,
+                endMillis = endMillis,
+                recordedAttempts = recordedTimes,
+            )
+            val decision = nextLiveFgsRetry(
+                windowStillLive = true,
+                inClassPhase = true,
+                bellAlreadyRung = true,
+                nextAttemptKeepsAlarmClockExemption = true,
+                attemptsAlreadyArmed = attempts,
+                maxAttempts = 1,
+            )
+            seen += decision.token
+            if (decision == LiveFgsRetry.ArmOnce) {
+                recordedCourse = courseId
+                recordedEnd = endMillis
+                recordedTimes = attempts + 1
+            }
+        }
+        arrive(7L, 1_700L) // 第三节：排出去一次
+        arrive(7L, 1_700L) // 第三节第二发：到此为止
+        arrive(8L, 1_700L) // 换一节课：它自己还有一次额度
+        arrive(8L, 1_800L) // 同一节课但下课时刻改过 ⇒ 那是另一个窗口
+        arrive(8L, 1_800L) // 上面那一发的第二发：又耗尽
+        assertEquals(
+            "账本走法不对（自激闸门或者换窗口归零其中一半坏了）",
+            listOf("armed", "skip:exhausted", "armed", "armed", "skip:exhausted"),
+            seen,
+        )
+        // 三格都成 Long：listOf(8L, 1_800L, 1) 会让 Kotlin 把字面量 1 也推成 Long，
+        // 于是断言变成 Long(1) vs Int(1) 的 equals —— 打印出来一模一样却判红（本轮踩过）。
+        assertEquals(
+            "最终记在账上的窗口是 (8,1800)，次数 1",
+            Triple(8L, 1_800L, 1L),
+            Triple(recordedCourse, recordedEnd, recordedTimes.toLong()),
+        )
+    }
 }
