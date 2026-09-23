@@ -943,116 +943,121 @@ private fun ScheduleToolbarRow(
         termSlot?.invoke()
         // 切到日视图时这一整簇会消失。原本是 `if` 硬切——下方的内容区在淡入，
         // 顶栏却整块闪现/消失，两个节奏不同步就被读成"卡了一下"。
-        // 权重挂在簇**外面**（#113 的账）：这一枚是 Row 的加权子节点 ⇒ 只吃 termSlot 与
-        // campusSlot 拿完固有宽之后剩下的那一份。写进簇内部时 AnimatedVisibility 自己是枚
-        // 无权重子节点，按整份可用宽（装机量到 1038px）量一次，簇里那枚 weight 就把这一份全吃了，
+        // 权重不许挂在簇内部（#113 的账）：那时 AnimatedVisibility 是枚无权重子节点，
+        // 按整份可用宽（装机量到 1038px）铺开，簇里那枚 weight 把这一份全吃了，
         // 后面的 campusSlot 于是拿到 maxWidth = 0 —— 周课表页签上「校区切换」整块不在屏上。
-        // 代价要说清楚：加权的是簇的**布局位**而不是画出来的宽度，所以校区从此稳稳占住右端、
-        // 不再跟着簇滑动；展开/收起本身仍是逐帧的（装机一次切页签 UI 线程画 15 帧、反向 14 帧，
-        // 260ms @60fps；对照空转 1s 画 0 帧）。
-        AnimatedVisibility(
-            visible = showWeekNav,
-            modifier = Modifier.weight(1f),
-            enter = expandHorizontally(motionSpec(MotionTokens.DURATION_MEDIUM)) +
-                fadeIn(motionSpec(MotionTokens.DURATION_MEDIUM)),
-            exit = shrinkHorizontally(motionSpec(MotionTokens.DURATION_MEDIUM)) +
-                fadeOut(motionSpec(MotionTokens.DURATION_MEDIUM)),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-            // 原来是一颗没有字面的时钟图标：点一下就把整张周课表换成 24 小时
-            // 时间轴，用户看不出自己改了什么，只会觉得"默认就是时间轴"。
-            // 现在把当前模式写在按钮上（课次 = 按节次分行，默认；时间 = 连续时间轴）。
-            // 热区与外观分两层：48dp 是**触摸**下限，画出来的胶囊要贴着文字。
-            // 此前两者写在同一个 Box 上，而 Box 默认 TopStart 对齐 —— 于是这一排里
-            // 立着一块 48dp 高的实心蓝块，「课次/时间」四个字还吊在蓝块上沿
-            // （真机反馈：没对齐、有点偏上、顶栏显厚）。
-            Box(
-                modifier = Modifier
-                    .defaultMinSize(minHeight = DesignTokens.minTouchTarget)
-                    .clip(RoundedCornerShape(DesignTokens.cornerChip))
-                    .clickable(
-                        role = Role.Switch,
-                        onClickLabel = if (timeMode) "切换到课次行视图" else "切换到 24 小时时间轴",
-                    ) {
-                        Personalization.weekGridMode = if (timeMode) {
-                            Personalization.WEEK_GRID_PERIOD
-                        } else {
-                            Personalization.WEEK_GRID_TIME_24H
-                        }
-                        Personalization.save(context)
-                    }
-                    .semantics {
-                        contentDescription = if (timeMode) "时间轴视图" else "课次行视图"
-                        stateDescription = if (timeMode) "已选 24 小时时间轴" else "已选课次行"
-                    },
-                contentAlignment = Alignment.Center,
+        // 但权重也不许只挂在簇身上（#118 的账）：AnimatedVisibility 在 visible=false 且退场
+        // 跑完之后整枚退出组合，那份 weight 跟着没了 ⇒ 这一行只剩两枚无权重端件、按默认 Start
+        // 挤在左端，校区从右端跳回行首（装机：「校区切换」文字左缘 42 / 847，横跳 805px）。
+        // 所以要一枚**不随页签进出**的加权槽来吃这份余量：簇在时它就是簇的布局位（宽度一分不变），
+        // 簇没了时同一个槽继续吃满 ⇒ 校区左缘 = 行宽 − 校区固有宽，与页签、与学期槽在不在都无关。
+        // 用 Row 不用 Box：Box 不读 weight，挂进盒子里就是空转，而 #113 那笔账钉的正是簇自己那一枚。
+        // 展开/收起本身仍是逐帧的（改后装机：一次切页签 UI 线程画 15 帧、反向 16 帧；空转 1s 画 0 帧）。
+        Row(modifier = Modifier.weight(1f)) {
+            AnimatedVisibility(
+                visible = showWeekNav,
+                modifier = Modifier.weight(1f),
+                enter = expandHorizontally(motionSpec(MotionTokens.DURATION_MEDIUM)) +
+                    fadeIn(motionSpec(MotionTokens.DURATION_MEDIUM)),
+                exit = shrinkHorizontally(motionSpec(MotionTokens.DURATION_MEDIUM)) +
+                    fadeOut(motionSpec(MotionTokens.DURATION_MEDIUM)),
             ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                // 原来是一颗没有字面的时钟图标：点一下就把整张周课表换成 24 小时
+                // 时间轴，用户看不出自己改了什么，只会觉得"默认就是时间轴"。
+                // 现在把当前模式写在按钮上（课次 = 按节次分行，默认；时间 = 连续时间轴）。
+                // 热区与外观分两层：48dp 是**触摸**下限，画出来的胶囊要贴着文字。
+                // 此前两者写在同一个 Box 上，而 Box 默认 TopStart 对齐 —— 于是这一排里
+                // 立着一块 48dp 高的实心蓝块，「课次/时间」四个字还吊在蓝块上沿
+                // （真机反馈：没对齐、有点偏上、顶栏显厚）。
                 Box(
                     modifier = Modifier
+                        .defaultMinSize(minHeight = DesignTokens.minTouchTarget)
                         .clip(RoundedCornerShape(DesignTokens.cornerChip))
-                        .background(
-                            if (timeMode) MaterialTheme.colorScheme.primaryContainer
-                            else MaterialTheme.colorScheme.surfaceVariant,
-                        )
-                        .padding(horizontal = DesignTokens.spaceS, vertical = DesignTokens.spaceXS),
-                ) {
-                    Text(
-                        text = if (timeMode) "时间" else "课次",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (timeMode) MaterialTheme.colorScheme.onPrimaryContainer
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            IconButton(
-                onClick = { onBrowseWeekChange(((displayWeek ?: 1) - 1).coerceAtLeast(1)) },
-                enabled = (displayWeek ?: 1) > 1,
-            ) {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "上一周")
-            }
-            // Text 是"从顶往下画"的：直接给它 48dp 的下限，字会吊在上沿，
-            // 和左右垂直居中的箭头按钮对不齐（真机反馈：偏上）。
-            // 下限、点按、居中都放到外层 Box 上。
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(DesignTokens.cornerPanel))
-                    .defaultMinSize(minHeight = DesignTokens.minTouchTarget)
-                    .clickable(role = Role.Button, onClickLabel = "跳转到周次") { showJumpDialog = true },
-                contentAlignment = Alignment.Center,
-            ) {
-                androidx.compose.foundation.layout.Column(
-                    horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
-                ) {
-                    Text(
-                        text = weekHeadline,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (displayWeek == currentWeek) {
-                            MaterialTheme.colorScheme.onSurface
-                        } else {
-                            MaterialTheme.colorScheme.primary
+                        .clickable(
+                            role = Role.Switch,
+                            onClickLabel = if (timeMode) "切换到课次行视图" else "切换到 24 小时时间轴",
+                        ) {
+                            Personalization.weekGridMode = if (timeMode) {
+                                Personalization.WEEK_GRID_PERIOD
+                            } else {
+                                Personalization.WEEK_GRID_TIME_24H
+                            }
+                            Personalization.save(context)
+                        }
+                        .semantics {
+                            contentDescription = if (timeMode) "时间轴视图" else "课次行视图"
+                            stateDescription = if (timeMode) "已选 24 小时时间轴" else "已选课次行"
                         },
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    // 「第 3 周」只是一个数：学期过半还是还剩六周得自己算。
-                    // 这条线不新增信息层级——它是这行字的图形化，所以同格、同色。
-                    SemesterProgressLine(
-                        currentWeek = currentWeek,
-                        totalWeeks = totalWeeks,
-                        modifier = Modifier.padding(top = DesignTokens.spaceXS),
-                    )
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(DesignTokens.cornerChip))
+                            .background(
+                                if (timeMode) MaterialTheme.colorScheme.primaryContainer
+                                else MaterialTheme.colorScheme.surfaceVariant,
+                            )
+                            .padding(horizontal = DesignTokens.spaceS, vertical = DesignTokens.spaceXS),
+                    ) {
+                        Text(
+                            text = if (timeMode) "时间" else "课次",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (timeMode) MaterialTheme.colorScheme.onPrimaryContainer
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
-            }
-            IconButton(
-                onClick = { onBrowseWeekChange(((displayWeek ?: totalWeeks) + 1).coerceAtMost(totalWeeks)) },
-                enabled = (displayWeek ?: totalWeeks) < totalWeeks,
-            ) {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "下一周")
-            }
+                IconButton(
+                    onClick = { onBrowseWeekChange(((displayWeek ?: 1) - 1).coerceAtLeast(1)) },
+                    enabled = (displayWeek ?: 1) > 1,
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "上一周")
+                }
+                // Text 是"从顶往下画"的：直接给它 48dp 的下限，字会吊在上沿，
+                // 和左右垂直居中的箭头按钮对不齐（真机反馈：偏上）。
+                // 下限、点按、居中都放到外层 Box 上。
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(DesignTokens.cornerPanel))
+                        .defaultMinSize(minHeight = DesignTokens.minTouchTarget)
+                        .clickable(role = Role.Button, onClickLabel = "跳转到周次") { showJumpDialog = true },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    androidx.compose.foundation.layout.Column(
+                        horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = weekHeadline,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (displayWeek == currentWeek) {
+                                MaterialTheme.colorScheme.onSurface
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            },
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        // 「第 3 周」只是一个数：学期过半还是还剩六周得自己算。
+                        // 这条线不新增信息层级——它是这行字的图形化，所以同格、同色。
+                        SemesterProgressLine(
+                            currentWeek = currentWeek,
+                            totalWeeks = totalWeeks,
+                            modifier = Modifier.padding(top = DesignTokens.spaceXS),
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = { onBrowseWeekChange(((displayWeek ?: totalWeeks) + 1).coerceAtMost(totalWeeks)) },
+                    enabled = (displayWeek ?: totalWeeks) < totalWeeks,
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "下一周")
+                }
+                }
             }
         }
         campusSlot?.invoke()
