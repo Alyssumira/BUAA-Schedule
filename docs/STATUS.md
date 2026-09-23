@@ -1772,3 +1772,155 @@
       那是 `dayTicker` 那发对齐零点的 `delay` 被冻结拖住的**直接观测**，只有它能把这一改动从"顺手改"抬成"缺陷修"。
       届时仪器用本卡 C④ 那一档（真跨零点 + 新进程使 app 时钟自洽），**别再拿 `setprop persist.sys.timezone` 推时区**
       —— 那条代理已被本卡证伪：跑着的进程里 `LocalDateTime.now()` 不跟系统本地日走。
+
+- [x] 课程实况前台服务起不来时不再只剩两行 WARN：按读数换触发源重排一次，装机实测 5.2 秒复活（T78 + T78b，2026-09-23，`60e362f`…`3923453`，台账 #119）：
+      **判定先行：#119 修成了 —— 两枚吞异常的站点现在都过 `reportLiveDegrade`，它固定吐一行
+      `liveFgsDegraded site=… action=…`，并按读数把课堂窗口重排一遍、让下一发从 `setAlarmClock` 的闹钟豁免档进来。
+      改后的包在 emulator-5554 上实测三发起死回生（**5.203 / 5.310 / 5.435 秒** AMS 放行到实况首帧），
+      同窗口第二发判成 `skip:exhausted` 且一个闹钟都不许多排（挡住自激回路），
+      未授权精确闹钟那一档 `skip:no-exact-alarm`、课前倒计时那一档 `skip:before-class` 各自量到。**
+
+      **读数① 就地重投救不回来（前任 T78 在未改码的包上手动重投，`.tmp/T78/shots/C2|C5|C20-clean.log`）**：
+      直发 `am broadcast` 叫起的上课铃广播没有 FGS 后台启动豁免，隔 2.3 / 5.3 / 20.4 秒各重投两发，
+      **六发的 AMS 判据逐字段相同**（`grep -ho "uidState.*tempAllowListReason:<null>"` 三枚文件合计 6 命中、
+      去重后只剩一行）：
+      `Background started FGS: Disallowed [callingPackage: com.buaa.schedule; callingUid: 10225; uidState: RCVR;
+      uidBFSL: n/a; intent: Intent { xflg=0x4 cmp=com.buaa.schedule/.reminder.CourseFluidService (has extras) };
+      code:DENIED; tempAllowListReason:<null>; allowWiu:-1; targetSdkVersion:36; …]`
+      ⇒ 这一档的拒绝是**结构性的**、与等待时长无关。卡面原本给的「有界重试」就是这条，**已被读数驳回**，
+      内核里因此压根没有"等 N 秒再投同一发"这一档。
+
+      **读数② 换触发源才有效（前任，`.tmp/T78/shots/B1-gap2|B2-gap5|B3-gap20-keep.log`，3/3）**：
+      同一窗口经 `ClassProgressScheduler.rescheduleNextWindow` 重排后上课铃改由 `setAlarmClock` 排出，
+      它叫醒的那一发拿到豁免、AMS 放行：
+      `Background started FGS: Allowed [… code:ALARM_MANAGER_ALARM_CLOCK; tempAllowListReason:<ad5cf87 Intent
+      { flg=0x10 xflg=0x4 cmp=com.buaa.schedule/.reminder.ClassProgressReceiver (has extras) }/u0,reasonCode:
+      ALARM_MANAGER_ALARM_CLOCK,duration:10000,callingUid:10225>; …]`（B1 那发的落地时刻 14:03:15.784，
+      guest 当时在 `Asia/Riyadh`，换算过来就是重排后约 5.3 秒起来）。
+
+      **读数③ 出路也断掉的那一档（前任 `F1-exact-denied.log`；本轮在改后的包上端到端复现，见读数⑤的 C 那一发）**：
+      `appops set com.buaa.schedule SCHEDULE_EXACT_ALARM deny` 之后重排出去的那一发依旧
+      `not allowed due to mAllowStartForeground false`（F1 里该串 6 命中、`code:DENIED` 1 枚）——
+      未授权时 `scheduleClassStartBell` 换的是 `setAndAllowWhileIdle`，那不是 `setAlarmClock`，
+      AMS 不给 `ALARM_MANAGER_ALARM_CLOCK` 那一档 ⇒ 这一档**重排也没用**，判成 skip。
+
+      **读数④ 改后的包装机实测（T78b，本轮新增；装机 = 我这一版 debug 包
+      `sha256 17428198cb21c3c828033a7943c7a0c73e951ac5268ed68b1c4005c75cd915d7`，
+      `lastUpdateTime=2026-09-23 15:21:11`、`firstInstallTime=2026-09-20 16:04:29` 一字未变 ⇒ 库没清）**。
+      命令形状照抄前任：`am broadcast -n com.buaa.schedule/.reminder.ClassProgressReceiver --es extra_action
+      class_start …`（起点触发前 25 分钟、终点后 70 分钟），时钟先挪到 `America/Bogota`（UTC−5，无 DST）
+      让 10:2x 落进周三 09:50–11:25 那一节真课里。`.tmp/T78b/A1-first-*.log`：
+      ```
+      10:25:16.931 I/ActivityManager: Broadcasting: Intent { flg=0x400000 cmp=…/.reminder.ClassProgressReceiver (has extras) }
+      10:25:16.945 I/ActivityManager: Start proc 4023:com.buaa.schedule/u0a225 for broadcast {…ClassProgressReceiver}
+      10:25:18.070 W/ActivityManager: Background started FGS: Disallowed [… code:DENIED; tempAllowListReason:<null>; …]
+      10:25:18.088 W/CourseFluidService: 启动课程实况前台服务失败，回退普通常驻通知
+      10:25:18.088 W/CourseFluidService: android.app.ForegroundServiceStartNotAllowedException: … :434 ← ReminderNotifications.kt:269 ← ClassProgressReceiver.kt:55
+      10:25:18.099 W/CourseFluidService: liveFgsDegraded site=startService action=armed course=10 attempts=0
+      --- dumpsys alarm：09:50×2 + 11:25×1（force-stop 会把该应用已排的闹钟全清掉 —— 读空档的那一格见下面 B 那一发的
+      "alarms before"，本轮量到 ⇒ 这两发 09:50 的上课铃只能是上面这一行排出去的）
+      10:25:23.302 I/ActivityManager: Background started FGS: Allowed [… code:ALARM_MANAGER_ALARM_CLOCK;
+                                       tempAllowListReason:<3abf8c8 Intent {…ClassProgressReceiver…},duration:10000,…>]
+      10:25:23.313 D/BUAA-LiveUpdate: fluidService: … style=android.app.Notification$ProgressStyle chip=60分钟
+      dumpsys activity services: isForeground=true foregroundId=20260002
+      ```
+      **armed → 豁免那一发 = 5.203 秒**，实况首帧在同一毫秒里跟上 ⇒ 这就是 #119 修没修成的唯一判据，它通了。
+      恢复秒数里含这台机器的 `min_futurity` +5 s 夹取（过去的开课时刻被夹到此刻 +5 s），所以三发都贴着 5.2–5.4 秒，
+      **这个数不是"网络/设备快慢"，是那 5 秒的地板**。
+
+      **读数⑤ 三档 skip 各自的读数（`.tmp/T78b/B1-same-window.log` / `C1-no-exact-alarm.log` / `D1-before-class.log`）**：
+      - **同窗口第二发（B，两发 extras 逐字节相同 ⇒ 内核认出是同一枚窗口）**：
+        `10:30:09.072 … action=armed course=10 attempts=0` → 排口 `dumpsys alarm` = **09:50×3** + 11:25×1 →
+        `10:30:11.369 … action=skip:exhausted course=10 attempts=1` → 再数一次**上课铃仍是 09:50×3**（一枚没多）
+        ⇒ **第二发没有再排铃，自激回路挡住**；同两帧之间下课铃那一格从 11:25 变成 11:40:06（= 假窗口的终点），
+        那是 `ClassProgressReceiver` 每一发 `class_start` 都要给手中那枚窗口排下课铃的既有行为、
+        与 `reportLiveDegrade` 无关（要把它摘干净得在未改码的包上比同一对快照，那是前任的账，本轮没做）；
+        随后 `10:30:14.382 Allowed … code:ALARM_MANAGER_ALARM_CLOCK`（距 armed **5.310 秒**）、首帧 10:30:14.407。
+      - **未授权精确闹钟（C，`appops … deny`）**：`10:30:52.526 … action=skip:no-exact-alarm course=10 attempts=0`；
+        约 5.4 秒后降级排出去的那一发（`setAndAllowWhileIdle`）在 10:30:57.898 又叫起一次降级、
+        仍是 `not allowed due to mAllowStartForeground false`，判据同样 `skip:no-exact-alarm course=8`
+        ⇒ 读数③那条"出路也断掉"在**改后的包**上端到端复现，且到这里就停了（收尾 `dumpsys alarm` 只剩 11:25）。
+      - **课前那一档（D，`am broadcast -n …/.reminder.ReminderReceiver`，它的 `phase = BEFORE_CLASS`）**：
+        `10:31:23.192 … action=skip:before-class course=10 attempts=0` ⇒ 自己不重排；而 10:31:28.627
+        （**5.435 秒**后）AMS 仍给出 `Allowed … ALARM_MANAGER_ALARM_CLOCK` —— 那正是这一档判 skip 的理由本身：
+        上课铃本来就排着、必然带着豁免再响一次，为一条倒计时去拆了重弹不值得。
+      - 三档 skip 之外，`skip:window-over` 与 `skip:bell-not-rung` 只有 JVM 证据（表驱动单测那两行），
+        设备上没能造出"课已下课还在降级"的形状 —— 见末节。
+
+      **实现与判据**：`reminder/LiveFgsRetry.kt`（枚举六档 + `nextLiveFgsRetry` + `liveFgsAttemptsAlreadyArmed`，
+      **零 import、零时钟读取**，守卫按绝对偏移核过）；`CourseFluidService` 加 `reportLiveDegrade`（两枚站点
+      `:163` / `:435` 都过它）、`keepsAlarmClockExemption`（全服务唯一判 `Build.VERSION_CODES.S` +
+      `canScheduleExactAlarms` 的地方）、`MAX_LIVE_FGS_RETRY = 1` + 三枚 `@Volatile` 账本 + `retryLedger` 锁。
+      T78b 复核改的一处是真漏的：`keepsAlarmClockExemption` 当时只把 `canScheduleExactAlarms()` 包进
+      `runCatching`，`context.getSystemService(AlarmManager::class.java)` 是裸的，而 `SITE_START_SERVICE`
+      递来的正是广播的临时收件 Context ⇒ 现在整段函数体就是一枚 `runCatching`，判不出来按「没豁免」答
+      （少排一次铃），而不是把 `ClassProgressReceiver` 的广播打崩。
+      屏幕上仍是同 id `20_260_002` 那条兜底常驻通知：不新增通知、不加渠道、不弹 toast、不动勿扰、设置页零改动。
+
+      **守卫**：`LiveFgsRetryDecisionTest`（8 档：六档全枚举 + 判定顺序成对档 + `window-over` 扫满 32 组合 +
+      上限参数 0..3×0..3 全组合 + **反向档 `everyGuardIsLoadBearing`**（五枚入参逐枚拔线、再改回去必须回到
+      `armed`，证明判据不是空转）+ 账本按调用点形状串起来走五发）；
+      `LiveFgsDegradeWiringGuardTest`（T78 五档 + T78b 三档 = 8 档：两枚 `onFailure` 都得报、两行原始 WARN
+      不许删、`liveFgsDegraded site=` 取证行本身活着且全服务只此一枚、`SDK_INT` 只判一次、内核零 android 零时钟、
+      重排挂应用级作用域且整段 `runCatching`、通知 id/渠道/toast 三条约束、**这条路不许多出一台调度器**
+      （`WorkRequest`/`alarmManager.set`/`Handler(`/`postDelayed`/重投 `startForegroundService` 全禁，出口只许
+      一枚 `rescheduleNextWindow`）、**凡碰框架的调用必须按绝对偏移落在 runCatching 里、两块里不许 `throw`**）；
+      `ReleaseForensicLogSurvivalTest` 产物层把 `liveFgsDegraded site=` 与六枚 token 一起钉进 release，
+      我另用 python `zipfile` 独立开两个 `.dex` 按 UTF-8 字节数了一遍命中：**13 枚靶串全在**
+      （`liveFgsDegraded site=` 1、`action=` 3、`course=` 2、`attempts=` 1、六枚 token 各 1、tag `CourseFluidService` 4、
+      两行 WARN 各 1），反向对照 `GlassDiag`/`jankRate=` 各 **0** ⇒ 读到的确实是折叠过 `BuildConfig.DEBUG` 的
+      minified 产物，没动 proguard 一行。
+
+      **门禁四步**（`JAVA_HOME=D:\AndroidSDK\jdk-21`、`--offline`）：`:app:assembleRelease` BUILD SUCCESSFUL
+      （12 executed / 79 up-to-date）→ `:app:testDebugUnitTest --rerun-tasks` **1483 tests / 178 suites / 0 失败 /
+      0 skipped** → `:app:lintAnalyzeDebug --rerun :app:lintReportDebug --rerun` **0 error / 14 warning**（条目与
+      基点同一张表）→ 复跑 `:app:testDebugUnitTest --rerun-tasks` **1483 / 178 / 0 / 0**。
+      基线 1466/176 → **+17 tests / +2 suites**，正是这两枚新测试文件。
+      ⚠️ 第 2 步第一次跑**是红的**（2 failed）：T14 那枚 `ClassProgressRescheduleWiringTest` 钉着"全仓库
+      `rescheduleNextWindow` 调用点集合 = 已知五处"，而 #119 的出路按卡面第 2 档第⑤条就是要多接一枚 ⇒
+      设计内变更，`3923453` 把那张表按事实重登成六处（`CourseFluidService` 单列一枚 3 的计数、
+      新那处实参 `app` 补进"吃默认报告口"那张表），**没有放宽任何一条判据**。前任只跑了 `--tests` 三枚新测试、
+      没跑全量门禁，所以这笔账当时没响。
+      **包体（全量对全量）**：`:app:assembleRelease --rerun-tasks`（91/91 executed）= **7,243,313 B**，
+      与增量档那一次逐字节相同 ⇒ 本轮 ±319 B 的散布没复现；基线 7,242,082 B ⇒ **+1,231 B**。
+      归因到符号级（`apkanalyzer dex packages --proguard-mappings`）：新增符号 dex 原始尺寸
+      `LiveFgsRetry` 520 + `reportLiveDegrade` 那枚挂起 lambda 类 801 + `liveFgsAttemptsAlreadyArmed` 59 +
+      `nextLiveFgsRetry`（被 R8 改成 `c(boolean,boolean,boolean,boolean,int)`）95 = **1,475 B**；
+      两枚既有方法（`postProgressNotification` 244 / `onStartCommand` 359）各自变胖了多少读不出来
+      （手上没有基线 apk 可对照）⇒ **归因做到符号级，没做到"每一 B 都有出处"**。
+
+      ⚠️ 三笔环境账（下一张卡别再当成盘面变了）：① 我接手时 **AVD 是关机状态**，只能按上次那一条
+      `emulator.exe -avd buaa36 -read-only` 重新起一台 —— 于是前任那枚 10:34:29 装上去的 `dc1d149` debug 包
+      随 RAM overlay 一起回滚了（重装前读到的是 `lastUpdateTime=2026-09-21 03:25:46`），
+      这正是 `-read-only` 的语义、不是有人动了盘；种子库 22 行 `courses` 完好。
+      ② `am force-stop` 会**把这个 app 已排的闹钟一并清空**（实测：force-stop 后 `dumpsys alarm` 里
+      `com.buaa.schedule` 归零）⇒ 这是好事，降级那一发之后数出来的闹钟就只可能是 `reportLiveDegrade` 排的。
+      ③ 第 0 步那条 `find -newermt '2026-09-23 19:24:40'` **非空**（五枚文件、22:09–22:22），
+      但 `git status --porcelain` 空、三枚 commit 已在 `ai/T78` 上、无 java 进程、最后一次写盘距我开工 36 分钟
+      ⇒ 判成"第一位续派也已死、且它交到了第 3 档"，不是双写者；按卡面该停手，这里选择继续并把证据摆在这条。
+
+      **没做到 / 只能靠推断**：
+      ① **`:159` 那枚站点（`startForeground` 抛异常）在设备上一次都没能让它发火**，三次尝试全被机制挡住：
+      `pm revoke POST_NOTIFICATIONS` 会连带 force-stop 应用 ⇒ 滴答中的服务先死了；
+      `pm revoke FOREGROUND_SERVICE_SPECIAL_USE` 报 "not a changeable permission type"（它是安装期权限）；
+      直发 `am start-service` 时 AMS 按调用方判（`callingPackage: com.android.shell; callingUid: 0`）直接放行。
+      ⇒ 这一枚只有源码文本守卫（第①档两枚 `onFailure` 都必须调 `reportLiveDegrade`）+ **按代码推的行为**背书，
+      **没有读数**；读数④⑤那五行全部出自 `site=startService`。
+      ② `skip:window-over` 与 `skip:bell-not-rung` 两档只有 JVM 证据（设备上要造出"课已下课仍在降级"得改库或等一小时）。
+      ③ `LiveClassResyncer` 与 `MainActivity` 校准链那两条**补起实况**的路子今天没被降级打到过（它们走的是前台调用，
+      本来就有豁免），所以"重排出去的那一发会不会被它们抢跑"这一问只能靠推断：会，但抢跑的那一发是 Allowed，
+      对本卡无害，且 `MAX_LIVE_FGS_RETRY` 是进程内的账、两枚站点共用一把锁。
+      ④ 真机（f128bc02 / HyperOS）一行都没看：那台机器上前台是用户正在用的东西，卸载会清真实课表。
+      ⑤ 5.2–5.4 秒这个恢复时长**贴着 +5 s 的 `min_futurity` 地板**，不能外推成"生产上也是 5 秒"：
+      真机上重排出去的那发要等到下一个真实上课时刻才有铃声，本卡量的只是"铃在不在过去"这一档。
+      ⑥ sha256 自证按前任的 `.tmp/T78/sha256-before.txt`（527 枚，取于 `69f7b3a` 之后一分钟）逐只重算：
+      收工**523 枚一致 / 4 枚 FAILED**，而那四枚全是设计内变更：`CourseFluidService.kt`（T78 的实现 +
+      T78b 那处 `runCatching` 补口）、`ReleaseForensicLogSurvivalTest.kt`（产物层加了一行取证靶子）、
+      `ClassProgressRescheduleWiringTest.kt`（调用点表五处重登成六处）、`docs/STATUS.md`（本段）。
+      另有三枚**新增**文件不在这 527 枚的账里：内核 `LiveFgsRetry.kt` 与两枚测试
+      `LiveFgsRetryDecisionTest.kt` / `LiveFgsDegradeWiringGuardTest.kt` ⇒ **除这七枚之外一寸没动**。
+      设备还原读数：`persist.sys.timezone=GMT`、`adb unroot`（uid 2000）、`stay_on_while_plugged_in=0`、
+      `POST_NOTIFICATIONS` 与 `FOREGROUND_SERVICE*` 均 `granted=true`、`SCHEDULE_EXACT_ALARM: allow`、
+      我们那条通知清空（`dumpsys notification` 里 `Notification Record` 段 `com.buaa.schedule` 0 命中，
+      只剩两条 `ZenRule` 是 09-20 建的、`state=STATE_FALSE`）、服务 `CourseFluidService` 0 记录、装机停在
+      本轮这一版 debug 包（`sha256 17428198…d7`）并 force-stop。
