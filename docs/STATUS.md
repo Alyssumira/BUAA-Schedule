@@ -1675,3 +1675,76 @@
       真机那一排「学期切换 + 校区切换」的实画读数**欠一次复验**；② 课次块计数它量到 18→3→18、我卡里写的 13→1 是 T72 的另一套口径，
       **两边都没复现出对方的数**，入账按两套口径分开写、不互抄；③ `wm density 240` 分栏档与
       `font_scale 2.0` 大字号档本卡未复量（它改的是分布不是宽度）⇒ 这两档的校区位置只有 T72 那次的读数。
+- [x] `WhileSubscribed(5_000)` 这笔账量到底：不退订、也不重算，改一处没用、改两处才通（T77 评估卡，2026-09-23，台账 #117，**交付零代码改动**，判定先行）：
+      **判定：这条账是真的但不值钱 —— 不值得全站改 26 处；只值得改 `uiState` 那两个同实例消费点
+      （`ui/home/HomeScreen.kt:155` + `MainActivity:484`，必须一起改），且它修不了任何用户看得见的 bug：
+      真跨零点那一档两条链都落在对的一天上。落地价值在后台不做无谓功，而实测那份无谓功是
+      15.5 分钟 0.43 s CPU、combine 重跑 0 次 ⇒ 建议按顺手改、两档起改排，不按缺陷排。**
+      A（探针 `T77PROBE`：`combine` 变换体一行 + `onStart`/`onCompletion` 各一行，量完已删、release 包 dex 扫 0 命中）：
+      ① 前台静置 60 s：`/proc/<pid>/stat` utime+stime 7010→7020 ms（**+10 ms**），`COMBINE-RERUN` **0 次**；
+      ② 退后台 60 s：7040→7040 ms（**+0 ms**），`top -b -n1 -p` 的 `TIME+` 两次都 0:07.04、`dumpsys cpuinfo` 给
+      `0% 5623/com.buaa.schedule`，`COMBINE-RERUN` **0 次**、`UPSTREAM-STOP` **0 次**；采样时刻 08:51:26→08:52:52 GMT。
+      ③ 冻结不是挡箭牌：HOME 后逐秒 `isFrozen` 读数 false(1..8s)→true(10s)，也就是 `WhileSubscribed` 那 5 s
+      窗口整段落在**没冻结**的时间里，`UPSTREAM-STOP` 仍然一发没有 ⇒ 判 **后台不退订但不重算**（Room 那三路不动、
+      `combine` 就不重跑，订阅者在但没活干）。
+      B（没有免费午餐要买，包体也不是白送的）：`androidx.lifecycle:lifecycle-runtime-compose:2.9.4`
+      **早就在依赖树里**（`--offline :app:dependencies`，debugCompileClasspath `:157` 经
+      `lifecycle-viewmodel-compose:2.8.7 -> 2.9.4` 传递进来、debugRuntimeClasspath `:247` 亦在）⇒
+      加 `import androidx.lifecycle.compose.collectAsStateWithLifecycle` **零 `build.gradle` 改动**就能编。
+      包体同状态两枚全量构建：基线复跑 **7,242,082 B**（与卡面那个数一字不差）、改两处后 **7,243,263 B**
+      ⇒ **+1,181 B**（两枚 import + 两处调用点）。⚠️ 顺手记一条口径：同颗 pristine 树走**增量**
+      `assembleRelease`（12 executed / 79 up-to-date）给 7,241,763 B，`--rerun-tasks` 全量才回到 7,242,082
+      ⇒ **R8 增量构建自身有 ±319 B 的非确定性**，以后核包体只比全量对全量。
+      C（改一处是假动作，钉着的是 Activity 那枚根组合）：
+      ① 只改 `HomeScreen:155`：退后台 9 s + 推日 + 回前台按「回到今天」⇒ 页头仍 `9月23日 · 周三`
+      （`[404,537][676,598]` w=272），探针后台到回前台**整段 0 发** ⇒ 没接通。
+      ② 谁钉的：`MainActivity:484 val uiState by viewModel.uiState.collectAsState()` —— `AppNavHost` 把
+      Activity 那枚 `viewModel` 一路 `viewModel = viewModel` 传进 home/course_management/import/stats/settings
+      （9 处传参），所以首页与根组合吃的是**同一个 VM 实例**、`uiState` 是**同一条共享上游**；根组合在 Activity
+      活着期间从不离开组合 ⇒ 它一人在场就把 `WhileSubscribed` 顶死。两处一起改即通：`UPSTREAM-STOP`
+      落在 HOME 后 **+5.5 s**（`23:39:14.599 ChildCancelledException`，pristine 任何窗口都不发），
+      回前台 `22:37:10.306 UPSTREAM-SUBSCRIBE` + `COMBINE-RERUN`（现读时钟）。
+      ③ ⚠️ **卡面那条实验的代理是坏的，要订正**：`setprop persist.sys.timezone` 推走系统本地日，
+      **app 进程里的 `LocalDateTime.now()` 不跟着走**——改后包在系统本地已是 `2026-09-22 22:37` 时，
+      重订阅那一发仍打 `today=2026-09-23`（前台 soak 14 s + 后台 10 s + 回前台三档都没吸收到）。
+      ⇒ 退后台 9 秒加推日那一档页头仍落 9月23日量到的其实是代理失效，不是 today 停在昨天这件事。
+      ④ 换真跨零点（唯一量得动一天的仪器，`Pacific/Kiritimati`=UTC+14 起新进程使 app 时钟自洽）：
+      **pristine 自己会修**——后台 26 分钟里 `00:01:04` 那一发 `COMBINE-RERUN today=2026-09-23` 在**退订状态下
+      没有、在未退订的 pristine 上发了**（跨点前 isFrozen=true，DATE_CHANGED 投递时把进程解冻才醒），回前台页头
+      直接 `9月23日 · 周三` + 顶栏「今日课表」；**改后包**在后台零点整**一枪未发**（上游已被取消，正是这次改动要买的
+      东西），回前台 `00:07:24` 重订阅读到 `today=2026-09-24`、页头 `9月24日 · 周四`、顶栏「今日课表」w=168、
+      「回到今天」消失 ⇒ **两档都落到对的一天**，差别只在什么时候醒、不在落哪一天。
+      ⑤ 锚定日那一档（T68 的 `inUseBrowseDate` 取锚定日）装机验过、不自相矛盾：两档都是先翻到别的一天
+      （`9月22日`/`9月21日`，w=272，「回到今天」在 (934,727)）再让 today 当场跳一天，结果页头与顶栏同一天、
+      按钮按 `date != today` 的口径自己消失，没有出现写着今日课表而页头是别一天。
+      D（建议范围，能直接抄成下一张卡）：**只改 2 处** —— `MainActivity:484`、`ui/home/HomeScreen.kt:155`
+      （同一枚 Activity VM 的 `uiState`，两处必须同批改，改一处是零收益）。**同族但可缓**：`ui/course/
+      CourseManagementScreen.kt:98`、`ui/stats/StatsScreen.kt:87`、`ui/settings/SettingsScreen.kt:194`、
+      `ui/importing/ImportScreen.kt:121`（都吃同一枚 Activity VM 的 `uiState`，只在各自页面在屏时参与组合，
+      单独改哪一处都不会让 `uiState` 退订，改了也只是多一处一致）。**不属于本族、别顺手改**：
+      `MainActivity:510` 的 `reminders` 是 `SharingStarted.Eagerly`（`ScheduleViewModel.kt:273`，编辑器要它先就绪，
+      换 API 不改上游也照样不退订）、`ImportScreen.kt:110` 是 `.uiState.value` 一次性读取（本卡口径已排除）、
+      `ui/signin/SpocScanScreen.kt:126/286` 是另一枚 NavBackStackEntry 级 `SignInViewModel` 且
+      `ScanSilentBranchGuardTest.kt:172` 钉着字面量 `viewModel.inFlight.collectAsState()`（改了直接红守卫）、
+      相机页改生命周期感知还有退后台就断取景的表现风险；`MainActivity:669`/`SettingsScreen:204` 的
+      `UpdateCheck.state` 挂在下载进度上，退订时机一变要多验一轮后台下载回前台进度对不对；
+      `:242/:249` 两族（`importHistory`/`allSemesters`，消费点 `ImportScreen:122`、`ImportHistoryScreen:58`、
+      `SettingsScreen:371`）上游是纯 Room 流、没有滴答押在上面，改了不会有任何用户可见差别。
+      ⚠️ 全仓 `collectAsState()` 调用点我数到 **27** 处（`grep -rn collectAsState --include=*.kt app/src/main` 去掉
+      9 行 import）：卡面那个 26 是把 `ImportHistoryScreen.kt:58` 那颗带 `initial =` 实参的漏在外头的口径差，
+      不影响结论。`collectAsStateWithLifecycle()` 现在 **0 处**。
+      没做到 / 只能靠推断：① **真机 Doze 长眠那一档没量**（23:30 睡到 07:30 时 pristine 那发对齐零点的 `delay`
+      会被推迟多久、会不会整晚不醒）——这台 AVD 屏幕常亮且不进 Doze，我只量到解冻投递时它就醒，
+      所以改了以后在真机上更稳这一步**是推断、不是读数**；② 全站 26/27 处一把改的包体与守卫影响没量（只量了
+      两处这一档 +1,181 B）；③ 后台那 60 s 我取的是 `/proc/<pid>/stat` 为主、`top`/`dumpsys cpuinfo` 为旁证，
+      没做 5 分钟以上的常态后台驻留（pristine 26 分钟那一档顺带给了 7630→8130 ms = +500 ms）；
+      ④ 组合层订阅者计数没直接读（`subscriptionCount` 需要额外探针代码），我是用未冻结窗口里 `UPSTREAM-STOP`
+      不发 + 两处一起改就立刻发两侧夹出来的；⑤ 统计页那一档（只吃 `currentWeek`，周分辨率）本卡没再量，
+      卡面已写明它量不动一天的位移。
+      门禁四步全绿且树是原样：`assembleRelease` 7,242,082 B（探针 dex 0 命中）→ `testDebugUnitTest --rerun-tasks`
+      **1466 tests / 176 suites / 0 失败 / 0 skipped** → `lintAnalyzeDebug`+`lintReportDebug` **0 error / 14 warning**
+      → 复跑 `testDebugUnitTest --rerun-tasks` **1466 / 176 / 0 / 0**；527 枚受控文件 sha256 逐只与开工前快照
+      一致（0 不匹配）、`git status --short` 空。设备已还原：`persist.sys.timezone=GMT`、`adb unroot`(uid 2000)、
+      `stay_on_while_plugged_in=0`、`screen_off_timeout=2147483647`、`wm size 1080x2400`、`wm density 420`、
+      `font_scale 1.0`，装机换回无探针的 `dc1d149` debug 包（`firstInstallTime=2026-09-20 16:04:29` 一字未变
+      ⇒ 库没清；`lastUpdateTime=2026-09-23 10:34:29`），回前台页头 `9月23日 · 周三` + 顶栏「今日课表」。
