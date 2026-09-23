@@ -19,6 +19,8 @@ import org.junit.Assert.assertTrue
  * `docs/APK-SIZE-AUDIT-2026-09-19.md` §8 第 1 条欠的就是这笔"运行时结论全部靠静态证据"的账。
  *
  * 本轮实测结论（同文档 §9）：**上面这些行在 release 产物里全部活着，一行没死**。
+ * T78 新加的那一行 `liveFgsDegraded site=`（#119 唯一的取证口）与六枚 `LiveFgsRetry.token` 一并
+ * 由本文件的第 3 层产物断言覆盖：2026-09-23 在 `:app:assembleRelease` 的产物上按 dex 字节复核过。
  * 机制上的原因是 AGP 8.13 那份 `proguard-android-optimize.txt` 里**没有**
  * `-assumenosideeffects class android.util.Log` 那一段（老版本 AGP 有，那是"release 里 Log.d 全灭"
  * 这个流传很广的说法的来源），本工程自己的规则文件与全部依赖的 consumer rules 里也没有。
@@ -58,7 +60,7 @@ class ReleaseForensicLogSurvivalTest {
             val extraFragments: List<String> = emptyList(),
         )
 
-        /** 编排者那几本账用到的全部取证行（§4.3 / §4.4 / T11 / T12 / T13 / T14 的过滤条件） */
+        /** 编排者那几本账用到的全部取证行（§4.3 / §4.4 / T11 / T12 / T13 / T14 / T78 的过滤条件） */
         private val SITES = listOf(
             Site(
                 "reminder/WakeLocks.kt", "d", "WakeLocks", "唤醒锁跑完 tag=",
@@ -109,6 +111,11 @@ class ReleaseForensicLogSurvivalTest {
                 "reminder/ClassProgressReceiver.kt", "w", "ClassProgressReceiver", "续排下一节课堂窗口失败",
                 "下课铃之后那一步的失败痕迹",
             ),
+            Site(
+                "reminder/CourseFluidService.kt", "w", "CourseFluidService", "liveFgsDegraded site=",
+                "#119 / T78 的取证口：实况起不来时唯一一行说清「这一档重排了没有」的判据行，" +
+                    "删了它等于用户看不见、编排者也看不见",
+            ),
         )
 
         /** 只以 `Decision.reason` 进日志的闸门判据（不是 Log 调用的直接实参，单独列） */
@@ -119,6 +126,12 @@ class ReleaseForensicLogSurvivalTest {
                 "时钟回摆",
                 "自己的闹钟不在了",
                 "三把钥匙均放行：跳过重建整链",
+            ),
+            // T78：`action=` 那一格读的是 LiveFgsRetry.token —— 枚举一旦被 R8 换成 int，
+            // logcat 里就只剩 skip:1 / skip:4 这种没人认得的数，取证行自己先失去意义
+            "reminder/LiveFgsRetry.kt" to listOf(
+                "armed", "skip:window-over", "skip:bell-not-rung",
+                "skip:before-class", "skip:no-exact-alarm", "skip:exhausted",
             ),
         )
 
