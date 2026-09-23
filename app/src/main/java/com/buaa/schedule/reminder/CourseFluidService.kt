@@ -1,5 +1,6 @@
 package com.buaa.schedule.reminder
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.Service
 import android.content.Context
@@ -35,6 +36,10 @@ import kotlinx.coroutines.launch
  * - 前台服务必须 `startForeground()` 后才能真正开始，因此进入服务先 post 首帧通知；
  * - 启动失败时调用方回退到普通常驻通知（`ReminderNotifications.startLiveWindow`
  *   在起服务之前就已经发过同 id 的 promoted 兜底）。
+ *   **两处吞异常的地方现在都过 [reportLiveDegrade] 走一遍**：它固定吐一行
+ *   `liveFgsDegraded site=… action=…`（`logcat -d -s CourseFluidService` 看得见），
+ *   并按 [nextLiveFgsRetry] 的分档决定要不要把课堂窗口重排一遍、让下一发从闹钟豁免档进来。
+ *   账与读数在 `docs/STATUS.md` 的 T78 段。
  */
 class CourseFluidService : Service() {
 
@@ -158,6 +163,13 @@ class CourseFluidService : Service() {
         }.onFailure {
             android.util.Log.w(TAG, "startForeground 失败，回退普通常驻通知", it)
             stopSelf()
+            reportLiveDegrade(
+                context = applicationContext,
+                window = window,
+                phase = phase,
+                site = SITE_START_FOREGROUND,
+                error = it,
+            )
         }
     }
 
@@ -285,6 +297,114 @@ class CourseFluidService : Service() {
          */
         private const val START_BELL_GRACE_MS = 5_000L
 
+        /** [reportLiveDegrade] 的两枚站名：进 `liveFgsDegraded site=` 那一格，grep 时分档用 */
+        private const val SITE_START_FOREGROUND = "startForeground"
+        private const val SITE_START_SERVICE = "startService"
+
+        /**
+         * 一个课堂窗口最多因为降级重排几次。
+         *
+         * 写死 1，不做"多试几次看运气"：隔 2.3 / 5.3 / 20.4 秒重投同一发，AMS 的判据
+         * 逐字段相同（`uidState: RCVR; code:DENIED; tempAllowListReason:<null>`，六发全 DENIED），
+         * 说明这一档的拒绝与等待时长无关 —— 多试只是多几发注定 DENIED 的 binder。
+         * 上限在这里唯一的用处，是挡住"重排 → 新的一发又降级 → 再重排"那条自激回路。
+         */
+        private const val MAX_LIVE_FGS_RETRY = 1
+
+        /** 本进程内「最近为哪个窗口重排过几次」；窗口身份口径见 [liveFgsAttemptsAlreadyArmed] */
+        @Volatile
+        private var retriedCourseId = 0L
+
+        @Volatile
+        private var retriedEndMillis = 0L
+
+        @Volatile
+        private var retriedTimes = 0
+
+        /** 账本的读改写要成一把：`:159` 与 `:310` 两处都往这里报 */
+        private val retryLedger = Any()
+
+        /**
+         * 实况降级的那一笔账：留一行能 grep 的痕迹，并按 [nextLiveFgsRetry] 决定要不要把课堂
+         * 窗口重排一遍 —— 换一条带闹钟豁免的触发源再进来，而不是原地重投。
+         *
+         * 三条约束都是这台机器上量出来的，不是设计偏好：
+         * - **不重投同一发** `startForegroundService`（判据与时长无关，见 [MAX_LIVE_FGS_RETRY]）；
+         * - **不新增通知、不改通知 id、不弹 toast**：屏幕上留下的就是广播侧先发出的那条同 id
+         *   兜底常驻通知，这是本 app「少打扰」的口味，一次降级不该再骚扰用户第二遍；
+         * - **整条路不许抛**：这里已经站在 `onFailure` 里面，从这儿逃出去的异常会把下课铃广播
+         *   （[ClassProgressReceiver] 整段 runCatching 之内）或服务主线程直接打崩。
+         */
+        private fun reportLiveDegrade(
+            context: Context,
+            window: ClassProgressScheduler.ClassWindow,
+            phase: LivePhase,
+            site: String,
+            error: Throwable,
+        ) {
+            val app = runCatching { context.applicationContext }.getOrDefault(context)
+            val now = System.currentTimeMillis()
+            val attempts: Int
+            val decision: LiveFgsRetry
+            synchronized(retryLedger) {
+                attempts = liveFgsAttemptsAlreadyArmed(
+                    recordedCourseId = retriedCourseId,
+                    recordedEndMillis = retriedEndMillis,
+                    courseId = window.courseId,
+                    endMillis = window.endMillis,
+                    recordedAttempts = retriedTimes,
+                )
+                decision = nextLiveFgsRetry(
+                    windowStillLive = !window.endedAt(now),
+                    inClassPhase = phase == LivePhase.IN_CLASS,
+                    bellAlreadyRung = !window.startsAfter(now),
+                    nextAttemptKeepsAlarmClockExemption = keepsAlarmClockExemption(app),
+                    attemptsAlreadyArmed = attempts,
+                    maxAttempts = MAX_LIVE_FGS_RETRY,
+                )
+                if (decision == LiveFgsRetry.ArmOnce) {
+                    retriedCourseId = window.courseId
+                    retriedEndMillis = window.endMillis
+                    retriedTimes = attempts + 1
+                }
+            }
+            // 这一行是 #119 的取证口：出问题先 `logcat -d -s CourseFluidService` 看它。
+            // action=armed 说明链子已经自己重排过一遍；action=skip:* 说明这一档重排也没用，
+            // 屏幕上那条同 id 通知就是这节课实况的全部残骸。栈由上面两行 WARN 负责带，
+            // 这里只留一行可 grep 的判据，不重复第二份 trace。
+            android.util.Log.w(
+                TAG,
+                "liveFgsDegraded site=$site action=${decision.token} course=${window.courseId} attempts=$attempts",
+                error,
+            )
+            if (decision != LiveFgsRetry.ArmOnce) return
+            // 重排挂应用级作用域：这里可能正站在一个马上 onDestroy 的服务里，也可能站在
+            // 一条广播的临时 Context 上。形状同 finishLiveAndReschedule()。
+            runCatching {
+                (app as? BUAAApplication)?.applicationScope?.launch {
+                    ClassProgressScheduler.rescheduleNextWindow(app)
+                }
+            }
+        }
+
+        /**
+         * 重排出来的那一发还带不带「闹钟豁免档」。
+         *
+         * 全服务只在这一处判 `Build.VERSION` 与权限，[nextLiveFgsRetry] 收的是算好的布尔
+         * —— 判据内核不许被调用点各判一遍 SDK_INT。
+         *
+         * 2026-09-23 实测：`appops set com.buaa.schedule SCHEDULE_EXACT_ALARM deny` 之后，
+         * 重排出去的那条铃叫醒的广播里 `CourseFluidService.start` 依旧
+         * `not allowed due to mAllowStartForeground false` —— 未授权时
+         * [ClassProgressScheduler.scheduleClassStartBell] 换的是 `setAndAllowWhileIdle`，
+         * 它不是 `setAlarmClock`，AMS 不给 `ALARM_MANAGER_ALARM_CLOCK` 那一档豁免。
+         */
+        private fun keepsAlarmClockExemption(context: Context): Boolean {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+            val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return false
+            return runCatching { alarmManager.canScheduleExactAlarms() }.getOrDefault(false)
+        }
+
         /**
          * 启动一段课程实况。
          *
@@ -308,6 +428,13 @@ class CourseFluidService : Service() {
                 ContextCompat.startForegroundService(context, intent)
             }.onFailure {
                 android.util.Log.w(TAG, "启动课程实况前台服务失败，回退普通常驻通知", it)
+                reportLiveDegrade(
+                    context = context,
+                    window = window,
+                    phase = phase,
+                    site = SITE_START_SERVICE,
+                    error = it,
+                )
             }
         }
 
