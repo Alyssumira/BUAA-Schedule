@@ -1972,3 +1972,139 @@
       ③ 设备我已还原（TZ=GMT、服务 0 记录、进程未跑、`adb unroot` uid 2000、
       `firstInstallTime=2026-09-20 16:04:29` 未变 ⇒ 库没清）。**装机停在 `9bb1e7b` 的 debug 包**
       （`sha256 17428198…d7`），用户要上机自己看就现在这台 AVD。
+
+- [ ] Baseline Profile 重生成（T79，2026-09-24，基点 `0ab8dfc`）：**这一轮没有重新生成，两份 `.txt` 一个字节都没动**
+      —— 档 3 断在设备上（`emulator-5554` 的 qemu 进程在这张卡跑到一半时整体消失，见末节"设备"）。
+      能不等设备算的账都算完了：死规则数、实际进包数、**当前这份 profile 的真实包体代价**。
+
+      **① 档 1：死了多少（两把独立的尺子，脚本已入库 `docs/tools/`）**
+
+      `docs/tools/profile_audit.py` —— 自带最小 DEX 解析器，把入库文本里 `Lcom/buaa/schedule/…` 的规则
+      逐条对**当前编译产物**的签名表（`:app:assembleDebug` 的 24 个 dex，2,635 枚本应用类）：
+
+      | 口径 | 规则总数 | 还能命中 | 已死 |
+      |---|---|---|---|
+      | `baseline-prof.txt` | 3,979 | 3,356 | 623 |
+      | `startup-prof.txt` | 3,134 | 2,786 | 348（startup 那份是 baseline 的子集） |
+      | **去重合计** | **3,979** | **3,356** | **623（15.7%）** |
+
+      死因：`sig-changed` 327 / `name-gone` 209 / `class-gone` 42 / **`variant-suffix` 45**。
+      按名字是谁造的分开算才不灌水分母：手写代码桶 **1,776 / 1,600 命中 / 29 只差变体后缀 / 147 真死（8.3%）**；
+      编译器造的名字（`$$ExternalSyntheticLambda` / `$r8$lambda$` / `ComposableSingletons$` / `$1`）
+      合计 2,203 / 1,756 命中 / 16 / **431 真死**（编号与捕获列表一变就整片漂移）。
+
+      死得最疼（手写桶 code-dead，按类）：`ui/home/WeekViewKt` 50、`ui/settings/SettingsScreenKt` 32、
+      `ui/home/HomeScreenKt` 22、`ui/home/DayViewKt` 13、`MainActivityKt` 12、widget 族 13。
+      按包族看死亡率：**`ui/home` 85/165 = 52%、`ui/settings` 32/49 = 65%**，
+      而 `data/repository`、`domain/*`、`core/designsystem/liquid` 这些没动的族是 0。
+
+      `docs/tools/profile_landed.py` —— 不看源码对表，直接读 AGP 自己的中间产物并按 `mapping.txt` 反混淆归属：
+      `expandReleaseArtProfileWildcards`（R8 的输入）**3,979** 条本应用规则 →
+      `minifyReleaseWithR8`（进包那份）**1,381** 条，**存活 34.7%**。
+      ⚠️ 口径：这 65% 不全是这张卡的账 —— R8 在缩包时本来就会把 profile 点名的方法合掉/摊平，
+      一份"刚生成、签名全对"的 profile 也吃这一刀；它的用法是**重生成后拿同一把尺子再量一次比大小**，
+      不是绝对健康度。两把尺子互相印证的那部分是：`ui/stats` 在两处都是零。
+
+      **② 一件结构性事实，重生成治不了**
+
+      Kotlin 给 `internal` 成员钉的模块后缀**带变体名**：`:benchmark` 的变体就叫 `nonMinifiedRelease`
+      （`gradle :benchmark:tasks` 原文可查），采集时编译出的名字是 `foo$app_nonMinifiedRelease`；
+      出货的 `release` 变体是 `foo$app_release` —— 后者见本轮 `minifyReleaseWithR8` 之后的
+      `mapping.txt` 原文 `…ReminderScheduler.hasPendingReminder$app_release(android.content.Context)`。
+      入库那份 profile 里 45 条带 internal 后缀的规则全是前者，**在出货包里一条都没命中过，
+      再生成一次还是这样**（`reminder` 族 12 条、`widget` 族 13 条首当其冲）。
+      真要治有两条路：`:app` 的 `kotlin.moduleName` 按变体钉死成同一个名，或采集端改跑 `release` 变体。
+      本轮都没做 —— 前者改的是全工程编译参数、后者要设备，都不是一张"先把账量清楚"的卡该顺手动的事。
+
+      **③ 覆盖盲区（不是"死规则"，是从未有规则）**
+
+      `baseline-prof.txt` 里搜 0 条命中的当前在跑的面：`ui/stats/StatsScreen`、`domain/schedule/SemesterStats`、
+      `ui/home/DaySwipePolicy`（T70 手写左右滑）、`SpecialDayBadge`、`TopBarDateLabel`、`DayTimelineAxis`、
+      `ui/home/CourseEntrance`、`reminder/LiveFgsRetry`、`CourseFluidService.reportLiveDegrade`（T78）。
+      26 个源码包里 **10 个零覆盖**，其中 `ui/importing`/`ui/signin` 那几条是基准类注释里写明有意排除的，
+      而 `ui/stats` 不是 —— 它是**根本没有一条 CUJ 往里走**。顶栏那枚入口 T69 才进，
+      所以"统计页改吃 Activity 那枚 VM（T75）/ 首帧判档（T74）"这一整片在 profile 里是空白。
+      `ScheduleToolbarRow` 有 7 条规则，其中 4 条（`ScheduleToolbarRow$lambda$4*`）已经 `name-gone`，
+      函数本体 `ScheduleToolbarRow(Z…Composer;I)V` 还活着 —— T72/T76 加的那枚常驻加权 `Row`
+      动的是捕获，不是签名。
+
+      **④ 包体代价：这一轮唯一不需要设备就能补齐的账，数字比历史常数大五倍半**
+
+      同一枚 commit（`6276280`）上只换那两份 `.txt`，两侧都 `clean :app:assembleRelease`（`gradle --stop` 先跑）：
+
+      | 侧 | APK 全量 | `classes*.dex`(存) | `classes*.dex`(原始) | `assets/dexopt/*` | res | lib |
+      |---|---|---|---|---|---|---|
+      | A 带当前 profile | **7,243,313 B** | 2,747,361 | 5,708,440 | 11,856 + 579 | 581,275 | 2,925,238 |
+      | B 两份 `.txt` 清空 | 7,049,000 B | 2,558,569 | 5,351,184 | 6,277 + 830 | 581,275 | 2,925,238 |
+      | **A − B** | **+194,313 B** | **+188,792** | +357,256 | +5,328 | 0 | 0 |
+
+      ⇒ **当前这份 profile 的代价是 +194,313 B（占包 2.68%），其中 97.2% 在 dex 那一侧**，
+      profile 文件自己只占约 5.3 KB。res 与 lib 两侧逐字节相同，是这组对照的内部控制变量。
+      ⚠️ 历史那两个数（第一份 +2,270 B、第二份 +35,199 B）**已经不能当预算用**：口径是"这份 profile 相对没有它的代价"，
+      而 profile 覆盖的方法集合随 40 枚提交长了一大截，R8 按 profile 留方法/重排的收益也一起涨。
+      B 侧仍留 6,277 B 的 `baseline.prof` 是各 AAR 自带的库规则，与本工程无关，属正常。
+      ⚠️ 只比全量对全量：A 侧数字与 `0ab8dfc` 台账记的 7,243,313 B 逐字节相同，这轮没有踩到增量虚报那一坑。
+
+      **⑤ 档 2 做了什么：只修行号指针，没加新跳**
+
+      五处点击锚点与三处起点页判据**按当前源码逐条复核，全部还成立**（「下一周」1059 / 「上一周」1017 /
+      模式胶囊 990 仍是同一节点两个态 / `options = listOf("周课表","今日")` 579 / 「前一天」288 「后一天」346 /
+      `listOf("列表","时间轴")` 358 / `GlassTopBar` 的 `Text("返回")` 还在 73 行未动 /
+      `weekHeadline()` 的「第N周」「第N周（浏览）」格式未动 / 「今天有课直接落今日页」还在 198-201 的
+      `LaunchedEffect` 里）。所以**这一档不满足卡面写的动手条件**（"锚点已随 UI 失效"）。
+      改了 24 处 `File.kt:NNN` 引用（最多差 273 行）+ 一处机制改名：日视图模式重组 T70 之后是
+      `DayView.kt:650` 的 `AnimatedContent(targetState = timelineMode)`，注释还写着 `Crossfade`
+      —— 而 `DayView.kt:298` 另有一枚真的 `Crossfade`，照旧注释去找会认错件。
+      差异自证：37 增 36 删，去掉数字之后两侧逐行相等；`:benchmark:compileNonMinifiedReleaseKotlin` 绿
+      （唯一那条 warning 在 352 行 `it.text?.toString()`，不在本卡改动里）。
+      **没有加 `ui/stats` 那条新跳**，理由是拿不出 dump 证据：卡面要求每条跳带 bounds 与前后页面标识自证，
+      而那时设备已经没了。在没有设备的盘面上写一条新跳，正是这条基准的注释里反复警告的"静默空跑"，
+      宁可不写。
+
+      **⑥ 门禁（profile 一个字节没改，也照四步跑完）**
+
+      `:app:assembleRelease` 绿 → `:app:testDebugUnitTest --rerun-tasks` **1,483 tests / 178 suites / 0 失败 / 0 skipped**
+      → `:app:lintAnalyzeDebug --rerun :app:lintReportDebug --rerun` **0 error / 14 warning**
+      → 再单独一遍 `testDebugUnitTest --rerun-tasks` **1,483 / 178 / 0 / 0 skipped**。与 `0ab8dfc` 基线逐格相同。
+      release 签名包全量 **7,243,313 B**，A 侧（`clean`）与还原 `.txt` 后补跑的那一次（增量）
+      **字节数逐位相同**。⚠️ 但这两次的 **APK sha256 不同**（`add7adad…9ed7e` vs `596523c6…f1d68`）
+      —— 一次 clean 一次增量，ZIP 条目时间戳跟着输入文件的 mtime 走。**别拿 APK 的 sha256 当
+      "是哪一版"的判据，至少要比 clean 对 clean**；这条卡面上"R8 增量与全量之间有 ±319 B 非确定性"
+      是另一码事（那说的是字节数，本轮两次字节数相同、没触发）。
+      本轮没有装机，所以不产生"装机停在某一版"的读数。
+
+      **⑦ 设备：失败形状（原样）**
+
+      开工时 `adb devices -l` 有 `emulator-5554`，我取了 `persist.sys.timezone=GMT`、`pm list packages` 有
+      `com.buaa.schedule` 两项读数；**约 15 分钟后同一台从 `adb devices` 里消失**：
+      `adb.exe: device 'emulator-5554' not found`，`tasklist` 里 `qemu-system-x86_64.exe` / `emulator.exe`
+      零个进程，`netstat` 里 `127.0.0.1:5554`/`5555` 无监听，只剩 adb server 的 5037。
+      ⇒ 不是我关的窗口，也不是我重启的：**进程整个不在**，而我从开工到那时只发过两枚只读 shell 探针
+      （`settings get` / `getprop` / `pm list packages` / `dumpsys package dexopt`），没有 install、没有 root、
+      没有 `am`、没有 `reboot`。取证原文 `.tmp/T79/device-failure.txt`。
+      ⚠️ **同一时刻真机 `f128bc02`（socrates / 22127RK46C）出现在 `adb devices` 里**，我**对它发过零条命令**
+      （唯一一次带 `-s` 的调用指名 `emulator-5554`，且失败返回）。
+      我没有去起那台 AVD：冷重启 = overlay 回滚，正是卡面写着不许的事，而且回滚掉的是别人的装机证据，
+      起不起、什么时候起该由编排者决定。
+      **⇒ 档 3 的三件事全部没做**：没生成、没做 15 轮 ×2 的 `am start -W` 手工对照、没量装机是否落到
+      `speed-profile`。所以"这次收益是多少"这一格是空的，也就谈不上"由数据决定入库"：
+      **没有新生成的 profile 可入，两份 `.txt` 原样不动**。这不是"看起来更规整所以不入库"，是手里没有货。
+
+      **⑧ 没做到 / 只能靠推断**
+
+      - **没做到**：档 3 全部（生成、重播种、冷启动 15 轮 ×2 对照、`/data/misc/profiles/ref/…primary.prof` 取证、
+        `dumpsys package dexopt` 的 `[status=speed-profile]` 那行）；档 1 的重跑对照（"死规则数应降到接近 0"
+        这一判据本轮无从验证）；`ui/stats` 那条新 CUJ。
+      - **只能靠推断（标明）**：① "重生成后 623 条死规则会显著下降"是**推**的 —— 机制上 profile 的文本就是
+        采集当次的签名快照，但 45 条 internal 后缀那一族**不会**因此变好（见 ②），431 条编译器造名那一族
+        只能保证"和当次构建自洽"，换一次构建照样漂；② "578 条 code-dead 里大部分是 T49/T70/T72/T76 那几组
+        重做造成的"是按包族对上的（死得最疼的正是 `ui/home`+`ui/settings`，而没动的族是 0），**没有**逐条
+        `git log -S` 归因；③ "重生成会把包体代价推高"是从 A−B 的 97.2% 落在 dex、而新 profile 的规则数只会多
+        不会少推的，**没量过**。
+      - **下一轮接手的现成起点**：两把尺子的脚本在 `docs/tools/`，命令原文见各自 docstring，重生成后
+        `--apk` 换新的 debug 包、`--expanded/--shipped` 仍指同一对中间产物即可直接复算；
+        分母已经钉死在 **3,979**。设备起来后要补的三件事顺序：播种 → 生成 → 重播种+补权限，
+        然后先跑一次 `verify`/`speed-profile` 各 15 轮再谈入库。
+      - **本轮不需要发版，也不涉及真机行为改动**：`:app` 的业务码一行未动（`git diff 0ab8dfc..HEAD -- app/src/main`
+        为空），改的是两支新脚本与 `benchmark/` 的注释。
+
