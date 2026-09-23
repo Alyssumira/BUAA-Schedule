@@ -1387,3 +1387,64 @@
       代理自己的探针序列里最接近它的是"杀进程后再点格子"（`onCreate saved=true` + `onNewIntent day=1` ⇒ 落周一），
       同样是靠 `onNewIntent` 兜住。⇒ **真机（HyperOS）上若出现"点格子没反应"，第一嫌疑就是这一档**，
       与它自记的残账①同一条线，验收 #112 时要在真机上专门点一次组件。
+
+- [x] 学期统计页不再每次进入新造一枚 ViewModel（T75，2026-09-23，台账 #116）：
+      `StatsScreen` 的 `viewModel` 原本是带默认值的参数（`= viewModel(factory = …)`），在 NavHost 里
+      默认值按 **nav entry 的 `ViewModelStore`** 解析 ⇒ 每次进这一页都新造一枚 `ScheduleViewModel`、
+      `uiState` 从 `stateIn` 的 `initialValue` 重走一遍加载链。改法就三处：`MainActivity.kt:928` 显式
+      `viewModel = viewModel`（与 `settings/{section}` 等 8 个调用点同口径）、`StatsScreen.kt:85` 把默认值
+      **整条摘掉换成必传参数**（默认值会让"忘了接线"静默通过，这条收法同 T69 对 `onOpenStats`）、
+      随之删掉不再使用的 `LocalContext` / `viewModel` 两处 import。`StatsPageStage` 三档与它的单测一行没动。
+
+      **装机实测（代理跑的①③，原始 JSON/录屏在 `.tmp/T75/`，我逐格复核过）**：
+      ① 进页到第一帧内容，**空闲态中位 245 → 186.5 ms（−24%）、CPU 饥饿态 311 → 247.5 ms（−20%）**，
+      各 6 次（`before-idle.json` / `before-starved.json` / `after-idle.json` / `after-starved.json`，
+      饥饿态那组是一次并发 gradle 构建制造的争抢，最大单样本 914 ms）。
+      ⚠️ **台账标题里那笔"3 秒冷路径"要订正**：3080 ms 是 T74 在更狠的争抢下量的**冷启动首帧**，
+      本卡同一台镜像、同一把量具（点胶囊 → 探针 `stage=`）量到的稳态差是**百毫秒级 58 ms**。
+      ② 探针打的 `vm=` 身份是最硬的一条：改前 6 次进入 6 枚**不同**的 VM（`100417045` / `236575313` /
+      `237684623` / `253547098` / `35407355` / `9787080`，Activity 那枚恒为 `210405691`），
+      改后 6 次进入 `vm_page == vm_activity == 72132839` 恒等 ⇒ 复用坐实。
+      ③ Loading 那一档：改前 **12 次进入 12 次都先发射 `Loading`**，改后 **12 次进入一次没有**；
+      录屏逐帧分类另给一条弱证据（改前 49 帧里 10 帧是这一面、改后 36 帧 0 帧）——受帧粒度所限，
+      后一半只能当**负观测**看。⚠️ 代理把一组对不上的数（"改前 18 次 18 次先亮 / 改后 19 次一次没亮"）
+      写进了 `StatsScreen` 的注释，盘面 `assign-before.txt` 实际是 49 帧 / rep=3 计 10 帧，
+      **合并前我按盘上证据改写成 12/12 与 0/12**（同 T46 那条"假实测口径"的账）。
+
+      **②那条退订语义是我自己复跑的**（代理那组实验只把读数打到 stdout、没落盘 ⇒ 对我等于没有）：
+      统计页只吃 `state.currentWeek`（周分辨率，一天的位移量不动），所以量具换成首页——
+      先滑到 9/24 让「回到今天」出现，退后台 9 秒（>5 s）、后台里把时区从 GMT 改成 Anchorage
+      （系统本地日随之变 9/22），回前台后按「回到今天」⇒ 页头落 **9月23日 · 周三**、不是 9/22
+      （`.tmp/T75-orch/S3-backtotoday.xml`；`HomeScreen.kt:164 val today = state.today` 说明这一按读的就是
+      VM 里那一枚）。⇒ **共享 VM 的上游在 Activity 存活期间从不退订**，根因不在本卡：全站 26 处
+      `collectAsState()`、`collectAsStateWithLifecycle()` **零处** ⇒ `WhileSubscribed(5_000)` 形同虚设，
+      `today` 的推进一直只靠 `dayTicker` 对齐零点那一发（`ScheduleViewModel.kt:418-431`）。
+      ⇒ 三条结论：本卡**没有切断任何在用的链**（改前改后首页那一枚都是同一枚，退订本来就没发生）；
+      真正失去的是"进这一页顺手重读一次时钟"这个**偶发**触发点（`upstream_emissions` 每进一次页
+      由 1 变 0，就是它）；而 `WhileSubscribed` 空转这件事本身是一笔独立的账 ⇒ **转 #117 评估**，
+      不在本卡动（换 API 要引依赖、且要单独量"后台到底还算不算"，不许顺手）。
+      ⚠️ 我第一版把同一档做砸了一次：拿顶栏那枚 272px 日期当 `today` 量，读到 9-23 就差点写成
+      "回前台不刷新"的结论——那一行其实是 T68 的**锚定浏览日**（设计上跨进程存活），量具错位。
+
+      **编排账**：这支在 150 轮上限被掐断，交回来的时候 **零 commit、零 stash**，全部工作只躺在工作区
+      里（`git rev-list --count 7b162ec..HEAD` = 0）。我先按 mtime 判活（两次读取间隔 45 s、`app/` 下无移动），
+      再 `git diff HEAD > .tmp/T75-rescue/wip-115415.patch` + 把未跟踪的守卫测试整份复制过去，然后才动手。
+      它最后一句"restore 逻辑有 bug，先修工作区"来自 `.tmp/T75/prove_red.py`（把守卫源码逐档扰动、
+      跑同一枚测试类、证"先红"）：重写版改成按原始字节还原，我复核盘面 —— 工作区只剩该改的三枚文件
+      加一枚新测试，main 源码里 `grep Log.` 只剩既有的 `GlassDiag`，**没有残留探针**。
+      它的取证脚本另有 11 份在 `.tmp/T75/`（`measure.py` / `cold_path.py` / `frames.py` / `classify*.py`），
+      中途还把框架跑崩过一次、自己 `adb emu kill` 冷重启后**重装重测**（11:29 重启 ⇒ 11:35:23 重装 debug 包，
+      之后又重录了一遍改后档），没有拿重启前的数糊弄。⚠️ 顺带一条环境事实：**AVD 序列号会随重启漂移**
+      （这轮 `emulator-5556` → 重启后回到 `emulator-5554`），而它所有脚本硬编码 5556 ⇒ 重启之后的脚本
+      读数要另看一遍是不是空树。
+
+      门禁（我按序重跑 + 单独再跑一遍测试）：**1452 tests / 174 suites / 0 失败 / 0 skipped**
+      （地板 1445/173 ⇒ +7 条 / +1 枚套件，全在新守卫 `StatsViewModelScopeGuardTest`：纯 JVM、
+      只 import `java.io.File` 与 junit，7 档里含"Loading 那一档不许被摘"与"共享策略不许改"两档反向守卫）/
+      lint **0 error / 14 warning**（持平）/ release 签名包 **7,241,176 B**（基点 7,241,395 ⇒ **−219 B**；
+      产物层另核一遍：release dex 里 `T75Probe` / `T74PROBE` / `StatsEntryBudget` 三个取证标签命中 **0**，
+      取证探针没跟着进包）。
+      残账：① 3 秒档再没在这台镜像上复现过，饥饿态最大也只到 914 ms ⇒ 本卡收益按"百毫秒级"记；
+      ② 真机（f128bc02 / HyperOS）未跑，那台的 logcat 截在 Info 级、且 ROM 的任务栈回收口径不同；
+      ③ "resident 进程跨零点时 `dayTicker` 那一发真的会来"这一条**没有直接观测**（Doze 冻结时会迟到，
+      代码注释自己承认），与 #117 是同一条线。
