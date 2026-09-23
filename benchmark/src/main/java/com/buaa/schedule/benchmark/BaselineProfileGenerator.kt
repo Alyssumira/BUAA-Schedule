@@ -21,7 +21,7 @@ import org.junit.runner.RunWith
  *
  * 这一半**不做**「起点页确认」，与交互那四条相反，这不是漏了：它停在首帧，采的就是
  * 首帧真正落在哪一页的组合路径。已播种的状态下今天有课，那一帧是今日页
- * （`HomeScreen.kt:180` 的 `selectedTab = if (hasTodayCourses) 1 else 0`），
+ * （`HomeScreen.kt:200` 的 `selectedTab = if (hasTodayCourses) 1 else 0`），
  * 而"用户冷启动第一眼看到的那一屏"本来就该进 startup profile —— 换页只会让它偏离。
  * 需要站定起点页的是交互场景：它们要点只有某一侧才渲染的锚点。
  */

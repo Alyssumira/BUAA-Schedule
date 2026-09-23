@@ -33,7 +33,7 @@ import java.util.regex.Pattern
  *    ART 也管不着。所以这里刻意不点底栏的「导入」。
  * 2. **每个场景都从 `startActivityAndWait()` 起、在已播种的库上跑，并且自己声明起点页**
  *    （[ensureOnWeekPage] / [ensureOnTodayPage]）。生成前的播种条件见 docs/STATUS.md。
- *    不依赖 app 的默认落位是硬要求：`HomeScreen.kt:180` 写的是
+ *    不依赖 app 的默认落位是硬要求：`HomeScreen.kt:200` 写的是
  *    `selectedTab = if (hasTodayCourses) 1 else 0` —— **今天有课就直接落在「今日」页**，
  *    上一版两条"以为自己在周视图"的场景其实一直站在今日页上。
  * 3. **锚点只用 dump 里真存在的东西，点法一律走坐标。** 本工程没有任何
@@ -65,13 +65,13 @@ class InteractionBaselineProfileGenerator {
     /**
      * CUJ 1 · 周课表纵向滚动 + 翻周。
      *
-     * 周视图的滚动容器是 `WeekView.kt:679` 的 `verticalScroll(gridScrollState)`，
+     * 周视图的滚动容器是 `WeekView.kt:696` 的 `verticalScroll(gridScrollState)`，
      * 网格按节次分行、内容比一屏长，所以滚动真的会绑定新行。
      *
-     * 翻周走顶栏的「下一周」（`HomeScreen.kt:886` 的 contentDescription，与实测过的
+     * 翻周走顶栏的「下一周」（`HomeScreen.kt:1059` 的 contentDescription，与实测过的
      * 「后一天」同一种节点）：它 `enabled = displayWeek < totalWeeks`，所以播种的学期
      * 必须处在中间周（条件见 docs/STATUS.md）。翻完用周次标题（「第3周」→「第4周（浏览）」，
-     * `HomeScreen.kt:965-969` 的 `weekHeadline()`）当证据 —— 这是这一跳唯一点得出来的物证，
+     * `HomeScreen.kt:1135-1144` 的 `weekHeadline()`）当证据 —— 这是这一跳唯一点得出来的物证，
      * 标题没变就是没点上。
      */
     @Test
@@ -91,7 +91,7 @@ class InteractionBaselineProfileGenerator {
             // 两种"没点着"必须分开：锚点存在但是禁用态 = 已经翻到最后一周，跳过这步是
             // 诚实的；锚点根本不存在 = 这条场景会静默空跑，必须红。
             check(device.hasDesc(DESC_NEXT_WEEK)) {
-                "周课表页上没有 content-desc「$DESC_NEXT_WEEK」（HomeScreen.kt:886）—— " +
+                "周课表页上没有 content-desc「$DESC_NEXT_WEEK」（HomeScreen.kt:1059）—— " +
                     "要么这颗按钮的 desc 没进 accessibility 树，要么这一步压根没站在周课表页。" +
                     "翻周这一跳会静默空跑，宁可直接红"
             }
@@ -105,13 +105,13 @@ class InteractionBaselineProfileGenerator {
      * CUJ 2a · 周课表侧「课次行 ↔ 24 小时时间轴」。
      *
      * 这颗胶囊的两个状态是**同一个节点的同一个 contentDescription 位**在变：
-     * `HomeScreen.kt:817` 写的是 `if (timeMode) "时间轴视图" else "课次行视图"`。
+     * `HomeScreen.kt:990` 写的是 `if (timeMode) "时间轴视图" else "课次行视图"`。
      * 所以"当前是哪一态"能从 dump 里读出来，不用猜：先按当前态的 desc 找它、点一次，
      * 再按新的 desc 点回来。**来回**是这条场景的自检装置 —— 第二跳找得到第一跳留下的
      * 那个态，就说明第一跳真的点了；第一跳点空了，第二跳就找不到，[waitUntil] 直接红。
      *
      * 切换会整表重组（时间轴模式下每行的高度、刻度都要重算），这是这条 CUJ 的价值所在。
-     * 模式是落盘的（`HomeScreen.kt:814` 的 `Personalization.save`），所以这里必须回到
+     * 模式是落盘的（`HomeScreen.kt:982` 的 `Personalization.save`），所以这里必须回到
      * 出发态收尾，否则下一轮采集从另一态起步。
      */
     @Test
@@ -126,7 +126,7 @@ class InteractionBaselineProfileGenerator {
             device.hasDesc(DESC_WEEK_VIEW_TIME) -> DESC_WEEK_VIEW_TIME
             else -> throw IllegalStateException(
                 "周课表页上「$DESC_WEEK_VIEW_PERIOD」和「$DESC_WEEK_VIEW_TIME」两个 content-desc " +
-                    "都不在 dump 里（HomeScreen.kt:817 那颗胶囊）—— 锚点不成立，这条场景只能空跑，" +
+                    "都不在 dump 里（HomeScreen.kt:990 那颗胶囊）—— 锚点不成立，这条场景只能空跑，" +
                     "先拿 uiautomator dump 确认这颗胶囊到底暴露了什么"
             )
         }
@@ -149,7 +149,7 @@ class InteractionBaselineProfileGenerator {
     /**
      * CUJ 2b · 今日页「列表 ↔ 时间轴」。
      *
-     * 这颗控件与 2a 那件不是一回事：`DayView.kt:248` 的
+     * 这颗控件与 2a 那件不是一回事：`DayView.kt:358` 的
      * `GlassSegmentedControl(options = listOf("列表", "时间轴"))`，只有文字、没有
      * content-desc，而文字不随状态改（选中态只体现在颜色/字重上，dump 里读不出来）。
      * 所以这里的判据换成 [segmentSelected]：按几何关系找「这格对应的可点容器」有没有
@@ -158,11 +158,12 @@ class InteractionBaselineProfileGenerator {
      * **三跳而不是两跳**：起点态读不出来（2a 能把当前态写在 desc 上，这里不能），
      * 所以固定从「列表」起步、回到「列表」收尾 —— 与上一轮停在哪个态无关，且每一跳
      * 后面都有自己的判据。两跳的话结尾落在哪一态就说不清了，而日视图的内容树整棵要按
-     * 模式重组（`DayView.kt:423` 的 `Crossfade(targetState = timelineMode)`：列表侧是
-     * LazyColumn，时间轴侧是 `Column + verticalScroll`，`DayView.kt:523`），
+     * 模式重组（`DayView.kt:650` 的 `AnimatedContent(targetState = timelineMode)`，T70
+     * 之前它是 `Crossfade`：列表侧是
+     * LazyColumn，时间轴侧是 `Column + verticalScroll`，`DayView.kt:889`），
      * 落回默认态才算把播种环境还原。
      *
-     * 锚点不依赖数据：`DayView.kt:247` 那个 `GlassSegmentedControl` 直接挂在页头
+     * 锚点不依赖数据：`DayView.kt:357` 那个 `GlassSegmentedControl` 直接挂在页头
      * `Column` 里，**没有**"这一天有课才渲染"的门，所以没课的日子这两格也在、这一条也跑得通。
      * 但播种仍要让今天有课 —— 空的一天内容区走 `DayView.kt` 的 `EmptyState` 分支，
      * 整表重组那条路径就没东西可重组，这一跳只是切了两格的颜色而已。
@@ -175,7 +176,7 @@ class InteractionBaselineProfileGenerator {
         device.ensureOnTodayPage()
 
         for (label in listOf(LABEL_DAY_LIST, LABEL_DAY_TIMELINE, LABEL_DAY_LIST)) {
-            device.tapOrThrow(inText(label), "今日页分段「$label」（DayView.kt:248 的 options）")
+            device.tapOrThrow(inText(label), "今日页分段「$label」（DayView.kt:358 的 options）")
             device.waitUntil("「$label」成为选中格") { device.segmentSelected(label) }
         }
 
@@ -185,12 +186,12 @@ class InteractionBaselineProfileGenerator {
     /**
      * CUJ 3 · 今日视图。
      *
-     * 顶栏那枚分段控件是 `HomeScreen.kt:421` 的 `options = listOf("周课表", "今日")`，
+     * 顶栏那枚分段控件是 `HomeScreen.kt:579` 的 `options = listOf("周课表", "今日")`，
      * 格子文本走 `Text(label)`（`GlassSegmentedControl.kt:254`），所以是 `By.text` 命中
      * （**实测**：这两格在 dump 里就是 clickable=false 的 Text 节点，必须坐标点击）。
      * 两段文本各自唯一：「今日」是精确匹配，不会撞上标题那句「今日课表」。
      *
-     * 起点刻意声明在周课表侧：本应用今天有课时**默认就落在今日页**（`HomeScreen.kt:180`），
+     * 起点刻意声明在周课表侧：本应用今天有课时**默认就落在今日页**（`HomeScreen.kt:200`），
      * 不先站到周课表上，这一跳就只是重复点一次已经在的格子，切页那条组合路径根本没走到。
      *
      * 「今日」这一侧的内容是 `DayView.kt` 的 LazyColumn + verticalScroll，
@@ -219,13 +220,13 @@ class InteractionBaselineProfileGenerator {
     /**
      * CUJ 4 · 设置页。
      *
-     * 入口是底栏的「设置」（`MainActivity.kt:312` 的 navItems，文案取
+     * 入口是底栏的「设置」（`MainActivity.kt:357` 的 navItems，文案取
      * R.string.tab_settings = 设置）。之所以用 [tapLowest] 而不是直接 findObject：
-     * 进了设置页以后顶栏标题也叫「设置」（`SettingsScreen.kt:354`），
+     * 进了设置页以后顶栏标题也叫「设置」（`SettingsScreen.kt:349`），
      * 页面上会同时存在两个同名节点，取最靠下的那个才是底栏。
      *
      * **这一页的证据用「返回」而不是「设置」**：设置页的 `GlassTopBar` 无条件收到一个
-     * `onBack`（`SettingsScreen.kt:355`），于是 `GlassTopBar.kt:73` 那颗
+     * `onBack`（`SettingsScreen.kt:350`），于是 `GlassTopBar.kt:73` 那颗
      * `Text("返回")` 一定会渲染，而课表页与导入页都没有这两个字 —— 比数「设置」的
      * 个数干净（底栏本来就有一个）。
      *
@@ -233,12 +234,12 @@ class InteractionBaselineProfileGenerator {
      * （`SettingsScreen.kt:379`），根界面只列 6 条分类入口，其余分组全靠
      * `visibleWhen = section == …` 整组跳过，所以根界面上那几记坐标 swipe
      * 大概率推不动任何东西（一屏就装完了）。这一条 CUJ 真正吃到的组合是**进入设置页**
-     * 这一下（`SettingsScreen.kt:363` 的 verticalScroll + 六个玻璃行 + 顶栏）——
+     * 这一下（`SettingsScreen.kt:358` 的 verticalScroll + 六个玻璃行 + 顶栏）——
      * 上一版它连点都没点成，等于整页没进。
      *
      * 「展开」保持**命中就点、点不到就跳过**：它是 `SettingsStack.kt:228` 那颗 chevron
      * 的 contentDescription，而 `SettingsGroup` 的 `collapsible` 默认是 false，根界面
-     * 唯一一个组还是 `SettingsGroup(title = null)`（`SettingsScreen.kt:384`）——
+     * 唯一一个组还是 `SettingsGroup(title = null)`（`SettingsScreen.kt:379`）——
      * 按源码根界面不会渲染它。真机 dump 里我也**没有**验过它作为 content-desc 出现，
      * 所以它既不当锚点、也不加断言。
      */
@@ -283,20 +284,20 @@ private const val PAGE_TIMEOUT_MS = 3_000L
 /** 点完之后再多等这么久复查一次，避开"首帧页签事后被改掉"那个竞态 */
 private const val SETTLE_MS = 800L
 
-// 周课表顶栏那颗模式胶囊的两个状态（同一节点、两个态；HomeScreen.kt:817）
+// 周课表顶栏那颗模式胶囊的两个状态（同一节点、两个态；HomeScreen.kt:990）
 private const val DESC_WEEK_VIEW_PERIOD = "课次行视图"
 private const val DESC_WEEK_VIEW_TIME = "时间轴视图"
 
-private const val DESC_NEXT_WEEK = "下一周"        // HomeScreen.kt:886
-private const val DESC_PREV_WEEK = "上一周"        // HomeScreen.kt:844（不是「前一周」）
-private const val DESC_PREV_DAY = "前一天"         // DayView.kt:201  实测
-private const val DESC_NEXT_DAY = "后一天"         // DayView.kt:236  实测
+private const val DESC_NEXT_WEEK = "下一周"        // HomeScreen.kt:1059
+private const val DESC_PREV_WEEK = "上一周"        // HomeScreen.kt:1017（不是「前一周」）
+private const val DESC_PREV_DAY = "前一天"         // DayView.kt:288  实测
+private const val DESC_NEXT_DAY = "后一天"         // DayView.kt:346  实测
 private const val DESC_SETTINGS_EXPAND = "展开"    // SettingsStack.kt:228（未实测，不当判据）
 
-private const val LABEL_WEEK_SEGMENT = "周课表"    // HomeScreen.kt:421  实测
-private const val LABEL_TODAY_SEGMENT = "今日"     // HomeScreen.kt:421  实测
-private const val LABEL_DAY_LIST = "列表"          // DayView.kt:248     实测
-private const val LABEL_DAY_TIMELINE = "时间轴"    // DayView.kt:248     实测
+private const val LABEL_WEEK_SEGMENT = "周课表"    // HomeScreen.kt:579  实测
+private const val LABEL_TODAY_SEGMENT = "今日"     // HomeScreen.kt:579  实测
+private const val LABEL_DAY_LIST = "列表"          // DayView.kt:358     实测
+private const val LABEL_DAY_TIMELINE = "时间轴"    // DayView.kt:358     实测
 private const val LABEL_SETTINGS_TAB = "设置"      // R.string.tab_settings
 private const val LABEL_SCHEDULE_TAB = "课表"      // R.string.tab_home
 private const val LABEL_BACK = "返回"              // GlassTopBar.kt:73，设置页才有
@@ -332,11 +333,11 @@ private fun atDesc(description: String): BySelector =
 private fun UiDevice.hasDesc(description: String): Boolean =
     findObject(atDesc(description)) != null
 
-/** 周课表页的证据：只有它会渲染的上一周/下一周导航（HomeScreen.kt:844/886） */
+/** 周课表页的证据：只有它会渲染的上一周/下一周导航（HomeScreen.kt:1017/886） */
 private fun UiDevice.onWeekPage(): Boolean =
     hasDesc(DESC_PREV_WEEK) || hasDesc(DESC_NEXT_WEEK)
 
-/** 今日页的证据：只有它会渲染的日期导航（DayView.kt:201/236，实测） */
+/** 今日页的证据：只有它会渲染的日期导航（DayView.kt:288/236，实测） */
 private fun UiDevice.onTodayPage(): Boolean =
     hasDesc(DESC_PREV_DAY) || hasDesc(DESC_NEXT_DAY)
 
@@ -379,7 +380,7 @@ private fun UiDevice.segmentSelected(label: String): Boolean {
  * 站到周课表页，并确认站上了。
  *
  * **先刻意切一次今日页、再切回来**，这一遍不是冗余，是把 app 自己那一下改页签的
- * `LaunchedEffect`（`HomeScreen.kt:178-183`）吃掉：它在首次数据到位时把
+ * `LaunchedEffect`（`HomeScreen.kt:198-201`）吃掉：它在首次数据到位时把
  * `selectedTab` 改成 1（今日）并置 `tabDecided`，此后永不再动 —— 也就是说全应用
  * 只有"往今日页去"的自动改页签。而首帧 `selectedTab` 的初值就是 0，周课表那一簇
  * （学期/周次步进/胶囊）已经在屏幕上，于是"点分段 + 确认到周课表证据"这一趟
@@ -419,7 +420,7 @@ private fun UiDevice.ensureOnTodayPage() = ensurePage(
 /**
  * 按文本点顶栏分段 [segment]，然后用 dump 里的证据确认已经切过去；确认不了就抛。
  *
- * 为什么要这个函数：`HomeScreen.kt:173` 的 `selectedTab` 默认 0，但 `:180` 那句
+ * 为什么要这个函数：`HomeScreen.kt:193` 的 `selectedTab` 默认 0，但 `:180` 那句
  * `selectedTab = if (hasTodayCourses) 1 else 0` 会在数据到位后把它改掉 —— 也就是说
  * **落在哪一页取决于今天有没有课**，而采集的前提是"今天有课"（不然日视图是空的）。
  * 于是上一版两条周视图场景实际站在今日页上：胶囊不在那一侧（它在
@@ -428,7 +429,7 @@ private fun UiDevice.ensureOnTodayPage() = ensurePage(
  *
  * 为什么还要复查一次 + 试两次：主防线是 [ensureOnWeekPage] 里"先绕一次今日页"，
  * 那道竞态不再靠这里兜；这里留的是第二道，管的是短时抖动 —— 分段切换要跑
- * `AnimatedVisibility` 的展开/收起动画（`HomeScreen.kt:786`），旧页的锚点在动画期间
+ * `AnimatedVisibility` 的展开/收起动画（`HomeScreen.kt:762`），旧页的锚点在动画期间
  * 仍在屏幕上，而新页的锚点得等组合落定才出现。[settledProbe] 要求证据**出现并且再过
  * [SETTLE_MS] 仍在**，不成就重点一次；两遍都不成就红，而不是带着一个假"已确认"往下走。
  */
@@ -436,7 +437,7 @@ private fun UiDevice.ensurePage(segment: String, evidence: String, probe: () -> 
     var reason = "从没点过分段「$segment」"
     repeat(PAGE_ATTEMPTS) {
         if (tapLowest(inText(segment)) == null) {
-            reason = "分段「$segment」（HomeScreen.kt:421 的 options）在 dump 里没有文本节点"
+            reason = "分段「$segment」（HomeScreen.kt:579 的 options）在 dump 里没有文本节点"
         } else if (settledProbe(probe)) {
             return
         } else {
