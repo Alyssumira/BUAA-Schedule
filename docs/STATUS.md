@@ -1321,3 +1321,50 @@
       每次进入都重订阅三条 Room 流、重跑一次全学期聚合，那 3080 ms 冷路径就是这么来的。
       照 `viewModel = viewModel` 把 Activity 那枚传进去，这一页第一帧即内容 —— 但它会让新加的 Loading 档
       在装机上不可见（拿不到证据），所以先修"不说假话"、再修"不用等"。
+
+- [x] 只点桌面图标不再自己跳到某一天（T71，收台账 #112，2026-09-23，`0577f55`…`d9f17c5`）：
+      T68 装机复核顺手挖出来的那一笔，本卡修根。症状是用户的原话："我没点任何东西，它自己跳到周三"。
+      **第 0 问（三行 `onCreate` 无条件重放，哪些本来就该一次性）用探针答成"三行全是同一档"**：
+      三枚 extra 的生产方**无一例外**是 `PendingIntent.getActivity`（组件格子 `WidgetCommon.kt:774`
+      + 每格 `WeekGridWidgetService.kt:173`；组件行 `:320` + `CourseListWidgetService.kt:265`；
+      通知按钮 `ReminderNotifications.kt:387`），非 Activity 上下文发 Activity 意图时框架补
+      `FLAG_ACTIVITY_NEW_TASK` ⇒ 那枚 intent 成了任务栈根 intent（`dumpsys activity activities`
+      实测根 intent `flg=0x10000000 … (has extras)`、`rootOfTask=true`）。进程被杀、任务还活着时
+      点桌面图标，系统重放它。差别只在生产方是谁，不在新鲜度语义 ⇒ 三档共用一道闸，
+      取值域判据（缺省哨兵 -1 / 0、白名单成员、ISO 1..7）仍各判各的。
+      **判据**取「这个 Activity 实例是不是一个**已跑过的**实例的重建」（`savedInstanceState != null`），
+      装机实测把四条序列全钉在这条上：冷启动点格子 `saved=false day=5`（认）/ 杀进程后点图标
+      `saved=true day=5` + `onNewIntent day=null(LAUNCHER)`（不认）/ 杀进程后再点格子
+      `saved=true day=5(陈旧)` + `onNewIntent day=1(新)`（落周一，组件那一跳没被顺手关掉）/
+      转屏 `saved=true day=1`（不认）。**内核** `core/LaunchRequestPolicy.kt`（零 android import、
+      零时钟、不吃 `Intent`/`Bundle`，守卫 ① 三种漂法都扫）；`onCreate` 与 `onNewIntent` 从此共用
+      同一份判据，能差别的只剩传进去的那个布尔，`courseIdFrom`/`routeFrom`/`dayOfWeekFrom` 三份就地
+      判据删掉（基点上那两个入口本来就自相矛盾 —— 这才是本卡的病）。9 档表驱动单测 + 7 条守卫，
+      守卫每档先证过它是红的（两轮共 9 处扰动：内核塞 android import、`?.let` 退回无条件赋值、
+      onCreate 里多读一枚 extra、模板缺省 0→1、取走回调换成空 `{}`、白名单少一条、
+      `hasSavedState` 写死 false、多冒一处赋值、内核哨兵 0→1；其中"写死 false"那一轮其余五档
+      照旧绿 ⇒ 守卫不是"一动就全红"的空断言）。
+      **装机 A/B（同一台 buaa36 / emulator-5556、同一份种子课表、同一条命令序列，改前后各跑一次）**：
+      点格子(extra=5) → 按「回到今天」→ HOME + `am kill`（pidof 先空）→ 只点桌面图标 ⇒
+      改前「课表（浏览）」+「9月25日 · 周五」（`.tmp/T71/T71-13-…png`），改后「今日课表」+
+      「9月23日 · 周三 · 今天 · 第 4 周」（`T71-12-…png`），而 `dumpsys` 显示那枚 extra **仍在**根
+      intent 上（是被拒了，不是没送到）。同一条序列搬到路由与课程 id 两枚 extra 上：改前图标进来
+      自己打开**扫码签到页** / 自己打开**编辑器**（`T71-16-PREROUTE-end.png`、`…PRECOURSE-end.png`），
+      改后两档都留在首页。组件那一跳正反两面：冷启动点第 5 格 → 9月25日（`T71-10`）、
+      杀进程后点第 1 格 → 9月21日（`T71-14`）。转屏那一档改前是"回到今天后一转屏又跳回 9月21日"
+      （`T71-04-rotate-replay.png`），改后转屏留在今天（`S4.xml` 量到 168px「今日课表」）。
+      ⚠️ 判据用节点宽度不用中文 text（这条管道里 text 是 mojibake）：168px=「今日课表」/
+      252px=「课表（浏览）」/ 272px=日视图页头那一天。
+      ⚠️ **T68 那条"锚定日"会把第一版复现序列污染**：点过格子之后那笔浏览本来就跨进程死亡存活（有意为之），
+      所以"杀进程 → 点图标 → 还停在 9/25"这一张图**不能单独当证据**（改前改后同图）；必须先按
+      「回到今天」把浏览清回今天，剩下的那一跳才是本卡修的这一笔。上面那组 A/B 就是这么做的。
+      门禁（按序重跑 + 单独再跑一遍）：**1445 tests / 173 suites / 0 失败 / 0 skipped**
+      （地板 1429/171 ⇒ +16 条 / +2 枚套件，全在 `LaunchRequestPolicyTest` 9 + `LaunchRequestWiringGuardTest` 7）/
+      lint **0 error / 14 warning**（地板持平）/ release 签名包 **7,241,395 B**（基点 `3e4ae8a` 实测
+      7,241,865 ⇒ **-470 B**：三份就地判据被收成一份，删的比新内核多）。
+      残账：① 通知链路那一枚 `EXTRA_ROUTE`/`EXTRA_COURSE_ID` 的**真通知点按**在模拟器上没叫得醒
+      （要教务会话与闹钟窗口），本卡是用 `am start` 带同一枚 extra 走的同形路径 ⇒ 判据有装机证据、
+      通知那一头只有源码证据；② 真机（f128bc02，HyperOS）上"杀进程 → 点图标"这一档未跑，
+      且 HyperOS 的任务栈回收口径与 AOSP 不同，`savedInstanceState` 是否总在重放那一趟非空**没验到**；
+      ③ `am kill` 保留任务栈这件事本身是这台镜像的行为，不同 ROM 可能要换 `force-stop`——
+      命令序列已按"pidof 先空后新 pid"逐条验过，换设备要重跑。
