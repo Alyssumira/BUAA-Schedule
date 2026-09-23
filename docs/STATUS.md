@@ -1924,3 +1924,51 @@
       我们那条通知清空（`dumpsys notification` 里 `Notification Record` 段 `com.buaa.schedule` 0 命中，
       只剩两条 `ZenRule` 是 09-20 建的、`state=STATE_FALSE`）、服务 `CourseFluidService` 0 记录、装机停在
       本轮这一版 debug 包（`sha256 17428198…d7`）并 force-stop。
+
+      **编排者复核（同日 16:10–16:20 GMT）**：我的独立门禁五步与 T78b 报的**逐格相同** ——
+      1483 tests / 178 suites / 0 失败 / 0 skipped、lint 0 error / 14 warning、release 包 **7,243,313 B**
+      （`--rerun-tasks` 全量，91/91 executed）⇒ 本轮 ±319 B 的散布确实没复现，两档一致；
+      dex 我自己用 `zipfile` 开两个 `.dex` 按字节数了一遍：`liveFgsDegraded site=` **1 枚**、
+      `skip:exhausted` **1 枚**、`skip:no-exact-alarm` **1 枚**，反向对照 `jankRate=` **0**（T57 那枚已被 R8 剪干净）。
+      它写进账的锚点我逐条回读为真：`:163`/`:435` 确为两枚 `.onFailure` 行首、`LiveFgsRetry.kt` 零 import
+      （`grep -n "^import" LiveFgsRetry.kt` 返回空）、`MAX_LIVE_FGS_RETRY = 1` 在 `:312`、
+      `reportLiveDegrade` 的 `:338`、两枚 WARN 分别在 `:164` 与 `:436`（与 T73 段那两枚 `:159`/`:310` 是同一对行，
+      只是被 133 行的改动往下推了 5–126 位——**账里那两个号已经过时，认 `:164`/`:436`**）。
+      T14 那枚 `ClassProgressRescheduleWiringTest` 的五处重登成六处我读了 diff：按事实改的、加了一枚
+      "CourseFluidService 恰好三枚"的新断言、`app` 那枚实参进了"吃默认报告口"那张表 ⇒ **没放宽任何判据**。
+      `nothingOnTheDegradePathEscapesToTheCaller` 按绝对偏移核 runCatching 区间（不是文本包含），
+      兜底方向必须是 `getOrDefault(false)`（保守不排）⇒ 我认这个判据。
+
+      **我自己单发复跑了一次承重判据**（第二例，机器空闲、不在饥饿档）：
+      `force-stop` → TZ 挪 `America/Bogota`（UTC−5，11:11 落进周三 09:50–11:25 那一节真课里）→
+      同形状的 `am broadcast -n com.buaa.schedule/.reminder.ClassProgressReceiver --es extra_action class_start
+      --el extra_course_id 10 --el extra_start <−25min> --el extra_end <+70min>` ⇒
+      - `11:11:23.955 Background started FGS: Disallowed … code:DENIED; tempAllowListReason:<null>`
+      - `11:11:23.960 W/CourseFluidService: 启动课程实况前台服务失败，回退普通常驻通知`
+      - `11:11:23.966 W/CourseFluidService: liveFgsDegraded site=startService action=armed course=10 attempts=0`
+      - `11:11:29.215 Background started FGS: Allowed … code:ALARM_MANAGER_ALARM_CLOCK` ⇒ **armed → Allowed = 5.249 秒**
+      - `11:11:29.227 D/BUAA-LiveUpdate: fluidService: … style=…ProgressStyle chip=14分钟` +
+        `dumpsys activity services` 给 `isForeground=true foregroundId=20260002 …NO_CLEAR|FOREGROUND_SERVICE`
+      ⇒ **#119 判成修成了，我这一发是第二次独立复现**。
+      **反手验了自激**：`force-stop`（清账本与闹钟）→ 同窗口两发间隔 1.6 s ⇒
+      第一发 `action=armed attempts=0` → 第二发 `action=skip:exhausted attempts=1`、
+      **`liveFgsDegraded` 整段只两行**（没有第三行 ⇒ 没自激）；5.310 s 后 Allowed、实况 `isForeground=true`。
+      ⚠️ 我那两发量的都是 `site=startService`（`:436` 那枚 WARN 与 `:437` 那枚 `reportLiveDegrade`）；
+      `:164` 那枚（`startForeground()` 抛 ⇒ `:166` 的 `reportLiveDegrade`）**依旧没有读数**，
+      与代理末节①一致，这台 AVD 上三种强制手段全试过（revoke POST_NOTIFICATIONS 会连带 force-stop；
+      `FOREGROUND_SERVICE_SPECIAL_USE` 是安装期权限、报"not a changeable permission type"；
+      直发 `am start-service` 时 AMS 按 `com.android.shell`/uid 0 判、直接放行）。
+      **⇒ `:164` 那一枚只有源码文本守卫 + 按代码推的行为背书，发版前若在真机上想验它，
+      要么改库造一个窗口已过的实况帧、要么等一次生产事故自然发火。**
+
+      **编排账（我的失误 + 两条新纪律）**：
+      ① 首派 19:29 报 ERROR，我按"5 分钟无 mtime 写入"判死并续派 —— **首派其实一直跑到 22:44**
+      （22:12/22:20/22:27 三枚 commit 是它落的）。这次没撞成双写是运气（T78b 实际 23:2x 才开工）。
+      ⇒ 新纪律：**ERROR 之后不许用 5 分钟静默判死**，要"工作树干净 + 全部已提交 + `tasklist` 无 java
+      + 最后一次写盘静默 ≥30 分钟"四件齐；拿不准就干脆等一轮再说。
+      ② **AVD 在 19:30→23:20 之间被关机过一次** ⇒ `-read-only` 把 overlay 里的装机与当天证据全回滚
+      （T77 那枚 `dc1d149` debug 包没了）。多半就是那位跑到 22:44 的代理关的
+      ⇒ 卡面"不许冷重启"要补一句"**也不许关机**"。
+      ③ 设备我已还原（TZ=GMT、服务 0 记录、进程未跑、`adb unroot` uid 2000、
+      `firstInstallTime=2026-09-20 16:04:29` 未变 ⇒ 库没清）。**装机停在 `9bb1e7b` 的 debug 包**
+      （`sha256 17428198…d7`），用户要上机自己看就现在这台 AVD。
