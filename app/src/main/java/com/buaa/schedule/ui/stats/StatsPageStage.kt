@@ -12,12 +12,14 @@ package com.buaa.schedule.ui.stats
  *
  * ## 病因（不是"仓库先回了空"，是首帧拿的是 `initialValue`）
  *
- * `StatsScreen` 的 `viewModel` 默认参数自己在 `"stats"` 这条路由的 `ViewModelStore` 上
+ * 改前 `StatsScreen` 的 `viewModel` 默认参数自己在 `"stats"` 这条路由的 `ViewModelStore` 上
  * **新造一枚** `ScheduleViewModel`（MainActivity 里其它页都是把 Activity 那枚传进去的），
  * 于是这一页的 `uiState` 从 `stateIn(WhileSubscribed(5_000), initialValue = ScheduleUiState())`
  * 的 `initialValue` 起步：`courses = emptyList()`、`loading = true`。
- * 改前那一档分支判据是 `summary.courseCount == 0`，它不看 `loading`，
+ * 那一档分支判据又是 `summary.courseCount == 0`，它不看 `loading`，
  * 就把"这一枚 VM 还没查到东西"说成了"你一门课都没有"。
+ * T75 把默认参数摘了、这一页改吃 Activity 那枚 VM（台账 #116），**但这一档不跟着摘**：
+ * 进程被杀后重建、磁盘慢的时候首帧照样可能是 `initialValue`，那时它还是唯一一句真话。
  *
  * 装机探针（release 包、pid 19917、`logcat -s T74PROBE`，原始序列存在 `.tmp/t74xml/T74-probe-logcat.txt`）
  * 量到的是这条：统计页那枚新 VM 的**上游三条流一条都没有先回过空** ——

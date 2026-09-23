@@ -925,6 +925,7 @@ private fun AppNavHost(
             CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
                 StatsScreen(
                     onBack = { navController.popBackStack() },
+                    viewModel = viewModel,
                 )
             }
         }

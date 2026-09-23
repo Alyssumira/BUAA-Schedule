@@ -29,10 +29,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buaa.schedule.core.designsystem.CourseWeekGantt
 import com.buaa.schedule.core.designsystem.DayLoadBars
 import com.buaa.schedule.core.designsystem.DesignTokens
@@ -72,21 +70,27 @@ import com.buaa.schedule.ui.ScheduleViewModel
  * T74 起这一页**先判档再开口**：加载中 / 真的空 / 有内容三档由 [statsPageStageOf] 定，
  * 就绪之前只画 [StatsLoadingCard] 那一面——"还没有课程可统计"是一句断言，
  * 没读到东西的时候没有资格说它（台账 #115）。
+ *
+ * T75 起 `viewModel` 是**必传**参数、吃 MainActivity 那枚 Activity 作用域的 VM：
+ * 改前的默认参数按 nav entry 的 ViewModelStore 取 VM，于是每次进入这一页都新造一枚，
+ * `uiState` 从 `stateIn` 的 `initialValue` 重走一遍加载链（台账 #116）。默认值会让
+ * 调用点"忘了接线"静默通过，这条口径同 T69 对 `onOpenStats` 收的口。
+ * 复用之后 Loading 那一档在热路径上基本看不见，但**那一档留着**——它是进程被杀后重建、
+ * 磁盘慢时唯一不说"没有课"的防线。
  */
 @Composable
 fun StatsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
-    viewModel: ScheduleViewModel = viewModel(
-        factory = ScheduleViewModel.Factory(LocalContext.current.applicationContext as android.app.Application),
-    ),
+    viewModel: ScheduleViewModel,
 ) {
     val state by viewModel.uiState.collectAsState()
     val summary = remember(state.courses, state.semester, state.timeSlots) {
         SemesterStats.summarize(state.courses, state.semester, state.timeSlots)
     }
     // 三态判定在纯 JVM 内核里（[statsPageStageOf]），调用点只递两件事：
-    // 就绪与否 = `uiState.loading` 取反（首帧吃的是 stateIn 的 initialValue，那里 loading=true），
+    // 就绪与否 = `uiState.loading` 取反（改前首帧吃的是 stateIn 的 initialValue，那里 loading=true；
+    // T75 复用 Activity 那枚 VM 之后首帧一般已是热值，这一档只剩进程重建与磁盘慢时会亮），
     // 条数 = 归并到整门课之后的 courseCount（18 门课在库里是 22 段，用片段数会把档走对、数说错）。
     // 改前这一档只看 `summary.courseCount == 0`，于是"这一页还没读到"被说成了"你一门课都没有"。
     val stage = remember(state.loading, summary.courseCount) {
@@ -167,15 +171,20 @@ private fun EmptyStatsCard() {
 /**
  * 课表还没读到时的那一档：只说"正在读"，不说"没有"。
  *
- * 台账 #115 的假话就出在这一档缺席 —— 这一页的 `ScheduleViewModel` 是 `"stats"` 那条路由
+ * 台账 #115 的假话就出在这一档缺席 —— 改前这一页的 `ScheduleViewModel` 是 `"stats"` 那条路由
  * 自己新造的一枚，`uiState` 起步于 `stateIn` 的 `initialValue`（`courses` 空、`loading` 真），
- * 改前那一档分支把"这枚 VM 还没查到东西"直接当成了"你一门课都没有"。
+ * 而那一档分支把"这枚 VM 还没查到东西"直接当成了"你一门课都没有"。
  *
  * 文案两行、外壳 [EmptyState] 那一枚玻璃卡，与 [EmptyStatsCard] 同一形状同一槽位
  * （见 [CenteredStatsCard]）：**不新增一行高度**，也不给这一页添动画——
  * 全站 main 源码里没有任何一处 `rememberInfiniteTransition`，本卡不在此开第一例，
- * 一枚转不完的圈比一屏静止更容易被读成"卡死了"。真机等这一档的时长通常只有一帧，
- * 装机实测（CPU 饥饿的模拟器）从进入这一页到第一次拿到数据是 3080ms。
+ * 一枚转不完的圈比一屏静止更容易被读成"卡死了"。
+ *
+ * T75 复用 Activity 那枚 VM 之后，热路径上这一档不再出现（装机探针：改前 12 次进入 12 次都先发射
+ * `Loading` 再转 `Ready`、改后 12 次进入只发射 `Ready`；录屏逐帧分类另给一条弱证据：改前 49 帧里
+ * 10 帧是这一面、改后 36 帧 0 帧——受帧粒度所限，后一半只当负观测看），但**这一面留着**：
+ * 进程被杀后重建、磁盘慢时它是唯一还说得出口的那句话。T74 那次量到的冷路径是 3080ms
+ * （CPU 饥饿的模拟器，从这一页第一帧到第一次拿到数据）。
  */
 @Composable
 private fun StatsLoadingCard() {
