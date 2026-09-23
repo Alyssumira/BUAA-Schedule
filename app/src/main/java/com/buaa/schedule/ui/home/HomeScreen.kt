@@ -952,7 +952,8 @@ private fun ScheduleToolbarRow(
         // 所以要一枚**不随页签进出**的加权槽来吃这份余量：簇在时它就是簇的布局位（宽度一分不变），
         // 簇没了时同一个槽继续吃满 ⇒ 校区左缘 = 行宽 − 校区固有宽，与页签、与学期槽在不在都无关。
         // 用 Row 不用 Box：Box 不读 weight，挂进盒子里就是空转，而 #113 那笔账钉的正是簇自己那一枚。
-        // 展开/收起本身仍是逐帧的（改后装机：一次切页签 UI 线程画 15 帧、反向 16 帧；空转 1s 画 0 帧）。
+        // 展开/收起本身仍是逐帧的（改后装机：切到今日页签 UI 线程画 10 帧、反向 33~51 帧，
+        // 260ms @60fps；对照空转 1s 画 0 帧）。
         Row(modifier = Modifier.weight(1f)) {
             AnimatedVisibility(
                 visible = showWeekNav,
