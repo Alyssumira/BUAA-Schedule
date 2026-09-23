@@ -1368,3 +1368,22 @@
       且 HyperOS 的任务栈回收口径与 AOSP 不同，`savedInstanceState` 是否总在重放那一趟非空**没验到**；
       ③ `am kill` 保留任务栈这件事本身是这台镜像的行为，不同 ROM 可能要换 `force-stop`——
       命令序列已按"pidof 先空后新 pid"逐条验过，换设备要重跑。
+      **编排者独立复核（合并前）**：盘面五条前置全过（三枚 hash `git cat-file -t` 都是 commit、
+      `rev-list --count 3e4ae8a..ai/T71` = 3、内核 `grep -c "^import"` = 0、`status` 空、52 份证据文件在
+      `.tmp/T71/`）。门禁我按序重跑 + 单独补跑一遍测试，与它报的**逐格相同**：
+      **1445 tests / 173 suites / 0 失败 / 0 skipped**、lint 0 error / 14 warning、包 **7,241,395 B**（−470 B）。
+      改前那张我看过像素（「课表（浏览）」+「9月25日 · 周五」+「回到今天」还在、列的是周五那几节课）；
+      改后这条序列是我自己在 `emulator-5556` 上跑的（点格子 extra=5 → 按「回到今天」→ HOME → `am kill`
+      且 `pidof` 先空 → `monkey` 只点桌面图标）⇒「**今日课表** / 9月23日 · 周三 / 今天 · 第 4 周」+
+      Hero「下一节 概率论与数理统计 · 450 分钟后开始」，而同一刻 `dumpsys activity activities` 里根 intent
+      仍是 `Intent { flg=0x10000000 … (has extras) }` + `rootOfTask=true` ⇒ **被拒了，不是没送到**（`.tmp/T71/M-02-icon-coldstart.png`）。
+      ⚠️ **我另外要验的那一档没能在这台镜像上构造出来，留作残账**：担心的是"Activity 已被系统销毁、
+      进程还活着、用户这时点格子" ⇒ `onCreate` 会同时拿到 `savedInstanceState != null` 与**新** intent，
+      而 `onNewIntent` 不会为死掉的实例调用 ⇒ 组件那一跳会被闸门误拒。实测：开
+      `always_finish_activities=1` 之后按 HOME 再带 `extra=1` 进来，框架只回
+      `Warning: Activity not started, its current task has been brought to the front`，
+      而屏幕确实落到「课表（浏览）/ 9月21日 · 周一」（周一那几节课）⇒ **请求经 `onNewIntent` 落地了，没误伤**；
+      也就是说这一档在这台 AOSP 镜像上走的是"实例还活着"那条路，我**没有构造出**"实例已销毁 + 新 intent"那一档。
+      代理自己的探针序列里最接近它的是"杀进程后再点格子"（`onCreate saved=true` + `onNewIntent day=1` ⇒ 落周一），
+      同样是靠 `onNewIntent` 兜住。⇒ **真机（HyperOS）上若出现"点格子没反应"，第一嫌疑就是这一档**，
+      与它自记的残账①同一条线，验收 #112 时要在真机上专门点一次组件。
