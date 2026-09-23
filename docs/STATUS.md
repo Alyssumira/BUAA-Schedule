@@ -1568,6 +1568,16 @@
       而不是先动 `startForeground` 的时序 —— 下课铃在 `ACTION_START` 分支里是**先排**的（`ClassProgressReceiver.kt:48-51`），
       它是勿扰与实况唯一的恢复路径，任何修法都不许把它挪到起服务之后。
 
+      门禁四步（按卡里给的顺序，第二与第四步各是一次 `--rerun-tasks`）：
+      `assembleRelease` **7,241,312 B** 签名包 = 基点 `f074435` 的同一枚字节数（**+0 B**，本卡零代码改动，
+      只有这份文档）/ `testDebugUnitTest` **1458 tests · 175 suites · 0 失败 · 0 errors · 0 skipped**（地板 1458/175 持平）/
+      `lintAnalyzeDebug + lintReportDebug` **0 error · 14 warning**（警告地板没涨）/
+      第二次 `testDebugUnitTest --rerun-tasks` 同样 **1458 · 175 · 0 · 0 · 0**（不是假绿：产物层判据没被跳过）。
+      装机复验走的是本卡取证那一趟：`assembleDebug` + `adb install -r`（**没卸载**，18 门课的库原样在），
+      装完在这个包上把三条链各跑过（校准档日志「课堂窗口内补起课程实况：离散数学」、
+      实况那行 `fluidService` 的 `chip=45分钟`→`47分钟` 逐分钟翻、`foregroundId=20260002` 挂在
+      `class_progress_v2` 渠道上），量完按清单还原设备。
+
       残账：① **x3 那一发判据不完整**（校准档、R8 满载 11.02 核）：`Background started FGS: Allowed` 与
       「课堂窗口内补起课程实况：」都在，但 t+6s / t+12s 两次 `CourseFluidService` 记录里都**没有** `isForeground`
       行、也没有服务自己那行实况日志，同时**没有**任何超时异常与杀进程记录 ⇒ 我既不能把它算成 0 超时、
