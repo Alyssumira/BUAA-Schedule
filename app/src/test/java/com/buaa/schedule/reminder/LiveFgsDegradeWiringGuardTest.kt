@@ -18,7 +18,7 @@ import org.junit.Test
  *
  * 前面五档各自钉一条已经付过学费的约束：
  * 1. `postProgressNotification()` 里 `startForeground` 那处 onFailure（当前源码 `:163`）与
- *    `start()` 里 `ContextCompat.startForegroundService` 那处（`:429`）**两处都过 reportLiveDegrade**
+ *    `start()` 里 `ContextCompat.startForegroundService` 那处（当前源码 `:435`）**两处都过 reportLiveDegrade**
  *    （台账 #119 记的是改前基线上的 `:159` / `:310`）：有人嫌取证烦、退回"只留一行 WARN"，
  *    本卡的账立刻又变成看不见的；
  * 2. 全服务的 `Build.VERSION.SDK_INT` 只许两枚，其中**属于这条判据的那一枚只能写在
@@ -118,7 +118,7 @@ class LiveFgsDegradeWiringGuardTest {
             .filter { !svc.substring(0, it.range.first).trimEnd().endsWith("fun") }
             .map { it.range.first }
             .toList()
-        assertEquals("reportLiveDegrade 的调用点数应当恰好两处（:163 与 :429）：${calls.size}", 2, calls.size)
+        assertEquals("reportLiveDegrade 的调用点数应当恰好两处（:163 与 :435）：${calls.size}", 2, calls.size)
         val ranges = onFailureRanges(svc)
         val orphans = calls.filter { at -> ranges.none { range -> at in range } }
         assertEquals("有 reportLiveDegrade 的调用点不在 .onFailure 里面（那它报的就不是降级，本卡的口径作废）", emptyList<Int>(), orphans)
@@ -234,7 +234,7 @@ class LiveFgsDegradeWiringGuardTest {
         // 只有 ArmOnce 才排，且账要记在锁里
         assertTrue("缺了 `if (decision != LiveFgsRetry.ArmOnce) return`：不排的档也会排出去", reporter.contains("!= LiveFgsRetry.ArmOnce) return"))
         assertTrue(
-            "读账与写账不在同一把 synchronized(retryLedger) 里：:163 与 :429 两处并发报时会各自以为还没试过（自激闸门失效）",
+            "读账与写账不在同一把 synchronized(retryLedger) 里：两枚站点（:163 / :435）并发报时会各自以为还没试过（自激闸门失效）",
             Regex("""synchronized\(\s*retryLedger\s*\)""").containsMatchIn(reporter) &&
                 argOf(reporter, "liveFgsAttemptsAlreadyArmed(") != null,
         )

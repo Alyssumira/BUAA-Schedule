@@ -17,7 +17,8 @@ import org.junit.Test
  * ① 漏传（照旧 `rescheduleNextWindow(context)`）⇒ 那道失败出不了它自己的 `runCatching`，
  *    闸门把这一轮记成成功、写下指纹，最长 24 小时不再重跑（正是 ai/T13 登记的那条残余）；
  * ② 传了个常量（`NO_STEP_FAILURE`）⇒ 形状上像接了，实际永远无人留痕；
- * ③ 顺手给另外四个调用点也接上 ⇒ 那四处（下课铃广播 / 前台服务 / 12 小时兜底 Worker）
+ * ③ 顺手给另外那几个没有报告口的调用点也接上 ⇒ 那几处（下课铃广播 / 前台服务 /
+ *    12 小时兜底 Worker —— T78 之后前台服务是三处）
  *    本来就没有 `failures` 清单可写，接上去只会把同一道失败在日志之外再报一遍。
  *
  * 与 `WakeLockTimeoutFloorTest` / `ColdStartRebuildWiringTest` 同一口径：读 .kt、
@@ -49,18 +50,26 @@ class ClassProgressRescheduleWiringTest {
     }
 
     /**
-     * ② 全仓库的调用点集合 = 已知那五处，而且只有一处带报告口。
+     * ② 全仓库的调用点集合 = 已知那几处（T14 那轮五处，T78 之后六处），而且只有一处带报告口。
      *
-     * 另外四处（`WidgetFallbackWorker` 1 处、`CourseFluidService` 2 处、`ClassProgressReceiver` 1 处）
+     * 没有报告口的那五处（`WidgetFallbackWorker` 1 处、`CourseFluidService` 3 处、`ClassProgressReceiver` 1 处）
      * 吃默认值：它们没有 `failures` 清单可写，接上去也无处落。哪天多出一个冷启动侧的驱动者，
      * 这条守卫当场红（同一件事第二份实现的形状，审计 §2.2 数过）。
+     *
+     * 2026-09-23 T78（台账 #119）真的把第六处接了进来，而且是**按这张守卫的意思接的**：
+     * 实况前台服务起不来时，唯一的出路是把课堂窗口重排一遍、让下一发从 `setAlarmClock` 的
+     * 闹钟豁免档进来（装机实测 5.203 / 5.310 / 5.435 秒三发起死回生），而重排只能走
+     * `ClassProgressScheduler.rescheduleNextWindow` 这一条既有编排 —— 所以这里从五处变六处，
+     * 新增那一处落在 `CourseFluidService`（第三枚实参 `app`：降级报告手可能站在广播的临时
+     * Context 上，用它自己算好的那枚应用级 Context，实参见 `reportLiveDegrade`）。
+     * 它吃的仍是默认报告口（没有 `failures` 清单可写），所以 ②③ 两条判据一个字没松。
      */
     @Test
-    fun bellRescheduleCallSitesAreTheKnownFiveRepoWide() {
+    fun bellRescheduleCallSitesAreTheKnownSixRepoWide() {
         val callSites = callSitesWithArguments()
 
         assertEquals(
-            "续排的调用点集合变了（本卡只许动 BackgroundSync 那一处）：\n${callSites.keys.sorted()}",
+            "续排的调用点集合变了（本卡只许动 BackgroundSync 那一处；T78 那处按上面的说明入账）：\n${callSites.keys.sorted()}",
             listOf(
                 "$MAIN_PREFIX/com/buaa/schedule/reminder/ClassProgressReceiver.kt",
                 "$MAIN_PREFIX/com/buaa/schedule/reminder/CourseFluidService.kt",
@@ -70,10 +79,17 @@ class ClassProgressRescheduleWiringTest {
             callSites.keys.sorted(),
         )
         assertEquals(
-            "续排的调用点总数不再是 5 处（BackgroundSync 1 + WidgetFallbackWorker 1 + " +
-                "CourseFluidService 2 + ClassProgressReceiver 1）：${callSites.values}",
-            5,
+            "续排的调用点总数不再是 6 处（BackgroundSync 1 + WidgetFallbackWorker 1 + " +
+                "CourseFluidService 3 + ClassProgressReceiver 1）：${callSites.values}",
+            6,
             callSites.values.sumOf { it.size },
+        )
+        // 第六处只许出现在 T78 那条降级路上：CourseFluidService 从 2 枚变 3 枚就是它，多一枚是有人在别处又排了一遍
+        assertEquals(
+            "CourseFluidService 里的续排调用点应当恰好三枚（finishLiveAndReschedule 两枚 + " +
+                "reportLiveDegrade 一枚）：${callSites.values.flatten().count { it.isNotEmpty() }}",
+            3,
+            callSites["$MAIN_PREFIX/com/buaa/schedule/reminder/CourseFluidService.kt"]?.size,
         )
         val reported = callSites.filterValues { args -> args.count { it.contains(',') } > 0 }
         assertEquals(
@@ -83,18 +99,18 @@ class ClassProgressRescheduleWiringTest {
         )
     }
 
-    /** ③ 那四处照旧吃默认值：一个字都不许多 */
+    /** ③ 那五处照旧吃默认值：一个字都不许多 */
     @Test
     fun otherCallSitesStillTakeTheNoOpDefault() {
         val expected = mapOf(
             "$MAIN_PREFIX/com/buaa/schedule/reminder/ClassProgressReceiver.kt" to listOf("context"),
             "$MAIN_PREFIX/com/buaa/schedule/reminder/CourseFluidService.kt" to
-                listOf("applicationContext", "applicationContext"),
+                listOf("app", "applicationContext", "applicationContext"),
             "$MAIN_PREFIX/com/buaa/schedule/widget/WidgetFallbackWorker.kt" to listOf("applicationContext"),
         )
         val actual = callSitesWithArguments().filterKeys { it in expected.keys }.mapValues { it.value.sorted() }
         assertEquals(
-            "没有报告口的那四处被顺手接上了别的东西（它们各自在广播/服务链路里，多报一遍没有清单可落）：\n$actual",
+            "没有报告口的那五处被顺手接上了别的东西（它们各自在广播/服务链路里，多报一遍没有清单可落）：\n$actual",
             expected.mapValues { it.value.sorted() },
             actual,
         )
@@ -130,7 +146,7 @@ class ClassProgressRescheduleWiringTest {
         assertTrue("编排本体不再向报告口报失败（本卡的全部目的）：\n$seam", report >= 0)
         assertTrue("日志与报告的次序反了（审计那边先按日志过滤）：$log vs $report", log < report)
         assertTrue("续排的标签不是 rescheduleNextWindow（与 rescheduleReminders 那一族对不上）：\n$seam", report >= 0)
-        assertTrue("runCatching 被改成向外抛了（四个没有报告口的调用点会崩在广播里）：\n$seam", !seam.contains("throw "))
+        assertTrue("runCatching 被改成向外抛了（五个没有报告口的调用点会崩在广播里）：\n$seam", !seam.contains("throw "))
     }
 
     /**
