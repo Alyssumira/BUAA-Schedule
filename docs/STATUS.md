@@ -1510,3 +1510,70 @@
       代理如实记了残账没顺手改，我认这个处置 —— 但它是"更美观"这条目标下的真缺陷，要单独收：
       方向是让校区**永远占住右端**（簇不在时补一枚 `Spacer(Modifier.weight(1f))`，或整排改 `SpaceBetween`），
       代价要说清楚：今日页签那一档现在是对的，动它就是把一枚已经能用的控件换个位置，装机两页签都得重验。
+
+- [x] 模拟器上课程实况前台服务的启动超时判成**测试台产物**，台账 #114 就此结案（T73，2026-09-23，**零代码改动**）：
+      **判定一句话：空闲态 7 发触发里 0 发超时，所以 #114 不是 `CourseFluidService` 的缺陷；它在同一台 AVD 上
+      复现不出来，上一轮那条观测按环境症状入账。**
+
+      两态对照（16 发，每发都 `am force-stop` 起冷进程）：
+
+      | 档 | 发数 | FGS 超时 / ANR / 看门狗 | 服务端 `isForeground` | AMS 放行 → 服务自己那行实况日志 |
+      |---|---|---|---|---|
+      | 空闲 | 7（直起 3 / 广播 2 / 进前台校准 2） | 0 / 0 / 0 | 7 发全 `isForeground=true` `foregroundId=20260002` `types=0x40000000` | 0.73–1.78 s |
+      | 饥饿 | 9（直起 5 / 广播 2 / 校准 2） | 0 / 0 / 0 | 8 发同上；第 9 发（x3）见下面残账① | 0.95–6.47 s |
+
+      饥饿档的压力是**并发跑真构建**造出来的：`:app:assembleRelease`（含 `minifyReleaseWithR8`、`lintVitalRelease`）
+      与 `:app:testDebugUnitTest --rerun-tasks` 在触发序列背后跑，采样到的宿主占用
+      **11.02 / 10.39 核**（16 逻辑核），同一时刻 guest 自己的 `/proc/loadavg` 只有 0.03–0.09 ⇒
+      这台机器的饥饿没能传到 guest 的框架线程上，所以饥饿档也一发没中。最坏那一发是 sr3（校准档，R8 期间）
+      **6.47 秒**才把首帧实况通知交出去 —— 配额 10 秒用到 65%，这是本卡量出来的真实余量，不是"没问题"。
+
+      三条触发链都按代码原样构造 extras（键表取自 `ClassProgressScheduler.ClassWindow.putInto`，
+      起点设在触发前 25 分钟、终点设在后 70 分钟，保证走 `onStartCommand` 的正常分支）：
+      ① 直起 `am start-foreground-service -n com.buaa.schedule/.reminder.CourseFluidService --es extra_phase IN_CLASS --el extra_course_id … --el extra_start … --el extra_end …`；
+      ② 广播 `am broadcast -n com.buaa.schedule/.reminder.ClassProgressReceiver --es extra_action class_start …`
+      —— 注意 `-a class_start` 那种写法量不到东西：`onReceive` 读的是 `getStringExtra(EXTRA_ACTION)`，不是 intent action；
+      ③ 进前台校准 `am start -n com.buaa.schedule/.MainActivity`，它落 `LiveClassResyncer.resync` ⇒
+      日志「课堂窗口内补起课程实况：」+ `postClassOngoing` + `fluidService` 三行连出才算这条链真跑了。
+      ⚠️ 校准档要**先把本机时区挪进一节真课里**（`service call alarm 3 s16 'Asia/Karachi'`，量完挪回 `GMT`）：
+      这台 AVD 的镜像时钟是 05:2x，而今天的课在 09:50 / 14:00 —— 08:00 那一档今天没有课；
+      时钟不在课堂窗口内时 `decide()` 只会走 `ClearLeftovers`，实况根本不起，
+      直起服务那条也会被冷启动重建链的 `rescheduleWindows` 在一秒内 `CourseFluidService.stop()` 掉
+      （第一发 idle1 就被它拆过，别把这一拆当成超时）。
+
+      分辨发了命令与这条链真跑了，靠 AMS 自己写的放行理由：`Background started FGS: Allowed …
+      code:ALARM_MANAGER_ALARM_CLOCK; tempAllowListReason:<… cmp=com.buaa.schedule/.reminder.ClassProgressReceiver …>`
+      这一行才是"闹钟叫醒上课铃广播、广播起前台服务"的生产形状；我用 `am broadcast` 直发的那一发拿到的是
+      `code:DENIED`（不走闹钟就没有 FGS 后台启动豁免），应用侧如实落到
+      「启动课程实况前台服务失败，回退普通常驻通知」这行 WARN（`CourseFluidService.kt:310`）——
+      这是**文档行为不是缺陷**，且它是 4 发广播档里每一发的固定读数。
+
+      **`:159` 那一问的答案：看不见。**`postProgressNotification` 里 `startForeground` 抛了只留一行 WARN 然后
+      `stopSelf()`，屏幕上留着的是广播侧先发的同 id（`NOTIFY_ID_CLASS_PROGRESS = 20_260_002`）那条兜底常驻通知 ——
+      实测读数：服务在跑时它是 `flags=ONGOING_EVENT|ONLY_ALERT_ONCE|NO_CLEAR|FOREGROUND_SERVICE` + `ProgressStyle`，
+      起不来时同一枚 id 只剩 `flags=ONGOING_EVENT|ONLY_ALERT_ONCE`、样式退回 `BigTextStyle`（正文写的是绝对下课时刻）。
+      也就是说用户的**全部**感知差异是"进度条不再走、岛上那一格分钟数不再翻"，没有 toast、没有页内提示、不崩；
+      而那行 WARN 在 HyperOS 真机上连读都读不到（那台截在 Info 级）。本卡 16 发里 `:159` 一次都没发火（发火的是兄弟行
+      `:310`），它的后果是按代码推的 + 用 `:310` 那一档实测对照出来的。⇒ 这是一笔**静默失败**的账，
+      **单独立 #119，不在本卡改**：要么让它对用户可感知（实况降级要在设置页/通知上留痕），
+      要么把这行 WARN 升成能在真机读到的取证口，两种都要单独量，不许顺手。
+
+      **结案口径**：#114 = 环境症状（宿主 CPU 被并发构建抢走时 guest 框架先死，那条超时是它的并发症状），
+      本机空闲态与饥饿态都复现不出来。**发版前若在真机（f128bc02 / HyperOS / Android 17）再见到，按这个序列重开**：
+      `adb logcat -b crash -c && adb logcat -c` → `adb shell am force-stop com.buaa.schedule` →
+      上面①②③三条触发 → 每条后 `dumpsys activity services com.buaa.schedule` 读 `isForeground` /
+      `startRequested` / `createTime`，并 `logcat -d | grep -E "CourseFluidService|BUAA-LiveUpdate|ForegroundServiceDidNotStartInTime|ANR in|WATCHDOG"`；
+      只有"空闲机器上也出现 `did not then call Service.startForeground` 或看门狗"才算真缺陷，
+      修法方向先量 `onCreate`→`onStartCommand` 的间隔（本卡最坏 6.47 秒那条就是它），
+      而不是先动 `startForeground` 的时序 —— 下课铃在 `ACTION_START` 分支里是**先排**的（`ClassProgressReceiver.kt:48-51`），
+      它是勿扰与实况唯一的恢复路径，任何修法都不许把它挪到起服务之后。
+
+      残账：① **x3 那一发判据不完整**（校准档、R8 满载 11.02 核）：`Background started FGS: Allowed` 与
+      「课堂窗口内补起课程实况：」都在，但 t+6s / t+12s 两次 `CourseFluidService` 记录里都**没有** `isForeground`
+      行、也没有服务自己那行实况日志，同时**没有**任何超时异常与杀进程记录 ⇒ 我既不能把它算成 0 超时、
+      也不能算成超时，只能说 12 秒窗口内没等到；它最可能是冷启动主线程被首帧玻璃/壁纸取样压住
+      （同一窗口里 `GlassDiag` 在放行后 7.6 秒还在出帧），**要收这发欠一台真机或一发明示 30 秒窗口的复验**
+      —— 编排者在中途下令停跑 A 档，我没有自己加跑；② 真机 f128bc02 全程未碰（那台在用），装机读数只有这一台 AVD；
+      ③ 饥饿档是我能造到的上限（单条 gradle 链、16 核里 11 核），上一轮那次的"多支并发构建"没能重造，
+      所以"环境症状"这条结论是**空闲态 0/7 的直接观测** + 上一轮那条框架看门狗记录的**间接归因**，
+      不是我复现出了同一份饥饿；④ 台账里 #114 的原始观测日志（上一轮那两份）不在本卡取证范围内，我没重新捞。
