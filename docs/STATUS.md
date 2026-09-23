@@ -1553,10 +1553,13 @@
       实测读数：服务在跑时它是 `flags=ONGOING_EVENT|ONLY_ALERT_ONCE|NO_CLEAR|FOREGROUND_SERVICE` + `ProgressStyle`，
       起不来时同一枚 id 只剩 `flags=ONGOING_EVENT|ONLY_ALERT_ONCE`、样式退回 `BigTextStyle`（正文写的是绝对下课时刻）。
       也就是说用户的**全部**感知差异是"进度条不再走、岛上那一格分钟数不再翻"，没有 toast、没有页内提示、不崩；
-      而那行 WARN 在 HyperOS 真机上连读都读不到（那台截在 Info 级）。本卡 16 发里 `:159` 一次都没发火（发火的是兄弟行
+      而那行 WARN **在真机上读得到**（订正：那台 `persist.logd.limit=Info` 只砍 D/V，I/W/E 照常出 —— 机制是
+      2026-09-20 量出来的，本卡这句把"截在 Info"当成了"读不到"，判反了；T77 入账时复核到此）。
+      本卡 16 发里 `:159` 一次都没发火（发火的是兄弟行
       `:310`），它的后果是按代码推的 + 用 `:310` 那一档实测对照出来的。⇒ 这是一笔**静默失败**的账，
       **单独立 #119，不在本卡改**：要么让它对用户可感知（实况降级要在设置页/通知上留痕），
-      要么把这行 WARN 升成能在真机读到的取证口，两种都要单独量，不许顺手。
+      要么把这行 WARN 升成能在真机读到的取证口 —— **后一条出路按上面的订正已作废**（WARN 本来就读得到），
+      ⇒ #119 只剩"要不要有界重试"与"要不要在 UI 上留痕"两条，两种都要单独量，不许顺手。
 
       **结案口径**：#114 = 环境症状（宿主 CPU 被并发构建抢走时 guest 框架先死，那条超时是它的并发症状），
       本机空闲态与饥饿态都复现不出来。**发版前若在真机（f128bc02 / HyperOS / Android 17）再见到，按这个序列重开**：
@@ -1679,7 +1682,7 @@
       **判定：这条账是真的但不值钱 —— 不值得全站改 26 处；只值得改 `uiState` 那两个同实例消费点
       （`ui/home/HomeScreen.kt:155` + `MainActivity:484`，必须一起改），且它修不了任何用户看得见的 bug：
       真跨零点那一档两条链都落在对的一天上。落地价值在后台不做无谓功，而实测那份无谓功是
-      15.5 分钟 0.43 s CPU、combine 重跑 0 次 ⇒ 建议按顺手改、两档起改排，不按缺陷排。**
+      15.5 分钟 0.43 s CPU、combine 重跑 0 次 ⇒ 该按"顺手改"排序、不按缺陷排序，且**只有两处同批改才算改到**。**
       A（探针 `T77PROBE`：`combine` 变换体一行 + `onStart`/`onCompletion` 各一行，量完已删、release 包 dex 扫 0 命中）：
       ① 前台静置 60 s：`/proc/<pid>/stat` utime+stime 7010→7020 ms（**+10 ms**），`COMBINE-RERUN` **0 次**；
       ② 退后台 60 s：7040→7040 ms（**+0 ms**），`top -b -n1 -p` 的 `TIME+` 两次都 0:07.04、`dumpsys cpuinfo` 给
@@ -1743,8 +1746,29 @@
       卡面已写明它量不动一天的位移。
       门禁四步全绿且树是原样：`assembleRelease` 7,242,082 B（探针 dex 0 命中）→ `testDebugUnitTest --rerun-tasks`
       **1466 tests / 176 suites / 0 失败 / 0 skipped** → `lintAnalyzeDebug`+`lintReportDebug` **0 error / 14 warning**
-      → 复跑 `testDebugUnitTest --rerun-tasks` **1466 / 176 / 0 / 0**；527 枚受控文件 sha256 逐只与开工前快照
-      一致（0 不匹配）、`git status --short` 空。设备已还原：`persist.sys.timezone=GMT`、`adb unroot`(uid 2000)、
-      `stay_on_while_plugged_in=0`、`screen_off_timeout=2147483647`、`wm size 1080x2400`、`wm density 420`、
+      → 复跑 `testDebugUnitTest --rerun-tasks` **1466 / 176 / 0 / 0**；开工前快照 **527 枚**受控文件，编排者收单时
+      逐只重算 sha256 ⇒ **526 枚一致、只有 `docs/STATUS.md` 按设计变更**（本卡交付就是这一枚；"527 枚 0 不匹配"
+      是这条账起初写漏了那一枚设计内的变更）、`git status --short` 空。设备已还原：`persist.sys.timezone=GMT`、`adb unroot`(uid 2000)、
+      `stay_on_while_plugged_in=0`、`screen_off_timeout=2147483647`、`wm size`/`wm density` 全程未加 override
+      （只有 Physical 行）、
       `font_scale 1.0`，装机换回无探针的 `dc1d149` debug 包（`firstInstallTime=2026-09-20 16:04:29` 一字未变
       ⇒ 库没清；`lastUpdateTime=2026-09-23 10:34:29`），回前台页头 `9月23日 · 周三` + 顶栏「今日课表」。
+
+      **编排者复核（同日）**：我的独立门禁四步与它**逐格相同** —— 1466 tests / 176 suites / 0 失败 / 0 skipped、
+      lint 0 error / 14 warning、release 包 **7,242,082 B**（与基点 `dc1d149` 一字不差 ⇒ docs-only 成立；
+      我这一趟 `assembleRelease` 全 UP-TO-DATE，包装输入没变正是"只动 docs"该有的读数）。
+      它写进账的锚点我逐条回读为真：`MainActivity:484` 与 `ui/home/HomeScreen.kt:155` 吃的是同一枚 Activity VM 的
+      `uiState`、`AppNavHost` 里 `viewModel = viewModel` 传参 **9 处**（所以"只改首页"确实是零收益）、
+      `ScheduleViewModel.kt:273` 的 `reminders` 是 `SharingStarted.Eagerly`、`ScanSilentBranchGuardTest.kt:172`
+      钉着字面量 `viewModel.inFlight.collectAsState()`、`lifecycle-runtime-compose:2.9.4` 确在
+      compile（`2.8.7 -> 2.9.4` 传递）与 runtime 两条 classpath 上。
+      **口径差它赢**：`collectAsState(` 在 `app/src/main` 是 **27** 处（26 颗无参 + `ImportHistoryScreen.kt:58` 那颗带
+      `initial =`），卡面那个 26 是无参口径；`collectAsStateWithLifecycle` 0 处。
+      ⚠️ **R8 增量 ±319 B 那条是它的读数，我没复跑增量档**（我只跑全量）⇒ 引用时按"未复核"处理，但"只比全量对全量"
+      这条纪律本身无害，先收下。
+      **处置：#117 不改，零代码改动入账（deferred）。** 理由照本卡读数：它修不了任何用户看得见的 bug（真跨零点两档
+      都落在对的一天上），常态后台的无谓功实测 60 s +0 ms / 26 min +500 ms，而代价是 +1,181 B 加"9 处传参下改一处
+      等于没改"的坑。⇒ **重开条件写死在这儿**：真机（f128bc02 / HyperOS）跑一夜 Doze 后早上首屏仍是前一天 ——
+      那是 `dayTicker` 那发对齐零点的 `delay` 被冻结拖住的**直接观测**，只有它能把这一改动从"顺手改"抬成"缺陷修"。
+      届时仪器用本卡 C④ 那一档（真跨零点 + 新进程使 app 时钟自洽），**别再拿 `setprop persist.sys.timezone` 推时区**
+      —— 那条代理已被本卡证伪：跑着的进程里 `LocalDateTime.now()` 不跟系统本地日走。
