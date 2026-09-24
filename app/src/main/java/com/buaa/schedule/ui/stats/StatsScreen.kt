@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,14 +22,18 @@ import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.CourseWeekGantt
@@ -37,7 +42,6 @@ import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.EmptyState
 import com.buaa.schedule.core.designsystem.GanttRow
 import com.buaa.schedule.core.designsystem.GlassSurface
-import com.buaa.schedule.core.designsystem.GlassTopBar
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.HeatGridDay
 import com.buaa.schedule.core.designsystem.MiniBar
@@ -53,6 +57,7 @@ import com.buaa.schedule.domain.schedule.SemesterStats
 import com.buaa.schedule.domain.schedule.WeekFreeGrid
 import com.buaa.schedule.domain.schedule.WeeklyLoadTrend
 import com.buaa.schedule.ui.ScheduleViewModel
+import com.buaa.schedule.ui.home.ScheduleHeaderBand
 
 /**
  * 学期统计页。
@@ -77,12 +82,26 @@ import com.buaa.schedule.ui.ScheduleViewModel
  * 调用点"忘了接线"静默通过，这条口径同 T69 对 `onOpenStats` 收的口。
  * 复用之后 Loading 那一档在热路径上基本看不见，但**那一档留着**——它是进程被杀后重建、
  * 磁盘慢时唯一不说"没有课"的防线。
+ *
+ * T80 起这一页**不再自带页头**：页头条换成与首页第一行同一个容器
+ * [com.buaa.schedule.ui.home.ScheduleHeaderBand]，板上画的是「返回 + 学期统计」。
+ * 改前这里是 `Scaffold(topBar = GlassTopBar(...))`，那条玻璃板与首页裸文字带的上下沿
+ * 差 1px、衬底也不同，而 `"stats"` 走 `NavMotion.SLIDE` 的 260ms 里两页同时在场 ——
+ * 同一块板上摆出两套文字，用户读作"页头文字跳动""跳转前后割裂"。
  */
 @Composable
 fun StatsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: ScheduleViewModel,
+    /**
+     * 这一页此刻是不是页头条的主人（T80，口径同 [com.buaa.schedule.ui.home.HomeScreen]）。
+     *
+     * ⚠️ **不许给默认值**：这一枚的默认值买不到"少一行参数"，买的是跳转期间两页页头
+     * 同时在场 —— 那正是本卡要消除的"页头文字跳动"。主人由 `AppNavHost` 按当前路由
+     * 答一次（[com.buaa.schedule.ui.home.headerBandOwnerOf]），两个调用点各判各的迟早走岔。
+     */
+    headerBandOnScreen: Boolean,
 ) {
     val state by viewModel.uiState.collectAsState()
     val summary = remember(state.courses, state.semester, state.timeSlots) {
@@ -113,13 +132,37 @@ fun StatsScreen(
     val busiestIndex = remember(summary) { summary.busiestDayOfWeek?.minus(1) }
     val maxCredit = remember(summary) { summary.perCourse.mapNotNull { it.credit }.maxOrNull() ?: 0.0 }
 
+    // 页头条自己的实高（T80）：不在台上的那一页按它占位，带子保持同样的高度、板上不画字。
+    // 与首页那一行各自量各自的那一帧：首页的字号档与这里不同（首页左列可能两行），
+    // 共用一个常数就是"拿一枚没量过的宽度向同行要地方"的 T48 老账换个维度重演。
+    var statsBandHeightPx by remember { mutableStateOf<Int?>(null) }
+
     Scaffold(
         containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {
-            GlassTopBar(
-                title = "学期统计",
-                onBack = onBack,
-            )
+            // 与首页第一行同一个容器（T80）：带的内衬、下限高同一个来源 ⇒ 跳转期间那条带的
+            // 上下沿像素位置一动不动，而板上永远只有一套字（谁在台上由 headerBandOwnerOf 答）。
+            ScheduleHeaderBand(
+                drawnOnScreen = headerBandOnScreen,
+                measuredHeightPx = statsBandHeightPx,
+                modifier = Modifier.onSizeChanged { statsBandHeightPx = it.height },
+            ) {
+                // ⚠️ 「返回」保持文字按钮 + `Text("返回")` 这个字面量：它是 Baseline Profile
+                // 交互 CUJ 的 uiautomator 锚点（InteractionBaselineProfileGenerator.LABEL_BACK），
+                // 换成箭头图标那条跳不会红，只会静默点空。
+                TextButton(
+                    onClick = onBack,
+                    modifier = Modifier.defaultMinSize(minHeight = DesignTokens.minTouchTarget),
+                ) { Text("返回") }
+                Text(
+                    text = "学期统计",
+                    // 页头主名要压过页内 SectionHeader 的 titleSmall，否则标题与组标题同档（§3）
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         },
     ) { padding ->
         // 导入第一门课后这一页整版换血，硬切像重开了一遍；淡入淡出与日视图空态同源。

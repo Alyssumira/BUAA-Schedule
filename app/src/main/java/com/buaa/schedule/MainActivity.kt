@@ -95,7 +95,10 @@ import com.buaa.schedule.core.LaunchRequests
 import com.buaa.schedule.core.NO_COURSE_ID
 import com.buaa.schedule.core.NO_DAY_OF_WEEK
 import com.buaa.schedule.core.launchRequestsOf
+import com.buaa.schedule.ui.home.HeaderBandOwner
 import com.buaa.schedule.ui.home.HomeScreen
+import com.buaa.schedule.ui.home.headerBandDrawnOnScreen
+import com.buaa.schedule.ui.home.headerBandOwnerOf
 import com.buaa.schedule.ui.onboarding.OnboardingScreen
 import com.buaa.schedule.ui.importing.BuaaLoginScreen
 import com.buaa.schedule.ui.importing.ImportHistoryScreen
@@ -512,6 +515,12 @@ private fun BUAAScheduleApp(
     val currentDestination = backStackEntry?.destination
     val topLevelRoutes = remember { navItems.map { it.route }.toSet() }
     val showBottomBar = currentDestination?.hierarchy?.any { it.route in topLevelRoutes } == true
+    // 页头那一条带（首页第一行 = 统计页页头，共用容器 ScheduleHeaderBand）此刻归谁（T80）。
+    // **全仓只在这里判一次**，两枚 Boolean 在 AppNavHost 里从这同一枚主人算出来：
+    // `"stats"` 走的是 SLIDE，那 260ms 里新旧两页同时在场，两个页面各自去读当前路由
+    // 就会有一帧两家同时在板上写字 —— 那正是用户说的"页头文字跳动"。
+    // 路由这一枚设备侧事实当参数递给纯 JVM 内核（HeaderBandOwnership.kt），内核不碰 NavController。
+    val headerBandOwner = headerBandOwnerOf(currentDestination?.route)
 
     // 更新检测的状态**不在这里 collect**：下载时每来一个数据块就有一个新百分比，
     // 挂在根组合上等于每一块重画一次主题 + 整棵导航树（P2）。
@@ -597,6 +606,7 @@ private fun BUAAScheduleApp(
                                 startRoute = navStartRoute,
                                 requestedDayOfWeek = requestedDayOfWeek,
                                 onDayRequestConsumed = onDayRequestConsumed,
+                                headerBandOwner = headerBandOwner,
                                 contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                             )
                         }
@@ -616,6 +626,7 @@ private fun BUAAScheduleApp(
                             startRoute = navStartRoute,
                             requestedDayOfWeek = requestedDayOfWeek,
                             onDayRequestConsumed = onDayRequestConsumed,
+                            headerBandOwner = headerBandOwner,
                             contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                             bottomBarVisible = showBottomBar,
                         )
@@ -705,11 +716,17 @@ private fun AppNavHost(
     /** 4×2 网格格子点击要打开的那一天（ISO 1..7，null = 无请求） */
     requestedDayOfWeek: Int? = null,
     onDayRequestConsumed: () -> Unit = {},
+    /** 页头那一条带此刻归谁（T80）：全仓在 BUAAScheduleApp 里判一次，两枚 Boolean 从这里算 */
+    headerBandOwner: HeaderBandOwner,
     contentPadding: androidx.compose.foundation.layout.PaddingValues,
     /** 手机端当前路由是否显示悬浮底栏（宽屏导航栏分支恒为 false） */
     bottomBarVisible: Boolean = false,
 ) {
     val reduceMotion = LocalReduceMotion.current
+    // 一条带、一个主人（T80）：两枚 Boolean 都从**同一枚** headerBandOwner 算出来 ——
+    // "板上同时摆两套页头文字"于是在这一层就不成立，而不是靠两个页面各自自觉。
+    val homeHeaderBandOnScreen = headerBandDrawnOnScreen(headerBandOwner, HeaderBandOwner.Home)
+    val statsHeaderBandOnScreen = headerBandDrawnOnScreen(headerBandOwner, HeaderBandOwner.Stats)
     // 刚从编辑器保存的课程：首页给那张卡做一次"定位脉冲"（④机会#4）。
     // 放在这一层是因为编辑器与首页分属两个 destination，返回时唯一的公共祖先就是这里。
     // 拆成「待送达 / 已送达」两格：编辑器也可能从课程管理页打开，保存后落点是管理页，
@@ -791,6 +808,8 @@ private fun AppNavHost(
                     // 这颗回调仍留在 AppNavHost 这一层而不是就地写 lambda —— 路由名只许有一份，
                     // 而这里漏传就是"界面上摆着入口、点下去没反应"（T41 那一族）。
                     onOpenStats = openStats,
+                    // 页头条的主人不在本页时，这一行照常占位但板上一字不画（T80）
+                    headerBandOnScreen = homeHeaderBandOnScreen,
                     onCourseClick = { course -> navController.navigate("editor/${course.id}") },
                     bottomBarVisible = bottomBarVisible,
                     highlightCourseId = pulseCourseId,
@@ -929,6 +948,8 @@ private fun AppNavHost(
                 StatsScreen(
                     onBack = { navController.popBackStack() },
                     viewModel = viewModel,
+                    // 这一页不再自带页头：带的几何与首页第一行同一个容器（T80）
+                    headerBandOnScreen = statsHeaderBandOnScreen,
                 )
             }
         }

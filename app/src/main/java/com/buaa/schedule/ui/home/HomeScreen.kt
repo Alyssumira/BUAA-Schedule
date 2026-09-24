@@ -13,10 +13,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -136,6 +138,15 @@ fun HomeScreen(
      * 扫源码钉着（MainActivity 传的是真的 `openStats`、胶囊的 onClick 连到这颗参数）。
      */
     onOpenStats: () -> Unit,
+    /**
+     * 首页此刻是不是**页头条的主人**（T80）。false = 那条带照常占位，但板上一个字都不画。
+     *
+     * ⚠️ 同样**不许给默认值**：这一枚的缺陷形状与 `onOpenStats` 相反 —— 默认 `true` 会让
+     * 跳转期间两页的页头同时在场（就是用户那句"页头文字跳动"），默认 `false` 会让首页
+     * 顶栏整条空白。主人只能由 `AppNavHost` 按当前路由答一次（[headerBandOwnerOf]），
+     * 两个调用点各判各的迟早走岔。
+     */
+    headerBandOnScreen: Boolean,
     /** 手机端悬浮玻璃底栏是否显示：显示时 FAB / 菜单要在底部让位 */
     bottomBarVisible: Boolean = false,
     /** 刚从编辑器保存返回的课程：这张卡要做一次定位脉冲（④机会#4）；-1 = 无 */
@@ -462,6 +473,9 @@ fun HomeScreen(
     //    过渡帧里两支同时在屏上，按当前那一支量就会在那 140ms 里把日期裁掉半截。
     var topRowWidthPx by remember { mutableStateOf<Int?>(null) }
     var segmentedWidthPx by remember { mutableStateOf<Int?>(null) }
+    // 带子自己的实高（T80）：首页不在台上时用它占位，而不是按 48dp 下限猜 ——
+    // 系统字号调大那一档，左列两行文字会高过下限，按下限占位会把整页正文往上抬
+    var topRowHeightPx by remember { mutableStateOf<Int?>(null) }
     val statsEntryMeasurer = rememberStatsEntryTextMeasurer()
     val statsEntryDensity = LocalDensity.current
     val statsEntryTypography = MaterialTheme.typography
@@ -505,17 +519,14 @@ fun HomeScreen(
             // ── 紧凑顶栏（参考稿布局）──
             // 第一行：左「第 N 周 / 今天日期」，右「周课表 | 今日」分段控件。
             // 之前分段控件单独占一行、学期/校区又占一行，顶部一共吃掉三行高度。
-            Row(
+            // 这一行的容器与统计页页头**共用**（`ScheduleHeaderBand`，T80）：带子的内衬、
+            // 下限高、量宽的口只在这里写一份，谁在板上画字由 `headerBandOnScreen` 答。
+            ScheduleHeaderBand(
+                drawnOnScreen = headerBandOnScreen,
+                measuredHeightPx = topRowHeightPx,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(
-                        start = DesignTokens.spaceL,
-                        end = DesignTokens.spaceS,
-                        top = DesignTokens.spaceXS,
-                    )
                     // 行宽读的是这一行自己的 content-box（padding 已扣）：预算的第一段事实
-                    .onSizeChanged { topRowWidthPx = it.width },
-                verticalAlignment = Alignment.CenterVertically,
+                    .onSizeChanged { topRowWidthPx = it.width; topRowHeightPx = it.height },
             ) {
                 Column(
                     modifier = Modifier
@@ -1144,10 +1155,67 @@ internal fun weekHeadline(
 }
 
 /**
+ * 页头那一条带：首页第一行与统计页页头**共用同一个容器**（T80）。
+ *
+ * 改前两条页头各写各的：首页是 `Column` 的第一个子 `Row`（裸文字、无衬底），统计页是
+ * `Scaffold(topBar = GlassTopBar(...))`（玻璃板 + 上下 `spaceS` 内衬）。装机量下来两条带
+ * 落在**同一条带**上（首页 y=158..284、统计页 y=157..283，实高都是 126px = 48dp 触控下限），
+ * 而 `"stats"` 不在 `MainActivity` 的 `navItems`（首页 / 导入 / 设置）里，`navMotionFor`
+ * 只能落到 `NavMotion.SLIDE`，进出场各 260ms（`MotionTokens.DURATION_MEDIUM`）里新旧两页同时在场 ⇒ 同一块板上摆两套文字，
+ * 用户原话是"页头文字跳动""跳转前后页面有点割裂"。
+ *
+ * 现在带的**几何只有一份**（内衬、下限高、量宽的口），板上画谁家字由 [headerBandOwnerOf]
+ * 答一次：不在台上的那一页传 `drawnOnScreen = false`，带子按自己上一次量到的实高占位 ——
+ * 所以正文不许跟着往上塌，带的上下沿像素位置也就一动不动。
+ *
+ * @param drawnOnScreen 这一页此刻是不是台上的那一页；false = 带子照常占位、板上一枚子节点都不画
+ *   （不是"画了但透明"：那样语义树里仍是两套文字，读屏与 uiautomator 都拿得到）
+ * @param measuredHeightPx 这一页的带上一次量到的实高（px，null = 还没量到）。占位时吃它而不是
+ *   48dp 下限：系统字号调大时首页那一列的两行文字会高过下限，按下限占位会把正文往上抬
+ * @param modifier 加在**内衬之后**：调用点的 `onSizeChanged` 要读的是 content-box 的宽
+ *   （顶栏宽度预算的第一段事实，见 `statsEntryBudgetPx` 的 `rowWidthPx` = 装机 1017px 那一档）
+ */
+@Composable
+internal fun ScheduleHeaderBand(
+    drawnOnScreen: Boolean,
+    measuredHeightPx: Int?,
+    modifier: Modifier = Modifier,
+    content: @Composable RowScope.() -> Unit,
+) {
+    val density = LocalDensity.current
+    val fallbackHeightPx = with(density) { ceil(DesignTokens.minTouchTarget.toPx()).toInt() }
+    val bandHeight = if (drawnOnScreen) {
+        // 板上立着的每一枚可点件本身就托在 minTouchTarget 上，这条 min 不改变实高（装机 126px），
+        // 它买的是"字号调小 / 内容更矮时带高仍然恒定"—— 过渡期带的上下沿才不动
+        Modifier.heightIn(min = DesignTokens.minTouchTarget)
+    } else {
+        Modifier.height(
+            with(density) {
+                headerBandPlaceholderHeightPx(measuredHeightPx, fallbackHeightPx).toDp()
+            },
+        )
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                start = DesignTokens.spaceL,
+                end = DesignTokens.spaceS,
+                top = DesignTokens.spaceXS,
+            )
+            .then(modifier)
+            .then(bandHeight),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // 不在台上的那一页：`content()` 干脆不求值，Row 里没有子节点，带高由上面那条定死
+        if (drawnOnScreen) content()
+    }
+}
+
+/**
  * 顶栏第一行那枚「学期统计」玻璃胶囊（T69）。
  *
- * 为什么是胶囊而不是一颗裸图标按钮：用户要的是"看得出里面有什么"，图标回答不了
- * （设置页那一行靠的是「学期统计」四个字 + 一句 summary，图标只是装饰）。
+ * 为什么是胶囊而不是一颗裸图标按钮：用户要的是"看得出里面有什么"，图标回答不了。
  * 为什么不用 `TextButton`：这一行里立着的每一块可点的东西都是玻璃（分段控件、
  * 第二行的学期/校区选择器），一块 M3 文字按钮落在中间会读成"这是段文字"。
  *
