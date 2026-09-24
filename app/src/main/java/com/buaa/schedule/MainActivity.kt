@@ -743,11 +743,15 @@ private fun AppNavHost(
     // SettingsScreen 的这些回调全都带 `= {}` 默认值，而它在根界面与 settings/{section} 子页
     // 各有一次调用点：任何一处漏传一个，那一行点击就是静默 no-op —— 编译不报错、
     // JVM 单测也碰不到这条链。「学期统计」进不去就是这么漏出来的：它那一行只在 SCHEDULE
-    // 子页渲染，回调却只写在了只画分类入口的根界面上。
+    // 子页渲染，回调却只写在了只画分类入口的根界面上。（T80 把设置页那一整行入口删了，
+    // 统计页现在只剩首页顶栏一枚胶囊 —— 这段病因记的仍是"默认值挂在真入口上"这一族。）
     val openSettingsSection: (com.buaa.schedule.ui.settings.SettingsSection) -> Unit = { section ->
         navController.navigate("settings/${section.id}")
     }
     val openCourseManagement: () -> Unit = { navController.navigate("course_management") }
+    // 「学期统计」现在只剩首页顶栏那一枚入口（设置页那一行已由 T80 摘掉），但这一颗
+    // 仍然定义在这里而不是就地写在 HomeScreen 的调用点上：路由名一抄两处就会各漂各的，
+    // 而 `StatsEntryWiringGuardTest` ①-b 钉的是「全仓一份 openStats 定义、跳的是 "stats"」。
     val openStats: () -> Unit = { navController.navigate("stats") }
     @OptIn(ExperimentalSharedTransitionApi::class)
     SharedTransitionLayout(modifier = Modifier.fillMaxSize()) {
@@ -783,8 +787,8 @@ private fun AppNavHost(
                     onImportBuaa = { navController.navigate("buaa_login") },
                     onCourseManagement = { navController.navigate("course_management") },
                     onSpocSignIn = openSpocSignIn,
-                    // 顶栏那枚「学期统计」胶囊与设置页那一行共用同一个回调：
-                    // 两处各写一份 `navigate("stats")` 迟早走岔（openStats 存在的理由），
+                    // 「学期统计」现在只有这一枚入口（顶栏胶囊）：设置页那一行已由 T80 摘掉。
+                    // 这颗回调仍留在 AppNavHost 这一层而不是就地写 lambda —— 路由名只许有一份，
                     // 而这里漏传就是"界面上摆着入口、点下去没反应"（T41 那一族）。
                     onOpenStats = openStats,
                     onCourseClick = { course -> navController.navigate("editor/${course.id}") },
@@ -915,7 +919,6 @@ private fun AppNavHost(
                     // 分类入口 → 打开独立的设置子界面（不再是同页折叠）
                     onOpenSection = openSettingsSection,
                     onOpenCourseManagement = openCourseManagement,
-                    onOpenStats = openStats,
                     onOpenSpocSignIn = openSpocSignIn,
                     bottomBarVisible = bottomBarVisible,
                 )
@@ -939,7 +942,6 @@ private fun AppNavHost(
                         .fromId(entry.arguments?.getString("section")),
                     onOpenSection = openSettingsSection,
                     onOpenCourseManagement = openCourseManagement,
-                    onOpenStats = openStats,
                     onOpenSpocSignIn = openSpocSignIn,
                 )
             }

@@ -167,10 +167,10 @@ class StatsEntryWiringGuardTest {
     /**
      * ③-b `onOpenStats` 参数不许有默认值：`= {}` 一长回来，T41 那一族就全回来了。
      *
-     * 只钉 `HomeScreen` 这一族。设置页那颗参数（`SettingsScreen` 的 `onOpenStats`）**改前就带着**
-     * `= {}`，本卡不顺手修它 —— 它今天没有落成 no-op，因为 MainActivity 的三处调用点
-     * （首页 + 设置根页 + 设置分类页）都显式传了 `onOpenStats = openStats`；摘掉那颗默认值
-     * 会牵动 T41 那一族的其它回调（`onOpenCourseManagement` 同样带着默认值），那是另一张卡的账。
+     * 只钉 `HomeScreen` 这一族。设置页那颗同名参数（`SettingsScreen` 的 `onOpenStats`）改前带着
+     * `= {}` 默认值，T80 把「学期统计」那一行整块摘掉时连同参数一起删了 —— 这一族现在只剩
+     * 首页顶栏这一条通路，也就是本档钉的这一条。摘掉那颗默认值当年会牵动 T41 那一族的其它回调
+     * （`onOpenCourseManagement` 同样带着默认值），那是另一张卡的账。
      */
     @Test
     fun openStatsParameterHasNoSilentDefault() {

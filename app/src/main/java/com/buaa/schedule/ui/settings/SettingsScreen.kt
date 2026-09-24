@@ -70,7 +70,6 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.EditCalendar
 import androidx.compose.material.icons.filled.EventNote
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Palette
@@ -174,8 +173,6 @@ fun SettingsScreen(
     onOpenSection: (SettingsSection) -> Unit = {},
     /** 通往「课表管理」的通路（①A-02）：不改底栏，只在设置里补一条入口 */
     onOpenCourseManagement: () -> Unit = {},
-    /** 通往「学期统计」：学分总数/每周负载这类量以前只存在域层，从没露过面 */
-    onOpenStats: () -> Unit = {},
     /**
      * 通往智学北航的登录/扫码页：签到开关不开账户入口的话，用户看完说明只能回首页找加号。
      *
@@ -527,16 +524,6 @@ fun SettingsScreen(
                 summary = "查看、编辑、删除全部课程（当前 ${state.courses.size} 门）",
                 showChevron = true,
                 onClick = onOpenCourseManagement,
-            )
-            }
-
-            item(key = "stats") {
-            SettingsRow(
-                icon = Icons.Filled.Insights,
-                title = "学期统计",
-                summary = "总学分、每周负载与空档（当前 ${state.courses.size} 段排课）",
-                showChevron = true,
-                onClick = onOpenStats,
             )
             }
 
