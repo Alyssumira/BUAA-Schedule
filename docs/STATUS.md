@@ -1973,9 +1973,11 @@
       `firstInstallTime=2026-09-20 16:04:29` 未变 ⇒ 库没清）。**装机停在 `9bb1e7b` 的 debug 包**
       （`sha256 17428198…d7`），用户要上机自己看就现在这台 AVD。
 
-- [ ] Baseline Profile 重生成（T79，2026-09-24，基点 `0ab8dfc`）：**这一轮没有重新生成，两份 `.txt` 一个字节都没动**
+- [x] Baseline Profile 重生成（T79 量账 + **T79b 生成**，2026-09-24，基点 `0ab8dfc` → `3793710`）：**T79 那一轮没有重新生成，两份 `.txt` 一个字节都没动**
       —— 档 3 断在设备上（`emulator-5554` 的 qemu 进程在这张卡跑到一半时整体消失，见末节"设备"）。
       能不等设备算的账都算完了：死规则数、实际进包数、**当前这份 profile 的真实包体代价**。
+      ⚠️ 下面通篇的"这一轮 / 本轮"指的是 **T79（量账）**；生成发生在续派卡 **T79b**，数字与判定在本节末尾
+      「T79b：第三次连设备生成已入库」那一段，**别把下面表里的 3,979 / 623 / +194,313 当现状**。
 
       **① 档 1：死了多少（两把独立的尺子，脚本已入库 `docs/tools/`）**
 
@@ -2141,3 +2143,83 @@
       ② T79 报的"同一枚树 clean 一次、增量一次，**字节数相同而 sha256 不同**"我收下并升级为纪律：
       **APK 的 sha256 不能当"是哪一版"的判据**（ZIP 条目时间戳跟着输入 mtime 走），要比就 clean 对 clean 比字节数。
       这条直接影响"装机停在某一版"的写法 —— 以后引用装机版本用 `lastUpdateTime` + 仓库 sha，不用 apk sha。
+
+- [x] Baseline Profile 第三次连设备生成（T79b，2026-09-24，基点 `3793710` → 入库 `dce4b68`）：**生成、复量、判"值"，全量 diff 只有那两份 `.txt`**
+      `:app:generateReleaseBaselineProfile --offline` 在 `emulator-5554` 上 **BUILD SUCCESSFUL 20m31s**，
+      `:benchmark:connectedNonMinifiedReleaseAndroidTest` **8/8 完成 / 2 skipped / 0 失败**（跳的就是
+      `HomeStartupBenchmark` 那两条对照，与 [[buaa-baseline-profile-plan]] 坑 4 一致）。全程只有一台设备在场，
+      真机 `f128bc02` 零条命令。**新产物**：`baseline-prof.txt` 31,565 行 / 3,348,293 B（工作树 CRLF；
+      仓库 blob 是 LF 3,304,822 B ⇒ **别拿工作树字节数和 blob 字节数直接比**），`startup-prof.txt` 26,880 行 / 2,770,001 B。
+
+      **① 两把尺子复算（同一枚 debug 包做真值，`app/src/main` 一字节未动）—— 上面 T79 那笔账全部改口**
+
+      | 口径 | T79 / 旧 profile | T79b / 新 profile |
+      |---|---|---|
+      | 规则总数（去重） | 3,979 | **3,900** |
+      | 还能命中 | 3,356 | **3,849** |
+      | 已死 | 623（15.7%） | **51（1.3%）** |
+      | 因源码变动而死 | 578 | **7** |
+      | 只算手写代码 | 1,776 / 147 死（8.3%） | 1,725 / **0 死（0.0%）** |
+      | 进包存活（`profile_landed.py`） | 1,381 / 3,979 = **34.7%** | 1,589 / 3,900 = **40.7%**（绝对 **+208 条**） |
+
+      手写族逐项：`ui/home` 165 条里死 85 → **321 条死 0**，`ui/settings` 49 里死 32 → **49 死 0**。
+      ⚠️ T79 那条"重生成治不了"的预言**成立且没被算成失败**：带 `$app_nonMinifiedRelease` 变体后缀的规则
+      49 → **44**（baseline）/ 31 → 29（startup），脚本按 `variant-suffix` 判死 45 → **44** —— 再生成一次确实还是这样。
+      盲区补上 4/9：`SpecialDayBadge` 0→19、`TopBarDateLabel` 0→8、`DayTimelineAxis` 0→14、`CourseEntrance` 0→26；
+      **仍然零规则**：`ui/stats/StatsScreen`、`domain/schedule/SemesterStats`、`DaySwipePolicy`、`LiveFgsRetry`、
+      `reportLiveDegrade` ⇒ 零规则源码包 **10/26 → 10/26，一枚没新覆盖**。统计页那一整片要继续进 profile，
+      得先给 `benchmark/` 加一条走进去的跳，这不是生成能顺手解决的事。
+
+      **② 代价（档 3）：分子跌、收益涨，所以"值不值"这题没有取舍要做**
+
+      同一枚树只换那两份 `.txt`，两侧都 `gradle --stop` 后 `clean :app:assembleRelease`：
+
+      | 侧 | APK 全量 | `classes*.dex`(存) | `assets/dexopt` | res(+arsc) | lib |
+      |---|---|---|---|---|---|
+      | A′ 新 profile | **7,235,089 B** | 2,739,206 | 11,754 + 616 | 581,275 | 2,925,238 |
+      | B′ 清空 | 7,049,000 B | 2,558,569 | 6,277 + 830 | 581,275 | 2,925,238 |
+      | **Δ** | **+186,089 B（占包 2.572%）** | +180,637（97.1%） | +5,263 | 0 | 0 |
+
+      ⇒ 相对 T79 那笔 **+194,313 B**，代价**降了 8,224 B**（因为规则总数从 3,979 掉到 3,900，见 ④ 的回退），
+      而收益同时上涨（进包 +208 条、`ref/primary.prof` 8,104 → **11,668 B**）。
+      **出货包地板随之改写：7,243,313 B → `7,235,089 B`**（后续卡引用地板用这个新数）。
+      B′ 与 T79 的 B 侧**逐字节相同**（7,049,000）、res/lib 也与 T79 一字不差 ⇒ 跨轮可比，不是口径漂移。
+      **判定：入库、不裁剪。** 驳回"入库但把编译器造名那一族裁掉"是带读数的：进包侧那一族占 **63.0%**
+      （synthetic-lambda 38.6% + anon 21.7% + ComposableSingletons 2.3% + WhenMappings 0.4%），
+      而本轮修好的恰恰是它（`synthetic-lambda-class` 939/1,237 命中 → **1,268/1,275**；`anon-class` 599/640 → **597/597**）；
+      ⚠️ **裁它能省多少字节没量**，这是代价侧唯一留下的未量分支。
+
+      **③ 冷启动 15 轮 ×2（手工 `cmd package compile` 对照，不是基准库那两条 SKIPPED）**
+
+      `verify`（`[status=verify] [reason=cmdline]`）中位 **893 ms**（均值 872.7 / min 753），
+      `speed-profile`（`[reason=cmdline]`）中位 **694 ms**（均值 718.2 / min 602）
+      ⇒ **中位 −199 ms（−22.3%）**、均值 −17.7%、最低对最低 −20.1%。全部 30 发 `Status: ok` / `LaunchState: COLD` /
+      `Activity: com.buaa.schedule/.MainActivity`，**零发 `TotalTime: 0`**（权限弹窗那一坑没出现）。
+      三代对照：第一次 1,075→882（**−18%**，绝对 −193 ms）、第二次 −20.4%、这轮 **−22.3%**（绝对 −199 ms）
+      ⇒ **绝对省下量三代几乎没变，百分比更好是因为 T18/T18b 把底子推到 893 ms**，别把它读成"profile 越来越值钱"。
+      ⚠️ 口径注意：verify 先跑、speed-profile 后跑（沿用 T16 口径以便对照），**没有交替或反序** ⇒
+      这 −199 ms 里有多少是顺序效应，未量。跑完复查 `ref` 仍是那枚 11,668 B、`cur` 空 ⇒ 无运行期采样污染。
+
+      **④ 本轮唯一回退 + 两条机制订正**
+
+      ⚠️ **`widget` 族规则 1,259 → 430 行**（手写侧 359 → 89），丢的是 `CourseDto` / `WidgetSnapshotDto` /
+      `WidgetBackgroundRenderer` 这套快照序列化 + 出图路径 —— 它就是 ② 里"分母变小"的真因。
+      机制读数：`dumpsys appwidget` 的 **Host record = 0**（生成时也是 0），生成链卸载重装把桌面组件实例清掉了 ⇒
+      采集时没有任何一块组件在渲染。**下一轮生成前必须先把组件绑回桌面**（配方见 [[buaa-avd-widget-harness]]），
+      否则这笔账还会再丢一次。⚠️ 这条是**推断**：没做过"绑上组件再生成一次"的正向对照。
+      机制订正 A：API 36 上 `ProfileInstaller` 写的是 **`cur/0/<pkg>/primary.prof`**，由 **bg-dexopt 提升到 `ref/`**
+      —— 装完那一刻 `ref/` 是空的，`cmd package bg-dexopt-job` 之后才轮到 `ref/primary.prof` 11,668 B +
+      `[status=speed-profile] [reason=bg-dexopt]`。T16 文档那句"落到 ref/"跳过了中间这一跳。
+      机制订正 B：播种时 `run-as` 在 **release 包**上直接 `package not debuggable` ⇒ 只能 `adb root` + `su 0 sqlite3`。
+      ⚠️ 电源判据再加一条：08:48:41 那发 Kernel-Power **506 没配 507** 而设备什么都没掉（qemu 在、5554/5555 在听、
+      有 ESTABLISHED 活流量）⇒ **"506 出现"不等于设备必死**，环境故障的判据仍然是"设备整个从 `adb devices` 消失"。
+
+      **⑤ 编排者复核（同日 09:41–09:52 GMT）**：收单五条前置全过 —— `3793710..HEAD` **1 枚** commit、
+      `git cat-file -t dce4b68` = commit、`app-release.apk` 在、`git diff --stat 3793710..HEAD -- app/src/main benchmark
+      app/build.gradle.kts` 输出 **0 行**（全量 diff 只有那两份 `.txt`，3,944 增 / 4,549 删）、工作树干净。
+      我的独立门禁四步与代理**逐格相同**：clean 全量 release **7,235,089 B**（与其 09:28 产物逐字节）、
+      **1,483 tests / 178 suites / 0 失败 / 0 skipped**（两轮各一次）、lint **0 error / 14 warning** 且族分布一字不差。
+      `benchmark/` 一条没改成立（8/8 / 0 failed 就是"每跳都有 dump 证据"的读数，不满足卡面动手条件）。
+      ⚠️ **设备侧现状变了**：这台 AVD 现在装的是 **release 签名包**（`dce4b68` 树，`lastUpdateTime=2026-09-24 01:15:13` UTC
+      显示 = 北京 09:15），不再是 T78b 那枚 debug 包 ⇒ 后续日常装机验证要么继续 `assembleRelease` + `install -r`
+      （同签名、保数据），要么换 debug 就得**卸载 → 重播种**。种子已复验：22 `courses` / 14 `time_slots` / 1 `semester`。
