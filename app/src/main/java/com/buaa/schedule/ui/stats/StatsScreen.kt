@@ -20,7 +20,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -88,6 +87,8 @@ import com.buaa.schedule.ui.home.ScheduleHeaderBand
  * 改前这里是 `Scaffold(topBar = GlassTopBar(...))`，那条玻璃板与首页裸文字带的上下沿
  * 差 1px、衬底也不同，而 `"stats"` 走 `NavMotion.SLIDE` 的 260ms 里两页同时在场 ——
  * 同一块板上摆出两套文字，用户读作"页头文字跳动""跳转前后割裂"。
+ * 页头也不再挂进 `Scaffold` 的 topBar 槽：装机量下来那个槽自己排了一次边距，
+ * 同一枚容器在里面的 children 落在 y=147 而首页那一行在 y=158（见函数体那段注释）。
  */
 @Composable
 fun StatsScreen(
@@ -137,43 +138,43 @@ fun StatsScreen(
     // 共用一个常数就是"拿一枚没量过的宽度向同行要地方"的 T48 老账换个维度重演。
     var statsBandHeightPx by remember { mutableStateOf<Int?>(null) }
 
-    Scaffold(
-        containerColor = androidx.compose.ui.graphics.Color.Transparent,
-        topBar = {
-            // 与首页第一行同一个容器（T80）：带的内衬、下限高同一个来源 ⇒ 跳转期间那条带的
-            // 上下沿像素位置一动不动，而板上永远只有一套字（谁在台上由 headerBandOwnerOf 答）。
-            ScheduleHeaderBand(
-                drawnOnScreen = headerBandOnScreen,
-                measuredHeightPx = statsBandHeightPx,
-                modifier = Modifier.onSizeChanged { statsBandHeightPx = it.height },
-            ) {
-                // ⚠️ 「返回」保持文字按钮 + `Text("返回")` 这个字面量：它是 Baseline Profile
-                // 交互 CUJ 的 uiautomator 锚点（InteractionBaselineProfileGenerator.LABEL_BACK），
-                // 换成箭头图标那条跳不会红，只会静默点空。
-                TextButton(
-                    onClick = onBack,
-                    modifier = Modifier.defaultMinSize(minHeight = DesignTokens.minTouchTarget),
-                ) { Text("返回") }
-                Text(
-                    text = "学期统计",
-                    // 页头主名要压过页内 SectionHeader 的 titleSmall，否则标题与组标题同档（§3）
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        },
-    ) { padding ->
+    // 这一页不再用 Scaffold（T80）。装机量下来：同一枚 ScheduleHeaderBand 挂进 Scaffold 的
+    // topBar 槽时，板上的 children 落在 y=147..273，而首页那一行落在 y=158..284 ——
+    // 那 11px 就是"跳转期间页头上下沿在动"的实底，与两页各自写内衬是同一类账。
+    // 改成"Column 的第一个子节点"之后，两页的带由同一个容器的同一份内衬摆位，
+    // 槽差从结构上消失，而不是靠这里再补一层 padding 把它抹平（补的那一层下次换壳又会漏）。
+    Column(modifier = modifier.fillMaxSize()) {
+        // 与首页第一行同一个容器（T80）：带的内衬、下限高同一个来源 ⇒ 跳转期间那条带的
+        // 上下沿像素位置一动不动，而板上永远只有一套字（谁在台上由 headerBandOwnerOf 答）。
+        ScheduleHeaderBand(
+            drawnOnScreen = headerBandOnScreen,
+            measuredHeightPx = statsBandHeightPx,
+            modifier = Modifier.onSizeChanged { statsBandHeightPx = it.height },
+        ) {
+            // ⚠️ 「返回」保持文字按钮 + `Text("返回")` 这个字面量：它是 Baseline Profile
+            // 交互 CUJ 的 uiautomator 锚点（InteractionBaselineProfileGenerator.LABEL_BACK），
+            // 换成箭头图标那条跳不会红，只会静默点空。
+            TextButton(
+                onClick = onBack,
+                modifier = Modifier.defaultMinSize(minHeight = DesignTokens.minTouchTarget),
+            ) { Text("返回") }
+            Text(
+                text = "学期统计",
+                // 页头主名要压过页内 SectionHeader 的 titleSmall，否则标题与组标题同档（§3）
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
         // 导入第一门课后这一页整版换血，硬切像重开了一遍；淡入淡出与日视图空态同源。
         // T74：targetState 从"空不空"两档换成三档——加载中 → 有内容那一跳同样要淡入，
         // 动画规格仍是 motionSpec（reduce-motion 下 snap 成硬切，不另起一炉）
         Crossfade(
             targetState = stage,
             animationSpec = motionSpec<Float>(),
-            modifier = modifier
+            modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
                 .padding(horizontal = DesignTokens.spaceL),
         ) { current ->
             when (current) {
