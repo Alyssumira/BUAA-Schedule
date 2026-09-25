@@ -55,6 +55,9 @@ class BUAAApplication : Application(), Configuration.Provider {
         com.buaa.schedule.data.import.BuaaWebSession.init(this)
         // 智学北航只寄存 Context：读盘是懒的，冷启动不为此多解一次密文
         com.buaa.schedule.data.import.SpocSession.init(this)
+        // 北航 iClass（轻新课堂）同一口径：T84 接上真实平台后这里同样只寄存，
+        // 那枚 id 到第一次签到或第一次进扫码页时才解一次密文
+        com.buaa.schedule.data.import.IClassSession.init(this)
         Personalization.load(this)
         // 通知渠道要在任何通知发出前就位（渠道重要性一旦创建只能由用户改）
         com.buaa.schedule.reminder.ReminderNotifications.ensureChannels(this)
