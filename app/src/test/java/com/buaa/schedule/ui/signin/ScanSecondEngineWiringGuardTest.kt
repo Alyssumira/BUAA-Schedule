@@ -302,19 +302,52 @@ class ScanSecondEngineWiringGuardTest {
      * 基线取本分支的基点（master 003bbdc）：区域重钉的纪律沿用
      * [ScanCameraAidWiringGuardTest]，抄字面量进测试就是第四份真相。
      * git 不可用时判失败而不是静默通过。
+     *
+     * ⚠️ [STATUS_FILE] 的形状在 T90（#134）之后换了钉法（与
+     * [ScanBlankDecodingWiringGuardTest] ⑤b 同一口径，理由也写在那里）：整文件比较换成
+     * **"挖掉帧观测措辞那一段之后逐字节"**。本条要抓的还是原来那件事 —— 兜底不许顺手改文案链；
+     * 而 T90 被授权改的正是那一段的断语，所以那段单独由 `ScanUiStatusTest` ⑨a/⑨b/⑨c 与
+     * [ScanFrameAidWordingWiringGuardTest] 钉住（这里再留一枚靶子，防止那段整段消失后
+     * "挖掉"把整个文件挖空）。其余四份照旧整文件逐字节。
      */
     @Test
     fun filesThisCardMustNotTouchAreByteIdenticalToBaseline() {
-        for (relative in listOf(STATUS_FILE, PROBE_FILE, WARM_UP_FILE, RECOVERY_FILE, GATE_FILE)) {
+        for (relative in listOf(PROBE_FILE, WARM_UP_FILE, RECOVERY_FILE, GATE_FILE)) {
             val path = "$MAIN_PREFIX/$relative"
             val baseline = gitShow("$T66_BASELINE", path)
-            check(baseline != null) { "git 跑不动或基线取不到（$path@${T66_BASELINE}），反向钉无从核对" }
+            check(baseline != null) { "git 跑不动或基线取不到（$path@$T66_BASELINE），反向钉无从核对" }
             assertEquals(
                 "$relative 相对基点被改过了：本卡只该加第二引擎，不该动文案/探针/预热那三条链",
                 normalizeNewlines(baseline),
                 normalizeNewlines(File(findMainJavaDir(), relative).readText()),
             )
         }
+        val statusPath = "$MAIN_PREFIX/$STATUS_FILE"
+        val statusBaseline = gitShow(T66_BASELINE, statusPath)
+        check(statusBaseline != null) { "git 跑不动或基线取不到（$statusPath@$T66_BASELINE），反向钉无从核对" }
+        val current = normalizeNewlines(File(findMainJavaDir(), STATUS_FILE).readText())
+        val currentOutside = withoutFrameAidSection(current, STATUS_FILE)
+        val baselineOutside = withoutFrameAidSection(normalizeNewlines(statusBaseline), "$statusPath@$T66_BASELINE")
+        assertEquals(
+            "$STATUS_FILE 在帧观测措辞那一段之外被改过了：兜底那一卡不许动降级文案链，" +
+                "T90 之后唯一被授权动的就是「画面里有码但没解开」两档的断语",
+            baselineOutside,
+            currentOutside,
+        )
+        // 靶子：被挖掉的那一段确实还在（挖空整份文件就让这条守卫绿着骗过去）
+        assertTrue("帧观测措辞那颗函数没了（提示条的出口被拆走）：", current.contains("internal fun scanFrameAidText("))
+        assertTrue("帧观测措辞不再按「本轮读出过原文没有」分支：", current.contains("readableCodeSeen"))
+    }
+
+    /**
+     * 挖掉 T90 被授权改动的那一段（帧观测措辞的 KDoc 起、到文件末尾）。
+     * 锚点找不到就抛：宁可红，不许退化成"没比也算过"。
+     */
+    private fun withoutFrameAidSection(text: String, label: String): String {
+        val at = text.indexOf(FRAME_AID_ANCHOR)
+        check(at >= 0) { "$label 里找不到帧观测措辞那一段的锚点「$FRAME_AID_ANCHOR」：这段挪过家了，钉法要跟着重看" }
+        check(text.length - at in 500..9_000) { "$label 里那一段的长度是 ${text.length - at}，不像是一段措辞（钉法本身漂了）" }
+        return text.substring(0, at)
     }
 
     /**
@@ -599,5 +632,11 @@ class ScanSecondEngineWiringGuardTest {
 
         /** 本分支的基点（master）：T66 不许改动上面那五份文件的比较基线 */
         const val T66_BASELINE = "003bbdc"
+
+        /**
+         * T90（#134）被授权改动的那一段（帧观测措辞）的锚点：它的 KDoc 第一行。
+         * ④e 靠它把这一段截掉之后再逐字节比 —— 锚点漂了就抛，不退化成"没比也算过"。
+         */
+        const val FRAME_AID_ANCHOR = "T65① 新增：「画面里有码"
     }
 }

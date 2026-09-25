@@ -118,27 +118,62 @@ class ScanFrameObservationWiringGuardTest {
      * 只加了注释与新函数，判档那一段与触发那一段必须逐字节等于起点。
      * 另外三份（文案、准入内核、兜底壳）整文件逐字节 —— 本卡不许把新出现的提示改哑，
      * 也不许把兜底那道空白过滤改松来少发几火。
+     *
+     * ⚠️ [STATUS_FILE] 那一半在 T90（#134）之后换了钉法（同一口径的另外两处见
+     * [ScanBlankDecodingWiringGuardTest] ⑤b 与 [ScanSecondEngineWiringGuardTest] ④e）：
+     * 文案那份文件里**只有帧观测措辞那一段**被授权改动（误检帧不再被宣称"看见二维码了"），
+     * 所以这里比的是"挖掉那一段之后相对本卡起点逐字节未动"。
+     * 本卡真正要守的那句话一个字都没松：**不许靠改措辞把新出现的提示糊过去** ——
+     * T90 之后这条由三格接着钉：`ScanUiStatusTest` ⑨b 钉"两档在两种证据下都必须出声"
+     * （整体改哑当场红）、⑨c 钉"不许宣称看见、也不许宣称没有码"、⑨a 逐字钉住八格映射表；
+     * [ScanFrameAidWordingWiringGuardTest] 再钉"那句只能由内核给、调用点一个字都不拼"。
+     * 兜底那道 `isNullOrBlank` 照旧整文件逐字节，一处都没松。
      */
     @Test
     fun theRungTreeAndTheFallbackTriggerWereNotRewritten() {
         assertRegionUnchanged(FRAME_LEDGER_FILE, "internal fun frameCodeRung(", "internal val ZoomLadderRatios")
         assertRegionUnchanged(SECOND_ENGINE_FILE, "internal fun retryableRung(", "internal const val SecondEngineStreakFrames")
         assertRegionUnchanged(SECOND_ENGINE_FILE, "internal fun secondEngineDecision(", "internal fun secondEngineAfterFire")
-        for (relative in listOf(STATUS_FILE, ADMISSION_FILE, SHELL_FILE)) {
+        for (relative in listOf(ADMISSION_FILE, SHELL_FILE)) {
             val path = "$MAIN_PREFIX/$relative"
             val baseline = gitShow(T88_BASELINE, path)
             check(baseline != null) { "git 跑不动或基线取不到（$path@$T88_BASELINE），反向钉无从核对" }
             assertEquals(
                 "$relative 相对本卡起点被改过了：本卡只动观测侧的数法，" +
-                    "文案、准入判据与兜底壳都不许动（改措辞把提示改哑、或改空白过滤少发火，都是本卡要避免的那类假绿）",
+                    "准入判据与兜底壳都不许动（改空白过滤少发火，是本卡要避免的那类假绿）",
                 normalizeNewlines(baseline),
                 normalizeNewlines(File(findMainJavaDir(), relative).readText()),
             )
         }
+        // 文案那份：挖掉 T90 被授权改的那一段之后逐字节，剩下的部分（结构性降级阶梯等）一字不许动
+        val statusPath = "$MAIN_PREFIX/$STATUS_FILE"
+        val statusBaseline = gitShow(T88_BASELINE, statusPath)
+        check(statusBaseline != null) { "git 跑不动或基线取不到（$statusPath@$T88_BASELINE），反向钉无从核对" }
+        val current = normalizeNewlines(File(findMainJavaDir(), STATUS_FILE).readText())
+        assertEquals(
+            "$STATUS_FILE 在帧观测措辞那一段之外被改过了：本卡只许改两档的断语，" +
+                "scanUiStatus 的七档阶梯、cameraLive 与相册前缀都不是这卡的账",
+            cutFrameAidSection(normalizeNewlines(statusBaseline), statusPath + "@" + T88_BASELINE),
+            cutFrameAidSection(current, STATUS_FILE),
+        )
+        // 靶子：那一段确实还在，而且仍是"按证据分支 + 两档都出声"的形状（挖空文件骗不过这一条）
+        assertTrue("帧观测措辞那颗函数没了：", current.contains("internal fun scanFrameAidText("))
+        assertTrue("帧观测措辞不再按「本轮读出过原文没有」分支：", current.contains("readableCodeSeen"))
         // 靶子：这三份文件确实各自管着本卡不许碰的那件事
         assertTrue("靶子丢了：文案那颗函数还在？", gitShow(T88_BASELINE, "$MAIN_PREFIX/$STATUS_FILE")!!.contains("internal fun scanFrameAidText("))
         assertTrue("靶子丢了：准入判据还在？", gitShow(T88_BASELINE, "$MAIN_PREFIX/$ADMISSION_FILE")!!.contains("internal fun decodingAdmission("))
         assertTrue("靶子丢了：兜底那道空白过滤还在？", gitShow(T88_BASELINE, "$MAIN_PREFIX/$SHELL_FILE")!!.contains("!it.text.isNullOrBlank()"))
+    }
+
+    /**
+     * 截掉 T90 被授权改动的那一段（帧观测措辞的 KDoc 起、到文件末尾）。
+     * 锚点找不到、或那一段长得不像一段措辞，都判失败而不是退化成"没比也算过"。
+     */
+    private fun cutFrameAidSection(text: String, label: String): String {
+        val at = text.indexOf(FRAME_AID_ANCHOR)
+        check(at >= 0) { "$label 里找不到帧观测措辞的锚点「$FRAME_AID_ANCHOR」：那段挪过家了，T90 的钉法要跟着重看" }
+        check(text.length - at in 500..9_000) { "$label 里那一段长 ${text.length - at} 字符，不像是一段措辞（钉法本身漂了）" }
+        return text.substring(0, at)
     }
 
     /**
@@ -440,5 +475,11 @@ class ScanFrameObservationWiringGuardTest {
 
         /** 本卡的起点（master）：反向钉按这一枚逐字节核对 */
         const val T88_BASELINE = "9e155df"
+
+        /**
+         * T90（#134）被授权改动的那一段（帧观测措辞）的锚点：它的 KDoc 第一行。
+         * ③ 用它把那一段截掉之后再逐字节比，锚点没了就抛。
+         */
+        const val FRAME_AID_ANCHOR = "T65① 新增：「画面里有码"
     }
 }

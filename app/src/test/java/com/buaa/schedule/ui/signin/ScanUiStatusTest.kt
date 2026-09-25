@@ -253,7 +253,10 @@ class ScanUiStatusTest {
             assertFalse("手电的残壳回来了（$torchRemnant）：要么死代码要么壳，两个都不许", code.contains(torchRemnant))
         }
         // 页面里不许还藏着文案原文：那就是第二份口径
-        for (lit in listOf("没有相机权限", "CameraX 起不来", "这份安装包没带", "走近一点", "拿稳对准")) {
+        // T90（#134）新增的两句（「还没扫出内容…」「看见二维码了…」）也一并扫进来：
+        // 分支加了一枚入参，最省事的错法就是页面自己 if 一句 —— 那一档由
+        // ScanFrameAidWordingWiringGuardTest ①a 与这一格各钉一次。
+        for (lit in listOf("没有相机权限", "CameraX 起不来", "这份安装包没带", "走近一点", "拿稳对准", "看见二维码了", "还没扫出内容")) {
             assertFalse("提示文案还在页面里另写一份（$lit），判据就被绕过了", code.contains(lit))
         }
         // provider 那一档是**真的**传给了判据，而不是只写了个没人读的字段
@@ -320,28 +323,113 @@ class ScanUiStatusTest {
     }
 
     /**
-     * ⑨ T65① 「有码但解不开」两档的措辞：各有专属的话、都只给做得到的动作。
+     * ⑨a 表驱动：四档 × 「本轮读出过非空白原文没有」共八格，逐字钉住期望的那一句。
+     *
+     * 这一张表就是 T90（#134）的修法本体：**每一格都写死整句原文**，措辞漂一个字这里先红。
+     * 两档无证据的那两格说的是"还没扫出内容"（只报结果），两档有证据的那两格才是
+     * 改前那句"看见二维码了"（原字面量不动）；读到了码 / 什么都没看见两档恒禁声。
+     */
+    @Test
+    fun frameAidTextTableCoversEveryRungAndEvidenceCell() {
+        val table = listOf(
+            // rung, readableCodeSeen, 期望的整句（null = 这一格禁声）
+            Row(FrameCodeRung.CodeReadable, false, null),
+            Row(FrameCodeRung.CodeReadable, true, null),
+            Row(FrameCodeRung.NothingDetected, false, null),
+            Row(FrameCodeRung.NothingDetected, true, null),
+            Row(FrameCodeRung.CodeTooSmall, false, "还没扫出内容：请走近一点，或把要扫的码对准取景框正中。"),
+            Row(FrameCodeRung.CodeTooSmall, true, "看见二维码了，但它小到解不出来：请走近一点，或把码对准取景框正中。"),
+            Row(FrameCodeRung.CodeUndecodable, false, "还没扫出内容：请把手机拿稳对准要扫的码，或换一张更清晰的码。"),
+            Row(FrameCodeRung.CodeUndecodable, true, "看见二维码了，但一时解不开：请拿稳对准它，或换一张更清晰的码。"),
+        )
+        // 值域自己也要自证扫全了：档位加一枚而表没跟着加，这里就得红
+        assertEquals("表里的格子数与 FrameCodeRung 的值域对不上：", FrameCodeRung.entries.size * 2, table.size)
+        for (row in table) {
+            assertEquals(
+                " rung=${row.rung} 有证据=${row.codeSeen} 这一格的话不对：",
+                row.expected,
+                scanFrameAidText(row.rung, row.codeSeen),
+            )
+        }
+        // 同一档的两支不许说成同一句（分档等于没分），两档之间也不许撞句
+        for (seen in listOf(false, true)) {
+            val tooSmall = scanFrameAidText(FrameCodeRung.CodeTooSmall, seen)
+            val undecodable = scanFrameAidText(FrameCodeRung.CodeUndecodable, seen)
+            assertNotEquals(
+                "同一档的有证据/无证据说成了同一句",
+                scanFrameAidText(FrameCodeRung.CodeTooSmall, !seen),
+                tooSmall,
+            )
+            assertNotEquals("太小与解不开说成了同一句话（$seen）", tooSmall, undecodable)
+        }
+    }
+
+    /**
+     * ⑨b 「有码但解不开」两档的话术纪律（T65① 立，T90 扩到两支都要过）。
      *
      * 判档在帧质量内核（[frameCodeRung]），这里钉的是话术的四条纪律：
      * 读到的/没看见两档禁声（后者按帧闪的提示只是噪音）；两档的话不许说成同一句
      * （太小与没解开是两种下一步）；不许指向已经不存在的硬件（本页没有补光手段，
      * 「照亮/打灯」那类话从这一卡起是谎话）；不许承诺时间、不许指使去设置。
+     * ⚠️ 并且**两档在两种证据下都必须出声** —— 把提示条整体映射成 null 是"用什么都不说
+     * 换掉说错话"，用户对着糊码就再没有指引，那是另一条静默死路。
      */
     @Test
     fun frameAidRungsSpeakTheirOwnSentences() {
-        val tooSmall = requireNotNull(scanFrameAidText(FrameCodeRung.CodeTooSmall))
-        val undecodable = requireNotNull(scanFrameAidText(FrameCodeRung.CodeUndecodable))
-        assertNull("读到码那一档不许再催：", scanFrameAidText(FrameCodeRung.CodeReadable))
-        assertNull("什么都没看见那一档由取景框回答，提示条禁声：", scanFrameAidText(FrameCodeRung.NothingDetected))
-        assertNotEquals("太小与解不开说成了同一句话，分档等于没分", tooSmall, undecodable)
-        assertTrue("太小那一档没给下一步（走近/对准正中是用户做得到的）：$tooSmall", tooSmall.contains("走近一点"))
-        assertTrue("解不开那一档没给下一步（拿稳是焦点问题的正解）：$undecodable", undecodable.contains("拿稳"))
-        for (aid in listOf(tooSmall, undecodable)) {
-            for (banned in listOf("手电", "补光", "照亮", "闪光", "灯", "手输", "设置", "秒")) {
-                assertFalse("取景提示指向了不存在的硬件/入口/承诺（$banned）：$aid", aid.contains(banned))
+        for (seen in listOf(false, true)) {
+            val tooSmall = requireNotNull(scanFrameAidText(FrameCodeRung.CodeTooSmall, seen)) {
+                "太小那一档禁声了（有证据=$seen）：提示条被整体改哑就是另一条静默死路"
+            }
+            val undecodable = requireNotNull(scanFrameAidText(FrameCodeRung.CodeUndecodable, seen)) {
+                "解不开那一档禁声了（有证据=$seen）：提示条被整体改哑就是另一条静默死路"
+            }
+            assertTrue("太小那一档没给下一步（走近/对准正中是用户做得到的）：$tooSmall", tooSmall.contains("走近一点"))
+            assertTrue("解不开那一档没给下一步（拿稳是焦点问题的正解）：$undecodable", undecodable.contains("拿稳"))
+            for (aid in listOf(tooSmall, undecodable)) {
+                for (banned in listOf("手电", "补光", "照亮", "闪光", "灯", "手输", "设置", "秒")) {
+                    assertFalse("取景提示指向了不存在的硬件/入口/承诺（$banned）：$aid", aid.contains(banned))
+                }
+            }
+        }
+        assertNull("读到码那一档不许再催：", scanFrameAidText(FrameCodeRung.CodeReadable, true))
+        assertNull("什么都没看见那一档由取景框回答，提示条禁声：", scanFrameAidText(FrameCodeRung.NothingDetected, false))
+    }
+
+    /**
+     * ⑨c ① 的那笔事实结论钉成一档：**分不清就不许断言**。
+     *
+     * 装机与依赖字节码都读不出"误检"与"一张真的小码/糊码"的分别（`Barcode` 的公开面只有
+     * format / valueType / boundingBox / cornerPoints / rawValue / displayValue / rawBytes
+     * 加十一枚按原文解出来的子结构，没有置信度、没有质量分、没有"解没解开"的标志位），
+     * 所以本轮从没收下过一枚非空白原文时，这一句：
+     * - 不许宣称看见了东西（断语词「看见」零命中）；
+     * - 也不许反过来宣称画面里没有码（那同样是拿不到证据的断言，且会把"走近一点"
+     *   这条对真小码有用的建议一起弄哑）。
+     * 读出过原文那一支才许说「看见二维码了」，两支持有的建议必须相同。
+     */
+    @Test
+    fun unbackedBranchClaimsNeitherPresenceNorAbsenceOfACode() {
+        for (rung in listOf(FrameCodeRung.CodeTooSmall, FrameCodeRung.CodeUndecodable)) {
+            val unbacked = requireNotNull(scanFrameAidText(rung, false))
+            for (assertion in listOf("看见", "有二维码", "有一枚码")) {
+                assertFalse("本轮没读出过任何原文，这一句还在宣称看见了东西（$assertion）：$unbacked", unbacked.contains(assertion))
+            }
+            for (absence in listOf("没有码", "没码", "没有二维码", "没看见", "识别不到码")) {
+                assertFalse("这一句改口宣称画面里没有码（$absence）—— 那同样是拿不到证据的断言：$unbacked", unbacked.contains(absence))
+            }
+            val backed = requireNotNull(scanFrameAidText(rung, true))
+            assertTrue("读出过原文那一支该把证据说出来（「看见」没了就是整体改哑）：$backed", backed.contains("看见二维码"))
+            // 降级只降**断语**，不降**建议**：同一档的两支持有同一组动作
+            val advice = if (rung == FrameCodeRung.CodeTooSmall) listOf("走近一点", "取景框正中") else listOf("拿稳", "换一张更清晰的码")
+            for (word in advice) {
+                assertTrue("无证据那一支把建议丢了（$word）：$unbacked", unbacked.contains(word))
+                assertTrue("有证据那一支把建议丢了（$word）：$backed", backed.contains(word))
             }
         }
     }
+
+    /** ⑨a 那张表的一行：档位 × 本轮有没有读出过非空白原文 → 期望的整句（null = 禁声） */
+    private data class Row(val rung: FrameCodeRung, val codeSeen: Boolean, val expected: String?)
 
     // ---- 源码核对工具（与 ColdStartRebuildWiringTest 同一套手法）----
 

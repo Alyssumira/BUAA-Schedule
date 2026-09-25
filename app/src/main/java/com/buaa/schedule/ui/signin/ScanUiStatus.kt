@@ -135,13 +135,48 @@ internal fun scanCameraLive(
  * 措辞纪律：两档都得给出用户下一步真做得到的动作（凑近 / 拿稳对住），不承诺时间、
  * 不指使去设置、不提任何不存在的硬件（本页已无补光手段，「照亮」那类话从这里起不许出现）。
  *
+ * ## T90（台账 #134）改的是**断语**那一半
+ *
+ * T88 把空白原文从帧观测的"读到了"那一侧收掉之后，这两档开始对**误检帧**说话
+ * （装机实测：这台 AVD 的虚拟场景 78.8% 落 `CodeUndecodable`、21.2% 落 `CodeTooSmall`，
+ * 而它们的原文长度都是 0）。那句「看见二维码了，但一时解不开：请拿稳对准它」于是成了
+ * 对着一个根本没有码的画面叫用户对准它 —— 与用户最初抱怨的「扫到的不是签到码」同一类怪罪。
+ *
+ * 为什么按 [readableCodeSeen] 分两支，而不是改成"这里没有码"、也不是整体改哑（① 的实测账）：
+ * ML Kit 交回来的那枚 `Barcode` 上**没有**任何一个字段说得出"这一枚是真码"还是
+ * "检测器看走了眼"—— 公开面只有 `format`/`valueType`/`boundingBox`/`cornerPoints`/
+ * `rawValue`/`displayValue`/`rawBytes` 加十一枚按原文解出来的子结构，**没有置信度、
+ * 没有质量分、没有"解没解开"的标志位**（依赖 jar 的 `javap` 全面 + 装机逐字段实读，
+ * 账与读数都写在 `ScanFrameAidWordingWiringGuardTest` 的 KDoc 里）。唯一分得开两者的
+ * 观测仍然是**原文本身**，而那正是 T87 那颗准入判据 [decodingAdmission] 在量的东西 ——
+ * 全仓只许有这一把尺子，所以这里吃的是它的结论（本轮有没有收下过一枚原文），
+ * 不另立第二把。于是三条纪律：
+ * - 不许把句子改成"这里没有码"：那同样在断言一件拿不到证据的事；
+ * - 不许把这两档整体映射成 null：用"什么都不说"换"说错话"，用户对着糊码就再没有指引，
+ *   那是另一条静默死路（`ScanUiStatusTest` ⑨a 钉着两档都必须说话）；
+ * - **把断语降级、把建议留下**：两档的动作照给（走近 / 对准正中 / 拿稳 / 换一张更清晰的），
+ *   只有本轮确实读出过一枚**有内容的**原文，句子才说"看见二维码了"。
+ *
  * @param rung 已过滞后的屏上观测档位（[ScanAssistState.shownRung] 的取值）
+ * @param readableCodeSeen 本轮绑定里解码器读出过**非空白**原文（设备侧事实，由调用点当参数传：
+ *   它就是 [decodingAdmission] 的 `admitted` 曾经为真的那一份账）。它是这一句里
+ *   "看见二维码了"这半句唯一拿得出的证据；没有它，措辞只说结果、不宣称看见了东西。
  * @return null = 这一档不需要说话（读到了码 / 什么都没看见 —— 后者是瞄的问题，
  *   由取景框本身回答，提示条对着空画面说"没看见"只会按帧闪）
  */
-internal fun scanFrameAidText(rung: FrameCodeRung): String? = when (rung) {
-    FrameCodeRung.CodeTooSmall -> "看见二维码了，但它小到解不出来：请走近一点，或把码对准取景框正中。"
-    FrameCodeRung.CodeUndecodable -> "看见二维码了，但一时解不开：请拿稳对准它，或换一张更清晰的码。"
+internal fun scanFrameAidText(rung: FrameCodeRung, readableCodeSeen: Boolean): String? = when (rung) {
+    FrameCodeRung.CodeTooSmall ->
+        if (readableCodeSeen) {
+            "看见二维码了，但它小到解不出来：请走近一点，或把码对准取景框正中。"
+        } else {
+            "还没扫出内容：请走近一点，或把要扫的码对准取景框正中。"
+        }
+    FrameCodeRung.CodeUndecodable ->
+        if (readableCodeSeen) {
+            "看见二维码了，但一时解不开：请拿稳对准它，或换一张更清晰的码。"
+        } else {
+            "还没扫出内容：请把手机拿稳对准要扫的码，或换一张更清晰的码。"
+        }
     FrameCodeRung.CodeReadable -> null
     FrameCodeRung.NothingDetected -> null
 }

@@ -183,6 +183,12 @@ fun SpocScanScreen(
     // T65①：帧观测档位的界面侧快照。只有内核滞后窗（[RungSettleFrames] 帧站稳）翻面时
     // 才被推一次，不按帧重写组合；措辞唯一来源是 [scanFrameAidText]，页面不留第二份。
     var frameRung by remember { mutableStateOf(FrameCodeRung.NothingDetected) }
+    // T90（#134）：本轮绑定里解码器**读出过非空白原文**没有 —— 提示栏那句要不要说
+    // 「看见二维码了」就吃这一枚（装机实测：这台镜像每帧都递回一枚空原文的误检，
+    // 让提示栏对根本没有码的画面叫用户"拿稳对准它"，与用户最初抱怨的「扫到的不是签到码」
+    // 同一类怪罪）。它只由分析器经那道唯一的准入尺子推进来（**页面不自己清**：
+    // 两边各清一次会在"绑定没成功"那一档漂开），复位跟着绑定走。
+    var readableCodeSeen by remember { mutableStateOf(false) }
     // 解码器"根本不在包里"（T24）：探针**已判定**不可用才 true —— 未判定不是不可用，
     // 那样会把 arm64 上预热还没跑到那一档的窗口变成一帧降级页。
     // 这一档比 scannerWorking 更彻底：相册识别用的是同一个 scanner，所以它一起没。
@@ -244,6 +250,8 @@ fun SpocScanScreen(
                 onGiveUpChanged = { giveUp -> scannerGiveUp = giveUp },
                 // T65①：滞后的帧观测档位翻面时推进来（措辞在 [scanFrameAidText]，这里只存档位）
                 onFrameRungChanged = { rung -> frameRung = rung },
+                // T90：提示栏那句要不要说"看见二维码了"，吃的就是这一枚 push（页面不自算）
+                onReadableCodeSeenChanged = { seen -> readableCodeSeen = seen },
                 // T65②：阶梯的缩放命令。⚠️ 不 await、不排主线程轮询——CameraX 1.4.2 里后一发
                 // setZoomRatio 会拿 OperationCanceledException 掐掉前一发 pending future；
                 // 阶梯最小间隔 [ZoomStepFrames] 帧已经保证不刷屏，下发与取证在 applyScanAssistZoom。
@@ -674,7 +682,9 @@ fun SpocScanScreen(
                 // T65①：「画面里有码、但还没解开」两档的提示。只在相机路径活着、且没有
                 // 结构性降级可说时出现 —— 对着死相机讲"走近一点"是新的假话。档位翻面
                 // 由内核滞后窗管（半秒站稳才换），这里不按帧重写；措辞唯一来源 [scanFrameAidText]。
-                val frameAidText = if (cameraLive && hintText == null) scanFrameAidText(frameRung) else null
+                // T90（#134）：这一句多吃的就是那枚证据位 —— 本轮读出过原文才允许说
+                // 「看见二维码了」；没读出过只说「还没扫出内容」，两支持有的动作一模一样。
+                val frameAidText = if (cameraLive && hintText == null) scanFrameAidText(frameRung, readableCodeSeen) else null
                 if (frameAidText != null) {
                     Text(
                         text = frameAidText,
@@ -874,6 +884,14 @@ private class QrCodeAnalyzer(
      */
     private val onFrameRungChanged: (FrameCodeRung) -> Unit,
     /**
+     * T90（#134）：本轮绑定「读出过一枚非空白原文」这枚证据位翻面时推进来。
+     *
+     * 它不是第二把尺子 —— 值只由 [decodingAdmission] 的 `admitted` 决定（相机那条唯一的
+     * 准入出口），这里只是把那个既成事实推给界面；提示栏那句要不要断言"看见了码"就吃它。
+     * 写它的是两条引擎所在的线程，读它的是组合，所以与分析器里那本账一样整枚换、只翻一次。
+     */
+    private val onReadableCodeSeenChanged: (Boolean) -> Unit,
+    /**
      * T65②：缩放阶梯的命令（目标比值 + 是否回滚）。执行侧在 applyScanAssistZoom：
      * 钳制、下发、取证都在那里，本类不碰 CameraControl。
      */
@@ -1002,6 +1020,18 @@ private class QrCodeAnalyzer(
     @Volatile private var blankDecoding = BlankDecodingLedger()
 
     /**
+     * T90：本轮绑定里有没有递出过一枚**非空白**原文（= [decodingAdmission] 曾经 `admitted`）。
+     *
+     * 它是提示栏那句断语唯一拿得出的证据：这一帧的框是不是"一张真码"量不出来（`Barcode` 上
+     * 没有置信度/质量分/解没解开的标志位，装机逐字段实读与 `javap` 全面都在
+     * `ScanFrameAidWordingWiringGuardTest` 的 KDoc 里），而"本轮确实读出过东西"是实打实的
+     * 正观测。@Volatile + 单向翻起（false→true），两个写者（ML Kit 回调线程与兜底所在的
+     * 分析线程）看到的都是同一枚布尔，最坏是重复 push 一次 true，不会漂回 false。
+     * 复位点在 [markBindStarted]（与留痕账本同一处）并同步推给界面。
+     */
+    @Volatile private var readableCodeSeen = false
+
+    /**
      * 绑定成功后调一次：健康度那几行取证要报"这是绑定后第多少毫秒发生的事"。
      * 顺带把首帧标志、交付尺寸标志、帧观测账本与补解账本一起复位（T59b① / T64② / T65①② / T66）——
      * 每一轮绑定都该重新报一次"首帧已到达"和"交付的是多大的帧"，也都该从基线视场重新数档、
@@ -1016,6 +1046,10 @@ private class QrCodeAnalyzer(
         secondEngineStopReported = null
         // T87：空白原文的留痕序号也按绑定数（旧序号对不上新画面，读日志的人会以为还是那一面墙）
         blankDecoding = BlankDecodingLedger()
+        // T90：提示栏的断语证据同样按绑定清 —— 新一轮画面还没读出一枚原文，就不许再说
+        // 「看见二维码了」（界面那份快照只能由这一颗 push 写，页面不自己清，两边各清会漂）
+        readableCodeSeen = false
+        onReadableCodeSeenChanged(false)
     }
 
     /**
@@ -1325,6 +1359,9 @@ private class QrCodeAnalyzer(
             noteBlankDecoding(admission)
             return DecodingSubmission.BlankRejected
         }
+        // T90：走到这里说明这份原文**有内容**（准入收了）—— 提示栏那句断语的证据就是这一次。
+        // 排在取墙钟与闸门判据之前：投不投得出去（冷却期、结果卡挂着）与"读出过东西"是两本账。
+        noteReadableCodeSeenOnce()
         // 墙钟在调用点读、判据是纯函数（仓库口径）
         val now = System.currentTimeMillis()
         if (!shouldSubmitScan(handled, raw, now, awaitingUserAction)) return DecodingSubmission.HeldByGate
@@ -1350,6 +1387,20 @@ private class QrCodeAnalyzer(
         blankDecoding = trace.ledger
         if (!trace.speak) return
         Log.i(TAG, decodingAdmissionTraceText(admission, trace.occurrence, frameCount))
+    }
+
+    /**
+     * 提示栏断语的证据位翻面（T90）：本轮第一次读出非空白原文时推一次 true。
+     *
+     * 三件事都不做：**不判原文**（尺子是调用它的那颗 [decodingAdmission]，全仓只此一把）、
+     * **不读时钟**、**不写任何一本账**（判死/闸门/停帧与这一位无关）。同一枚值重复写不触发
+     * 重组，所以按帧路径上它只是一次布尔读；留痕一个字都不写 —— 这一档既没失败也没新东西，
+     * 而它唯一的听众是界面。
+     */
+    private fun noteReadableCodeSeenOnce() {
+        if (readableCodeSeen) return
+        readableCodeSeen = true
+        onReadableCodeSeenChanged(true)
     }
 
     /**

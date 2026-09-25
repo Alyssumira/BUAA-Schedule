@@ -167,10 +167,25 @@ class ScanBlankDecodingWiringGuardTest {
         assertTrue("真码在相册那条路上被杀掉了", decodingAdmission(realCode, DecodingSource.GalleryImage).admitted)
     }
 
-    /** ⑤b 反向钉：七档判据、状态机、闸门与棘轮那几份文件本卡一个字都没碰 */
+    /**
+     * ⑤b 反向钉：七档判据、状态机、闸门与棘轮那几份文件本卡一个字都没碰。
+     *
+     * ⚠️ T90（#134）改过这条钉法，改的是**形状**不是**松紧**：
+     * [STATUS_FILE] 原来也在这份"整文件逐字节"的清单里，而 T90 被授权改的恰恰是它那一段
+     * 帧观测措辞（误检帧不再被宣称"看见二维码了"）。于是这一条换成两半：
+     *  1. 其余五份文件照旧整文件逐字节对 [T87_BASELINE]（本卡不许碰的就是这五份）；
+     *  2. [STATUS_FILE] 改成**挖掉被授权那一段之后**逐字节对同一枚基线 —— 也就是
+     *     "除了帧观测措辞那一段，这个文件相对 T87 起点仍然一个字都没动"。锚点找不到就抛，
+     *     所以"把那段挪个位置再改"也红（见 [stripFrameAidSection]）。
+     * 那段本身钉在哪：逐字八格（四档 × 本轮有没有读出过原文）在 `ScanUiStatusTest` ⑨a，
+     * "两档都必须出声、不许整体改哑"在 ⑨b，"不许宣称看见、也不许宣称没有码"在 ⑨c，
+     * 而"这一句只能由内核给、调用点一个字都不拼"由 [ScanFrameAidWordingWiringGuardTest] 钉。
+     * 这里另留两枚靶子：允许动的那一段确实还长着 T90 那个形状（按证据分支、两套建议都在），
+     * 否则上面那些守卫扫的就是空气。
+     */
     @Test
     fun filesThisCardMustNotTouchAreByteIdenticalToBaseline() {
-        for (relative in listOf(REJECT_FILE, VIEW_MODEL_FILE, GATE_FILE, RECOVERY_FILE, FRAME_FLOW_FILE, STATUS_FILE)) {
+        for (relative in listOf(REJECT_FILE, VIEW_MODEL_FILE, GATE_FILE, RECOVERY_FILE, FRAME_FLOW_FILE)) {
             val path = "$MAIN_PREFIX/$relative"
             val baseline = gitShow(T87_BASELINE, path)
             check(baseline != null) { "git 跑不动或基线取不到（$path@$T87_BASELINE），反向钉无从核对" }
@@ -181,6 +196,42 @@ class ScanBlankDecodingWiringGuardTest {
                 normalizeNewlines(File(findMainJavaDir(), relative).readText()),
             )
         }
+        val statusPath = "$MAIN_PREFIX/$STATUS_FILE"
+        val statusBaseline = gitShow(T87_BASELINE, statusPath)
+        check(statusBaseline != null) { "git 跑不动或基线取不到（$statusPath@$T87_BASELINE），反向钉无从核对" }
+        val current = normalizeNewlines(File(findMainJavaDir(), STATUS_FILE).readText())
+        assertEquals(
+            "$STATUS_FILE 在帧观测措辞那一段之外被改过了：T90 只被授权改「画面里有码但没解开」两档的断语，" +
+                "结构性降级阶梯（scanUiStatus 七档）、cameraLive 判据与相册前缀都不许动",
+            normalizeNewlines(stripFrameAidSection(statusBaseline)),
+            stripFrameAidSection(current),
+        )
+        // 靶子：允许动的那一段确实还是 T90 那个形状（少了任何一枚就说明守卫在扫空气）
+        val aid = frameAidSection(current)
+        assertTrue("帧观测措辞不再按「本轮读出过原文没有」分支（断语被改回无条件了）：\n$aid", aid.contains("readableCodeSeen"))
+        for (anchor in listOf("看见二维码了，但它小到解不出来", "看见二维码了，但一时解不开", "还没扫出内容")) {
+            assertTrue("帧观测措辞里少了锚点「$anchor」：\n$aid", aid.contains(anchor))
+        }
+        // 计数只看函数体：KDoc 里也**引用**过「看见二维码了」，整段去数会把注释那一次算进去
+        val aidBody = balancedBlock(withoutComments(current), "internal fun scanFrameAidText(")
+        assertEquals("「看见二维码了」只许出现在有证据那一支（两句）：\n$aidBody", 2, occurrences(aidBody, "看见二维码了"))
+        assertEquals("无证据那一支「还没扫出内容」只许两句（两档各一句）：\n$aidBody", 2, occurrences(aidBody, "还没扫出内容"))
+        assertEquals("帧观测措辞出口只能有一颗（第二份=页面自算口径）：", 1, occurrences(current, "internal fun scanFrameAidText("))
+    }
+
+    /** 被授权改动那一段：帧观测措辞的 KDoc 起、到文件末尾（锚点没了就抛，不许退化成不比较） */
+    private fun frameAidSection(text: String): String {
+        val at = text.indexOf(FRAME_AID_ANCHOR)
+        check(at >= 0) { "找不到帧观测措辞那一段的锚点「$FRAME_AID_ANCHOR」：这段挪过家或被改名，T90 的钉法要跟着重看" }
+        return text.substring(at)
+    }
+
+    /** 把被授权那一段挖掉之后的文件体（挖之前的长度自证：不许挖空整份文件） */
+    private fun stripFrameAidSection(text: String): String {
+        val normalized = normalizeNewlines(text)
+        val section = frameAidSection(normalized)
+        check(section.length in 500..9_000) { "被挖掉的那一段长度是 ${section.length}，不像是一段措辞（钉法本身漂了）" }
+        return normalized.replace(section, "")
     }
 
     // ---- 源码核对工具（与同族守卫一个刀法）----
@@ -286,6 +337,14 @@ class ScanBlankDecodingWiringGuardTest {
         const val FRAME_FLOW_FILE = "com/buaa/schedule/ui/signin/ScanFrameFlowPolicy.kt"
         const val STATUS_FILE = "com/buaa/schedule/ui/signin/ScanUiStatus.kt"
         const val REJECT_FILE = "com/buaa/schedule/data/import/ScanReject.kt"
+
+        /**
+         * T90 被授权改动的那一段（帧观测措辞）的锚点：它的 KDoc 第一行。
+         *
+         * ⑤b 靠它把这一段挖掉之后再逐字节比 —— 锚点漂了/整段挪家就抛，
+         * 而不是退化成"没比也算过"。
+         */
+        const val FRAME_AID_ANCHOR = "T65① 新增：「画面里有码"
 
         /** 本卡的起点（master）：⑤b 那几份"本卡不许碰"的文件按这一枚哈希逐字节核对 */
         const val T87_BASELINE = "6a27324"
