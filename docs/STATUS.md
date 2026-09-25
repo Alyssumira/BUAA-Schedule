@@ -2622,3 +2622,30 @@ lint 0 错 14 警、签名包 **7,247,271 B**（对 7,246,225 是 **+1,046 B**�
 复探的**收益**同样没量到（这台给不出"三次误检之后再来一张真码"的场景）；"用户动作复位账本"没做（`resume()` 在主线程、账本是分析线程单写者，要走得先立跨线程纪律）。
 **自伤一条**：它跑第一遍门禁时 `dir_path` 没生效，步骤 2–5 实际跑在**主仓**并 `clean` 过主仓 `app/build` ⇒ 源码零改动（我复核 `git status` 干净、HEAD 仍起点），
 但主仓 `app/build/` 里现有一枚 19:59 的 master 产物是派生文件、别当成果引用；副产品是同一 commit 两次干净全量差 **61 B**，把"±几百字节不归因给代码"那条坐实了。
+
+## T92：那把尺子的假绿不止 res/xml —— 给 `Test` 任务声明守卫真读的输入，顺手把 2.80 帧/秒降回"宿主当时多忙"（`1a7b99f` / `e85281b`，2 枚 / 5 文件 +267 / −9）
+
+**成败判据是实验而不是声明，三臂我自己跑了一遍**（同一枚命令 `:app:testDebugUnitTest --tests "*BackupRulesCoverCredentialStoresTest*"`、**不加 `--rerun`**，只换"哪一版脚本"与"那行排除在不在"）：
+
+- **A 臂（改前脚本 `ed49c54`）**：先跑绿存指纹 ⇒ 删掉 `res/xml/backup_rules.xml` 里 `<cloud-backup>` 的 `buaa_cookie_store.xml` 那一行 ⇒ **`Task :app:testDebugUnitTest UP-TO-DATE` + BUILD SUCCESSFUL**。T85b 当年写进文档的那句"就是这么'通过'了一次删掉三行排除的改动"，**今天我自己在同一台机器上复现了**。
+- **B 臂（HEAD 脚本，带 `inputs.files(guardReadWorkingTreeFiles)`）**：同一处删除、同一枚命令 ⇒ **BUILD FAILED**，红的正是 A 臂假绿的那两格（`everyKeystoreBackedCredentialPrefIsExcludedFromBothRuleFiles` / `eachRuleBlockActuallyParsesToANonEmptyExcludeList`）。
+- **C 臂（它没测、我加的那半 —— 范围打宽到底成不成立）**：往 `ScanRecoveryPolicy.kt` 的 **KDoc 里插一枚零宽空格**（class 字节一个都不变）⇒ `filesThisCardMustNotTouchAreByteIdenticalToBaseline FAILED`。⇒ "漏的不止 res/xml"这条**成立**，输入面必须连 `src/main/java` 一起给；只补 res/xml 会留下一半的洞。
+- 三臂跑完工作树回到 pristine（xml `70f29957cb`、脚本 `69306e8020`、`.kt` `4e71a6b987`，`git status` 空、HEAD 未动）。
+
+⚠️ **我第一版 B 臂是废的，而且是被自己的探针放过的**：脚本只 `checkout` 了 XML、忘了把 `build.gradle.kts` 换回 HEAD，于是两臂量的都是改前那一版；而我的 `state()` 用 `git diff`（工作树 vs **索引**）判断脚本版本，`git checkout <ref> -- <path>` 会连索引一起写 ⇒ 它把"base 脚本"报成"HEAD 脚本"，读数和结论正好自洽。改成 `git diff HEAD` + 直接 `grep -c guardReadWorkingTreeFiles <工作树文件>` 才看得见真相。**探针报出一个方便的答案时，先量探针。**
+
+**输入面**：8 项点名路径（`src/main/java`、`src/main/res`、清单、两份 pro 规则、本脚本、`../gradle/libs.versions.toml`、兄弟模块 consumer 规则、`app/schemas`）。我这边数到 **265 只 / ≈3.33 MB**（它报 251 / 3.6 MB，同一批路径、不同走法，量级一致）。**故意不铺满整仓**："改 README 也重跑 1,660 枚"是拿一种错换另一种。产物（release apk / mapping）**不进输入面**的理由写得比"怕慢"硬：那是 `:app:assembleRelease` 的产物，声明成输入而不加 `dependsOn` 等于造一条无依赖声明的产物消费边，加了又等于让单测去拉起 release 构建 —— 那笔账归门禁顺序，不归输入面。`PathSensitivity.RELATIVE` 是为了主仓与 `.worktrees/*` 两种 cwd 指纹同一份内容（不引盘符）。
+
+**② 2.80 帧/秒从"这一页的属性"降回"量它的那台机器当时有多忙的属性"**：`ScanFrameFlowPolicy.kt` 头部那段读数换成**带条件的区间 + 复现法**（宿主空闲 **8.01**（8,900 帧 / 1,110.7 s）、并发 `assembleRelease` 时 **4.73**、逐 50 帧最慢 **2.60** / R8 收尾 **2.05**）。旧 2.80 **按条件留在原位**，它当年那句解释（"挂着 ML Kit 解码是限流项"）被"同档差 3 倍不能由解码负载解释"打掉。复现法不装探针也不改代码：这台虚拟场景每帧递回空原文，那枚按 50 帧节流的留痕本身就是一根帧计数钟。**改动 100% 在注释里**（我把 diff 的增删行全扫了一遍，没有一行不以 ` * ` 开头）⇒ 零字节码变化，所以这张卡**不需要装机**，我也没跑设备。
+
+**④ 两枚守卫重钉**照 T90/T91 那一套：挖掉被授权那段、其余逐字节对基线、起始锚点唯一性 + 收尾锚点缺失就抛 + 段长越界就抛、两侧各配靶子。我复算过段长：**基线 139 / 本轮 1,815 字符**，与它写在常量注释里的两个数一字不差（不是抄来的）。`@Test` 数 7/6 不变、断言行 59→69 与 63→73、**被删的断言行 0**。`ScanRecoveryPolicy.kt` / `ScanSecondEnginePolicy.kt` / `SpocScanScreen.kt` / `ScanDecodingAdmission.kt` 一个没碰（`git diff --name-only` 只有 5 只文件）。
+
+**③ 补解那 8 发额度每次绑定都回满**：停用→自动试回→`scannerWorking` 翻面→`:313` 键表重跑→`:332 unbindAll()`→`:383 markBindStarted()`→`:1045 secondEngineLedger = SecondEngineLedger()`。我顺着代码复核了整条链，和 `:946-949` 已有的那句"语义是**每次绑定一行**"对得上 ⇒ 一节 45 分钟的课里额度按重绑次数回满，不是每轮绑定一次。**但这条只到"代码推得出来"这一档**：装机 ≥8,250 帧里停用/恢复/`onFailure` 一行都没有，它自己的判据是帧号 166/166 都满足 N==M（窗口内从没重绑）。⇒ 记**仅 JVM/代码证据**，真机上"停用⇒恢复翻面"这条活路兑现不兑现仍是 **#98 必问**。
+
+**门禁（我在 `e85281b` 上跑的干净全量，与代理读数一字不差）**：**1,660 tests / 194 suites / 0 失败 / 0 skipped**、lint 0 错 14 警（9 个 id，基线未动）、签名包 **7,247,110 B**（对 T91 的 7,247,109 是 **+1 B ⇒ 带内，读作"没有可测增量"**）。⇒ 地板仍是 **1,660 / 194 / 7,247,110**。
+
+**明留**：
+- **#140（我记的，它没提，是这张卡方法论的漏网）**：那段新文本把"每帧空转 ≈0.63 核·秒"按空闲档重折成 **≈0.22** —— **分母换了档、分子没换**。分子还是 T67 那枚 162.8–183.8 % of one core，而**那枚读数本身就是在 2.80 那一档量的**；"CPU 占用那半按墙上时间记、不随速率变"是**推断**。争用档下 app 自己的核占用多半一起掉 ⇒ 0.22 恰好是把两个条件的读数拼在一处，正是这张卡要收的那类错。归下一张动这颗内核的卡（要么同场再量一枚 %CPU，要么把那句改成"未在同一条件复核"）。
+- 它自报的另一条明留**我复核后不成立**：`ScanDecodingAdmission.kt:128-135` 那句"约每 18 秒一行"**并不是一枚裸数** —— 原文同时给了 8.10 帧/秒⇒约每 6 秒与 2.80⇒约每 18 秒，并写明"两个极端都读得到"。⇒ 已经是 T92② 要求的形状，不用返工。
+- `markBindStarted` 在主线程写 `secondEngineLedger`，而 `:993` 声明"它是分析线程的单写者" —— 这个跨线程形状至今没人量（要动账本先立纪律，和 T91 留的那条是同一笔）。
+- 产物层（release apk / mapping）那两类输入**故意留在洞外**，靠门禁顺序与"跳过数记在册"兜着。
