@@ -5,9 +5,12 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.buaa.schedule.data.import.IClassApi
+import com.buaa.schedule.data.import.IClassSession
+import com.buaa.schedule.data.import.ScanTarget
+import com.buaa.schedule.data.import.ScanTargetParser
 import com.buaa.schedule.data.import.SpocApi
 import com.buaa.schedule.data.import.SpocCredential
-import com.buaa.schedule.data.import.SpocQrParser
 import com.buaa.schedule.data.import.SpocSession
 import com.buaa.schedule.data.import.SpocSessionExpiredException
 import com.buaa.schedule.data.import.SpocSignTarget
@@ -18,15 +21,24 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 
 /**
+ * 这一次签到属于哪一族平台。
+ *
+ * 存在的理由只有一条：失败卡上那颗「去登录」必须把用户送到**对的**登录页。
+ * 送错了不是"白跑一趟"，而是第四条静默死路 —— 用户在 iClass 那条链上没登录，
+ * 却被丢进一个只需要 WebView 走完 CAS 的页面，页面里没有一个字段是这条链要的。
+ */
+enum class SignInPlatform { Spoc, IClass }
+
+/**
  * 一次扫码签到的进程状态。
  *
- * 没有单独画 `Parsing`：[SpocQrParser.parse] 是同步纯函数，纳秒级完成，
+ * 没有单独画 `Parsing`：[ScanTargetParser.parse] 是同步纯函数，纳秒级完成，
  * 给它一个状态只会让界面多闪一帧看不见的中间态。
  */
 sealed interface SignInState {
     data object Idle : SignInState
 
-    /** 二维码里只有 `qdid`，正在查签到详情换 `zjdm/czid` */
+    /** 二维码里只有 `qdid`，正在查签到详情换 `zjdm/czid`（只有 SPOC 这一族有这一步） */
     data object Resolving : SignInState
 
     data object Submitting : SignInState
@@ -37,12 +49,24 @@ sealed interface SignInState {
      */
     data class Signed(val timeText: String, val alreadySigned: Boolean) : SignInState
 
-    /** @param relogin true 表示服务端已经认不得这次的凭证，界面该给「去登录」出口 */
-    data class Failed(val reason: String, val relogin: Boolean) : SignInState
+    /**
+     * @param relogin true 表示服务端已经认不得这次的凭证，界面该给「去登录」出口
+     * @param platform 这个出口要通向哪一族的登录页（[SignInPlatform] 的类注释写了送错的代价）
+     */
+    data class Failed(
+        val reason: String,
+        val relogin: Boolean,
+        val platform: SignInPlatform = SignInPlatform.Spoc,
+    ) : SignInState
 }
 
 /**
  * 扫码签到状态机（扫到即提交，没有二次确认页 —— 这是已定决策）。
+ *
+ * 两族平台在这一颗状态机里**并存**（T84）：[ScanTargetParser] 先分出 iClass 与 SPOC，
+ * 再各走各的会话与提交形状。为什么不像 SPOC 那样"解析出字段再提交"——
+ * iClass 那张码是滚动码，提交的**全部信息**就是那条 URL 本身（外加 `&id=`），
+ * 拆开来重组就成另一条请求了，见 [com.buaa.schedule.data.import.IClassSignUrl]。
  *
  * 他班的码本地不拦：能不能签由服务端判定，界面只如实回显它给的原因。这样做的代价是
  * 「签错班」这件事永远不可能由本地预防，好处是二维码格式一变（换个字段名、多一层壳）
@@ -51,6 +75,8 @@ sealed interface SignInState {
 class SignInViewModel(application: Application) : AndroidViewModel(application) {
 
     private val api = SpocApi()
+
+    private val iClassApi = IClassApi()
 
     private val _state = MutableStateFlow<SignInState>(SignInState.Idle)
     val state: StateFlow<SignInState> = _state.asStateFlow()
@@ -74,30 +100,66 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
     /** @param raw 扫码得到的原文 —— 相机实时解码与相册识图两条路共用这一个入口（手输入口已删除） */
     fun signIn(raw: String) {
         if (flight.value) return
-        val target = SpocQrParser.parse(raw)
+        val target = ScanTargetParser.parse(raw)
         if (target == null) {
-            _state.value = SignInState.Failed("这不是一张智学北航的签到码", relogin = false)
+            _state.value = SignInState.Failed("这不是一张北航课堂签到码（智学北航与 iClass 都不认）", relogin = false)
             return
         }
         flight.value = true
         viewModelScope.launch {
             try {
-                val credential = SpocSession.authorized()
-                if (credential == null) {
-                    _state.value = SignInState.Failed(
-                        if (SpocSession.hasSession()) "登录已失效，请重新登录智学北航"
-                        else "还没有登录智学北航",
-                        relogin = true,
-                    )
-                    return@launch
-                }
                 when (target) {
-                    is SpocSignTarget.ByCourse -> submit(target.zjdm, target.czid, credential)
-                    is SpocSignTarget.ByQdid -> resolve(target.qdid, credential)
+                    is ScanTarget.IClass -> submitToIClass(target)
+                    is ScanTarget.Spoc -> signInViaSpoc(target.target)
                 }
             } finally {
                 flight.value = false
             }
+        }
+    }
+
+    /**
+     * iClass（竞业达轻新课堂）那一族：一次 GET，参数就是扫码原文加一枚 `id`。
+     *
+     * 没有会话时**必须**走到登录页：这一族的登录页是账号口令表单，与 SPOC 的 WebView CAS
+     * 是两条完全不同的路，静默失败就是把用户留在一张"签不上"的码前面反复扫。
+     * 这里也不写"有会话但读不出来"那一档 —— iClass 的 `authorized()` 就是读盘那一句，
+     * 两种说法在事实上同形，写两条就是给界面留一条永不成立的分支。
+     */
+    private suspend fun submitToIClass(target: ScanTarget.IClass) {
+        val userId = IClassSession.authorized()
+        if (userId == null) {
+            _state.value = SignInState.Failed(
+                "还没有登录北航 iClass（轻新课堂）",
+                relogin = true,
+                platform = SignInPlatform.IClass,
+            )
+            return
+        }
+        _state.value = SignInState.Submitting
+        // 成功回执里没有一个我们取到过证的时间字段 ⇒ 时间按本地给（口径与 SPOC 那条一致，
+        // 见 SignInState.Signed 的 KDoc），而"签成了"这一句由 stuSignStatus 担保（见 IClassApi）
+        iClassApi.signIn(target.rawUrl, userId)
+            .onSuccess {
+                _state.value = SignInState.Signed(java.time.LocalDateTime.now().format(TIME_FORMAT), alreadySigned = false)
+            }
+            .onFailure { fail(it, SignInPlatform.IClass) }
+    }
+
+    /** 智学北航（SPOC）那一族：收割 token → 必要时先查详情 → 提交 */
+    private suspend fun signInViaSpoc(target: SpocSignTarget) {
+        val credential = SpocSession.authorized()
+        if (credential == null) {
+            _state.value = SignInState.Failed(
+                if (SpocSession.hasSession()) "登录已失效，请重新登录智学北航"
+                else "还没有登录智学北航",
+                relogin = true,
+            )
+            return
+        }
+        when (target) {
+            is SpocSignTarget.ByCourse -> submit(target.zjdm, target.czid, credential)
+            is SpocSignTarget.ByQdid -> resolve(target.qdid, credential)
         }
     }
 
@@ -189,12 +251,13 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
         }.onFailure { fail(it) }
     }
 
-    private fun fail(error: Throwable) {
+    private fun fail(error: Throwable, platform: SignInPlatform = SignInPlatform.Spoc) {
         _state.value = if (error is SpocSessionExpiredException) {
-            SignInState.Failed(error.message ?: "登录已失效", relogin = true)
+            SignInState.Failed(error.message ?: "登录已失效", relogin = true, platform = platform)
         } else {
-            // 服务端拒绝他班的码时给的是中文原因，直接透传，不要包一层"签到失败"把信息吃掉
-            SignInState.Failed(error.message ?: "网络异常，请稍后重试", relogin = false)
+            // 服务端拒绝时给的是中文原因，直接透传，不要包一层"签到失败"把信息吃掉
+            // （iClass 那一族的 ERRMSG 我们一条都没取证到，加工一个字就是编话）
+            SignInState.Failed(error.message ?: "网络异常，请稍后重试", relogin = false, platform = platform)
         }
     }
 

@@ -113,8 +113,8 @@ import kotlin.coroutines.resume
 @Composable
 fun SpocScanScreen(
     onBack: () -> Unit,
-    /** 凭证失效时把用户送去登录页 */
-    onNeedLogin: () -> Unit,
+    /** 凭证失效时把用户送去登录页；**哪一族的**登录页由失败卡自己带（两族并存，见 [SignInPlatform]） */
+    onNeedLogin: (SignInPlatform) -> Unit,
     viewModel: SignInViewModel = viewModel(
         factory = SignInViewModel.Factory(
             LocalContext.current.applicationContext as android.app.Application,
@@ -729,7 +729,9 @@ fun SpocScanScreen(
                                 .weight(1f)
                                 .defaultMinSize(minHeight = DesignTokens.minTouchTarget)
                             if (s.relogin) {
-                                Button(onClick = onNeedLogin, modifier = cardAction) { Text("去登录") }
+                                // 平台由这张卡带：iClass 的登录页是账号口令，SPOC 的是 WebView CAS，
+                                // 送错一族等于把用户丢进一个这一族根本不需要填的页面（第四条静默死路）
+                                Button(onClick = { onNeedLogin(s.platform) }, modifier = cardAction) { Text("去登录") }
                             }
                             TextButton(
                                 onClick = { viewModel.reset() },

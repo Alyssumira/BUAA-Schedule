@@ -107,6 +107,7 @@ import com.buaa.schedule.ui.settings.SettingsScreen
 import com.buaa.schedule.ui.signin.ScanChainWarmUp
 import com.buaa.schedule.ui.signin.SpocLoginScreen
 import com.buaa.schedule.ui.signin.SpocScanScreen
+import com.buaa.schedule.ui.signin.iclass.IClassLoginScreen
 import com.buaa.schedule.ui.stats.StatsScreen
 import com.buaa.schedule.widget.WidgetNavigation
 import com.buaa.schedule.core.openExternalUrl
@@ -756,13 +757,26 @@ private fun AppNavHost(
             }
         }
     }
-    // 首页加号与设置页共用一条入口：没有 token 时扫码必然失败，先进登录页，
+    // 首页加号与设置页共用一条入口：没有凭证时扫码必然失败，先进登录页，
     // 登录页成功后自己 popUpTo 换成扫码页。两处各写一份判断迟早会走岔。
+    // T84 起两族平台并存（智学北航 SPOC / 北航 iClass），**任意一族**有会话就进扫码页：
+    // 扫码页自己按码分流，另一族没登录时会在那一刻把用户送去对应的登录页（失败卡上那颗
+    // 「去登录」带平台，见 SignInPlatform）。这里不改成"只看 iClass"，那是 T85 的活。
     val openSpocSignIn: () -> Unit = {
         navController.navigate(
-            if (com.buaa.schedule.data.import.SpocSession.hasSession()) "spoc_scan" else "spoc_login",
+            if (com.buaa.schedule.data.import.SpocSession.hasSession() ||
+                com.buaa.schedule.data.import.IClassSession.hasSession()
+            ) {
+                "spoc_scan"
+            } else {
+                "spoc_login"
+            },
         )
     }
+    // iClass 那一族的登录页入口（设置页那一行、以及扫码页失败卡都走它）。
+    // 它不做"已登录就不进"的判断：这一页本身就是重登一次的地方 —— 存储里那枚 id 失效时，
+    // 这是用户唯一的活路，挡在门外就成了第四条静默死路。
+    val openIClassSignIn: () -> Unit = { navController.navigate("iclass_login") }
     // 设置页这一族跳转回调只在这里构造一次（理由同上 openSpocSignIn：两处各写一份迟早走岔）。
     // SettingsScreen 的这些回调全都带 `= {}` 默认值，而它在根界面与 settings/{section} 子页
     // 各有一次调用点：任何一处漏传一个，那一行点击就是静默 no-op —— 编译不报错、
@@ -934,7 +948,28 @@ private fun AppNavHost(
             CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
                 SpocScanScreen(
                     onBack = { navController.popBackStack() },
-                    onNeedLogin = { navController.navigate("spoc_login") },
+                    // 失败卡带着"是哪一族要登录"（两族并存，见 SignInPlatform）：
+                    // 送错一族就是把用户丢进一个这一族根本不需要填的页面
+                    onNeedLogin = { platform ->
+                        when (platform) {
+                            com.buaa.schedule.ui.signin.SignInPlatform.IClass -> navController.navigate("iclass_login")
+                            com.buaa.schedule.ui.signin.SignInPlatform.Spoc -> navController.navigate("spoc_login")
+                        }
+                    },
+                )
+            }
+        }
+        composable("iclass_login") {
+            CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+                IClassLoginScreen(
+                    onBack = { navController.popBackStack() },
+                    // 与 spoc_login 同一取舍：登完直接把登录页换成扫码页，
+                    // 留在栈里只会让「返回」把用户又丢回一个已经用完的表单
+                    onLoggedIn = {
+                        navController.navigate("spoc_scan") {
+                            popUpTo("iclass_login") { inclusive = true }
+                        }
+                    },
                 )
             }
         }
@@ -948,6 +983,7 @@ private fun AppNavHost(
                     onOpenSection = openSettingsSection,
                     onOpenCourseManagement = openCourseManagement,
                     onOpenSpocSignIn = openSpocSignIn,
+                    onOpenIClassSignIn = openIClassSignIn,
                     bottomBarVisible = bottomBarVisible,
                 )
             }
@@ -976,6 +1012,7 @@ private fun AppNavHost(
                     onOpenSection = openSettingsSection,
                     onOpenCourseManagement = openCourseManagement,
                     onOpenSpocSignIn = openSpocSignIn,
+                    onOpenIClassSignIn = openIClassSignIn,
                 )
             }
         }

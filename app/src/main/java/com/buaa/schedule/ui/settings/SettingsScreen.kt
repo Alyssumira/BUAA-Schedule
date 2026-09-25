@@ -98,6 +98,7 @@ import com.buaa.schedule.domain.model.TimeSlotProfile
 import com.buaa.schedule.domain.schedule.CourseConstraints
 import com.buaa.schedule.domain.schedule.SmartPeriods
 import com.buaa.schedule.domain.schedule.isValidTimeSlot
+import com.buaa.schedule.data.import.IClassSession
 import com.buaa.schedule.data.import.SpocSession
 import com.buaa.schedule.reminder.ReminderNotifications
 import com.buaa.schedule.reminder.ReminderReceiver
@@ -182,6 +183,13 @@ fun SettingsScreen(
      * 有守卫钉着：`SpocSignInEntryWiringGuardTest`。
      */
     onOpenSpocSignIn: () -> Unit,
+    /**
+     * 通往北航 iClass（轻新课堂）登录页的那一行（T84 接上真实平台之后才有意义）。
+     *
+     * 同样**不许有 `= {}` 默认值**（理由与上面那颗一字不差：默认值挂在真入口上，
+     * 漏接线时编译器不响、那一行永远点不动）。
+     */
+    onOpenIClassSignIn: () -> Unit,
     /** 手机端悬浮玻璃底栏是否在本页显示：显示时滚动内容要在底部让位 */
     bottomBarVisible: Boolean = false,
     viewModel: ScheduleViewModel = viewModel(
@@ -279,6 +287,10 @@ fun SettingsScreen(
     // 是可变状态而不是快照，因为「退出登录」要在原地把它翻回未登录。
     var spocSignedIn by remember(permissionResumeTick) {
         mutableStateOf(SpocSession.hasSession())
+    }
+    // iClass 那一族（T84）跟着同一个 tick 重读：从它的登录页返回时本页不重组，只走一次 ON_RESUME
+    var iclassSignedIn by remember(permissionResumeTick) {
+        mutableStateOf(IClassSession.hasSession())
     }
 
     var darkModePref by remember { mutableStateOf(com.buaa.schedule.DarkModePreference.load(prefs)) }
@@ -1329,6 +1341,38 @@ fun SettingsScreen(
                     onClick = {
                         SpocSession.clear()
                         spocSignedIn = false
+                    },
+                )
+            }
+            item(key = "iclass_account") {
+                SettingsRow(
+                    title = if (iclassSignedIn) "已登录北航 iClass" else "未登录北航 iClass",
+                    summary = if (iclassSignedIn) {
+                        "课堂上扫的那张码（轻新课堂）用的 id 只存在本机加密存储里，不随备份迁移"
+                    } else {
+                        "老师投的那张码属于这一族：登一次即可，之后签到只用到服务端回传的 id"
+                    },
+                    showChevron = true,
+                    onClick = onOpenIClassSignIn,
+                    trailing = {
+                        Text(
+                            text = if (iclassSignedIn) "正常" else "去登录",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (iclassSignedIn) MaterialTheme.colorScheme.onSurfaceVariant
+                            else MaterialTheme.colorScheme.error,
+                        )
+                    },
+                )
+            }
+            // 清凭证这一档必须摆在界面上：存储里那枚 id 一旦失效（换号、服务端重排），
+            // 这是唯一的活路 —— 找不到它的人只会反复扫同一张码
+            item(key = "iclass_logout", visible = iclassSignedIn) {
+                SettingsRow(
+                    title = "退出北航 iClass 登录",
+                    summary = "只清 iClass 的 id，智学北航与教务那边的登录态都不受影响",
+                    onClick = {
+                        IClassSession.clear()
+                        iclassSignedIn = false
                     },
                 )
             }
