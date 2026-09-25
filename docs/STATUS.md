@@ -2529,3 +2529,48 @@ lint 0 错 14 警、签名包 **7,247,271 B**（对 7,246,225 是 **+1,046 B**�
 `frameSymbolCounts` 里最大候选框只跟候选数、readable 那一支 `continue` 掉框，是**改前就有的形状**，本卡原样保留；
 送帧率又添两个读数（**9.17 / 8.53**，与 T87 的 8.10/8.90 同档）⇒ `ScanFrameFlowPolicy.kt:19-21` 那句"2.80 帧/秒"
 现在差 **3.1–3.3 倍**，归 **#133 / T89**；探针 `T88PROBE` 已还原（`grep` = 0、`git status` = 0 行）。
+
+## T90：提示栏不许对没有码的画面宣称看见了码（`abfd38c`，2 枚 / 7 文件 +669 / −22）——动手前先量"分不分得开"
+
+**接手事实**：这支也撞了 150 回合上限，但**两枚 commit 都在 ref 上、工作树干净**，断在**门禁与装机那两步**（partial result 逐字是
+"Both reverse cells went red and the tree is restored. Now the real gate (⑤)"）⇒ 我把 ⑤ 和 ④ 替他跑完。
+（连着四支撞上限：T83 有 commit、T85 零 commit、T88 正常交回、T90 有 commit 缺验证 ⇒ **结局随机，"每完成一档立刻 commit"是硬纪律**。）
+
+**① 的答案是"不能分开"，而且是一组对照实验给的**（逐字段读数留在 `ScanFrameAidWordingWiringGuardTest` 的 KDoc 里）：
+`javap com.google.mlkit.vision.barcode.common.Barcode`（bundled `barcode-scanning-common:17.0.0`）的公开面只有
+`format / valueType / boundingBox / cornerPoints / rawValue / displayValue / rawBytes` 加那些**按原文解出来**的子结构
+（Url/Email/Phone/Sms/WiFi/Geo/Calendar/Contact/DriverLicense）——**没有置信度、没有质量分、没有"这枚解开了没"的标志位**。
+装机实读三种"没解开"的形状**逐字段同形**，只有框的大小不同：
+
+| 送进 scanner 的东西 | `format` | `valueType` | `rawLen` | 框短边 |
+| --- | --- | --- | --- | --- |
+| 相机虚拟场景（每帧都误检） | `-1` | `0` | `0` | 284..303 |
+| 真码、高斯 σ=6 糊到 zxing-cpp 也解不开 | `-1` | `0` | `0` | 413 |
+| 真码、缩到 40×40（真"小到解不出来"） | `-1` | `0` | `0` | **38（比误检还小一个数量级）** |
+| 真码、清晰（108 字符 iClass 形状，对照组） | `256` | `8` | `108` | 411 |
+
+⇒ `format` 不是真假信号、只是"解没解开"的信号；`rawValue` 在两种"没解开"里都交回**空串而不是 null**，
+所以连 `DecodingBlankness` 里 `NoText` / `EmptyText` 那一格分别都当不了分界（本来这是唯一可能省掉证据位的写法）。
+
+**于是措辞只做一件事：把断语降级、把建议留下**（`ui/signin/ScanUiStatus.kt:167-181`，新增参数 `readableCodeSeen`
+= 本轮绑定里准入判据 `admitted` 曾经为真，设备侧事实由调用点传入）：
+- 读出过有内容的原文 → 原句照旧（`看见二维码了，但一时解不开：请拿稳对准它，或换一张更清晰的码。`）；
+- 没读出过 → `还没扫出内容：请把手机拿稳对准要扫的码，或换一张更清晰的码。`
+三条纪律写进 KDoc，其中两条正是**不要走的回头路**：不许改成"这里没有码"（同样在断言拿不到证据的事）、
+不许把这两档整体映射成 `null`（拿"什么都不说"换"说错话"，用户对着糊码再没有指引 ⇒ 另一条静默死路，`ScanUiStatusTest` ⑨a 钉着两档都必须说话）。
+
+**它驳回了卡面一条事实错误，我写错的**：我在卡里说「`ScanSecondEngineWiringGuardTest` 本卡不该碰到，碰到就是改法走偏」。
+实际上 `ScanUiStatus.kt` **本来就是那颗守卫 ④e 逐字节钉的文件之一**（改前那行是 `listOf(STATUS_FILE, PROBE_FILE, WARM_UP_FILE, RECOVERY_FILE, GATE_FILE)`），
+⇒ 动提示栏必然要一起重钉。它的重钉形状值得抄：**"挖掉被授权改动的那一段之后再逐字节比"**，锚点找不到就抛（不退化成"没比也算过"）、
+段长不在 500..9,000 也抛（钉法漂了会响）、外加一枚靶子断言"被挖掉那一段确实还在"（防止把整份文件挖空来骗过"挖掉"）。
+`ScanBlankDecodingWiringGuardTest`（T87）与 `ScanFrameObservationWiringGuardTest`（T88）两处同口径一起改掉了。
+
+**门禁（我在 `abfd38c` 上跑的干净全量，T90 自己没跑）**：**1,658 tests / 194 suites / 0 失败 / 0 skipped**、lint 0 错 14 警、
+签名包 **7,247,098 B**。对 7,247,271 是 **−173 B ⇒ 落在我自己记录的那条 ±319 B 全量非确定性带内，只能读作"没有可测增量"**
+（这一档加了两枚字符串，字节数反而小，正说明单档小包体差值不该归因到代码上）。⇒ **地板现在是 1,658 / 194 / 7,247,098。**
+
+**装机 ④ 我替他补的**（`lastUpdateTime=2026-09-25 11:23:14` GMT，`firstInstallTime` 未变 ⇒ 全程 `install -r`、没卸过机）：
+提示栏逐字读到 **`还没扫出内容：请把手机拿稳对准要扫的码，或换一张更清晰的码。`**；页面文本节点只有
+`返回 / 扫码签到 / 相册识别` + 那一句，`看见二维码了` 与失败卡都 **0 命中**；
+`ScanSignInParse` 仍 0 条（T87 未回退）、`第二引擎补解没解出` 仍有 **3 行**（T88 那条兜底链没被措辞改动弄哑）。
+⚠️ 反向一格欠着：**"读出过有内容原文"那一格**这台 AVD 给不出（相机侧每帧都空、Picker 不能无人驱动）⇒ 那一格只有 JVM 证据。
