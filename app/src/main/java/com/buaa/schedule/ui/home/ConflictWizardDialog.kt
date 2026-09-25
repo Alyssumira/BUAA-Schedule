@@ -22,13 +22,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewModelScope
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.domain.model.Course
+import com.buaa.schedule.domain.model.CourseSaveOptions
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.joinMeta
 import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.model.weekdayLabel
 import com.buaa.schedule.domain.schedule.CourseConflictResolution
+import com.buaa.schedule.ui.ScheduleViewModel
 import kotlinx.coroutines.launch
 
 /**
@@ -54,11 +57,44 @@ private fun CourseConflictResolution.ConflictGroup.stableKey(): String = buildSt
 private fun Course.wizardKey(): String = if (id != 0L) id.toString() else "n:$name"
 
 /**
+ * 「只改这些周」那一次落库，**首页与统计页共用这一份**（T82）。
+ *
+ * 抽出来的理由是这条链上有两处一旦写错就静默的账：
+ * - 作用域必须是 `viewModelScope`，不能用 `rememberCoroutineScope()`：后者绑在对话框这次
+ *   composition 上，用户点完「只改这些周」顺手划走对话框，协程就被取消 ——
+ *   界面已经显示「已应用」，库里其实没写（P1）。统计页那一枚对话框同样会被人随手划走，
+ *   所以它不能再抄一遍这段（抄漏这一条正是最难查的那种漏）。
+ * - `join` 而非 fire-and-forget：调用方要拿到落库结果才能决定这一行是标成「已应用」
+ *   还是把按钮还原让用户重试。join 只等完成、不传播取消，所以对话框关了也不会打断写入。
+ * - 写的是 [CourseSaveOptions.partialWeeks]：只改冲突的那几周，其余周保持原排课。
+ *
+ * @return true = 确实写进了库（`updateCourse` 返回了最终行 id）
+ */
+suspend fun applyConflictShift(
+    viewModel: ScheduleViewModel,
+    target: Course,
+    newPeriods: List<Int>,
+): Boolean {
+    var saved = false
+    val job = viewModel.viewModelScope.launch {
+        saved = viewModel.updateCourse(
+            target.copy(periods = newPeriods),
+            CourseSaveOptions(partialWeeks = true),
+        ) != null
+    }
+    job.join()
+    return saved
+}
+
+/**
  * 冲突处理向导。
  *
  * 只做「建议 + 一键应用」，不做复杂拖拽：建议来自
  * [CourseConflictResolution.suggestNearestFreeShift]（同一天内最近空位，
  * 保持节次数量不变），落库走 partialWeeks——只改冲突周次，其余周不动。
+ *
+ * T82 起统计页也挂这一枚（同一个 composable、同一份 [applyConflictShift]）：
+ * 冲突的处置 UI 全站只有这一套，两页只是入口不同。
  */
 @Composable
 fun ConflictWizardDialog(

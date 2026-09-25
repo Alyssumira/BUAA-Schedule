@@ -86,7 +86,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlin.math.ceil
-import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.EmptyState
@@ -365,6 +364,13 @@ fun HomeScreen(
     // 而且每次重组都重算。这里派生为一个 remember 值，两个分支共用同一份。
     val conflictCourseIds: Set<Long> = remember(state.conflicts) {
         state.conflicts.flatMap { listOf(it.first.id, it.second.id) }.toSet()
+    }
+    // 冲突**归并成组**的结果，一条横幅与一枚向导共用（T82）。
+    // 改前横幅那句念的是 `state.conflicts.size` —— 那是两两配对的条数：三门课在同一格
+    // 互相撞会给出 3 条配对，而归并后是 1 组，于是横幅说「3 组」、点开的向导里只有一档。
+    // 统计页那一块（T82）念的是这里的同一枚 size，两页才是同一个数。
+    val conflictGroups = remember(state.conflicts) {
+        com.buaa.schedule.domain.schedule.CourseConflictResolution.groupConflicts(state.conflicts)
     }
 
     // 周次异动摘要（③C-02）：周次此前在课表界面完全不可见，单周课、只上到第 8 周的课
@@ -669,7 +675,7 @@ fun HomeScreen(
                         ) { showConflictWizard = true },
                 ) {
                     Text(
-                        text = "存在 ${state.conflicts.size} 组课程时间冲突，点这里按建议处理。",
+                        text = "存在 ${conflictGroups.size} 组课程时间冲突，点这里按建议处理。",
                         style = MaterialTheme.typography.bodyMedium,
                         // 卡位只声明意图（这张卡是 error），底板与文字成对由 GlassSurface 解
                         color = LocalSemanticPlate.current?.foreground
@@ -805,29 +811,13 @@ fun HomeScreen(
 
         ModalTransition(open = showConflictWizard) { modal ->
             ConflictWizardDialog(
-                groups = com.buaa.schedule.domain.schedule.CourseConflictResolution
-                    .groupConflicts(state.conflicts),
+                groups = conflictGroups,
                 allCourses = state.courses,
                 timeSlots = state.timeSlots,
                 modifier = modal,
-                onApplyShift = { target, newPeriods ->
-                    // 只改冲突周：partialWeeks 会拆出新行，其余周保持原排课。
-                    // 作用域必须是 viewModelScope，不能用 rememberCoroutineScope()：
-                    // 后者绑在对话框这次 composition 上，用户点完「只改这些周」顺手划走
-                    // 对话框，协程就被取消——界面已经显示「已应用」，库里其实没写（P1）。
-                    var saved = false
-                    val job = viewModel.viewModelScope.launch {
-                        saved = viewModel.updateCourse(
-                            target.copy(periods = newPeriods),
-                            com.buaa.schedule.domain.model.CourseSaveOptions(partialWeeks = true),
-                        ) != null
-                    }
-                    // join 而非 fire-and-forget：调用方要拿到落库结果才能决定
-                    // 这一行是标成「已应用」还是把按钮还原让用户重试。
-                    // join 只等完成、不传播取消，所以对话框关了也不会打断写入。
-                    job.join()
-                    saved
-                },
+                // 落库那一步在 applyConflictShift 里（与统计页那一枚共用一份，T82）：
+                // viewModelScope + join + partialWeeks 三条账都在那一处，这里不再抄一遍
+                onApplyShift = { target, newPeriods -> applyConflictShift(viewModel, target, newPeriods) },
                 onDismiss = { showConflictWizard = false },
             )
         }
