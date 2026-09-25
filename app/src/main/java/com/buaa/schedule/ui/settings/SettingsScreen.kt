@@ -99,7 +99,6 @@ import com.buaa.schedule.domain.schedule.CourseConstraints
 import com.buaa.schedule.domain.schedule.SmartPeriods
 import com.buaa.schedule.domain.schedule.isValidTimeSlot
 import com.buaa.schedule.data.import.IClassSession
-import com.buaa.schedule.data.import.SpocSession
 import com.buaa.schedule.reminder.ReminderNotifications
 import com.buaa.schedule.reminder.ReminderReceiver
 import com.buaa.schedule.reminder.IslandDiagnostics
@@ -175,19 +174,13 @@ fun SettingsScreen(
     /** 通往「课表管理」的通路（①A-02）：不改底栏，只在设置里补一条入口 */
     onOpenCourseManagement: () -> Unit = {},
     /**
-     * 通往智学北航的登录/扫码页：签到开关不开账户入口的话，用户看完说明只能回首页找加号。
+     * 通往北航 iClass（轻新课堂）登录页的那一行（T84 接上真实平台、T85 拆掉智学北航之后，
+     * 它是全仓唯一一条签到账号行）。
      *
      * ⚠️ 这一颗**不许有 `= {}` 默认值**（T59④ 拆掉的就是它）。这一族回调里其余几颗带着默认值，
      * 那是"可选入口"的写法；而默认值一旦挂在真入口上，接线被漏掉时编译器不响、界面照旧画得出，
      * 那一行设置项就永远点不动 —— 本仓的「学期统计」入口静默 no-op（T41）栽的就是这个。
-     * 有守卫钉着：`SpocSignInEntryWiringGuardTest`。
-     */
-    onOpenSpocSignIn: () -> Unit,
-    /**
-     * 通往北航 iClass（轻新课堂）登录页的那一行（T84 接上真实平台之后才有意义）。
-     *
-     * 同样**不许有 `= {}` 默认值**（理由与上面那颗一字不差：默认值挂在真入口上，
-     * 漏接线时编译器不响、那一行永远点不动）。
+     * 有守卫钉着：`SignInEntryWiringGuardTest` / `IClassSignInWiringGuardTest`。
      */
     onOpenIClassSignIn: () -> Unit,
     /** 手机端悬浮玻璃底栏是否在本页显示：显示时滚动内容要在底部让位 */
@@ -283,12 +276,9 @@ fun SettingsScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // 登录态跟着上面那个 tick 重读：从 SPOC 登录页返回时本页不重组，只走一次 ON_RESUME。
+    // 登录态跟着上面那个 tick 重读：从 iClass 登录页返回时本页不重组，只走一次 ON_RESUME。
     // 是可变状态而不是快照，因为「退出登录」要在原地把它翻回未登录。
-    var spocSignedIn by remember(permissionResumeTick) {
-        mutableStateOf(SpocSession.hasSession())
-    }
-    // iClass 那一族（T84）跟着同一个 tick 重读：从它的登录页返回时本页不重组，只走一次 ON_RESUME
+    // （T85 之前这里还有一位 `spocSignedIn` 与它同形，量的是智学北航那一族 —— 账号行连着状态一起拆了）
     var iclassSignedIn by remember(permissionResumeTick) {
         mutableStateOf(IClassSession.hasSession())
     }
@@ -1290,7 +1280,7 @@ fun SettingsScreen(
             }
 
             SettingsGroup(
-                title = "智学北航签到",
+                title = "课堂签到（北航 iClass）",
                 visibleWhen = section == SettingsSection.NOTIFICATION,
                 collapsible = true,
                 initiallyExpanded = true,
@@ -1298,52 +1288,26 @@ fun SettingsScreen(
             item(key = "toggle") {
                 var signHintEnabled by remember {
                     mutableStateOf(
-                        prefs.getBoolean(ReminderReceiver.PREF_SPOC_SIGN_HINT, false)
+                        prefs.getBoolean(ReminderReceiver.PREF_SIGN_HINT, false)
                     )
                 }
                 SettingsSwitchRow(
                     title = "课前提醒加「扫码签到」按钮",
                     summary = "在课程提醒的通知上放一个按钮，点一下直接进扫码页，不用回首页找加号。" +
-                        "到点仍需对着课堂上的二维码扫，应用不会替你签。",
+                        "到点仍需对着课堂上的二维码扫，应用不会替你签。" +
+                        "没登录北航 iClass 时那颗按钮不会出现（点进去也签不上）。",
                     checked = signHintEnabled,
                     onCheckedChange = {
                         signHintEnabled = it
                         // 接收器是在弹通知的那一刻才读这个键的，所以改完不用重排闹钟，
                         // 下一节课的提醒就按新状态来（反过来烘进 extras 就会晚一节课）
-                        prefs.edit { putBoolean(ReminderReceiver.PREF_SPOC_SIGN_HINT, it) }
+                        prefs.edit { putBoolean(ReminderReceiver.PREF_SIGN_HINT, it) }
                     },
                 )
             }
-            item(key = "account") {
-                SettingsRow(
-                    title = if (spocSignedIn) "已登录智学北航" else "未登录智学北航",
-                    summary = if (spocSignedIn) {
-                        "凭证只存在本机的加密存储里，不随备份迁移"
-                    } else {
-                        "签到要先有登录态。进登录页登一次，成功后直接落到扫码页"
-                    },
-                    showChevron = true,
-                    onClick = onOpenSpocSignIn,
-                    trailing = {
-                        Text(
-                            text = if (spocSignedIn) "正常" else "去登录",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (spocSignedIn) MaterialTheme.colorScheme.onSurfaceVariant
-                            else MaterialTheme.colorScheme.error,
-                        )
-                    },
-                )
-            }
-            item(key = "logout", visible = spocSignedIn) {
-                SettingsRow(
-                    title = "退出智学北航登录",
-                    summary = "只清签到用的凭证，教务系统的课表导入登录态不受影响",
-                    onClick = {
-                        SpocSession.clear()
-                        spocSignedIn = false
-                    },
-                )
-            }
+            // T85：这里从前有两条智学北航的行（「已登录/未登录智学北航」+「退出智学北航登录」），
+            // 连着 SpocSession 一起拆掉了。扫码入口不在这页上：它在首页加号菜单与课前提醒那颗按钮，
+            // 这一页只负责账号状态 —— 从前那两行做的事，现在由下面 iClass 那两行原样做着。
             item(key = "iclass_account") {
                 SettingsRow(
                     title = if (iclassSignedIn) "已登录北航 iClass" else "未登录北航 iClass",
@@ -1369,7 +1333,7 @@ fun SettingsScreen(
             item(key = "iclass_logout", visible = iclassSignedIn) {
                 SettingsRow(
                     title = "退出北航 iClass 登录",
-                    summary = "只清 iClass 的 id，智学北航与教务那边的登录态都不受影响",
+                    summary = "只清 iClass 的 id，教务那边的课表导入登录态不受影响",
                     onClick = {
                         IClassSession.clear()
                         iclassSignedIn = false

@@ -41,14 +41,14 @@ import com.buaa.schedule.data.import.IClassSession
 import kotlinx.coroutines.launch
 
 /**
- * 北航 iClass（竞业达「轻新课堂」）登录页。
+ * 北航 iClass（竞业达「轻新课堂」）登录页 —— T85 之后它是全仓**唯一**一条签到登录链。
  *
- * 与 [com.buaa.schedule.ui.signin.SpocLoginScreen] 是**两条不同的路**，不是同一页的两副面孔：
- * SPOC 的鉴权材料是一枚要由 CAS 跳转换来的 JWT，所以那边必须挂一个 WebView 走完跳转再收割
- * localStorage；iClass 这一族的登录接口就是一次 `POST app/user/login.action`，
- * 表单五件套（phone / password / verificationType / verificationUrl / userLevel），
- * 口令校验由服务端委托给学校的 `ve` 网关（常量与取证见
- * [com.buaa.schedule.data.import.IClassApi]）。这一页因此**没有 WebView**。
+ * 一次 `POST app/user/login.action`，表单五件套（phone / password / verificationType /
+ * verificationUrl / userLevel），口令校验由服务端委托给学校的 `ve` 网关（常量与取证见
+ * [com.buaa.schedule.data.import.IClassApi]）。这一页因此**没有 WebView** ——
+ * 从前同一目录里另有一页（智学北航那边）走的正是 WebView + CAS 跳转收割 localStorage 的路子，
+ * 两条路形状不同、要填的字段也不同，所以 T84 刻意没有把它们并成一页的两副面孔；
+ * T85 那条被整页拆掉了，"不许送错登录页"这条纪律现在由"根本没有第二页可送"来保证。
  *
  * 失败原因逐字来自服务端 ERRMSG：这一族的中文文案我们一条都没有取证到，
  * 加工一个字（"账号或密码错误"这种听上去很合理的猜测）就是编话。
@@ -58,9 +58,9 @@ import kotlinx.coroutines.launch
  * 明文躺在可读写目录里等于把账号交给任何拿到这台设备的人。这里刻意不照抄，
  * 所以下面也不做"记住口令/自动填充"那一类开关。
  *
- * 为什么这一页住在 `ui/signin` 的**子包**里：`SpocSignInEntryWiringGuardTest` ⑥ 禁的是
+ * 为什么这一页住在 `ui/signin` 的**子包**里：`SignInEntryWiringGuardTest` ⑥ 禁的是
  * 扫码目录里出现可敲字符的输入控件（那条按假想需求做的「手输签到码」入口不许回来），
- * 这一页收的是账号与口令 —— 它不是签到码输入口，而是 SPOC 那边 WebView 登录的对应物。
+ * 这一页收的是账号与口令 —— 它不是签到码输入口，而是一条登录表单。
  * 真要把这类表单页并回 `ui/signin`，得先把那条守卫的扫描范围一起改掉，别绕过去。
  */
 @Composable
@@ -174,7 +174,7 @@ fun IClassLoginScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    // 全屏页：先让出系统导航栏再叠页面内缩（与扫码页、SPOC 登录页同口径）
+                    // 全屏页：先让出系统导航栏再叠页面内缩（与扫码页同口径）
                     .navigationBarsPadding()
                     .padding(
                         start = DesignTokens.spaceL,
@@ -185,7 +185,7 @@ fun IClassLoginScreen(
                 Text(
                     text = statusText,
                     style = MaterialTheme.typography.bodySmall,
-                    // 成对取墨：染了 error 语义色时底板与文字一次解出（同 SPOC 登录页那处）
+                    // 成对取墨：染了 error 语义色时底板与文字一次解出（与扫码页那张失败卡同口径）
                     color = LocalSemanticPlate.current?.foreground
                         ?: MaterialTheme.colorScheme.onSurfaceVariant,
                 )

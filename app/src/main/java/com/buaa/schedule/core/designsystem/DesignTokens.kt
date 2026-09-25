@@ -313,7 +313,7 @@ object DesignTokens {
 
     /**
      * 全屏模态遮罩的压暗浓度（首次引导的覆盖层）。
-     * 之前 HomeScreen 裸写 0.55f，而 SpocScan 的半透明遮罩另写一套——两层遮罩浓度不一。
+     * 之前 HomeScreen 裸写 0.55f，而扫码页的半透明遮罩另写一套——两层遮罩浓度不一。
      */
     const val SCRIM_ALPHA = 0.55f
 

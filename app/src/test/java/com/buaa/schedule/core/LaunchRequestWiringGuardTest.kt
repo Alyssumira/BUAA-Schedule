@@ -200,8 +200,20 @@ class LaunchRequestWiringGuardTest {
         val activity = activity()
         val routable = Regex("""ROUTABLE_FROM_INTENT\s*=\s*setOf\(([^)]*)\)""").find(activity)
             ?: throw AssertionError("找不到 ROUTABLE_FROM_INTENT：白名单换写法了，本守卫要跟着改")
-        for (route in listOf("spoc_scan", "spoc_login")) {
+        // T85：名单从前有两枚（`spoc_scan` / `spoc_login`），后一枚跟着智学北航那条登录页一起拆了。
+        for (route in listOf("spoc_scan")) {
             assertTrue("白名单少了 $route（通知按钮点了会被内核拦回首页）：${routable.groupValues[1]}", routable.groupValues[1].contains("\"$route\""))
+        }
+        val listed = routable.groupValues[1].split(',').map { it.trim().trim('"') }.filter { it.isNotEmpty() }
+        assertEquals("白名单里的路由数不对（每一枚都要有真的生产者）：", listOf("spoc_scan"), listed)
+        // 反向那一半更要紧：名单里的每一枚都必须真的注册在 NavHost 上。消费方对名单内的值
+        // 直接 navigate，NavHost 认不出就抛 IllegalArgumentException —— 而带这枚 extra 进来的
+        // 可以是任何一台外部应用。删路由不删名单，就是自己给自己造一次远程崩溃。
+        for (route in listed) {
+            assertTrue(
+                "白名单里躺着 $route，NavHost 上却没这一条 composable：",
+                activity.contains("composable(\"$route\")"),
+            )
         }
     }
 

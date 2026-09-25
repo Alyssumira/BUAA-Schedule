@@ -126,7 +126,7 @@ fun HomeScreen(
     onAddCourse: () -> Unit,
     onImportBuaa: () -> Unit,
     onCourseManagement: () -> Unit,
-    /** 菜单里的「扫码签到」：智学北航课堂二维码 */
+    /** 菜单里的「扫码签到」：课堂上老师投的那张北航 iClass 码 */
     onSpocSignIn: () -> Unit,
     onCourseClick: (Course) -> Unit,
     /**

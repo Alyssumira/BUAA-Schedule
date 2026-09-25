@@ -11,8 +11,10 @@ package com.buaa.schedule.data.import
  * 这一族因此没有"先查详情再提交"那一步，解析器也不为它编造任何可延迟的语义。
  *
  * 三个门槛（host 精确 + 路由 + 带 `courseSchedId`）不是防御性偏执，而是"这张码归谁"的
- * 判据：iClass 与智学北航同在 `*.buaa.edu.cn` 下，任何一道松掉都会把别家的码打到这里、
- * 或把这里的码打给别家。判定与 [IClassSignUrl] 一样是纯 JVM、零 android import、零时钟读取
+ * 判据：`*.buaa.edu.cn` 下面住着的不止这一台（教务、智学北航、以及一批叫不出名字的系统），
+ * host 一松就会把别家的码打到这里、或把这里的码打给别家。T85 把智学北航那一族整条拆掉之后，
+ * 这道门槛从"两族之间的分界"变成了"本仓唯一一条链的入口"，判据一个字没改。
+ * 判定与 [IClassSignUrl] 一样是纯 JVM、零 android import、零时钟读取
  * （`timestamp` 只当参数名看，从不参与判断、也不与本地时间比较 —— 码过没过期由服务端判）。
  */
 object IClassQrParser {
@@ -89,17 +91,36 @@ object IClassQrParser {
      *
      * T83 起 `internal`：[ScanRejectClassifier] 判"参数齐不齐 / 值合不合形状"用的就是这两道
      * 门槛本身，不再抄一份取值逻辑。⚠️ 取到的值只许用来**判形状**，绝不许进日志或界面。
+     * T85 起切 query 那一刀收进 [queryPairs]：取值与念名字必须走同一把尺子。
      */
     internal fun queryValue(url: String, key: String): String? {
-        val query = url.substringBefore('#').substringAfter('?', "")
-        if (query.isEmpty()) return null
-        for (pair in query.split('&')) {
-            if (!pair.contains('=')) continue
-            if (pair.substringBefore('=').trim().lowercase() != key) continue
-            val value = pair.substringAfter('=').trim()
-            if (value.isNotEmpty()) return value
+        for ((name, value) in queryPairs(url)) {
+            if (name == key) return value
         }
         return null
+    }
+
+    /**
+     * 这条链接上**看得见的参数名**（小写、按出现次序、值为空的不算看见、同名只念一次）。
+     *
+     * 取证行与失败卡都念这一串。单独一颗而不用 [queryValue]：⚠️ "念名字"与"看见值"之间那道
+     * 界限一旦要靠调用方自觉，就早晚会有人把整个 query 拼进日志。
+     * 这一颗原先长在 `SpocQrParser` 里（判档那一边只有它用），T85 拆掉 SPOC 时跟着判据搬回来。
+     */
+    internal fun queryParamNames(url: String): List<String> = queryPairs(url).map { it.first }.distinct()
+
+    /** query 段里看得见的 `(名字, 值)` 对；值为空的直接不算看见（[queryValue] 与 [queryParamNames] 同源） */
+    private fun queryPairs(url: String): List<Pair<String, String>> {
+        val query = url.substringBefore('#').substringAfter('?', "")
+        if (query.isEmpty()) return emptyList()
+        val pairs = ArrayList<Pair<String, String>>()
+        for (pair in query.split('&')) {
+            if (!pair.contains('=')) continue
+            val name = pair.substringBefore('=').trim().lowercase()
+            val value = pair.substringAfter('=').trim()
+            if (name.isNotEmpty() && value.isNotEmpty()) pairs += name to value
+        }
+        return pairs
     }
 }
 

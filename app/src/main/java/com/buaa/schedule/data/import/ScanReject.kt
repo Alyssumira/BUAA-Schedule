@@ -1,14 +1,13 @@
 package com.buaa.schedule.data.import
 
 /**
- * 一张**没被两族收下**的码，到底死在哪一档（T83）。
+ * 一张**没被收下**的码，到底死在哪一档（T83）。
  *
  * 为什么非分档不可：[ScanTargetParser.parse] 只回 null，于是失败卡上只有一句话可说，
- * 而那一句在 T84 之后**已经是错的**（"这不是一张智学北航的签到码"—— 现在认两族了）。
- * 更要紧的是它把四件完全不同的事糊成一句：
+ * 而那一句话不管接几族都糊：
  *
  * 1. 根本不是一张码（一串文本、一张名片、空）；
- * 2. 是一张码，可它归别家（host 不在 iClass / `*.buaa.edu.cn` 这两道门槛上）；
+ * 2. 是一张码，可它归别家（host 不是 `iclass.buaa.edu.cn`，连 authority 都读不出来的畸形链接也算这里）；
  * 3. host 对，但这一族要的入口没对上 —— 路径不是学生扫码那条路由（[ScanRejectRung.WrongRoute]），
  *    或必填参数不齐（[ScanRejectRung.MissingParams]）；
  * 4. 参数名齐了，值却用不了 —— 形状不符（[ScanRejectRung.BadParamValue]），
@@ -18,20 +17,25 @@ package com.buaa.schedule.data.import
  * 1 说明第二站（解码器）交出来的压根不是链接（要改的是取景与解码那一段）。
  * 糊成一句，两边都在瞎判 —— 分档就是为了每一档各自说话。
  *
+ * ⚠️ **七档的形状与"几族"无关**（T85 拆掉智学北航那一族时这一条被反复问过）：
+ * 档位量的是链接形状 → host → 路由 → 参数齐备 → 值合法 → 是不是发过的请求，
+ * 一族也是这六问、两族也是这六问。T85 改口的只有**措辞里那几处"两族"**与 `族=` 的取值域，
+ * 一档没删一档没并 —— 收档容易（那是删判据），可每一档对应一种现场，删掉就等于那种现场没有话说了。
+ *
  * 纯度（仓库口径，与 [ScanTargetParser] 同一档，由 `ScanTargetParserTest` 的守卫钉住）：
- * 零 import、零 android、零时钟与设备读取。判"这一族收不收"用的是两族解析器自己那套门槛与常数
- * （[IClassQrParser] / [SpocQrParser] 的 internal 成员），并且**先问 [ScanTargetParser] 本人**，
+ * 零 import、零 android、零时钟与设备读取。判"这一族收不收"用的就是 [IClassQrParser] 自己那套
+ * 门槛与常数（internal 成员），并且**先问 [ScanTargetParser] 本人**，
  * 所以"收不收"与"为什么没收"长不成两本账 —— 全矩阵不变量在 `ScanRejectClassifierTest` 里钉着：
  * `classify(x).rung == Recognized ⟺ ScanTargetParser.parse(x) != null`。
  *
- * ⚠️ 值不外流：判形状当然要取值看（[IClassQrParser.queryValue] / [SpocQrParser.queryParams]），
+ * ⚠️ 值不外流：判形状当然要取值看（[IClassQrParser.queryValue]），
  * 但 [ScanRejectInfo] 里只有名字、长度与 host，三处措辞也都由这些字段拼出来。
  * 这一点不靠自觉：那张表里每一条输入的真实参数值，都不许出现在任何一条输出里（行为级断言）。
  */
 enum class ScanRejectRung {
 
     /**
-     * 两族的门槛其实都过了。
+     * 这一族的门槛其实都过了。
      *
      * 界面拿不到这一档（判据只在 `parse` 返回 null 之后才被问，见 [ScanTargetParser]），
      * 它是判据自身的**全函数**出口：直接拿一张真码问判据，答案必须是这一档，
@@ -39,10 +43,16 @@ enum class ScanRejectRung {
      */
     Recognized,
 
-    /** 不是一张码：既没有 http(s) 链接形状，也不带智学北航的签到路由片段 */
+    /**
+     * 不是一张码：既没有 http(s) 链接形状，也没有 host 可问。
+     *
+     * T85 起这一档比从前更宽一点：智学北航那一族认"只有路由片段"（`/pages/table/signIn?qdid=..`）
+     * 和"裸 32 位 ID"两种非链接形态，iClass 这条链上不存在这两种形态（提交就是那条 URL 本身），
+     * 所以那两类现在都落在这里。
+     */
     NotACode,
 
-    /** 有链接形状，但 host 不在两族的门槛上（含 authority 读不出来的畸形链接） */
+    /** 有链接形状，但 host 不是北航 iClass 那台服务器（含 authority 读不出来的畸形链接） */
     ForeignHost,
 
     /** host 是 iClass 的，路径却不落在学生扫码签到那条路由上（`stu_auto_sign.action` 那一族就落到这里） */
@@ -58,8 +68,8 @@ enum class ScanRejectRung {
     RequestUrlNotCode,
 }
 
-/** 这张码**看起来**归哪一族（按 host 与路由判，与两族解析器的门槛同一口径） */
-enum class ScanCodeFamily { IClass, Spoc, Foreign, None }
+/** 这张码**看起来**归谁（按 host 判，与 [IClassQrParser] 的 host 门槛同一口径；None = 连 host 都无从谈起） */
+enum class ScanCodeFamily { IClass, Foreign, None }
 
 /**
  * 一次拒绝的**形状**（没有一个字段装得下原文，也没有一个字段装得下参数值）。
@@ -99,21 +109,18 @@ object ScanRejectClassifier {
     fun classify(raw: String?): ScanRejectInfo {
         val shape = Shape(raw?.trim() ?: "")
         // 第一问先问解析器本人：收下了就没什么可解释的（这一句是全矩阵不变量的那一半）
-        when (ScanTargetParser.parse(shape.source)) {
-            is ScanTarget.IClass -> return infoOf(shape, ScanRejectRung.Recognized, ScanCodeFamily.IClass)
-            is ScanTarget.Spoc -> return infoOf(shape, ScanRejectRung.Recognized, ScanCodeFamily.Spoc)
-            null -> Unit
+        if (ScanTargetParser.parse(shape.source) != null) {
+            return infoOf(shape, ScanRejectRung.Recognized, ScanCodeFamily.IClass)
         }
         if (!shape.urlShaped) {
-            // 不是链接的两种处境：智学北航的路由片段（形态二，参数照判）与"就是一段文本"
-            if (shape.source.contains(SpocQrParser.SIGN_IN_ROUTE, ignoreCase = true)) return spocVerdict(shape)
+            // T85：这里从前还分两支 —— 智学北航认"只有路由片段"那种形态，落空才判"不是码"。
+            // 那一族的入口整条拆掉之后，非链接形状的东西确实一个字都用不上，就剩这一支。
             return infoOf(shape, ScanRejectRung.NotACode, ScanCodeFamily.None)
         }
         val host = shape.host
         // authority 读不出来（`user:pass@host`、端口位置放着非数字那一类）：连"哪台的码"都说不出
         if (host == null) return infoOf(shape, ScanRejectRung.ForeignHost, ScanCodeFamily.Foreign)
         if (host.equals(IClassSignUrl.HOST, ignoreCase = true)) return iclassVerdict(shape)
-        if (SpocQrParser.isSpocDomain(host)) return spocVerdict(shape)
         return infoOf(shape, ScanRejectRung.ForeignHost, ScanCodeFamily.Foreign)
     }
 
@@ -125,7 +132,14 @@ object ScanRejectClassifier {
             text.startsWith("http://", ignoreCase = true) || text.startsWith("https://", ignoreCase = true)
         val scheme: String? = if (urlShaped) urlSchemeOf(text) else null
         val path: String? = if (urlShaped) urlPathOf(text) else null
-        val names: List<String> = if (text.isEmpty()) emptyList() else SpocQrParser.queryParamNames(text)
+
+        /**
+         * 参数名只看 `#` 之前那一截 query —— 与 [IClassQrParser.queryParamNames] 同一刀，
+         * 也就是与收码那把尺子同一刀。
+         * T85 之前这里是两截都翻（`?...` 与 hash 路由自带的 `#/?...`）：那是智学北航那种
+         * uni-app H5 的入参放法，iClass 这条链上没有 hash 路由，跟着判据一起收进一颗函数里。
+         */
+        val names: List<String> = if (text.isEmpty()) emptyList() else IClassQrParser.queryParamNames(text)
         val host: String?
         val port: String?
 
@@ -139,7 +153,7 @@ object ScanRejectClassifier {
         }
     }
 
-    /** iClass 那一族的门槛，按 [IClassQrParser.parse] 的原次序一道道问过去 */
+    /** 这一族的门槛，按 [IClassQrParser.parse] 的原次序一道道问过去 */
     private fun iclassVerdict(shape: Shape): ScanRejectInfo {
         if (shape.path?.endsWith(IClassQrParser.SCAN_SIGN_ROUTE) != true) {
             return infoOf(shape, ScanRejectRung.WrongRoute, ScanCodeFamily.IClass)
@@ -164,27 +178,6 @@ object ScanRejectClassifier {
         return infoOf(shape, ScanRejectRung.Recognized, ScanCodeFamily.IClass)
     }
 
-    /**
-     * 智学北航那一族的门槛：要的是 `zjdm`+`czid` 这一对，或一个形状对的 `qdid`
-     * （[SpocQrParser] 的 `fromParams` 那两道，这里只把它们翻译成"缺哪一项 / 哪一项用不了"）。
-     */
-    private fun spocVerdict(shape: Shape): ScanRejectInfo {
-        val params = SpocQrParser.queryParams(shape.source)
-        val zjdm = params["zjdm"]
-        val czid = params["czid"]
-        if (params["qdid"] != null) {
-            // 名字在、值非空，却还走到这一格 ⇒ 只可能是形状不符（值本身不往任何一头送）
-            return infoOf(shape, ScanRejectRung.BadParamValue, ScanCodeFamily.Spoc, flagged = listOf("qdid"))
-        }
-        val pair = when {
-            zjdm.isNullOrBlank() && czid.isNullOrBlank() -> "zjdm+czid"
-            zjdm.isNullOrBlank() -> "zjdm"
-            czid.isNullOrBlank() -> "czid"
-            else -> "zjdm+czid"
-        }
-        return infoOf(shape, ScanRejectRung.MissingParams, ScanCodeFamily.Spoc, wanted = listOf(pair, "qdid"))
-    }
-
     private fun infoOf(
         shape: Shape,
         rung: ScanRejectRung,
@@ -205,9 +198,9 @@ object ScanRejectClassifier {
     )
 }
 
-/** 这两族的码才把路径念出来；别家的路径既不上界面也不进日志（那一头归属都判不出，路径上有什么没人核过） */
+/** 只有这一族的码才把路径念出来；别家的路径既不上界面也不进日志（那一头归属都判不出，路径上有什么没人核过） */
 private val ScanRejectInfo.familyIsOurs: Boolean
-    get() = family == ScanCodeFamily.IClass || family == ScanCodeFamily.Spoc
+    get() = family == ScanCodeFamily.IClass
 
 /** host[:port] 的展示形态；authority 读不出来时 null（措辞那一头按 null 说"认不出服务器"） */
 private fun rejectHostLabel(info: ScanRejectInfo): String? = info.host?.let { h ->
@@ -233,11 +226,11 @@ fun scanRejectCardText(info: ScanRejectInfo): String {
     }
     return when (info.rung) {
         ScanRejectRung.Recognized ->
-            "两族判据都说这张码收得下，签到却没开始 —— 它的形状已记进取证日志。"
+            "iClass 的判据说这张码收得下，签到却没开始 —— 它的形状已记进取证日志。"
         ScanRejectRung.NotACode ->
-            "扫到的不是签到码：既不是链接，也不像 32 位的签到 ID。"
+            "扫到的不是签到码：这一族只认北航 iClass 的签到链接，而它连链接都不是。"
         ScanRejectRung.ForeignHost ->
-            if (host == null) "$whose，也说不出它是北航哪一族的码。" else "$whose，但不是北航 iClass 或智学北航的码。"
+            if (host == null) "$whose，也说不出它是不是北航 iClass 的码。" else "$whose，但不是北航 iClass 的签到码。"
         ScanRejectRung.WrongRoute -> {
             val path = rejectPathLabel(info)
             "$whose，可${if (path == null) "那个页面" else " $path "}不是学生扫码签到的入口。"
@@ -255,7 +248,7 @@ fun scanRejectCardText(info: ScanRejectInfo): String {
 /**
  * 失败卡上第二行（小字）：**这一档凭什么这么说**。
  *
- * 只有形状（host、路径〔我们两族才给〕、参数名、字符数），一个参数值都不许出现 ——
+ * 只有形状（host、路径〔只有我们这一族才给〕、参数名、字符数），一个参数值都不许出现 ——
  * 与 [scanRejectForensicLine] 同一份口径：屏幕上念得出的人与 logcat 念得出的人看的是同一份事实。
  */
 fun scanRejectEvidenceText(info: ScanRejectInfo): String {
@@ -275,8 +268,10 @@ fun scanRejectEvidenceText(info: ScanRejectInfo): String {
  * Info/Warn 纪律）；这一颗只管话怎么说，而"不许把完整原文写进日志"就落在 `形状=` 这一段：
  * 它是 scheme + host[:port] + path（与 [redactUrl] 同一口径 —— **查询串整体裁掉**），
  * 参数只念名字，末尾明写 `参数值=未记录`，读日志的人不必猜这是漏了还是规则。
- * 够定位的形状全留着：长度、哪一族、host 与端口、路径、参数名清单，
+ * 够定位的形状全留着：长度、`族=`、host 与端口、路径、参数名清单，
  * 而滚动码的 `timestamp` 那一个字节都不出去。
+ * ⚠️ `族=` 的取值域是 [ScanCodeFamily]：T85 拆掉智学北航之后是 `IClass` / `Foreign` / `None` 三枚，
+ * 从前那张表里还有第四枚 `Spoc`。这一列的名字与"几族"无关，它是**这一档凭什么这么说**的主语。
  */
 fun scanRejectForensicLine(info: ScanRejectInfo): String {
     // 认得出却走到失败支 = 两本账漂移，这一行的前缀必须说实话，不许沿用"解析失败"
@@ -319,7 +314,7 @@ private fun rejectNameList(names: List<String>, separator: String): String =
     names.take(MaxNamesShown).joinToString(separator) { clipped(it, MaxNameChars) } +
         if (names.size > MaxNamesShown) "$separator…" else ""
 
-/** `形状=` 那一段：scheme://host[:port] + （我们两族才给的）路径；不是链接就明写不是链接 */
+/** `形状=` 那一段：scheme://host[:port] + （只有我们这一族才给的）路径；不是链接就明写不是链接 */
 private fun rejectSketch(info: ScanRejectInfo): String {
     if (info.scheme == null) return "不是链接"
     val head = "${info.scheme}://${rejectHostLabel(info) ?: "(读不出服务器)"}"

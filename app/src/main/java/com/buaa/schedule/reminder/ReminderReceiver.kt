@@ -7,7 +7,7 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.buaa.schedule.R
-import com.buaa.schedule.data.import.SpocSession
+import com.buaa.schedule.data.import.IClassSession
 import com.buaa.schedule.data.local.AppDatabase
 import com.buaa.schedule.data.repository.ScheduleRepository
 import kotlinx.coroutines.CoroutineScope
@@ -32,7 +32,7 @@ class ReminderReceiver : BroadcastReceiver() {
             classProgressEnabled(context) && classStartAt > now
         ) LivePhase.BEFORE_CLASS else null
         // 实况启动与通知展示整体挪到 goAsync() 之后：notifyCourse 里的
-        // SpocSession.hasSession() 要过 AndroidKeyStore 解密 + SharedPreferences 读盘，
+        // IClassSession.hasSession() 要过 AndroidKeyStore 解密 + SharedPreferences 读盘，
         // 闹钟唤醒常是冷进程，这笔 binder + 解密全落在广播主线程上就是在吃 10 秒配额，
         // 超配额系统直接掐广播 —— 用户看到的"这一节课没有提醒"就是这么来的。
         val pendingResult = goAsync()
@@ -73,10 +73,10 @@ class ReminderReceiver : BroadcastReceiver() {
         .getSharedPreferences(ClassProgressReceiver.PREFS_NAME, Context.MODE_PRIVATE)
         .getBoolean(ClassProgressReceiver.PREF_CLASS_PROGRESS, true)
 
-    /** 课前提醒是否带「扫码签到」按钮（与设置页同一键） */
-    private fun spocSignHintEnabled(context: Context): Boolean = context
+    /** 课前提醒是否带「扫码签到」按钮（与设置页同一键；键名字面量仍写作 `spoc_` 前缀，见常量那一段） */
+    private fun signHintEnabled(context: Context): Boolean = context
         .getSharedPreferences(ClassProgressReceiver.PREFS_NAME, Context.MODE_PRIVATE)
-        .getBoolean(PREF_SPOC_SIGN_HINT, false)
+        .getBoolean(PREF_SIGN_HINT, false)
 
     /**
      * 课前提醒的横幅通知。
@@ -117,8 +117,15 @@ class ReminderReceiver : BroadcastReceiver() {
         // 开关在这里读，而不是排程时烘进闹钟 extras：闹钟是几十分钟前就排好的，
         // 用户临上课前把这行关掉，烘死的标志仍会让这一节带着按钮。
         // 没登录时不挂：点下去只会跳到扫码页再当场报「还没有登录」，比没有按钮更糟。
-        if (spocSignHintEnabled(context) && SpocSession.hasSession()) {
-            builder.addAction(0, "扫码签到", ReminderNotifications.spocScanPendingIntent(context))
+        //
+        // ⚠️ T85：这一枚闸门从前挂的是 `SpocSession.hasSession()`（智学北航），那是**接错了平台**
+        // —— 课堂上真扫的那张码来自北航 iClass。拆掉 SPOC 时必须把它改挂到 iClass 那一族上，
+        // 不然"课前签到提醒"这一整条会静默变成永不触发（拆一个死平台顺手拆掉一条活功能）。
+        // 现在的触发条件是：**设置页那颗开关为真 且 本机存着 iClass 的 id**。
+        // && 的先后次序是要紧的（省电审计那条）：开关是内存里的一次 SharedPreferences 读，
+        // `hasSession()` 却要过 AndroidKeyStore 解密，开关关着时根本不该碰密钥库。
+        if (signHintEnabled(context) && IClassSession.hasSession()) {
+            builder.addAction(0, "扫码签到", ReminderNotifications.scanSignPendingIntent(context))
         }
 
         try {
@@ -143,8 +150,15 @@ class ReminderReceiver : BroadcastReceiver() {
          */
         const val NOTIFY_ID_COURSE = 20_260_003
 
-        /** 「课前提醒带扫码签到按钮」开关（prefs 走 [ClassProgressReceiver.PREFS_NAME]） */
-        const val PREF_SPOC_SIGN_HINT = "spoc_sign_hint"
+        /**
+         * 「课前提醒带扫码签到按钮」开关（prefs 走 [ClassProgressReceiver.PREFS_NAME]）。
+         *
+         * ⚠️ 常量名 T85 起去掉了 `SPOC`，**字面量 `spoc_sign_hint` 却一个字都不许改**：
+         * 它是已经躺在用户设备上的键名。换键名不会报错，只会让每一个开过这颗开关的人
+         * 在升级之后静默回到"关"—— 那条按钮从此不出现，正是这张卡要避免的拆法。
+         * （智学北航那一族拆掉之后，这颗键管的是 iClass 的扫码入口，值域没变。）
+         */
+        const val PREF_SIGN_HINT = "spoc_sign_hint"
 
         /** 通知 tag（纯函数，便于单测） */
         fun notificationTag(courseId: Long): String = "course_$courseId"

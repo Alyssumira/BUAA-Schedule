@@ -29,7 +29,7 @@ class ScanSubmissionGateTest {
     /** ① 从没放行过：第一帧就递交 */
     @Test
     fun firstFrameGoesThrough() {
-        assertTrue(shouldSubmitScan(null, "https://spoc.buaa.edu.cn/x?qdid=1", t0, awaitingUserAction = false))
+        assertTrue(shouldSubmitScan(null, "http://iclass.buaa.edu.cn:8081/app/course/stu_scan_sign.action?courseSchedId=1", t0, awaitingUserAction = false))
     }
 
     /** ② 同一张码、冷却期内：仍然抑制（这就是「一次只签一个」那条不变式） */

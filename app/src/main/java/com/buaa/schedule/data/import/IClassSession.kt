@@ -7,12 +7,12 @@ import com.buaa.schedule.data.local.IClassIdStore
 /**
  * 北航 iClass（竞业达「轻新课堂」）登录会话（应用级单例）。
  *
- * 形状刻意对齐 [SpocSession]（`init` / `hasSession` / `authorized` / `clear`），
- * 因为 T85 要把课前签到提醒那道闸门从 `SpocSession.hasSession()` 换成"两族任一有会话"：
- * 到时候换的是调用点的一句判断，不是再写一枚新单例。
+ * 形状是 `init` / `hasSession` / `authorized` / `clear` 四颗 —— T84 立这一族时照着当时那族
+ * （智学北航 SPOC）的形状对齐，为的是 T85 拆它时**只换调用点的一句判断**、不再写一枚新单例。
+ * 那一天真的来了，四颗一颗没动：课前提醒那道闸门（[com.buaa.schedule.reminder.ReminderReceiver]）
+ * 与首页那条扫码入口现在问的都是这一颗 [hasSession]。
  *
- * 与 SPOC 那两族的实质差别只有一条：**这里没有会过期的东西**。
- * SPOC 的鉴权材料是一枚带 `exp` 的 JWT，所以要预留续期、要解析 `exp`；
+ * ⚠️ **这里没有会过期的东西**：SPOC 的鉴权材料是一枚带 `exp` 的 JWT，所以要预留续期、要解析 `exp`；
  * iClass 的签到请求只带一枚 `id`（`GET …原文…&id=<User.id>`），
  * 所以 [authorized] 就是"盘上有就给你"，服务端认不认由那一次请求自己判
  * （判不出来的时候界面上读到的是服务端的 ERRMSG 原文，见 [IClassApi]）。
@@ -31,10 +31,10 @@ object IClassSession {
 
     @Volatile private var cached: String? = null
 
-    /** 区分「盘上确实没有」与「还没读盘」，避免每次取值都解一次密文（同 [SpocSession]） */
+    /** 区分「盘上确实没有」与「还没读盘」，避免每次取值都解一次密文 */
     @Volatile private var loadedFromDisk = false
 
-    /** 与 [SpocSession.init] 同口径：任意线程调一次，只寄存 Context */
+    /** 任意线程调一次，只寄存 Context（读盘是懒的，冷启动不为此解一次密文） */
     fun init(context: Context) {
         if (appContext != null) return
         appContext = context.applicationContext
@@ -47,7 +47,7 @@ object IClassSession {
     fun userId(): String? {
         if (loadedFromDisk) return cached
         val context = appContext ?: return null
-        // ⚠️ 顺序不能反（同 SpocSession 那条教训）：两个 @Volatile 之间没有互斥，
+        // ⚠️ 顺序不能反：两个 @Volatile 之间没有互斥，
         // 先发布 loadedFromDisk 再算 cached 的话，并发读到的就是"已加载 + null"，
         // 表现是随机"未登录"。
         val loaded = IClassIdStore.load(context)?.trim()?.takeIf { it.isNotEmpty() }
@@ -79,7 +79,7 @@ object IClassSession {
         Log.i(TAG, "iClass 会话已保存（只存 id，口令未落盘）")
     }
 
-    /** 退出 iClass 登录：只清这一族的 id，教务 Cookie 与 SPOC token 一概不动 */
+    /** 退出 iClass 登录：只清这一族的 id，教务 Cookie 一概不动 */
     fun clear() {
         cached = null
         loadedFromDisk = true

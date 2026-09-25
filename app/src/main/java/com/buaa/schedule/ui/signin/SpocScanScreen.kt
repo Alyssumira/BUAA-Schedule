@@ -89,15 +89,16 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 
 /**
- * 智学北航扫码签到页。
+ * 课堂扫码签到页（北航 iClass / 竞业达轻新课堂 —— T85 起这是全仓唯一一条签到链）。
  *
  * 两条入口指向同一个状态机（[SignInViewModel]）：相机实时解码、相册识图。相机是主路径。
  * 第三条入口「手输签到码」（底部按钮 + 输入弹窗）已于 2026-09-21 整条删除：
  * 现实里老师端只有那张二维码，不存在一个可以抄下来的短码，那条入口是按假想需求做的。
  *
  * 删掉它之后盖不住一个新事实：这两条入口**不是**在任何设备上都还在 —— MLKit 的解码库
- * 在 release 包里只带 arm64 一档（见 docs/BUAA_SPOC_SIGNIN_PLAN.md §1.2 与 app/build.gradle.kts 末尾的
- * `androidComponents` 块），而相册识别送进的是**同一个** `scanner.process(...)` ——
+ * 在 release 包里只带 arm64 一档（判据在 app/build.gradle.kts 末尾的 `androidComponents` 块；
+ * 当年量这一笔的记录留在 `docs/BUAA_SPOC_SIGNIN_PLAN.md` §1.2，那份文档 T85 起是历史），
+ * 而相册识别送进的是**同一个** `scanner.process(...)` ——
  * scanner 建不出来（缺解码库）时相机与相册**一起没**，这一页在这种设备上一条路都没有。
  * 以前这个事实被手输那颗按钮盖着，现在只能靠降级文案说实话（见 [scanUiStatus]）。
  *
@@ -113,8 +114,11 @@ import kotlin.coroutines.resume
 @Composable
 fun SpocScanScreen(
     onBack: () -> Unit,
-    /** 凭证失效时把用户送去登录页；**哪一族的**登录页由失败卡自己带（两族并存，见 [SignInPlatform]） */
-    onNeedLogin: (SignInPlatform) -> Unit,
+    /**
+     * 凭证失效时把用户送去登录页。T85 之后这一颗不带参数：全仓只剩一条签到登录链，
+     * 从前那个"按失败卡带的平台分流"的枚举（`SignInPlatform`）连同它要防的那次送错一起拆了。
+     */
+    onNeedLogin: () -> Unit,
     viewModel: SignInViewModel = viewModel(
         factory = SignInViewModel.Factory(
             LocalContext.current.applicationContext as android.app.Application,
@@ -278,7 +282,7 @@ fun SpocScanScreen(
     // CompositionLocal 只能在组合期读，绑定发生在协程里，所以先把旋转值取出来
     val view = LocalView.current
     val targetRotation = remember(view) { view.display?.rotation ?: Surface.ROTATION_0 }
-    val busy = state is SignInState.Resolving || state is SignInState.Submitting
+    val busy = state is SignInState.Submitting
     // ③ 有一次签到真的在飞：结果卡上那两颗按钮与相册那颗一起按灭。
     // 状态机自己也有 `if (inFlight) return` 的守卫（两处口径同一个来源），
     // 但按灭按钮才是修「按了没反应」的那一半 —— 吞掉动作是 ViewModel 的事，
@@ -687,10 +691,8 @@ fun SpocScanScreen(
         }
 
         val resultText = when (val s = state) {
-            is SignInState.Resolving -> "正在读取签到信息…"
             is SignInState.Submitting -> "正在提交签到…"
-            is SignInState.Signed ->
-                if (s.alreadySigned) "这节课你已经签过了（${s.timeText}）" else "签到完成　${s.timeText}"
+            is SignInState.Signed -> "签到完成　${s.timeText}"
             is SignInState.Failed -> s.reason
             else -> null
         }
@@ -744,9 +746,10 @@ fun SpocScanScreen(
                                 .weight(1f)
                                 .defaultMinSize(minHeight = DesignTokens.minTouchTarget)
                             if (s.relogin) {
-                                // 平台由这张卡带：iClass 的登录页是账号口令，SPOC 的是 WebView CAS，
-                                // 送错一族等于把用户丢进一个这一族根本不需要填的页面（第四条静默死路）
-                                Button(onClick = { onNeedLogin(s.platform) }, modifier = cardAction) { Text("去登录") }
+                                // 只有一条登录链了：`relogin` 现在唯一的写点就是"盘上没有 iClass 的 id"
+                                // （从前这里要把用户按平台分流 —— 送错一族等于丢进一个这一族根本
+                                // 不需要填的页面，那枚 `SignInPlatform` 随 SPOC 一起拆在 T85）
+                                Button(onClick = onNeedLogin, modifier = cardAction) { Text("去登录") }
                             }
                             TextButton(
                                 onClick = { viewModel.reset() },
@@ -1511,5 +1514,5 @@ private fun applyScanAssistZoom(context: android.content.Context, camera: Camera
     )
 }
 
-/** 与本页另一条设备链路（SpocLoginScreen）同一个 TAG 口径：只留证据，不代替文案 */
+/** 设备链路那一行取证日志的 TAG：只留证据，不代替文案（口径与 `SignInViewModel` 那一页一致） */
 private const val TAG = "SpocScanScreen"

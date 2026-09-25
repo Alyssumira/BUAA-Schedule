@@ -4,7 +4,9 @@
 
   排除的文件名必须与代码里实际的 SharedPreferences 名一致：
   - buaa_cookie_store.xml  ← BuaaCookieStore.PREFS
-  - spoc_token_store.xml   ← SpocTokenStore.PREFS
+  - spoc_token_store.xml   ← 老版本残留：T85 起本仓不再写这个文件（SpocTokenStore 已删），
+    但装过旧版的设备上它还在，排除这一行**不许跟着删**（详见 backup_rules.xml 里同一条的理由）。
+    同处还记着一笔没改的账：T84 的 iclass_id_store.xml 至今不在名单里，收口归单独一张卡。
   - buaa_session.xml       ← BuaaWebSession.PREFS_NAME
 
   此前这里写的是 secure_session.xml —— 项目里根本不存在这个 prefs，

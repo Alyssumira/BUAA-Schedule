@@ -105,7 +105,6 @@ import com.buaa.schedule.ui.importing.ImportHistoryScreen
 import com.buaa.schedule.ui.importing.ImportScreen
 import com.buaa.schedule.ui.settings.SettingsScreen
 import com.buaa.schedule.ui.signin.ScanChainWarmUp
-import com.buaa.schedule.ui.signin.SpocLoginScreen
 import com.buaa.schedule.ui.signin.SpocScanScreen
 import com.buaa.schedule.ui.signin.iclass.IClassLoginScreen
 import com.buaa.schedule.ui.stats.StatsScreen
@@ -347,8 +346,16 @@ class MainActivity : ComponentActivity() {
          */
         internal const val EXTRA_ROUTE = "com.buaa.schedule.EXTRA_ROUTE"
 
-        /** [EXTRA_ROUTE] 承认的路由：成员判定在 [com.buaa.schedule.core.launchRequestsOf] */
-        private val ROUTABLE_FROM_INTENT = setOf("spoc_scan", "spoc_login")
+        /**
+         * [EXTRA_ROUTE] 承认的路由：成员判定在 [com.buaa.schedule.core.launchRequestsOf]。
+         *
+         * T85 拆掉智学北航之后这里只剩扫码页那一枚。`spoc_login` 不是"顺手删掉的旧名字"，
+         * 它跟着那条路由一起没了：本名单之外的值会被判成"没有请求"，名单**之内**却没有注册
+         * 路由的值却被消费方原样 `navigate` 出去 —— NavHost 对不认识的 route 抛
+         * `IllegalArgumentException`，而发起那一下的可以是任何一台外部应用带的 Intent。
+         * 所以删路由必须同时删白名单里的成员，反过来（只留名单）就是自己造一次崩溃。
+         */
+        private val ROUTABLE_FROM_INTENT = setOf("spoc_scan")
     }
 }
 
@@ -757,19 +764,17 @@ private fun AppNavHost(
             }
         }
     }
-    // 首页加号与设置页共用一条入口：没有凭证时扫码必然失败，先进登录页，
+    // 首页加号菜单那条扫码入口：没有凭证时扫码必然失败，先进登录页，
     // 登录页成功后自己 popUpTo 换成扫码页。两处各写一份判断迟早会走岔。
-    // T84 起两族平台并存（智学北航 SPOC / 北航 iClass），**任意一族**有会话就进扫码页：
-    // 扫码页自己按码分流，另一族没登录时会在那一刻把用户送去对应的登录页（失败卡上那颗
-    // 「去登录」带平台，见 SignInPlatform）。这里不改成"只看 iClass"，那是 T85 的活。
+    // T85 之后只看 iClass 一族（智学北航那条整条拆掉了）：从前这里读两族、
+    // 任意一族有会话就放行，于是"只登录过 SPOC"的设备会进到一个扫 iClass 码必失败的页面。
+    // ⚠️ 名字里那枚 `Spoc` 连同 `spoc_scan` 那条路由在 T85-B 一起换；本档只动判据与出口。
     val openSpocSignIn: () -> Unit = {
         navController.navigate(
-            if (com.buaa.schedule.data.import.SpocSession.hasSession() ||
-                com.buaa.schedule.data.import.IClassSession.hasSession()
-            ) {
+            if (com.buaa.schedule.data.import.IClassSession.hasSession()) {
                 "spoc_scan"
             } else {
-                "spoc_login"
+                "iclass_login"
             },
         )
     }
@@ -930,32 +935,14 @@ private fun AppNavHost(
                 )
             }
         }
-        composable("spoc_login") {
-            CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
-                SpocLoginScreen(
-                    onBack = { navController.popBackStack() },
-                    // 登录成功 → 直接把登录页换成扫码页：再退回首页让用户点第二次没有意义，
-                    // 而留在栈里会让「返回」把用户又丢回一个已经用完的登录页
-                    onLoggedIn = {
-                        navController.navigate("spoc_scan") {
-                            popUpTo("spoc_login") { inclusive = true }
-                        }
-                    },
-                )
-            }
-        }
         composable("spoc_scan") {
             CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
                 SpocScanScreen(
                     onBack = { navController.popBackStack() },
-                    // 失败卡带着"是哪一族要登录"（两族并存，见 SignInPlatform）：
-                    // 送错一族就是把用户丢进一个这一族根本不需要填的页面
-                    onNeedLogin = { platform ->
-                        when (platform) {
-                            com.buaa.schedule.ui.signin.SignInPlatform.IClass -> navController.navigate("iclass_login")
-                            com.buaa.schedule.ui.signin.SignInPlatform.Spoc -> navController.navigate("spoc_login")
-                        }
-                    },
+                    // 失败卡上那颗「去登录」的唯一出口（T85 之后全仓只有一条签到登录链，
+                    // 从前这里按 `SignInPlatform` 分两族，送错一族就是把用户丢进
+                    // 一个这一族根本不需要填的页面 —— 那枚枚举随 SPOC 一起拆了）：
+                    onNeedLogin = { navController.navigate("iclass_login") },
                 )
             }
         }
@@ -963,7 +950,8 @@ private fun AppNavHost(
             CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
                 IClassLoginScreen(
                     onBack = { navController.popBackStack() },
-                    // 与 spoc_login 同一取舍：登完直接把登录页换成扫码页，
+                    // 登完直接把登录页换成扫码页，不留一颗"用完的表单"在栈里让用户再按一次返回
+                    // （T85 之前这条取舍写在 spoc_login 那一侧，现在它是唯一一条登录链了）
                     // 留在栈里只会让「返回」把用户又丢回一个已经用完的表单
                     onLoggedIn = {
                         navController.navigate("spoc_scan") {
@@ -982,7 +970,6 @@ private fun AppNavHost(
                     // 分类入口 → 打开独立的设置子界面（不再是同页折叠）
                     onOpenSection = openSettingsSection,
                     onOpenCourseManagement = openCourseManagement,
-                    onOpenSpocSignIn = openSpocSignIn,
                     onOpenIClassSignIn = openIClassSignIn,
                     bottomBarVisible = bottomBarVisible,
                 )
@@ -1011,7 +998,6 @@ private fun AppNavHost(
                         .fromId(entry.arguments?.getString("section")),
                     onOpenSection = openSettingsSection,
                     onOpenCourseManagement = openCourseManagement,
-                    onOpenSpocSignIn = openSpocSignIn,
                     onOpenIClassSignIn = openIClassSignIn,
                 )
             }

@@ -307,7 +307,7 @@ class ScanSecondEnginePolicyTest {
     /** 兜底每次都命中：一路发到每轮封顶为止，一发不多 */
     @Test
     fun alwaysHittingFallbackKeepsFiringUpToThePerBindCap() {
-        val loop = FrameLoop(decodedText = "https://spoc.buaa.edu.cn/t/checkin?qdid=1")
+        val loop = FrameLoop(decodedText = "http://iclass.buaa.edu.cn:8081/app/course/stu_scan_sign.action?courseSchedId=1")
         repeat(300) { loop.step(FrameCodeRung.CodeTooSmall) }
         assertEquals("封顶就是 $SecondEngineMaxFiresPerBind 发：", SecondEngineMaxFiresPerBind, loop.fired.size)
         assertEquals("每发之间恰好隔 $SecondEngineFrameGap 帧：", SecondEngineFrameGap, loop.fired[1] - loop.fired[0])

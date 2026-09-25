@@ -47,7 +47,7 @@
     -->
     <uses-permission android:name="com.android.launcher.permission.INSTALL_SHORTCUT" />
     <!--
-      SPOC 扫码签到：相机只在扫码页用到，授权由该页现取现用，不进开屏引导。
+      课堂扫码签到（北航 iClass / 轻新课堂）：相机只在扫码页用到，授权由该页现取现用，不进开屏引导。
       uses-feature 必须 required=false —— 声明 true 会让无相机设备在商店里直接
       看不到本应用，而课表功能本身与相机无关。非 arm64 设备同理：
       packaging.jniLibs 只保留 arm64 的 libbarhopper_v3.so，那档设备上

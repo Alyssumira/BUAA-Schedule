@@ -9,9 +9,9 @@ package com.buaa.schedule.data.local
  * 明文躺在可读写的目录里等于把账号交给任何一个拿到这台设备的人。
  * 我们只要那枚 id：签到请求不需要口令，也没有 token 会过期。
  *
- * 加密与存储格式与 [BuaaCookieStore] / [SpocTokenStore] 同一套实现（[KeystoreBlobStore]），
+ * 加密与存储格式与 [BuaaCookieStore] 同一套实现（[KeystoreBlobStore]），
  * 但**单开一份 prefs 与密钥 alias**：三条链路互不牵连 —— 清掉教务 Cookie
- * 不该把 SPOC 的登录带掉，反之 iClass 这一枚也不该。
+ * 不该把 iClass 的登录带掉，反之这一枚也不该动教务那一条。
  */
 internal val IClassIdStore = KeystoreBlobStore(
     prefsName = "iclass_id_store",

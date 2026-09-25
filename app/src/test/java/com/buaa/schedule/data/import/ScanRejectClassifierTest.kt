@@ -7,16 +7,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 拒绝原因**分档**的表驱动单测（T83①③）。
+ * 拒绝原因**分档**的表驱动单测（T83①③，T85 跟着"只留 iClass"改口）。
  *
  * 三件事分开钉，少一件都会漏：
  * ① **入出**：每一条原文落到哪一档、带着什么形状（host / 端口 / 路径 / 参数名 / 缺哪几项）；
  * ② **不变量**：`classify` 说"收得下"（[ScanRejectRung.Recognized]）与 [ScanTargetParser.parse]
- *    真的收下，必须是同一件事 —— 判档是抄两族解析器自己的门槛来判的，这一条用一枚全矩阵跑遍
+ *    真的收下，必须是同一件事 —— 判档是抄解析器自己的门槛来判的，这一条用一枚全矩阵跑遍
  *    （scheme × authority × 路径 × query 四轴组合），两把尺子一旦分家就红在这里，
  *    而不是红在同学的签到上；
  * ③ **措辞纪律**：每一档一句人话、逐字钉住（漂一个字就红），不许出现"请把手机对准…"那种
  *    没有信息量的指令句，也不许一个参数值出现在界面或日志上（滚动码的 `timestamp` 不出去）。
+ *
+ * ⚠️ T85 拆掉智学北航那一族时，**七档一枚没少**：档位量的是链接形状 → host → 路由 →
+ * 参数齐备 → 值合法 → 是不是发过的请求，与"接了几族"无关。跟着改的只有措辞里的"两族"、
+ * `族=` 的取值域（四枚 → 三枚），以及那几张 SPOC 形状的靶子 —— 它们现在都是**别家**的输入，
+ * 钉的是"别家的码要说别家"，一档没浪费：`*.buaa.edu.cn` 下面不止一台，这一族的 host 门槛
+ * 恰恰需要这类用例来证明它没有松成"整个学校都收"。
  */
 class ScanRejectClassifierTest {
 
@@ -59,10 +65,10 @@ class ScanRejectClassifierTest {
         }
         assertEquals("有两档说成了同一句话（分档等于没分）：", sentences.size, sentences.toSet().size)
         assertEquals("档位表就这些：", 7, ScanRejectRung.values().size)
-        assertEquals("两族 + 别家 + 说不清，四枚：", 4, ScanCodeFamily.values().size)
+        assertEquals("这一族 + 别家 + 说不清，三枚（T85 之前是四枚，多的那枚是智学北航）：", 3, ScanCodeFamily.values().size)
     }
 
-    /** 路径只念我们两族的：别家 host 的链接连归属都判不出，路径上有什么没人核过 */
+    /** 路径只念我们这一族的：别家 host 的链接连归属都判不出，路径上有什么没人核过 */
     @Test
     fun `别家的路径不上界面也不上日志`() {
         val foreign = CASES.first { it.title == "别家的链接" }
@@ -153,19 +159,25 @@ class ScanRejectClassifierTest {
     @Test
     fun `每一档的界面原话`() {
         assertEquals(
-            "两族判据都说这张码收得下，签到却没开始 —— 它的形状已记进取证日志。",
+            "iClass 的判据说这张码收得下，签到却没开始 —— 它的形状已记进取证日志。",
             scanRejectCardText(ScanRejectClassifier.classify(realCode)),
         )
         assertEquals(
-            "扫到的不是签到码：既不是链接，也不像 32 位的签到 ID。",
+            "扫到的不是签到码：这一族只认北航 iClass 的签到链接，而它连链接都不是。",
             scanRejectCardText(ScanRejectClassifier.classify("智慧教室 3 号楼")),
         )
         assertEquals(
-            "这是 weixin.qq.com 的码，但不是北航 iClass 或智学北航的码。",
+            "这是 weixin.qq.com 的码，但不是北航 iClass 的签到码。",
             scanRejectCardText(ScanRejectClassifier.classify("https://weixin.qq.com/r/abc?x=1")),
         )
+        // T85 新账：智学北航的域名从前是"我们这一族的"，现在是**别家**。这一句逐字钉住，
+        // 因为它是这张卡最容易写成假话的地方 —— 判据若还留着那一道 host 门槛，文案就会说漏。
         assertEquals(
-            "这是一条认不出服务器的链接，也说不出它是北航哪一族的码。",
+            "这是 spoc.buaa.edu.cn 的码，但不是北航 iClass 的签到码。",
+            scanRejectCardText(ScanRejectClassifier.classify(FOREIGN_SPOC_CODE)),
+        )
+        assertEquals(
+            "这是一条认不出服务器的链接，也说不出它是不是北航 iClass 的码。",
             scanRejectCardText(ScanRejectClassifier.classify(SUFFIX_SPOOF)),
         )
         assertEquals(
@@ -177,10 +189,6 @@ class ScanRejectClassifierTest {
             scanRejectCardText(ScanRejectClassifier.classify(NO_SCHED_ID)),
         )
         assertEquals(
-            "这是 spoc.buaa.edu.cn 的码，还缺签到要用的参数：zjdm+czid 或 qdid。",
-            scanRejectCardText(ScanRejectClassifier.classify("https://spoc.buaa.edu.cn/bhspoc/#/pages/table/signIn")),
-        )
-        assertEquals(
             "这是 iclass.buaa.edu.cn:8081 的码，参数名对得上，值却用不了：courseSchedId。",
             scanRejectCardText(ScanRejectClassifier.classify(BAD_SCHED_ID)),
         )
@@ -188,13 +196,14 @@ class ScanRejectClassifierTest {
             "这是 iclass.buaa.edu.cn:8081 的码，可它已经带着提交才拼的 id —— 是一条发过的请求，不是投影那张码。",
             scanRejectCardText(ScanRejectClassifier.classify("$realCode&id=$USER_ID")),
         )
+        // 从前"只有路由片段"是智学北航认的第二种形态，如今与一串普通文本同档
         assertEquals(
-            "扫到的这段东西，还缺签到要用的参数：zjdm+czid 或 qdid。",
-            scanRejectCardText(ScanRejectClassifier.classify("/pages/table/signIn")),
+            "扫到的不是签到码：这一族只认北航 iClass 的签到链接，而它连链接都不是。",
+            scanRejectCardText(ScanRejectClassifier.classify("/pages/table/signIn?qdid=abc")),
         )
     }
 
-    /** 失败卡第二行的形状：host（含端口）、路径（我们两族才给）、参数名、字符数，一个字都不多 */
+    /** 失败卡第二行的形状：host（含端口）、路径（只有我们这一族才给）、参数名、字符数，一个字都不多 */
     @Test
     fun `失败卡上的取证行念得出形状`() {
         assertEquals(
@@ -247,7 +256,7 @@ class ScanRejectClassifierTest {
     fun `一个参数值都不许出现在界面或日志上`() {
         val inputs = ArrayList<String?>()
         inputs += CASES.map { it.raw }
-        inputs += listOf(realCode, "$realCode&id=$USER_ID", SPOC_CODE, SUFFIX_SPOOF)
+        inputs += listOf(realCode, "$realCode&id=$USER_ID", FOREIGN_SPOC_CODE, SUFFIX_SPOOF)
         for (text in inputs) {
             val info = ScanRejectClassifier.classify(text)
             for (line in listOf(scanRejectCardText(info), scanRejectEvidenceText(info), scanRejectForensicLine(info))) {
@@ -268,9 +277,12 @@ class ScanRejectClassifierTest {
                 "/app/course/stu_scan_sign.action 参数名=courseschedid,timestamp,id 参数值=未记录 不合用=id",
             scanRejectForensicLine(ScanRejectClassifier.classify("$realCode&id=$USER_ID")),
         )
+        // `族=` 这一列 T85 之后只有 IClass / Foreign / None 三种取值：从前这条靶子（同为
+        // `*.buaa.edu.cn` 的另一个子域）判的是 `族=Spoc 档=MissingParams 缺=zjdm+czid,qdid`，
+        // 现在它就是一个别家 host —— 少一枚枚举、多一句实话。
         assertEquals(
-            "扫码解析失败 档=MissingParams 族=Spoc 长度=34 形状=https://jw.buaa.edu.cn/xk/qr" +
-                " 参数名=foo 参数值=未记录 缺=zjdm+czid,qdid",
+            "扫码解析失败 档=ForeignHost 族=Foreign 长度=34 形状=https://jw.buaa.edu.cn 路径=不记录" +
+                " 参数名=foo 参数值=未记录",
             scanRejectForensicLine(ScanRejectClassifier.classify("https://jw.buaa.edu.cn/xk/qr?foo=1")),
         )
     }
@@ -354,7 +366,14 @@ class ScanRejectClassifierTest {
         /** 后缀伪装：`…:8081.evil.com` —— splitAuthority 那一刀就把它判成畸形（authority 读不出来） */
         const val SUFFIX_SPOOF =
             "http://iclass.buaa.edu.cn:8081.evil.com/app/course/stu_scan_sign.action?courseSchedId=2488752"
-        const val SPOC_CODE = "https://spoc.buaa.edu.cn/bhspoc/#/pages/table/signIn?qdid=1AA9A5D7F4295A0DE0630211FE0AB83E"
+
+        /**
+         * 智学北航那张真码。T85 拆掉那一族之后它是**别家**的输入 —— 名字与形状都留着，
+         * 因为"另一个 `*.buaa.edu.cn` 子域必须被 host 门槛挡在外面"这一条判据，
+         * 没有比这张真码更合适的靶子。
+         */
+        const val FOREIGN_SPOC_CODE =
+            "https://spoc.buaa.edu.cn/bhspoc/#/pages/table/signIn?qdid=1AA9A5D7F4295A0DE0630211FE0AB83E"
         const val USER_ID = "88888888"
 
         /** 一个都不许出现在任何输出里的参数值（取自实测、真码，以及下面那枚全矩阵） */
@@ -418,36 +437,36 @@ class ScanRejectClassifierTest {
                 "裸 ID 形状不对", "1AA9A5", ScanRejectRung.NotACode, ScanCodeFamily.None,
             ),
             Case(
-                "智学北航域名下·缺参数", "https://spoc.buaa.edu.cn/bhspoc/#/pages/table/signIn",
-                ScanRejectRung.MissingParams, ScanCodeFamily.Spoc,
-                host = "spoc.buaa.edu.cn", wanted = listOf("zjdm+czid", "qdid"),
+                "智学北航的域名现在算别家", FOREIGN_SPOC_CODE,
+                ScanRejectRung.ForeignHost, ScanCodeFamily.Foreign,
+                host = "spoc.buaa.edu.cn",
             ),
             Case(
-                "另一个 buaa 子域·缺参数", "https://jw.buaa.edu.cn/xk/qr?foo=1",
-                ScanRejectRung.MissingParams, ScanCodeFamily.Spoc,
-                host = "jw.buaa.edu.cn", paramNames = listOf("foo"), wanted = listOf("zjdm+czid", "qdid"),
+                "另一个 buaa 子域", "https://jw.buaa.edu.cn/xk/qr?foo=1",
+                ScanRejectRung.ForeignHost, ScanCodeFamily.Foreign,
+                host = "jw.buaa.edu.cn", paramNames = listOf("foo"),
             ),
             Case(
-                "只有 zjdm", "https://spoc.buaa.edu.cn/bhspoc/#/pages/table/signIn?zjdm=ZJ001",
-                ScanRejectRung.MissingParams, ScanCodeFamily.Spoc,
-                host = "spoc.buaa.edu.cn", paramNames = listOf("zjdm"), wanted = listOf("czid", "qdid"),
+                "只有 SPOC 的路由片段（从前那一族认它）", "/pages/table/signIn",
+                ScanRejectRung.NotACode, ScanCodeFamily.None,
             ),
             Case(
-                "qdid 形状不对", "https://spoc.buaa.edu.cn/bhspoc/#/pages/table/signIn?qdid=ab",
-                ScanRejectRung.BadParamValue, ScanCodeFamily.Spoc,
-                host = "spoc.buaa.edu.cn", paramNames = listOf("qdid"), flagged = listOf("qdid"),
+                "路由片段带着 qdid 也一样不是链接", "/pages/table/signIn?qdid=abc",
+                ScanRejectRung.NotACode, ScanCodeFamily.None, paramNames = listOf("qdid"),
             ),
             Case(
-                "路由片段·不是链接也没参数", "/pages/table/signIn",
-                ScanRejectRung.MissingParams, ScanCodeFamily.Spoc, wanted = listOf("zjdm+czid", "qdid"),
+                "裸 32 位 ID（SPOC 收得下的第三种形态，如今是纯文本）", "1AA9A5D7F4295A0DE0630211FE0AB83E",
+                ScanRejectRung.NotACode, ScanCodeFamily.None,
             ),
             Case(
-                "路由片段·qdid 形状不对", "/pages/table/signIn?qdid=abc",
-                ScanRejectRung.BadParamValue, ScanCodeFamily.Spoc, paramNames = listOf("qdid"), flagged = listOf("qdid"),
+                "iClass 的 host 但路径是根", "https://iclass.buaa.edu.cn/",
+                ScanRejectRung.WrongRoute, ScanCodeFamily.IClass,
+                host = "iclass.buaa.edu.cn",
             ),
             Case(
-                "裸 ID 形状对（SPOC 收得下）", "1AA9A5D7F4295A0DE0630211FE0AB83E",
-                ScanRejectRung.Recognized, ScanCodeFamily.Spoc,
+                "iClass 的 host、参数名齐但值全空", "$SCAN_SIGN?courseSchedId=&timestamp=",
+                ScanRejectRung.MissingParams, ScanCodeFamily.IClass,
+                host = "iclass.buaa.edu.cn", port = "8081", wanted = listOf("courseSchedId"),
             ),
         )
 

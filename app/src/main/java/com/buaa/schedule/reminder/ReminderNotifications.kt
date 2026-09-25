@@ -196,7 +196,7 @@ object ReminderNotifications {
     private const val REQUEST_COURSE_REMINDER = 310_000
     private const val REQUEST_TOMORROW_PREVIEW = 320_000
     private const val REQUEST_CLASS_LIVE = 300_000
-    private const val REQUEST_SPOC_SCAN = 330_000
+    private const val REQUEST_SCAN_SIGN = 330_000
 
     /**
      * 课前倒计时正在数的那节课（0 = 没有）。进程内状态，与 [CourseFluidService.isRunning]
@@ -359,12 +359,15 @@ object ReminderNotifications {
         launchActivityPendingIntent(context, REQUEST_COURSE_REMINDER)
 
     /**
-     * 「扫码签到」按钮的落点：直接进智学北航扫码页，不落回首页再让人点一次加号。
+     * 「扫码签到」按钮的落点：直接进课堂扫码页（北航 iClass 那条链，T85 起全仓只此一条），
+     * 不落回首页再让人点一次加号。
      *
      * 用户是在上课前两三分钟点它的，多一次跳转就是多一次「我到底签上没有」的悬空。
+     * ⚠️ 这里写的路由名必须与 `MainActivity.ROUTABLE_FROM_INTENT` 里那一枚同字面量 ——
+     * 漂了不会报错，只会让用户点了按钮被拦回首页（`SignInEntryWiringGuardTest` ⑤ 钉着这一对）。
      */
-    fun spocScanPendingIntent(context: Context): PendingIntent =
-        launchActivityPendingIntent(context, REQUEST_SPOC_SCAN, route = "spoc_scan")
+    fun scanSignPendingIntent(context: Context): PendingIntent =
+        launchActivityPendingIntent(context, REQUEST_SCAN_SIGN, route = "spoc_scan")
 
     /**
      * 各通知族共用的启动意图工厂：**码段 + data 双重分家**。

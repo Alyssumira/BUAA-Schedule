@@ -39,22 +39,36 @@ class IClassSignInWiringGuardTest {
         assertTrue("登录页在栈里没被 popUpTo 掉：\n$block", block.contains("popUpTo(\"iclass_login\") { inclusive = true }"))
     }
 
-    /** ② 扫码页那颗「去登录」按平台分流，两族的目标都在 */
+    /**
+     * ② 失败卡那颗「去登录」真的通向 iClass 的登录页，而且**没有第二个出口**回来。
+     *
+     * T84/T85 之间这一条的形状换过一次：从前它钉"按 `SignInPlatform` 分流，两族的目标都在"。
+     * 智学北航整条拆掉之后，那枚枚举的存在理由（送错一族 = 丢进一个这一族不需要填的页面）
+     * 没了，于是枚举、`Failed.platform` 这一位、以及 MainActivity 里那个 `when` 一起拆了 ——
+     * 本条改钉"只剩一个出口"，防的是同一件事的现在形态：那颗按钮通向的不是 iClass 登录页，
+     * 或者有人又把第二枚枚举与第二条路由接回来（那才是真给这条链开出第四条静默死路）。
+     */
     @Test
-    fun failureCardSendsEachPlatformToItsOwnLoginPage() {
+    fun failureCardGoesToTheOneLoginPageAndNoSecondExitComesBack() {
         val code = blankComments(source(MAIN_ACTIVITY))
         val block = balancedBlock(code, "composable(\"spoc_scan\")")
-        assertTrue("扫码页的 onNeedLogin 不再按平台分流（iClass 会被送进 WebView 登录页）：\n$block", block.contains("SignInPlatform.IClass -> navController.navigate(\"iclass_login\")"))
-        assertTrue("SPOC 那一族失去了它的登录出口：\n$block", block.contains("SignInPlatform.Spoc -> navController.navigate(\"spoc_login\")"))
-
+        assertTrue(
+            "扫码页失败卡那颗按钮不再跳 iclass_login（没有会话时用户就出不去）：\n$block",
+            block.contains("navController.navigate(\"iclass_login\")"),
+        )
+        assertFalse("又出现了第二个登录出口：\n$block", block.contains("spoc_login"))
+        val vm = blankComments(source(VIEW_MODEL))
+        assertEquals(
+            "SignInPlatform 的定义处数（这一族只剩一个登录页，那枚枚举应当已经拆干净）：",
+            0, Regex("""enum class SignInPlatform""").findAll(vm).count(),
+        )
+        assertFalse("Failed 状态又带回了平台这一位：\n$vm", vm.contains("val platform:"))
+        // 「去登录」那颗按钮仍然把出口交给了调用方（平台信息不该在状态机里丢）
         val screen = blankComments(source(SCAN_SCREEN))
         assertTrue(
-            "失败卡上那颗按钮没有把平台交给调用方（平台信息在状态机里丢了）：\n$screen",
-            screen.contains("onClick = { onNeedLogin(s.platform) }"),
+            "失败卡上那颗按钮没把出口交给调用方（界面自己决定去哪 = 状态机与路由各说各话）：\n$screen",
+            screen.contains("Button(onClick = onNeedLogin"),
         )
-        val vm = blankComments(source(VIEW_MODEL))
-        assertTrue("Failed 状态不带平台字段：\n$vm", vm.contains("val platform: SignInPlatform"))
-        assertEquals("SignInPlatform 的定义处数：", 1, Regex("""enum class SignInPlatform""").findAll(vm).count())
     }
 
     /** ③ 没有 iClass 会话时那条支路必须说话并且给出口（不许静默） */
@@ -66,7 +80,6 @@ class IClassSignInWiringGuardTest {
         val failed = branch.substringAfter("SignInState.Failed(")
         assertTrue("没有会话那一档没落到失败卡上：\n$branch", failed.isNotBlank() && !failed.startsWith(")"))
         assertTrue("失败卡不给「去登录」出口（relogin 没置上）：\n$branch", failed.contains("relogin = true"))
-        assertTrue("出口没指明是 iClass 那一族：\n$branch", failed.contains("platform = SignInPlatform.IClass"))
         assertTrue("登录页那条链上没人取过 id：\n$branch", branch.contains("iClassApi.signIn("))
     }
 
@@ -81,7 +94,7 @@ class IClassSignInWiringGuardTest {
             parameter.value.contains("= {"),
         )
         assertEquals("onClick = onOpenIClassSignIn 的落点应当恰好一处：", 1, occurrences(settings, "onClick = onOpenIClassSignIn"))
-        // 与 SPOC 那颗共用同一条清凭证的形状：清完要把本地状态翻回未登录，不能等重组
+        // 清凭证的形状：清完要把本地状态翻回未登录，不能等重组（那一行会一直写着"已登录"）
         val logout = balancedBlock(settings, "title = \"退出北航 iClass 登录\"")
         assertTrue("退出这一档没真的清会话：\n$logout", logout.contains("IClassSession.clear()"))
         assertTrue("清完没把界面状态翻回去（那一行会一直写着已登录）：\n$logout", logout.contains("iclassSignedIn = false"))

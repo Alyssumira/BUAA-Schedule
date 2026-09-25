@@ -15,7 +15,7 @@ import javax.crypto.spec.GCMParameterSpec
  * 一份凭据的加密落盘：AndroidKeyStore 的 AES-256/GCM，密钥不出安全硬件，
  * 存储格式 `Base64(iv):Base64(密文)` 写进 SharedPreferences 的单个键。
  *
- * 教务 Cookie（[BuaaCookieStore]）与 SPOC token（[SpocTokenStore]）各持一个实例，
+ * 教务 Cookie（[BuaaCookieStore]）与 iClass 的签到 id（[IClassIdStore]）各持一个实例，
  * prefs 名与密钥 alias 都不同：清一边不会把另一边的登录一起带掉。
  * **已落盘数据的读法就在这里** —— 改格式等于让老凭据全部解不开，要改先想清楚迁移。
  *

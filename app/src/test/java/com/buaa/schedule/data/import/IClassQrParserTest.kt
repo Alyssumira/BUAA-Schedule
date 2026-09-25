@@ -129,6 +129,7 @@ class IClassQrParserTest {
     }
 
     /** 两族同在 `*.buaa.edu.cn` 下：智学北航那张码不许被这一族抢走 */
+    /** 智学北航那张真码（T85 起本仓不接这一族）：同域、也带 query ID，是 host 门槛最难的一次考试 */
     @Test
     fun `智学北航的码不认成本族`() {
         assertNull(

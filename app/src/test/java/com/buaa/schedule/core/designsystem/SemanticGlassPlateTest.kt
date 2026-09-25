@@ -382,10 +382,10 @@ class SemanticGlassPlateTest {
         Slot("导入页抓取消息·成功（ImportScreen）", GlassVariant.PANEL, successIntent, rawAlphaOf(GlassVariant.PANEL)),
         Slot("教务登录状态卡·失败（BuaaLoginScreen）", GlassVariant.ALERT, errorIntent, rawAlphaOf(GlassVariant.ALERT)),
         Slot("教务登录状态卡·完成（BuaaLoginScreen）", GlassVariant.PANEL, successIntent, rawAlphaOf(GlassVariant.PANEL)),
-        Slot("SPOC 登录状态卡·失败（SpocLoginScreen）", GlassVariant.ALERT, errorIntent, rawAlphaOf(GlassVariant.ALERT)),
-        Slot("SPOC 登录状态卡·已保存（SpocLoginScreen）", GlassVariant.PANEL, successIntent, rawAlphaOf(GlassVariant.PANEL)),
-        Slot("SPOC 签到状态卡·失败（SpocScanScreen）", GlassVariant.ALERT, errorIntent, rawAlphaOf(GlassVariant.ALERT)),
-        Slot("SPOC 签到状态卡·已签到（SpocScanScreen）", GlassVariant.PANEL, successIntent, rawAlphaOf(GlassVariant.PANEL)),
+        Slot("iClass 登录状态卡·失败（IClassLoginScreen）", GlassVariant.ALERT, errorIntent, rawAlphaOf(GlassVariant.ALERT)),
+        Slot("iClass 登录状态卡·已保存（IClassLoginScreen）", GlassVariant.PANEL, successIntent, rawAlphaOf(GlassVariant.PANEL)),
+        Slot("课堂签到状态卡·失败（SpocScanScreen）", GlassVariant.ALERT, errorIntent, rawAlphaOf(GlassVariant.ALERT)),
+        Slot("课堂签到状态卡·已签到（SpocScanScreen）", GlassVariant.PANEL, successIntent, rawAlphaOf(GlassVariant.PANEL)),
         Slot("课表编辑校验汇总（CourseEditorScreen）", GlassVariant.ALERT, errorIntent, rawAlphaOf(GlassVariant.ALERT)),
     )
 
