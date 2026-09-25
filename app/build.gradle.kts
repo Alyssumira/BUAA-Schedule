@@ -398,6 +398,85 @@ dependencies {
     baselineProfile(project(":benchmark"))
 }
 
+// ---------- 守卫测试读的工作树文件 = 测试任务的真实输入（T92①，台账 #130） ----------
+//
+// `app/src/test` 下这一族"接线守卫"不跑设备、不读构建产物，它们**直接读工作树的源码与资源文本**：
+// `BackupRulesCoverCredentialStoresTest` 数两份 res/xml 的排除名单，
+// `ScanBlankDecodingWiringGuardTest` ⑤b / `ScanFrameAidWordingWiringGuardTest` ④ 把某几份 .kt
+// 整文件逐字节对 `git show <基线>`，`ReleaseForensicLogSurvivalTest` 读 proguard 规则与脚本形状，
+// `WidgetGlassSourceWiringTest` ⑨ 读 res/drawable 的圆角值，`IClassSignInWiringGuardTest` 读清单……
+//
+// 它们量的是**磁盘上的字**，而 `:app:testDebugUnitTest` 的输入面里根本没有这些字 ——
+// 于是"改完文件、单跑那一枚守卫"给出的是 Gradle 的缓存绿灯，对应的磁盘状态其实是红的。
+// 本轮两颗实验（每颗都是同一枚命令跑两次，只换文件）：
+//   A. 删掉 `app/src/main/res/xml/backup_rules.xml` 里 `<cloud-backup>` 的一行 `<exclude>` ⇒
+//      `parseDebugLocalResources` 与 `processDebugResources` 都重跑了，`testDebugUnitTest` 却判
+//      UP-TO-DATE、BUILD SUCCESSFUL；同一枚命令加 `--rerun` 当场 FAILED。
+//   B. 改 `app/src/main/java/.../ScanFrameFlowPolicy.kt` 里**一行注释**（一个字节都不进字节码）⇒
+//      `compileDebugKotlin` 重跑，但 `bundleDebugClassesToRuntimeJar` 判 UP-TO-DATE（class 字节没变），
+//      `testDebugUnitTest` 照样 UP-TO-DATE，而 ⑤b 那条逐字节钉在 `--rerun` 下 FAILED。
+//
+// ⚠️ 实验 B 把卡面那句"JVM 测试任务的输入是编译产物"里隐含的范围打宽了：漏的**不止 res/xml**。
+// 凡"守卫读文本、而这次改动不改变 class 字节"的都漏 —— 注释与 KDoc（这一族守卫大量在注释里写
+// 账，改注释是常态操作）、XML、清单、proguard 规则、构建脚本。所以输入面必须连 `src/main/java`
+// 一起给，只补 res/xml 会留下一半的洞。
+//
+// 为什么不铺到整个仓库：那等于"改 README 也重跑 1,660 枚测试"，是拿一种错换另一种。
+// 这里逐项列的都是**上面点过名的守卫真读到的路径**。漏一项的后果写在该项注释里。
+//
+// 加了会怎样：注释/资源/清单/脚本一改动，增量跑也会重跑测试（实测代价见 docs/STATUS.md 的 T92 段：
+// 指纹 ~3.6 MB、测试段本身 1,660 枚的墙钟不变）。代码类改动本来就会重跑（class 字节变了），
+// 所以这条只补"字节没变而字变了"那一档 —— 正是守卫最管用的那一档。
+//
+// 明确**不进**输入面的两类，理由与"怕慢"无关：
+// - `app/build/outputs/apk/release/*.apk`、`app/build/outputs/mapping/release/configuration.txt`：
+//   那是**另一枚任务（:app:assembleRelease）的产物**。把它们声明成输入而又不加 dependsOn，就是
+//   给 Gradle 造一条"没有依赖声明的产物消费边"（验证期会报 implicit dependency），加了 dependsOn
+//   又等于让单测去拉起 release 构建。这两枚守卫自己有"没有产物就 assumeTrue 跳过"的口径，
+//   而门禁把跳过数记在册（跳了就不算绿）—— 那笔账归门禁顺序，不归输入面。
+// - `app/src/test/**`：测试自己的源码，编译产物本来就在输入面里，改它一定重跑。
+val guardReadWorkingTreeFiles = files(
+    // ① 接线守卫的本体：约 60 枚读 main 源码文本（逐字节对基线 / 抹注释后找锚点 / 数出现次数）。
+    //    实验 B 证明编译产物盖不住它：改一行注释 class 字节不变。
+    "src/main/java",
+    // ② `BackupRulesCoverCredentialStoresTest` 读两份 res/xml 的排除名单；`LiveFgsDegradeWiringGuardTest`
+    //    与 `ReleaseForensicLogSurvivalTest` 读 res/values（取证文案不许搬进资源）；
+    //    `WidgetGlassSourceWiringTest` ⑨ 读 res/drawable/widget_bg_r*.xml 的 android:radius。
+    //    整个 res/ 只有 50 个文件、0.5 MB，按子目录点名省不下什么，却会漏掉下一枚新增的 res 守卫。
+    "src/main/res",
+    // ③ `IClassSignInWiringGuardTest`（不许加 usesCleartextTraffic / networkSecurityConfig）、
+    //    `WorkManagerOnDemandInitTest`（清单里那个 Provider 的 removal）、
+    //    `WidgetGlassSourceWiringTest` ⑫（相册权限不许声明）都按文本读清单。
+    //    清单内容不进单测的 classpath：改一行 manifest 单测照旧端缓存绿灯。
+    "src/main/AndroidManifest.xml",
+    // ④ `ReleaseForensicLogSurvivalTest` 第 1 层扫的就是规则文件里的 -assumenosideeffects；
+    //    它同时读 app/build.gradle.kts 钉"release 仍用被审过的那套收缩配置"。
+    "proguard-rules.pro",
+    // ⑤ `BarhopperNativeLibProbeTest` ⑤ 与 `ScanSecondEngineWiringGuardTest` ④b 拿
+    //    jniLibs 那六条 exclude 与探针里的库名常量对同源 —— 这条"漂移就红"完全靠读脚本文本。
+    //    （改本文件当然会重新配置一次构建，但重新配置 ≠ 让测试任务重跑：它不在测试的输入里。）
+    "build.gradle.kts",
+    // ⑥ `ScanSecondEngineWiringGuardTest` 读版本目录钉 zxing-cpp 的坐标与那两条 exclude。
+    "../gradle/libs.versions.toml",
+    // ⑦ `ReleaseForensicLogSurvivalTest` 第 1 层把兄弟模块的规则文件一起扫了（目标类能盖住
+    //    android.util.Log 的不止 :app 一份）。
+    "../kyant-backdrop/consumer-rules.pro",
+    // ⑧ `MigrationChainTest` 用 KSP 导出的 app/schemas/<数据库类>/<N>.json 反查迁移记账。
+    //    这条找不着目录时是 assumeTrue **跳过**（不是抛），路径漂了只表现为"永远绿"——
+    //    所以更要把它放进输入面：至少让"改了 json 没重跑"这一档不再有。
+    "schemas",
+)
+
+tasks.withType<Test>().configureEach {
+    inputs.files(guardReadWorkingTreeFiles)
+        .withPropertyName("guardReadWorkingTreeFiles")
+        // RELATIVE 而不是默认的 ABSOLUTE：本仓同时有主仓与 .worktrees/<Txx> 两种工作目录，
+        // 绝对路径会把同一份内容指纹成两枚不同的输入（换 worktree 就白跑一遍全量测试）。
+        // 上面有几项在项目目录之外（../gradle/…、../kyant-backdrop/…），RELATIVE 下它们按
+        // ".."+相对段参与指纹，仍是可复现的，且不引入本机盘符。
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
 // ---------- 发布 ----------
 //
 // 两步走：`gradle :app:stampVersion -PreleaseVersion=0.2.0` 落盘版本号，
