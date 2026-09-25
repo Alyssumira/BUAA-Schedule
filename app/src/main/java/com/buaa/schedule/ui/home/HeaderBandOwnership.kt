@@ -65,3 +65,27 @@ const val STATS_ROUTE_NAME: String = "stats"
  */
 fun headerBandPlaceholderHeightPx(measuredHeightPx: Int?, fallbackHeightPx: Int): Int =
     measuredHeightPx?.takeIf { it > 0 } ?: fallbackHeightPx
+
+/**
+ * 带子在**台上**那一档的下限高（px）—— 同一条带在首页与统计页落在同一个 y（T80-C）。
+ *
+ * 病根（1080x2400 / density 420 / 状态栏下沿 136 装机量到，像素扫与语义树两把尺对过）：
+ * 两页的带**上沿同在 147**（就是 [headerBandPlaceholderHeightPx] 那份 `spaceXS` 内衬），
+ * 但内容盒一个 148、一个 126。首页那一支里立着分段控件，它自己那层玻璃衬里
+ * （COMPACT 的上下各 4dp = 11px × 2）把内容盒顶到 148；统计页那一支最高的一枚就是 48dp
+ * 的「返回」（126）。孩子被居中之后：首页可点件 158..284、统计页 147..273，
+ * 中心差 11px、正文差 22px —— 用户读作"跳转时页头往上跳一格"。
+ *
+ * 所以**参照 = 首页那一支量到的实高**，统计页把同一枚数当**下限**吃：
+ *  - 取 `max` 而不是"照抄"：统计页那一支将来长高了不许被裁（T48 那笔账换个维度重演），
+ *    而首页那一支自己就是参照，`max(参照, 触控下限) == 参照` 恒等 ⇒ 首页一像素都不动；
+ *  - 参照**不许反过来由统计页供给**：统计页量到的是"已经被下限托过"的高，拿它再向首页要
+ *    一份下限就成了只涨不落的棘轮（字号调大再调回去，带子会永远停在厚的那一档）。
+ *    首页那一支没吃任何参照，它量到的永远是自然高 ⇒ 这一路是收敛的；
+ *  - 参照没量到（冷启动直接落在统计页）就退到触控下限，两页同时退到同一枚兜底 ⇒ 仍然同高。
+ *
+ * 两枚输入都是调用点量好的整数（实高、48dp 换算出的触控下限），内核不做 dp 换算、
+ * 不读密度、不读路由（口径同 [headerBandOwnerOf]）。
+ */
+fun headerBandFloorHeightPx(referenceHeightPx: Int?, touchFloorHeightPx: Int): Int =
+    maxOf(referenceHeightPx?.takeIf { it > 0 } ?: 0, touchFloorHeightPx)

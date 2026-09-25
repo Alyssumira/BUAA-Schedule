@@ -147,6 +147,17 @@ fun HomeScreen(
      * 两个调用点各判各的迟早走岔。
      */
     headerBandOnScreen: Boolean,
+    /**
+     * 页头条量到的实高（px）往上传一次（T80-C）：首页这一支是这条带的**几何主人** ——
+     * 它比统计页那一支多出一截分段控件的玻璃衬里（COMPACT 上下各 4dp，装机 11px × 2），
+     * 统计页那条带按这一枚数托底，两页的可点件才落在同一个 y。
+     *
+     * ⚠️ **不许给默认值**：`= {}` 买到的是"统计页那条带永远按 48dp 下限排"，
+     * 于是跳转瞬间页头往上跳一格 —— 那是一枚读数差 11px 的观感 bug，不会让任何测试变红。
+     * 方向也不许反过来（让统计页当主人）：首页量不到自己时统计页就没有参照，而首页那一支
+     * 永远更长。接线由 `HeaderBandWiringGuardTest` ⑥ 扫源码钉着。
+     */
+    onHeaderBandHeightMeasured: (Int) -> Unit,
     /** 手机端悬浮玻璃底栏是否显示：显示时 FAB / 菜单要在底部让位 */
     bottomBarVisible: Boolean = false,
     /** 刚从编辑器保存返回的课程：这张卡要做一次定位脉冲（④机会#4）；-1 = 无 */
@@ -524,9 +535,16 @@ fun HomeScreen(
             ScheduleHeaderBand(
                 drawnOnScreen = headerBandOnScreen,
                 measuredHeightPx = topRowHeightPx,
+                // 这一支就是带的几何主人：它把量到的实高往上递，自己不回收（递回来是恒等，
+                // 而"拿统计页量到的高向首页要下限"会变成只涨不落的棘轮，见 headerBandFloorHeightPx）
+                referenceHeightPx = null,
                 modifier = Modifier
                     // 行宽读的是这一行自己的 content-box（padding 已扣）：预算的第一段事实
-                    .onSizeChanged { topRowWidthPx = it.width; topRowHeightPx = it.height },
+                    .onSizeChanged {
+                        topRowWidthPx = it.width
+                        topRowHeightPx = it.height
+                        onHeaderBandHeightMeasured(it.height)
+                    },
             ) {
                 Column(
                     modifier = Modifier
@@ -1168,10 +1186,19 @@ internal fun weekHeadline(
  * 答一次：不在台上的那一页传 `drawnOnScreen = false`，带子按自己上一次量到的实高占位 ——
  * 所以正文不许跟着往上塌，带的上下沿像素位置也就一动不动。
  *
+ * T80-C 补的是这一族账剩下的一半：**同一条带同一条带的高度**。收掉两套文字之后装机再量，
+ * 两页的带上沿仍在同一个 147，可内容盒一个 148、一个 126 —— 首页那一支里立着分段控件，
+ * 它自己那层玻璃衬里（COMPACT 上下各 4dp = 11px × 2）把盒子顶到 148，统计页那一支最高的
+ * 就是 48dp 的「返回」（126）。孩子被 `CenterVertically` 居中之后可点件差 11px、正文差 22px。
+ * 修法是 [headerBandFloorHeightPx]：首页那一支量到的实高当参照，统计页把同一枚数吃成**下限**。
+ *
  * @param drawnOnScreen 这一页此刻是不是台上的那一页；false = 带子照常占位、板上一枚子节点都不画
  *   （不是"画了但透明"：那样语义树里仍是两套文字，读屏与 uiautomator 都拿得到）
  * @param measuredHeightPx 这一页的带上一次量到的实高（px，null = 还没量到）。占位时吃它而不是
  *   48dp 下限：系统字号调大时首页那一列的两行文字会高过下限，按下限占位会把正文往上抬
+ * @param referenceHeightPx 另一页（首页那一支）量到的实高（px，null = 还没量到）。台上那一档
+ *   的**下限**吃它：两页的带同高，带里的可点件才落在同一个 y。首页自己这一处不递 ——
+ *   它就是参照本身，递回来是恒等，而"把统计页量到的高再喂给首页"会变成只涨不落的棘轮
  * @param modifier 加在**内衬之后**：调用点的 `onSizeChanged` 要读的是 content-box 的宽
  *   （顶栏宽度预算的第一段事实，见 `statsEntryBudgetPx` 的 `rowWidthPx` = 装机 1017px 那一档）
  */
@@ -1180,14 +1207,21 @@ internal fun ScheduleHeaderBand(
     drawnOnScreen: Boolean,
     measuredHeightPx: Int?,
     modifier: Modifier = Modifier,
+    referenceHeightPx: Int? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
     val density = LocalDensity.current
     val fallbackHeightPx = with(density) { ceil(DesignTokens.minTouchTarget.toPx()).toInt() }
     val bandHeight = if (drawnOnScreen) {
         // 板上立着的每一枚可点件本身就托在 minTouchTarget 上，这条 min 不改变实高（装机 126px），
-        // 它买的是"字号调小 / 内容更矮时带高仍然恒定"—— 过渡期带的上下沿才不动
-        Modifier.heightIn(min = DesignTokens.minTouchTarget)
+        // 它买的是"字号调小 / 内容更矮时带高仍然恒定"—— 过渡期带的上下沿才不动。
+        // T80-C：同一枚下限还要吃**另一页量到的实高**（referenceHeightPx）—— 首页那一支比
+        // 统计页那一支高出一截玻璃衬里，两页都按更高的那一支托底，带里的可点件才落在同一个 y。
+        Modifier.heightIn(
+            min = with(density) {
+                headerBandFloorHeightPx(referenceHeightPx, fallbackHeightPx).toDp()
+            },
+        )
     } else {
         Modifier.height(
             with(density) {

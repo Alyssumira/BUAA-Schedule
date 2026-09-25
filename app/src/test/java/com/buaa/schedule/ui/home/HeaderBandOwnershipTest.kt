@@ -132,6 +132,106 @@ class HeaderBandOwnershipTest {
         }
     }
 
+    // ---- ③b 两页同一条带：带子在**台上**那一档的下限高（T80-C）----
+
+    /**
+     * 缺陷本体：同一条带在首页与统计页**不同高**。
+     *
+     * 装机读数（1080x2400 / density 420 / 状态栏下沿 136，语义树与像素扫两把尺对过）：
+     * 两页的带上沿都在 147（同一份 `spaceXS` 内衬），可内容盒首页 148、统计页 126 ——
+     * 首页那一支里立着分段控件，它那层玻璃衬里（COMPACT 上下各 4dp = 11px × 2）把盒子顶高，
+     * 统计页那一支最高的一枚只有 48dp 的「返回」。孩子被居中之后可点件差 11px、正文差 22px。
+     * 内核答的就是"这一枚下限取哪一数"：参照（首页量到的实高）与触控下限里更高的那一枚。
+     */
+    @Test
+    fun floorIsTheTallerOfReferenceAndTouchFloor() {
+        val table = listOf(
+            // 参照 px, 触控下限 px, 答案 px, 为什么
+            intArrayOf(148, 126, 148) to "统计页托到首页那一支的高 —— 两页的带同高，可点件落在同一个 y",
+            intArrayOf(126, 126, 126) to "两页一样高时这一枚就是恒等：首页一像素都不动",
+            intArrayOf(210, 126, 210) to "字号调大那一档首页两行字长过了下限，参照跟着涨、统计页跟着走",
+            intArrayOf(90, 126, 126) to "参照比触控下限还矮（字号被调到极小）→ 不许把带子压穿到点不着",
+            intArrayOf(127, 126, 127) to "差一px也认：内核不做『差不多就取下限』的那种四舍五入",
+        )
+        for ((row, why) in table) {
+            val (reference, touch, answer) = row
+            assertEquals(
+                "参照=$reference 下限=$touch：$why", answer, headerBandFloorHeightPx(reference, touch),
+            )
+        }
+    }
+
+    /** 还没量到（null）与量到一枚不是高度的数（0 / 负）都退到触控下限，两页同时退到同一枚 ⇒ 仍然同高 */
+    @Test
+    fun missingOrAbsurdReferenceFallsBackToTheTouchFloor() {
+        for (bad in listOf(null, 0, -1, -4_096)) {
+            assertEquals(
+                "参照=$bad 只能是『首页那一支还没画出来』，按下限排就是把两页的带又拆成两个高",
+                126, headerBandFloorHeightPx(bad, 126),
+            )
+        }
+    }
+
+    /** 内核只许在递给它的两枚整数里挑一枚：不许自己换算 dp、不许读 48dp 这个数、不许发明第三枚高 */
+    @Test
+    fun floorOnlyPicksBetweenTheTwoIntegersItIsGiven() {
+        for (reference in listOf(null, 0, 1, 7, 90, 126, 147, 148, 210, 4_096)) {
+            for (touch in listOf(0, 1, 120, 126, 147)) {
+                val answer = headerBandFloorHeightPx(reference, touch)
+                val allowed = listOfNotNull(reference?.takeIf { it > 0 }, touch)
+                assertTrue(
+                    "参照=$reference 下限=$touch 答出 $answer，不是递进来的任何一枚：$allowed",
+                    answer in allowed,
+                )
+                assertTrue("下限那一枚是触控底线，答案永远不许低于它：$reference/$touch -> $answer", answer >= touch)
+                if (reference != null && reference > 0) {
+                    assertTrue("参照是要拿来对齐两页的，答案比它还矮就白托了：$reference/$touch -> $answer", answer >= reference)
+                }
+            }
+        }
+    }
+
+    /**
+     * 单调：参照越长，带子的下限只许跟着越长（这条带将来还会装别的东西，不能越装越矮）。
+     *
+     * 反向的那一维（字号调回去）也一并钉住：内核**不持有状态**，答案只由这一次的两枚输入决定，
+     * 所以只要调用点递的是首页那一支的自然高，带子就能跟着缩回去（棘轮在接线那一层防，见 ⑥）。
+     */
+    @Test
+    fun floorIsMonotonicInReferenceAndHoldsNoStateItself() {
+        for (touch in listOf(120, 126, 133)) {
+            var last = -1
+            for (reference in listOf(null, 0, 50, 126, 147, 148, 210, 320)) {
+                val answer = headerBandFloorHeightPx(reference, touch)
+                assertTrue("参照=$reference 下限=$touch 答出 $answer，比上一档 $last 还矮：", answer >= last)
+                last = answer
+            }
+        }
+        // 同一枚输入答两次必须一模一样（内核不许藏计数器 / 时间 / 设备读数）
+        assertEquals(headerBandFloorHeightPx(148, 126), headerBandFloorHeightPx(148, 126))
+    }
+
+    /**
+     * 带子的下限**不许按主人分叉**：两页吃同一枚参照就必须答同一个高。
+     *
+     * 一旦签名里出现 `HeaderBandOwner`，"这一页的带多高"就又变成两枚真相了 ——
+     * 那正是本卡要消除的形状（首页按分段控件排、统计页按「返回」排）。
+     */
+    @Test
+    fun floorDoesNotBranchOnWhoIsAsking() {
+        val declaration = Regex("""fun headerBandFloorHeightPx\(([^)]*)\)""").find(blankComments(kernelSource()))
+        check(declaration != null) { "已经没有 headerBandFloorHeightPx 这枚判据了：本守卫要跟着改" }
+        assertFalse(
+            "带子的下限高不再吃『两页共用的那一枚参照』而是按页分叉（${declaration.groupValues[1]}）：" +
+                "两页又会各长各的高",
+            declaration.groupValues[1].contains("HeaderBandOwner"),
+        )
+        assertTrue(
+            "参照与触控下限都不许给默认值（默认一枚常数就是拿没量过的高向那条带承诺）：" + declaration.value,
+            !declaration.groupValues[1].contains("="),
+        )
+    }
+
     // ---- ④ 内核纯度：这张表要在 JVM 里裸跑 ----
 
     @Test

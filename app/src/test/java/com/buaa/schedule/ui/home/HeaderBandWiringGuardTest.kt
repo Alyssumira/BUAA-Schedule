@@ -258,6 +258,105 @@ class HeaderBandWiringGuardTest {
         }
     }
 
+    // ---- ⑥ 两页同一个高：参照只能量出来，且只许从首页流向统计页（T80-C）----
+
+    /**
+     * ⑥-a 带子的下限高不许写死成常数。
+     *
+     * 装机读数是首页 148px / 统计页 126px，可这一枚 148 是**分段控件那层玻璃衬里**（COMPACT
+     * 上下各 4dp）在当前字号档下算出来的：系统字号调大时首页那一支还要长，写死 57dp / 148px
+     * 当天就穿。所以带子的几何只许吃 `headerBandFloorHeightPx(参照, 触控下限)`，
+     * 函数体里一个 `数字 + dp/sp/px` 都不许出现。
+     */
+    @Test
+    fun bandFloorComesFromMeasurementNotFromALiteral() {
+        val code = blankComments(source(HOME_SCREEN))
+        val body = balancedBlock(code, "internal fun ScheduleHeaderBand(")
+        val literals = Regex("""\b\d+(\.\d+)?(dp|sp|px)\b""").findAll(body).map { it.value }.toList()
+        assertTrue(
+            "ScheduleHeaderBand 的函数体里出现了写死的尺寸（带的几何只许有一份，而那份只吃 token 与量到的数）：$literals",
+            literals.isEmpty(),
+        )
+        assertTrue(
+            "台上那一档的下限不再走 headerBandFloorHeightPx —— 又变成『这一页的内容多高就多高』，" +
+                "两页的带当场分家：\n$body",
+            Regex("""headerBandFloorHeightPx\(\s*referenceHeightPx,\s*fallbackHeightPx\s*\)""").containsMatchIn(body),
+        )
+        assertTrue(
+            "参照没吃进 heightIn 的 min：那等于统计页递了参照也没人认领",
+            Regex("""heightIn\(\s*min = with\(density\) \{[\s\S]*?headerBandFloorHeightPx""").containsMatchIn(body),
+        )
+    }
+
+    /**
+     * ⑥-b 参照的流向只有一个方向：首页量出来 → MainActivity 存一枚 → 统计页吃下限。
+     *
+     * 反向（把统计页量到的实高喂给首页）会把这一族账变成只涨不落的棘轮：统计页那次量的高
+     * 已经含了首页的下限，再拿它去托首页，字号调回去时带子永远停在厚的那一档。
+     */
+    @Test
+    fun referenceHeightFlowsFromHomeToStatsAndNeverBack() {
+        val home = blankComments(source(HOME_SCREEN))
+        val stats = blankComments(source(STATS_SCREEN))
+        val activity = blankComments(source(MAIN_ACTIVITY))
+        assertTrue(
+            "首页不再把**画出来那一帧**的带高递上去（换成常数就是 T48 换个维度重演）：\n" +
+                home.lines().filter { it.contains("onHeaderBandHeightMeasured") }.joinToString("\n"),
+            Regex("""onSizeChanged \{[^}]*onHeaderBandHeightMeasured\(it\.height\)""").containsMatchIn(home),
+        )
+        assertTrue(
+            "首页那一支自己回收了参照（referenceHeightPx 不再写 null）：首页 → 统计页 → 首页" +
+                "就成了一个只涨不落的环",
+            Regex("""referenceHeightPx = null""").containsMatchIn(home),
+        )
+        assertTrue(
+            "统计页的带没吃首页递来的参照：两页的带又会差那一截玻璃衬里（装机 11px 的页头跳动）",
+            Regex("""referenceHeightPx = headerBandReferenceHeightPx""").containsMatchIn(stats),
+        )
+        assertFalse(
+            "统计页把**自己**量到的实高当参照喂回带子 —— 那一枚已经含了首页的下限，喂回去就是棘轮",
+            Regex("""referenceHeightPx = statsBandHeightPx""").containsMatchIn(stats),
+        )
+        assertEquals(
+            "MainActivity 里那枚参照高只许声明一次（两处存就是两枚真相）：",
+            1, Regex("""var homeHeaderBandHeightPx by remember \{ mutableStateOf<Int\?>\(null\) \}""")
+                .findAll(activity).count(),
+        )
+        assertEquals(
+            "那枚状态全仓只许出现三次（声明一次 + 首页写一次 + 统计页读一次）；第四次就是又一个主人：" +
+                Regex("""homeHeaderBandHeightPx""").findAll(activity).toList(),
+            3, Regex("""homeHeaderBandHeightPx""").findAll(activity).count(),
+        )
+        assertTrue(
+            "首页的回调不再写进那一枚状态：接线断在这里，统计页的带就永远退到 48dp 下限",
+            Regex("""onHeaderBandHeightMeasured = \{ homeHeaderBandHeightPx = it \}""").containsMatchIn(activity),
+        )
+        assertTrue(
+            "统计页没接到那枚状态：同上，只是这次红在『两页不同高』上",
+            Regex("""headerBandReferenceHeightPx = homeHeaderBandHeightPx""").containsMatchIn(activity),
+        )
+    }
+
+    /** ⑥-c 两枚新参数都不许长回默认值：`= null` / `= {}` 买到的都是"忘了接线也编译过" */
+    @Test
+    fun bandHeightWiringHasNoSilentDefaultOnEitherPage() {
+        val home = blankComments(source(HOME_SCREEN))
+        val stats = blankComments(source(STATS_SCREEN))
+        val callback = Regex("""onHeaderBandHeightMeasured: \(Int\) -> Unit(\s*=\s*[^\n,]*)?""").find(home)
+        check(callback != null) { "HomeScreen 的参数表里已经没有 onHeaderBandHeightMeasured 了：参照换地方量了，本守卫要跟着改" }
+        assertEquals(
+            "首页的带高回调又长出默认值（`= {}` = 统计页永远量不到参照）：「${callback.value.trim()}」",
+            "", callback.groupValues[1].trim(),
+        )
+        val reference = Regex("""headerBandReferenceHeightPx: Int\?(\s*=\s*[^\n,]*)?""").find(stats)
+        check(reference != null) { "StatsScreen 的参数表里已经没有 headerBandReferenceHeightPx 了：参照换地方递了，本守卫要跟着改" }
+        assertEquals(
+            "统计页的参照高又长出默认值（`= null` = 这一页永远按 48dp 下限排，页头当场跳一格）：" +
+                "「${reference.value.trim()}」",
+            "", reference.groupValues[1].trim(),
+        )
+    }
+
     // ---- 源码核对工具（与 StatsEntryWiringGuardTest 同一套刀法）----
 
     private fun source(relative: String): String {

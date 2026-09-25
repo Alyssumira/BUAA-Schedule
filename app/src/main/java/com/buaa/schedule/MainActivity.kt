@@ -727,6 +727,13 @@ private fun AppNavHost(
     // "板上同时摆两套页头文字"于是在这一层就不成立，而不是靠两个页面各自自觉。
     val homeHeaderBandOnScreen = headerBandDrawnOnScreen(headerBandOwner, HeaderBandOwner.Home)
     val statsHeaderBandOnScreen = headerBandDrawnOnScreen(headerBandOwner, HeaderBandOwner.Stats)
+    // 同一条带的**高**也只有一个主人（T80-C）：首页那一支量到的实高（px）。装机读数是
+    // 首页带 147..294（148px = 分段控件那层玻璃衬里 4dp×2 垫在 48dp 触控下限之上）、
+    // 统计页带 147..273（126px = 「返回」那一枚的下限），两页的可点件因此差 11px。
+    // 这枚实高由首页的 onSizeChanged 从画出来那一帧递上来（设备侧事实走参数，不进判据内核），
+    // 统计页拿它当**下限**用；两页的带同高 ⇒ 跳转期间带的上下沿与正文一动不动。
+    // 只许首页往上传：统计页量到的是"已被托过底"的高，喂回首页就成了只涨不落的棘轮。
+    var homeHeaderBandHeightPx by remember { mutableStateOf<Int?>(null) }
     // 刚从编辑器保存的课程：首页给那张卡做一次"定位脉冲"（④机会#4）。
     // 放在这一层是因为编辑器与首页分属两个 destination，返回时唯一的公共祖先就是这里。
     // 拆成「待送达 / 已送达」两格：编辑器也可能从课程管理页打开，保存后落点是管理页，
@@ -810,6 +817,8 @@ private fun AppNavHost(
                     onOpenStats = openStats,
                     // 页头条的主人不在本页时，这一行照常占位但板上一字不画（T80）
                     headerBandOnScreen = homeHeaderBandOnScreen,
+                    // 首页这一支是带的几何主人：量到的实高递上来给统计页当下限（T80-C）
+                    onHeaderBandHeightMeasured = { homeHeaderBandHeightPx = it },
                     onCourseClick = { course -> navController.navigate("editor/${course.id}") },
                     bottomBarVisible = bottomBarVisible,
                     highlightCourseId = pulseCourseId,
@@ -950,6 +959,9 @@ private fun AppNavHost(
                     viewModel = viewModel,
                     // 这一页不再自带页头：带的几何与首页第一行同一个容器（T80）
                     headerBandOnScreen = statsHeaderBandOnScreen,
+                    // 带的**高**也吃首页那一支量到的实高（T80-C）：不托这一下，这一页的带只有
+                    // 48dp（126px）而首页是 148px，「返回」比首页那枚胶囊高 11px
+                    headerBandReferenceHeightPx = homeHeaderBandHeightPx,
                 )
             }
         }

@@ -103,6 +103,16 @@ fun StatsScreen(
      * 答一次（[com.buaa.schedule.ui.home.headerBandOwnerOf]），两个调用点各判各的迟早走岔。
      */
     headerBandOnScreen: Boolean,
+    /**
+     * 首页那条带量到的实高（px，null = 首页还没量到过），本页的带按它**托底**（T80-C）。
+     *
+     * ⚠️ **不许给默认值**：默认 null = 这一页永远按 48dp 下限排，而首页那一支里立着分段控件、
+     * 它那层玻璃衬里（COMPACT 上下各 4dp）把带子垫到 148px —— 两页的带差 22px，
+     * 带里的可点件被居中之后差 11px：用户读作"跳进统计页页头往上跳一格"。
+     * 这一枚是设备侧事实（实高），按仓库口径由调用点（`AppNavHost`，那里同时看得到两页）
+     * 当参数传进来；取的是"下限"而不是"照抄"，所以字号调到极大、这一支自己长高时不会被裁。
+     */
+    headerBandReferenceHeightPx: Int?,
 ) {
     val state by viewModel.uiState.collectAsState()
     val summary = remember(state.courses, state.semester, state.timeSlots) {
@@ -134,8 +144,9 @@ fun StatsScreen(
     val maxCredit = remember(summary) { summary.perCourse.mapNotNull { it.credit }.maxOrNull() ?: 0.0 }
 
     // 页头条自己的实高（T80）：不在台上的那一页按它占位，带子保持同样的高度、板上不画字。
-    // 与首页那一行各自量各自的那一帧：首页的字号档与这里不同（首页左列可能两行），
-    // 共用一个常数就是"拿一枚没量过的宽度向同行要地方"的 T48 老账换个维度重演。
+    // 与首页那一行各自量各自的那一帧，共用一个常数就是"拿一枚没量过的宽度向同行要地方"的
+    // T48 老账换个维度重演。⚠️ 这一枚只服务**占位**：它已经被下面的参照托过一次底，
+    // 再把它喂回首页当参照就成了只涨不落的棘轮（T80-C 的账），所以它到此为止。
     var statsBandHeightPx by remember { mutableStateOf<Int?>(null) }
 
     // 这一页不再用 Scaffold（T80）。装机量下来：同一枚 ScheduleHeaderBand 挂进 Scaffold 的
@@ -146,9 +157,13 @@ fun StatsScreen(
     Column(modifier = modifier.fillMaxSize()) {
         // 与首页第一行同一个容器（T80）：带的内衬、下限高同一个来源 ⇒ 跳转期间那条带的
         // 上下沿像素位置一动不动，而板上永远只有一套字（谁在台上由 headerBandOwnerOf 答）。
+        // T80-C 补的那一半：下限还要吃首页那一支量到的实高（referenceHeightPx）——
+        // 首页那一支里立着分段控件，它那层玻璃衬里比这里最高的「返回」(48dp) 多出一截，
+        // 不托这一下，两页的可点件就差 11px（装机：首页 158..284 / 统计页 147..273）。
         ScheduleHeaderBand(
             drawnOnScreen = headerBandOnScreen,
             measuredHeightPx = statsBandHeightPx,
+            referenceHeightPx = headerBandReferenceHeightPx,
             modifier = Modifier.onSizeChanged { statsBandHeightPx = it.height },
         ) {
             // ⚠️ 「返回」保持文字按钮 + `Text("返回")` 这个字面量：它是 Baseline Profile
