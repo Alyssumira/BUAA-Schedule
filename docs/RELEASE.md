@@ -159,6 +159,10 @@ CI 用 `BUAA_KEYSTORE_BASE64` 等环境变量传同一组值（secrets 存不了
   所以**扫码签到这一轮涨 3,877,970 字节（+3.70MB）**，几乎全是
   `com.google.mlkit:barcode-scanning`；更早记录的 2,453,873 地板见
   `docs/PERFORMANCE_BATTERY_AUDIT.md`，逐项拆解见 `docs/BUAA_SPOC_SIGNIN_PLAN.md` §1.3。
+  ⚠️ 那份文档在 T85 之后已标成**已拆除链路的历史记录**（智学北航那一族整条拆掉了，现在这条
+  签到链是北航 iClass），但它 §1.3 量的是 **ML Kit 解码库本身**的体积代价 —— 与是哪一族的签到
+  码无关，iClass 用的还是同一颗 `barcode-scanning`，所以那组数字仍然作数。引用时只引体积账，
+  别把里面的行号 / 哈希锚点照抄到当前代码。
 - **剪枝只按 `.so` 文件名做**：`packaging.jniLibs.excludes` 里逐条列出
   `lib/<非arm64>/libbarhopper_v3.so`。**不要**改用 `ndk.abiFilters`，也**不要**写
   `lib/x86/**` 这类目录通配 —— 两者都会连带裁掉 `libandroidx.graphics.path.so`，

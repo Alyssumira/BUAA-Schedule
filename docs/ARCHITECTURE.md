@@ -44,8 +44,12 @@ BuaaLoginScreen（WebView 统一身份认证）
 2. 保留的登录 WebView **必须留在窗口内**（`BuaaWebSession` 的 1×1 隐藏宿主），
    脱离窗口后页面内异步 JS 不会执行，刷新课表会恒定超时。
 3. **仅教务**（byxt / gsmis）接口鉴权认页面上下文，原生复刻必 401 —— 不要试图"优化"成原生请求。
-   智学北航 SPOC 不在此列：它的凭证是请求头 `token` + `rolecode`，原生 HTTP 就是生产路径
-   （`SpocApi.kt`），别把这条 401 结论往那边外推，两套链路各记各的。
+   签到那条链不在此列，它**本来就是原生**的：iClass 的提交是一条拼接出来的 GET
+   （`IClassApi.kt` + `IClassSignUrl.kt`，按契约**不发** Cookie、**不发**鉴权头、不发请求体），
+   登录那一次也只是一次 form-urlencoded `POST`。别把教务那 401 的结论往这边外推。
+   （从前这一条的对照物是智学北航的 `SpocApi.kt`：那一族的凭证在请求头 `token` + `rolecode` 上、
+   同样是原生 HTTP。**那是已拆除链路的历史记录** —— `SpocApi.kt` 已随 T85 整族删除，
+   而这条"两套链路各记各的、别互相外推"的结论一个字没改：它钉的是教务这一侧别改原生。）
 
 失败路径**不要清登录会话**：`CookieManager.removeAllCookies` 会把 SSO TGT 一起删掉，
 用户被迫重新登录。
