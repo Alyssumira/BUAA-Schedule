@@ -279,7 +279,9 @@ fun scanRejectEvidenceText(info: ScanRejectInfo): String {
  * 而滚动码的 `timestamp` 那一个字节都不出去。
  */
 fun scanRejectForensicLine(info: ScanRejectInfo): String {
-    val builder = StringBuilder("扫码解析失败 档=${info.rung} 族=${info.family} 长度=${info.textLength}")
+    // 认得出却走到失败支 = 两本账漂移，这一行的前缀必须说实话，不许沿用"解析失败"
+    val head = if (info.rung == ScanRejectRung.Recognized) "扫码解析判档与收码打脸" else "扫码解析失败"
+    val builder = StringBuilder("$head 档=${info.rung} 族=${info.family} 长度=${info.textLength}")
     builder.append(" 形状=").append(rejectSketch(info))
     builder.append(" 参数名=").append(
         if (info.paramNames.isEmpty()) "无" else rejectNameList(info.paramNames, LogSeparator),

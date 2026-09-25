@@ -275,6 +275,21 @@ class ScanRejectClassifierTest {
         )
     }
 
+    /** 收得下那一档的日志前缀不许写"失败"：那一格说的是两本账漂移，不是解析失败 */
+    @Test
+    fun `判档与收码打脸时日志说实话`() {
+        val line = scanRejectForensicLine(ScanRejectClassifier.classify(REAL_CODE))
+        assertTrue("这一档的前缀没换过来：$line", line.startsWith("扫码解析判档与收码打脸"))
+        assertFalse("明明收得下，日志却报解析失败：$line", line.startsWith("扫码解析失败"))
+        // 真失败那几档的前缀不动（`logcat -s ScanSignInParse | grep 扫码解析失败` 是它的过滤条件）
+        for (case in CASES.filter { it.rung != ScanRejectRung.Recognized }) {
+            assertTrue(
+                "${case.title}：失败档的日志前缀漂了：${scanRejectForensicLine(ScanRejectClassifier.classify(case.raw))}",
+                scanRejectForensicLine(ScanRejectClassifier.classify(case.raw)).startsWith("扫码解析失败"),
+            )
+        }
+    }
+
     /** 名字、host 与路径都封顶：一枚 200 字的怪 host 不能把失败卡顶出画面 */
     @Test
     fun `超长的形状被截断而不是撑破卡片`() {
