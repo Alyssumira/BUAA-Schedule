@@ -2243,6 +2243,7 @@
   首页一像素不动、统计页被托到同高。**方向不许反**：统计页量到的高已被下限托过，喂回首页就是只涨不落的棘轮。
   改后装机（我这一轮独立复量，`lastUpdateTime=2026-09-25 00:37:18` GMT）：首页「今日课表」191..252 = 统计页标题 191..252，
   首页胶囊/分段 195..247 = 统计页「返回」195..248 ⇒ **差 ≤1px**。
+  取证原件（49 份 uiautomator dump，改前/改后各一档）归档在 `D:/schedule/.tmp/T80c/`，不在 worktree 里，清目录不丢。
 
 **门禁（我在 `55eaf37` 上独立重跑，四步全过）**：clean 全量签名包 **7,237,369 B**（上一档 7,236,290 ⇒ **+1,079 B**）、
 **1,510 tests / 180 suites / 0 失败 / 0 skipped**（二跑复验 skipped 仍 0）、lint **0 error / 14 warning**。
@@ -2257,3 +2258,45 @@
 ② 那支代理 03:21 之后静默 5 小时、**改动全在工作树里一枚没提交**，而 `emulator.exe` / qemu 进程当时已经没了
    ⇒ 它的最后一步是设备取证、设备消失就挂在那里。**判"代理还在不在"最硬的一枚证据是宿主进程，不是 mtime**。
    我按 `git diff` 存了 `.tmp/T80c-wip-0822.patch`（27,998 B）再自己提交、跑门禁、合并。
+
+## T84 + T81：签到接上真平台 iClass，统计页把已算好的量露出来（`5dce0a0` / `3c4d774`）
+
+**T84 iClass 整条链（`d4b4ae2` A / `0dd81fc` B / `2a06340` C / `5dce0a0` D，18 文件 +2,211）**
+契约按 09-24 取证那份逐条落地，没有一处是自己发明的：提交 = `GET 扫码原文 + "&id=" + User.id`
+（**只装原文、不装字段** —— `ScanTarget.IClass(rawUrl)`，"提取字段再重组 URL"就是实测 `参数错误!` 的形状）；
+端口 `:8081 → :8181` 的升级**按 authority 整段比 `host:port`**，不是 `startsWith` ——
+后者会让 `iclass.buaa.edu.cn:8081.evil.com/` 这种后缀伪装被"升级"成一条加密的**外发**请求；
+外壳两层判定缺一不可（`STATUS` 整数 switch：`1`=业务错误 / `2`=框架 / 其余=成功，**成功还要** `result.stuSignStatus=="1"`），
+`ERRCODE` 恒 `"100"` 不参与分支、`ERRMSG` 逐字透传、**空体判失败**、解 JSON 前先看响应头否则按 **GBK**；
+口令只在登录那一趟过手、**一个字都不落盘**，`IClassIdStore` 单开 prefs 与密钥 alias
+（`iclass_id_store` / `iclass_id_store_key`）⇒ 教务 Cookie / SPOC / iClass 三条链路互不牵连。
+解析次序是**先 iClass 后 SPOC**：SPOC 的域名门槛是 `*.buaa.edu.cn`，哪天 iClass 的码里多出一个 `qdid` 参数就会被 SPOC 抢走、
+打去智学北航 —— 那是"签错平台"，比解析失败难查得多。设置页新增一行「已登录/未登录北航 iClass」
+（**不是**把 T80-A 删掉的双入口加回来：那是统计页的重复入口，这是一条账号行，不登录就没法签到）。
+⚠️ **端到端仍未验**：模拟器喂不进二维码，`id` 只能由真登录拿到 ⇒ 真机现扫等下次课，且**动手前先问用户**。
+
+**T81 统计页第一批（`69e94e6` A / `1238c96` B / `25502be` C / `3c4d774` D，8 文件 +652）**
+四件已算未露的量：学期名（`semesterTitleOf` 分 `Named`/`CodeOnly` 两档，因为 `buildFallbackSemester` 会把
+`termName` 写成 `termCode`、设置页允许 `"未命名学期"` 占位）、每日门数（口径钉死 `DayLoad.courseCount` =
+**全学期并集、按门去重、不分周**，界面原话「这学期里，周一有 3 门不同的课…同一门课在同一天排成几段也只算一门，这里不分具体哪一周」）、
+课程明细教师/地点/校区（**走 domain 路线**：`CourseCredit.fragments: List<Course>`，`fragmentCount` 改成它的派生属性 ——
+两枚各存一份就会让"几段合并"变成第二套能算错的真相；统计页零 `groupBy`）、学分降序 + 逐门课「由 N 段排课合并」。
+`"未知教师"` 那枚字面量兜底（`BuaaScheduleParser.kt:78`，不是 null）折成 `teacherOrNull`，不再印出一位不存在的老师。
+⚠️ **它驳回了卡面一条指令，是对的**：合计学分不许复用 `formatCredit` —— `CourseConstraints.MAX_CREDIT = 100` 是**一门课**的量程，
+多门课之和（手动堆课 40×3.5=140）会被 `normalizeCredit` 判 null ⇒ **这一页唯一的大字号会直接空着**。
+改成抽出共用的 `formatScaledCredits`（拼法只有一份）+ 另开 `formatCreditTotal`（量程自定）。
+守卫一档没动（三枚 `SectionHeader` 字面量、`weight(GanttLabelWeight)` 仍恰好 3 处、`remember(` 约束原样通过）。
+
+**并发与接手（两条新事实）**
+这两张卡是**同时派出**的（基点同为 `684da1b`、文件零交集）。T81 卡面写死"不许 rebase/merge"，
+所以我按这个顺序收：合 T84 → `git -C .worktrees/T81 rebase master`（4 枚换哈希，`merge-base --is-ancestor` 确认建在 T84 之上）
+→ **在 rebase 后的对象上重跑全量门禁** → 才 `merge --ff-only`。省掉那次重跑就是"门禁跑的对象 ≠ 合进去的对象"。
+⚠️ **宿主在 10:16 非正常重启过一次**（`systeminfo` 启动时间 10:23:56；Kernel-Power **41** + EventLog **6008**"关闭是意外的"），
+代理、gradle daemon、模拟器一起没 ⇒ T84 的死因是机器重启，不是它自己断的（任务注册表 `TaskStop` 回 `No task found` 是权威判据）。
+09:36 那次只装了 Defender 定义（KB2267602），**不足以解释这次重启，真因未定**。
+
+**门禁与地板**：T84 在 `5dce0a0` 上 185 suites / **1,565** tests / 0 失败 / 0 skipped、包 **7,246,891 B**
+（与代理 09:12 那枚**字节数逐位相同** ⇒ 产物层可复现）；T81 在 rebase 后 `3c4d774` 上
+**186 suites / 1,583 tests / 0 失败 / 0 skipped**、lint **0 error / 14 warning**、clean 签名包 **7,247,072 B**。
+⇒ **新地板 1,583 / 186 / 0 / 0，包体 7,247,072 B**；T80-C→T81 之间累计 +11,782 B（iClass 那一族 +9,522、统计页 +181）。
+**本地 19 枚未 push，发版仍未做。**
