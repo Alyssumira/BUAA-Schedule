@@ -113,4 +113,60 @@ class CourseMetaFormatTest {
         // 教务导出脏数据里有半截括号（对齐组件侧 parenInner 的既有口径）：取到结尾
         assertEquals("田径", peProjectOf("体育(田径"))
     }
+
+    // —— formatCreditTotal（合计 ≠ 单体量程）——
+
+    @Test
+    fun formatCreditTotalTable() {
+        val cases = listOf(
+            0.0 to "0",
+            43.0 to "43",
+            6.7 to "6.7",
+            2.20 to "2.2",
+            99.999 to "100",
+            105.55 to "105.55",
+            -1.0 to "0",
+        )
+        for ((input, expected) in cases) {
+            assertEquals("formatCreditTotal($input)", expected, formatCreditTotal(input))
+        }
+    }
+
+    @Test
+    fun creditTotalBeyondPerCourseCapStillGetsANumber() {
+        // MAX_CREDIT = 100 是"一门课"的尺子：40 门 × 3.5 = 140 是真合计，
+        // 拿单体的尺子判它 null 会让统计页那个唯一的大字号空着
+        assertEquals("120", formatCreditTotal(120.0))
+        assertEquals("140", formatCreditTotal(140.0))
+        assertNull("单体那一枚仍然要判 null：两条量程各守各的", formatCredit(140.0))
+    }
+
+    @Test
+    fun formatCreditTotalNeverPrintsANonFiniteSum() {
+        assertEquals("0", formatCreditTotal(Double.NaN))
+        assertEquals("0", formatCreditTotal(Double.POSITIVE_INFINITY))
+        assertEquals("0", formatCreditTotal(Double.NEGATIVE_INFINITY))
+    }
+
+    // —— teacherOrNull（教务的字面量哨兵）——
+
+    @Test
+    fun teacherOrNullTable() {
+        val cases = listOf(
+            null to null,
+            "" to null,
+            "   " to null,
+            // BuaaScheduleParser.kt:78 写进去的就是这一串：它不是 null，但也不是一个人
+            "未知教师" to null,
+            " 未知教师 " to null,
+            "张三" to "张三",
+            " 王教授 " to "王教授",
+            // 只折整串等于哨兵的值：真给出来教师名的课不许被这枚删掉
+            "未知教师(代)" to "未知教师(代)",
+            "李四、未知教师" to "李四、未知教师",
+        )
+        for ((input, expected) in cases) {
+            assertEquals("teacherOrNull($input)", expected, teacherOrNull(input))
+        }
+    }
 }

@@ -31,9 +31,34 @@ import com.buaa.schedule.domain.schedule.WeekParser
  */
 fun formatCredit(credit: Double?): String? {
     val value = CourseConstraints.normalizeCredit(credit) ?: return null
-    // 按百分位取整后拼字面量：value 已被 normalizeCredit 夹在 0..100 的有限值内，
-    // ×100 取整不会溢出，也不需要任何 locale 敏感的格式化器
-    val scaled = kotlin.math.round(value * 100).toLong()
+    return formatScaledCredits(kotlin.math.round(value * 100).toLong())
+}
+
+/**
+ * 学分合计的格式化：`43.0` -> "43"、`6.7` -> "6.7"、`120.0` -> "120"。
+ *
+ * ⚠️ 这一枚**不走** [CourseConstraints.normalizeCredit]，是有意的：那把尺子的
+ * [CourseConstraints.MAX_CREDIT] = 100 是"一门课"的上界，而这里是多门课相加的结果 ——
+ * 一个 43 学分的学期是真的，手动堆课的用户堆出 120 学分也是真的，
+ * 拿单体量程去判它 null 会让统计页那个唯一的大字号空着（比偏大的数字更糟）。
+ * 数字的**拼法**与 [formatCredit] 共用 [formatScaledCredits] 这一份，
+ * 统计页不许再手抄一份 `trimCredits`：两份手抄迟早一条带 .0、另一条不带。
+ *
+ * 脏值只收非有限值（NaN / Infinity 来自被写坏的库行求和），负数按 0 画 ——
+ * 求和的每一项都已经被 normalizeCredit 夹在 0..100，"负的总学分"这件事不存在。
+ */
+fun formatCreditTotal(credits: Double): String =
+    if (!credits.isFinite()) "0" else formatScaledCredits(kotlin.math.round(credits.coerceAtLeast(0.0) * 100).toLong())
+
+/**
+ * 已经放大 100 倍的学分数 → 文案（[formatCredit] 与 [formatCreditTotal] 共用的一步）。
+ *
+ * 不用 `DecimalFormat` / `NumberFormat`：它们跟着 locale 走（小数点可能是逗号），
+ * 这个函数要在纯 JVM 单测里钉死、又要与设备上完全一致，字符串只能自己拼。
+ * 最多两位小数（学分实际口径最多 .5），非整数去尾随 0：`2.20` -> "2.2"；
+ * 四舍五入到百分位后成整的按整数档（`99.999` -> "100"）。
+ */
+private fun formatScaledCredits(scaled: Long): String {
     val whole = scaled / 100
     val frac = scaled % 100
     return when {
@@ -50,6 +75,30 @@ fun formatCredit(credit: Double?): String? {
  * 措辞必须一字不差，调用点各写一遍"学分"后缀是将来某处悄悄改口的开始。
  */
 fun creditLabel(credit: Double?): String? = formatCredit(credit)?.let { "${it}学分" }
+
+/**
+ * 教务解析在"这一行没给教师"时写的**字面量**哨兵：见
+ * `BuaaScheduleParser.kt:78`（`teacherWeekPairs.isEmpty()` 那一支整条课程都填它），
+ * 解析自检也按它数"未知教师"的条数（同文件 :119）。
+ *
+ * 它是数据里的字符串、不是 null，所以照抄 `course.teacher` 就会把"没有教师"
+ * 印成一位名叫「未知教师」的人 —— 与 [formatCredit] 不许把 null 印成 "0" 同一族账。
+ */
+const val UNKNOWN_TEACHER_SENTINEL = "未知教师"
+
+/**
+ * 教师 → 可显示的教师：哨兵与空白一律折成 null，真值原样返回（只 trim）。
+ *
+ * null 的含义是"不知道"，调用点按仓库既有的「缺项整段跳过」（[joinMeta]）处理，
+ * 不要在这里补一句占位文案：详情 Sheet 那类"每一行都得有字"的界面自己决定占什么，
+ * 判据只管把假教师挡掉。
+ *
+ * 只折**整串等于**哨兵的值：`"未知教师(代)"`、`"三位教师：未知教师"` 这类是教务真给了
+ * 内容的课名，挡掉就是在删数据 —— 教务侧还有 `extractTeacherWeekPairs` 那条多教师链，
+ * 那里的 "未知教师" 是真教师名单里的一项，不在这枚的射程内。
+ */
+fun teacherOrNull(teacher: String?): String? =
+    teacher?.trim()?.takeIf { it.isNotEmpty() && it != UNKNOWN_TEACHER_SENTINEL }
 
 /**
  * [peProjectOf] 认的项目名长度上限。
