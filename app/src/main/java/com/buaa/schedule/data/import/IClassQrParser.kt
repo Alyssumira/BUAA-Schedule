@@ -23,14 +23,20 @@ object IClassQrParser {
      * 同族还有一条 `app/course/stu_auto_sign.action`（POST，带经纬度与 `machineInfo`，
      * 人不在课堂也能签）—— 那不是"扫老师投的码"，本仓刻意不接，也不许有人顺手把它
      * 从这里放过来：路由门槛就是为它设的。
+     *
+     * T83 起 `internal`：[ScanRejectClassifier] 要说"host 对但路径不是签到入口"那一档，
+     * 而它必须与这道门槛**同一个字面量**，两处分身就是两本账（改这里它跟着改）。
      */
-    private const val SCAN_SIGN_ROUTE = "/app/course/stu_scan_sign.action"
+    internal const val SCAN_SIGN_ROUTE = "/app/course/stu_scan_sign.action"
 
-    /** 这门课这一学期的排课 ID：这条链上唯一的必填参数，实测值形如 `2488752` */
-    private const val COURSE_SCHED_ID = "courseschedid"
+    /**
+     * 这门课这一学期的排课 ID：这条链上唯一的必填参数，实测值形如 `2488752`。
+     * 界面要念的是驼峰原样，所以那份写人在 [ScanRejectClassifier]（只有显示用的差别）。
+     */
+    internal const val COURSE_SCHED_ID = "courseschedid"
 
     /** 取值形态照实测：纯数字。放宽到 `[0-9A-Za-z_-]` 是因为服务端别的 ID 也用过带横线的形状 */
-    private val SCHED_ID_PATTERN = Regex("^[0-9A-Za-z_-]{1,64}$")
+    internal val SCHED_ID_PATTERN = Regex("^[0-9A-Za-z_-]{1,64}$")
 
     /**
      * @return [ScanTarget.IClass]，装着**原文**（只去过首尾空白）；null 表示这不是 iClass 的签到码。
@@ -71,19 +77,20 @@ object IClassQrParser {
      *
      * 为什么不整串 `contains`：参数值里也可能出现这个字符串（`?back=…stu_scan_sign.action`），
      * 那时候这张码根本不是签到入口，而是别的东西包了一层。
+     *
+     * T83：切 path 那一步搬到 [urlPathOf]（同一刀，[ScanRejectClassifier] 说 WrongRoute 那一档
+     * 时要念它），本函数的判据一个字没动 —— 否则"收不收"与"为什么没收"就长成了两把尺子。
      */
-    private fun isScanSignRoute(url: String): Boolean {
-        val head = url.substringBefore('#')
-        val separator = head.indexOf("://")
-        if (separator <= 0) return false
-        val pathStart = head.indexOf('/', separator + 3)
-        if (pathStart < 0) return false
-        val queryStart = head.indexOf('?', pathStart).let { if (it < 0) head.length else it }
-        return head.substring(pathStart, queryStart).endsWith(SCAN_SIGN_ROUTE)
-    }
+    private fun isScanSignRoute(url: String): Boolean =
+        urlPathOf(url)?.endsWith(SCAN_SIGN_ROUTE) == true
 
-    /** query 取值（键名大小写不敏感）：只看 `#` 之前那一截 —— 这张码没有 hash 路由 */
-    private fun queryValue(url: String, key: String): String? {
+    /**
+     * query 取值（键名大小写不敏感）：只看 `#` 之前那一截 —— 这张码没有 hash 路由。
+     *
+     * T83 起 `internal`：[ScanRejectClassifier] 判"参数齐不齐 / 值合不合形状"用的就是这两道
+     * 门槛本身，不再抄一份取值逻辑。⚠️ 取到的值只许用来**判形状**，绝不许进日志或界面。
+     */
+    internal fun queryValue(url: String, key: String): String? {
         val query = url.substringBefore('#').substringAfter('?', "")
         if (query.isEmpty()) return null
         for (pair in query.split('&')) {
@@ -117,6 +124,36 @@ internal fun urlAuthority(url: String): String? {
         }
     }
     return if (end > start) url.substring(start, end) else null
+}
+
+/**
+ * 一条绝对 URL 的 scheme（`://` 之前那段，逐字取、小写归一）；不是这个形状时返回 null。
+ *
+ * 判据不吃它（"是不是这张码"与 http/https 无关，见 [IClassQrParser] 的门槛四），
+ * 它只服务 T83 那一行取证：`http:` 与 `https:` 是两种现场（前者才需要 [IClassSignUrl.upgradeToTls]）。
+ */
+internal fun urlSchemeOf(url: String): String? {
+    val separator = url.indexOf("://")
+    if (separator <= 0) return null
+    return url.substring(0, separator).lowercase()
+}
+
+/**
+ * 一条绝对 URL 的 path（authority 之后、第一个 `?` 之前，且只看到 `#` 为止）；没有 path 段时 null。
+ *
+ * 刀法与 [urlAuthority] 同一份：先 `substringBefore('#')` 再找 `?`，所以
+ * `http://h/p?x=1#/y?q=2` 的 path 是 `/p`、`http://h/p#/y?q=2` 的也是 `/p`。
+ * 这一刀原来是 [IClassQrParser.isScanSignRoute] 内联写的，T83 搬出来共用 ——
+ * 判档的那一把尺子与收码的那把必须是同一把，两把就会有一把说谎。
+ */
+internal fun urlPathOf(url: String): String? {
+    val head = url.substringBefore('#')
+    val separator = head.indexOf("://")
+    if (separator <= 0) return null
+    val pathStart = head.indexOf('/', separator + 3)
+    if (pathStart < 0) return null
+    val queryStart = head.indexOf('?', pathStart).let { if (it < 0) head.length else it }
+    return head.substring(pathStart, queryStart)
 }
 
 /**

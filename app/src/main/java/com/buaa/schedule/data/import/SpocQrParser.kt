@@ -22,8 +22,11 @@ sealed interface SpocSignTarget {
  */
 object SpocQrParser {
 
-    /** 签到 ID 允许字符集：服务端 ID 形如 `1AA9A5D7F4295A0DE0630211FE0AB83E`（32 位十六进制大写） */
-    private val ID_PATTERN = Regex("^[0-9A-Za-z_-]{4,64}$")
+    /**
+     * 签到 ID 允许字符集：服务端 ID 形如 `1AA9A5D7F4295A0DE0630211FE0AB83E`（32 位十六进制大写）。
+     * T83 起 `internal`：[ScanRejectClassifier] 判"参数齐但值不合法"那一档用的就是这一道门槛。
+     */
+    internal val ID_PATTERN = Regex("^[0-9A-Za-z_-]{4,64}$")
 
     /**
      * 裸 ID 的收严版：形态三没有任何上下文（不是链接、不是路由），
@@ -59,11 +62,23 @@ object SpocQrParser {
         return null
     }
 
-    private const val SIGN_IN_ROUTE = "/pages/table/signIn"
+    /**
+     * 智学北航 H5 的签到路由。
+     * T83 起 `internal`：[ScanRejectClassifier] 要靠它说"是路由片段、不是普通文本"那一档。
+     */
+    internal const val SIGN_IN_ROUTE = "/pages/table/signIn"
+
+    /**
+     * host 是否落在这族的域名门槛上（`spoc.buaa.edu.cn` 或任一 `*.buaa.edu.cn` 子域）。
+     * 从 [isSpocUrl] 里拆出来的同一道判据 —— 判档那边要说"host 对但参数不齐"，
+     * 用的必须是这一把尺子，不能另量一次。
+     */
+    internal fun isSpocDomain(host: String): Boolean =
+        host == "spoc.buaa.edu.cn" || host.endsWith(".buaa.edu.cn")
 
     private fun isSpocUrl(url: String): Boolean {
         val host = runCatching { java.net.URI(url.substringBefore('#').ifEmpty { url }).host }.getOrNull()
-        if (host != null) return host == "spoc.buaa.edu.cn" || host.endsWith(".buaa.edu.cn")
+        if (host != null) return isSpocDomain(host)
         // URI 解析失败（原生壳偶尔会带奇怪的前缀）时退化到子串判定
         return url.contains("spoc.buaa.edu.cn") || url.contains(SIGN_IN_ROUTE, true)
     }
@@ -82,8 +97,11 @@ object SpocQrParser {
      *
      * 同名时以**后出现**的 fragment 参数为准 —— hash 路由是 H5 真正的入参来源，
      * 主 query 往往是分享链接包装层留下的。
+     *
+     * T83 起 `internal`（[ScanRejectClassifier] 判"缺哪个参数 / 哪个值不合法"用），
+     * ⚠️ 但**值只许用来判形状**：日志与界面只许读 [queryParamNames] 那一颗名字表。
      */
-    private fun queryParams(url: String): Map<String, String> {
+    internal fun queryParams(url: String): Map<String, String> {
         val result = mutableMapOf<String, String>()
         // 两段各自只剥一次 '?'：'#' 之前是主 query，之后是 hash 路由自带的 query。
         // 没有 '#' 时第一段就是整条 URL，第二段为空串直接跳过。
@@ -99,6 +117,14 @@ object SpocQrParser {
         }
         return result
     }
+
+    /**
+     * 这条链接上**看得见的参数名**（小写、按出现次序、值为空的算看不见）。
+     *
+     * 单独一颗而不用 [queryParams] 的 keys：取证行与失败卡都要念这一串，
+     * 而"念名字"与"看见值"之间那道界限一旦要靠调用方自觉，就早晚会有人把整个 map 拼进日志。
+     */
+    internal fun queryParamNames(url: String): List<String> = queryParams(url).keys.toList()
 
     private fun urlDecode(value: String): String =
         runCatching { java.net.URLDecoder.decode(value, "UTF-8") }.getOrDefault(value)

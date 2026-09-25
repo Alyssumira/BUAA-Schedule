@@ -69,7 +69,7 @@ class ScanTargetParserTest {
 
     @Test
     fun `解析层零import零android零取钟`() {
-        for (name in listOf(TARGET_FILE, PARSER_FILE, URL_FILE)) {
+        for (name in listOf(TARGET_FILE, PARSER_FILE, URL_FILE, REJECT_FILE)) {
             val code = blankComments(readSource(name))
             val imports = code.lines().map(String::trim).filter { it.startsWith("import ") }
             assertTrue("$name 出现了 import，这一层就到不了纯 JVM：$imports", imports.isEmpty())
@@ -151,6 +151,9 @@ class ScanTargetParserTest {
         const val TARGET_FILE = "ScanTarget.kt"
         const val PARSER_FILE = "IClassQrParser.kt"
         const val URL_FILE = "IClassSignUrl.kt"
+
+        /** T83：拒绝原因的分档判据与三处措辞都住在这颗文件里，纯度口径与上面三枚一模一样 */
+        const val REJECT_FILE = "ScanReject.kt"
 
         val CLOCK_AND_ANDROID = listOf(
             "android.",

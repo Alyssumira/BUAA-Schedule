@@ -39,7 +39,13 @@ sealed interface ScanTarget {
  */
 object ScanTargetParser {
 
-    /** @return null 表示这**两族**都不是（别的 App 的二维码、一串无关文本等） */
+    /**
+     * @return null 表示这**两族**都不是（别的 App 的二维码、一串无关文本等）。
+     *
+     * ⚠️ null 只说"不收"，不说**为什么**不收 —— 那一句由 [ScanRejectClassifier.classify] 答
+     * （T83：界面按档说话，取证按形状留痕）。两者对"收不收"用的是同一道门槛：
+     * 判据第一问就是问这一颗。
+     */
     fun parse(raw: String?): ScanTarget? =
         IClassQrParser.parse(raw) ?: SpocQrParser.parse(raw)?.let { ScanTarget.Spoc(it) }
 }
