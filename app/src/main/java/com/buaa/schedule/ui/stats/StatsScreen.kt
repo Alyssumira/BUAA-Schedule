@@ -51,6 +51,8 @@ import com.buaa.schedule.core.designsystem.courseColor
 import com.buaa.schedule.core.designsystem.coursePlateSceneLuma
 import com.buaa.schedule.core.designsystem.legibleTintPlate
 import com.buaa.schedule.core.designsystem.motionSpec
+import com.buaa.schedule.domain.model.formatCredit
+import com.buaa.schedule.domain.model.formatCreditTotal
 import com.buaa.schedule.domain.schedule.CourseWeekSpans
 import com.buaa.schedule.domain.schedule.SemesterStats
 import com.buaa.schedule.domain.schedule.WeekFreeGrid
@@ -138,6 +140,11 @@ fun StatsScreen(
     val loadTrend = remember(state.courses, state.semester, state.timeSlots, state.currentWeek) {
         WeeklyLoadTrend.trendOf(state.courses, state.semester, state.timeSlots, state.currentWeek)
     }
+    // 这一页此前一个字都没提"是哪一学期"：termName 一直在 state 里，
+    // 但它在两条写入路径上都会退化成学期代码或占位名，所以措辞由内核判（见文件内注释）
+    val semesterTitle = remember(state.semester) {
+        semesterTitleOf(state.semester?.termName, state.semester?.termCode)
+    }
     // 柱状图吃的是 7 项平均分钟数；busiest 是 ISO 星期序号（1 = 周一），下标要退一格
     val dayMinutes = remember(summary) { summary.dayLoads.map { it.averageMinutes } }
     val busiestIndex = remember(summary) { summary.busiestDayOfWeek?.minus(1) }
@@ -201,7 +208,7 @@ fun StatsScreen(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM),
                 ) {
-                    CreditHeadline(summary)
+                    CreditHeadline(summary, semesterTitle)
                     DayLoadCard(dayMinutes, busiestIndex, summary)
                     // 趋势紧跟「每周负载」：那张是全学期平均、这张是按周摊开，同一个问题的两半
                     LoadTrendCard(loadTrend)
@@ -270,20 +277,40 @@ private fun CenteredStatsCard(content: @Composable () -> Unit) {
 
 /** 总学分：页面上唯一一个大字号，其余卡片都不该和它抢 */
 @Composable
-private fun CreditHeadline(summary: SemesterStats.SemesterSummary) {
+private fun CreditHeadline(
+    summary: SemesterStats.SemesterSummary,
+    title: SemesterTitle?,
+) {
     GlassSurface(
         variant = GlassVariant.PANEL,
         contentPadding = DesignTokens.spaceL,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceXS)) {
+            // 「这是哪一学期」：学期名判据见 semesterTitleOf（两个降级值不当学期名吹）。
+            // 放在最前面是因为它限定的是下面所有数字——没有这一行，"本学期总学分"的
+            // "本学期"要靠这一页之外的记忆来补（切了学期而这一页还是同一串数字时最危险）。
+            title?.let {
+                Text(
+                    text = when (it.kind) {
+                        SemesterTitleKind.Named -> it.text
+                        SemesterTitleKind.CodeOnly -> "学期代码 ${it.text}"
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
+            }
             Text(
                 text = "本学期总学分",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                text = trimCredits(summary.totalCredits),
+                // 合计走 formatCreditTotal 而不是 formatCredit：100 是"一门课"的量程，
+                // 多门课相加超它的学期是真的，判成 null 会让这枚大字号空着
+                text = formatCreditTotal(summary.totalCredits),
                 style = MaterialTheme.typography.displaySmall,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.primary,
@@ -337,6 +364,23 @@ private fun DayLoadCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            // 每日课次数（T81）：口径钉在 DayLoad.courseCount 上 —— 那是**全学期并集、
+            // 按门去重、不分具体哪一周**的门数（SemesterStats.kt:207 的 groupsByDay）。
+            // ⚠️ 别与 WeekFreeGrid.Grid.occupiedByDay 混用：那一枚是"这一周这天占了几节"，
+            // 两个数在同一天上天生不等（一门 1-8 周的课并集里算 1 门、第 12 周算 0 节），
+            // 所以这句话必须自带"这学期里"与"不分周次"两个限定，否则装机一定被读成数不对。
+            val courseCounts = summary.dayLoads.filter { it.courseCount > 0 }
+            if (courseCounts.isNotEmpty()) {
+                Text(
+                    text = "这学期里，" + courseCounts.mapIndexed { index, load ->
+                        val day = "周${weekdayChar(load.dayOfWeek)}"
+                        if (index == 0) "${day}有 ${load.courseCount} 门不同的课" else "$day ${load.courseCount} 门"
+                    }.joinToString("、") +
+                        "；同一门课在同一天排成几段也只算一门，这里不分具体哪一周",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -344,7 +388,16 @@ private fun DayLoadCard(
 /** 课程色圆点：行内的颜色标记，不是图标——图标刻度最小档 [DesignTokens.iconSmall] 落在正文行里偏重 */
 private val CourseDotSize = 10.dp
 
-/** 每门课的学分：名字 + 一条占比条，占比条用课程自己的颜色，和课表上的色块对得上 */
+/**
+ * 每门课的学分：名字 + 一行明细（教师/地点/校区/几段合并）+ 一条占比条，
+ * 占比条用课程自己的颜色，和课表上的色块对得上。
+ *
+ * T81 起这一张卡做了三件事，都不新增任何数据源：
+ * 1. **按学分降序**（domain 层没有排序字段，`perCourse` 是首次出现序，所以排序是这里的事）；
+ * 2. **逐门课说清它由几段排课合并**（吃 `fragmentCount`，一段的不写）；
+ * 3. **把片段级的教师/地点/校区露出来**（吃 `CourseCredit.fragments`，
+ *    判据在 [courseRowNote]，这里不 groupBy）。
+ */
 @Composable
 private fun CreditListCard(perCourse: List<SemesterStats.CourseCredit>, maxCredit: Double) {
     GlassSurface(
@@ -354,7 +407,7 @@ private fun CreditListCard(perCourse: List<SemesterStats.CourseCredit>, maxCredi
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM)) {
             SectionHeader("课程学分")
-            perCourse.forEach { item ->
+            perCourse.sortedByCreditDesc().forEach { item ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
@@ -370,6 +423,18 @@ private fun CreditListCard(perCourse: List<SemesterStats.CourseCredit>, maxCredi
                             maxLines = 1,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         )
+                        // 明细行：全都没得说（无教师/教室/校区、只有一段）时整段不画，
+                        // 与详情 Sheet 的「缺项整段跳过」同一条口径
+                        courseRowNote(item.fragments)?.let { note ->
+                            Text(
+                                text = note,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = DesignTokens.spaceMicro),
+                            )
+                        }
                         MiniBar(
                             fraction = if (maxCredit <= 0.0) 0f
                             else (item.credit ?: 0.0).toFloat() / maxCredit.toFloat(),
@@ -378,16 +443,49 @@ private fun CreditListCard(perCourse: List<SemesterStats.CourseCredit>, maxCredi
                         )
                     }
                     Spacer(modifier = Modifier.width(DesignTokens.spaceS))
-                    Text(
-                        text = item.credit?.let { trimCredits(it) } ?: "—",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Medium,
-                    )
+                    // 学分的格式化只有一处（CourseMetaFormat）：改前这里私自带一份 trimCredits，
+                    // 与 Sheet 各自演进迟早一条带 .0、另一条不带。
+                    // null 的画法也与 Sheet 对齐：**没有就不画**，不再印 "—" ——
+                    // "—" 会把「教务没给」画成"这门课的学分是某个说不出口的值"，
+                    // 而 0 学分是真值、会照常画成 "0"（Course.kt:41 那条分界）。
+                    formatCredit(item.credit)?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
                 }
+            }
+            // 留空容易被读成"画坏了"，所以这一档要当场说一句（数字来自 perCourse，不另取源）
+            val missing = perCourse.count { it.credit == null }
+            if (missing > 0) {
+                Text(
+                    text = "$missing 门课没有学分数据：右侧数字与占比条留空，总学分里也没算它们",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
 }
+
+/**
+ * 统计页那一列的排序：学分降序，**没有学分数据的那些整档沉底**。
+ *
+ * 为什么不排序：`SemesterStats.creditsByCourse` 交出来的是首次出现序（LinkedHashMap），
+ * 那是"库里怎么来"的次序，对这一列没有意义 —— 用户扫这一列要的是"哪门课占的分量最大"。
+ * 排序放在界面这一侧，domain 层不备第二份排序字段（归并口径只有一份那条承诺）。
+ *
+ * 两档判据分开写，而不是一个 `compareByDescending { it.credit }`：后者靠的是
+ * `compareValues` 把 null 当最小这个隐式规矩，读代码的人看不出"不知道"与"0 分"
+ * 谁在前。并列的课由稳定排序保持首次出现序，结果不随传入顺序抖动。
+ */
+internal fun List<SemesterStats.CourseCredit>.sortedByCreditDesc(): List<SemesterStats.CourseCredit> =
+    sortedWith(
+        compareByDescending<SemesterStats.CourseCredit> { it.credit != null }
+            .thenByDescending { it.credit },
+    )
 
 /** 空档：全学期一节都不落课的格子数 */
 @Composable
@@ -577,6 +675,7 @@ private fun humanMinutes(minutes: Long): String {
     }
 }
 
-/** 6.0 → "6"，3.5 → "3.5"：学分是 Double，但整数不该带着一串 .0 上桌 */
-private fun trimCredits(value: Double): String =
-    if (value % 1.0 == 0.0) value.toLong().toString() else value.toString()
+// 学分的格式化不在这一页手抄：全应用只有 CourseMetaFormat 那一份
+// （formatCredit 管单体、formatCreditTotal 管合计）。改前这里私带过一枚 trimCredits，
+// 它与 formatCredit 是同一段逻辑的手抄版，而 null → "—" 那一档还和详情 Sheet 的
+// "null 整行不画" 走了两套口径 —— 两条账都在 T81 这次收掉。
