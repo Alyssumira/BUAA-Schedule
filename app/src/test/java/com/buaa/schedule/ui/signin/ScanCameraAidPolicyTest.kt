@@ -394,6 +394,147 @@ class ScanCameraAidPolicyTest {
         assertEquals(FrameCodeRung.NothingDetected, state.shownRung)
     }
 
+    // ---- ⑤ T88①：一帧的符号怎么数 —— 空白原文永远不算"读到了" ----
+
+    /**
+     * 判档的表驱动：五类原文各自落在 readable 还是 candidates 那一侧。
+     *
+     * 这一张表就是本卡的全部修法（装机那一发：151.4 s / 1,389 帧，**每帧**一枚
+     * `len=0 / bytes=0 / corners=4` 的符号、框短边 284..303 px）。改前调用点用
+     * `rawValue != null` 数，于是第二行那一档被数成"读到了"，阶梯与兜底一起被按住。
+     *
+     * ⚠️ 空白口径**不许在这张表里另立**：这里断言的是"落在哪一侧"，而"什么叫空白"
+     * 由 [decodingAdmission] 那一把尺子说（它自己的十二档表在 `ScanDecodingAdmissionTest`）。
+     * 两张表叠在一起才是完整的判据：U+3000 与 U+00A0 必须同侧（Kotlin 的 `isBlank()` 把
+     * U+00A0 算空白，`java.lang.Character.isWhitespace` 不算 —— 拿后者当尺子就会漏一档），
+     * 而零宽空格 U+200B 与长度 1 的真文本必须留在 readable（那才是真码，杀掉它就是 T87
+     * 注释里点名的"把真码一起杀掉"那条路）。
+     */
+    @Test
+    fun blankPayloadIsNeverCountedAsAReadCode() {
+        val realCode = "http://iclass.buaa.edu.cn:8081/app/course/stu_scan_sign.action" +
+            "?courseSchedId=2488752&timestamp=1790247391994"
+        val rows = listOf(
+            // 原文 → readable / candidates（框固定给一枚 300 px 的，只问数到哪一侧）
+            SymbolRow(null, 0, 1),                   // ML Kit 只回框不给原文：本就在候选那一侧
+            SymbolRow("", 0, 1),                     // 装机实测那一档：空串绝不是"扫到了"
+            SymbolRow(" ", 0, 1),                    // 半角空格
+            SymbolRow("\n", 0, 1),                   // 换行
+            SymbolRow("\t", 0, 1),                   // 制表
+            SymbolRow("\u3000", 0, 1),                // U+3000 全角空格
+            SymbolRow("\u00A0", 0, 1),                // U+00A0 不换行空格
+            SymbolRow(" \u3000\u00A0\n\t", 0, 1),   // 混一版全空白
+            SymbolRow("a", 1, 0),                     // 长度 1 的真文本：单字符 QR 就是这形状
+            SymbolRow("\u200Bx", 1, 0),               // 零宽空格不算空白（与准入同一把尺子）
+            SymbolRow(realCode, 1, 0),                // 真码原文
+        )
+        for (row in rows) {
+            val counts = frameSymbolCounts(listOf(FrameSymbol(row.payload, 300)))
+            assertEquals("${row.payload}: readable", row.readable, counts.readableCodeCount)
+            assertEquals("${row.payload}: candidates", row.candidates, counts.candidateCodeCount)
+            // 框只跟着**候选**数（readable 那一支本来就 `continue` 掉了）：判档要的是"候选里最大的框"
+            val expectedEdge = if (row.candidates > 0) 300 else NoCandidateBoxShortEdgePx
+            assertEquals("${row.payload}: 框的账（candidate 才带框）：", expectedEdge, counts.largestCandidateBoxShortEdgePx)
+            // 反向钉：空白档绝不允许长出 CodeReadable 那一档（本卡要避免的那件事故）
+            val rung = frameCodeRung(counts.readableCodeCount, counts.candidateCodeCount, counts.largestCandidateBoxShortEdgePx)
+            if (row.readable == 0) {
+                assertFalse("空白/无原文被数成了 CodeReadable：${row.payload}", rung == FrameCodeRung.CodeReadable)
+            } else {
+                assertEquals("有原文那一档仍然是 CodeReadable：${row.payload}", FrameCodeRung.CodeReadable, rung)
+            }
+        }
+        // 混合帧：一枚真码 + 三枚空白 ⇒ 只数那一枚（readable 压倒 candidates，与 frameCodeRung 的次序同源）
+        val mixed = frameSymbolCounts(
+            listOf(FrameSymbol("", 400), FrameSymbol(realCode, 10), FrameSymbol("\u3000", 500), FrameSymbol(null, 600)),
+        )
+        assertEquals("混合帧的 readable 数多了（空白挤进了读到的那一侧）：", 1, mixed.readableCodeCount)
+        assertEquals("混合帧的 candidates：", 3, mixed.candidateCodeCount)
+        assertEquals("最大短边按候选算：", 600, mixed.largestCandidateBoxShortEdgePx)
+        // 空列表 = 这一帧什么都没交回来：三颗数都必须落在"没看见"那一侧
+        val empty = frameSymbolCounts(emptyList())
+        assertEquals(0, empty.readableCodeCount)
+        assertEquals(0, empty.candidateCodeCount)
+        assertEquals("没框时必须递哨兵（frameCodeRung 靠它落 NothingDetected）：", NoCandidateBoxShortEdgePx, empty.largestCandidateBoxShortEdgePx)
+        assertEquals(FrameCodeRung.NothingDetected, frameCodeRung(empty.readableCodeCount, empty.candidateCodeCount, empty.largestCandidateBoxShortEdgePx))
+        // 框缺失（哨兵）与退化框（≤0）原样带上：不可信档是内核的既有判据，不许在数符号时就地折掉
+        val noBox = frameSymbolCounts(listOf(FrameSymbol("", NoCandidateBoxShortEdgePx)))
+        assertEquals(1, noBox.candidateCodeCount)
+        assertEquals(NoCandidateBoxShortEdgePx, noBox.largestCandidateBoxShortEdgePx)
+        assertEquals("框不可信却去抬视场：", FrameCodeRung.CodeUndecodable, frameCodeRung(noBox.readableCodeCount, noBox.candidateCodeCount, noBox.largestCandidateBoxShortEdgePx))
+        val zeroBox = frameSymbolCounts(listOf(FrameSymbol("", 0), FrameSymbol(" ", -7)))
+        assertEquals("退化框被折成了没框（短边取最大而不是取哨兵）：", 0, zeroBox.largestCandidateBoxShortEdgePx)
+    }
+
+    /**
+     * 判档之后的两本账：阶梯还走不走、第二引擎的连击攒不攒 —— 装机那一窗口逐帧复算。
+     *
+     * 三行对照用的是**同一批符号**，只有"数法"不同（改前 `rawValue != null` / 改后走准入）：
+     * - 改前：1,389 帧全 `CodeReadable` ⇒ `tooSmallStreak` 恒 0、`retryableStreak` 恒 0；
+     * - 改后（短边 ≥291 那 79.3%）：`CodeUndecodable` ⇒ 不抬视场（焦点的事，抬了白抬），
+     *   但可重试连击每帧 +1 ⇒ 第二引擎终于有触发量；
+     * - 改后（短边 <291 那 20.7%）：`CodeTooSmall` ⇒ 阶梯按 [ZoomStepFrames] 帧一档往上走。
+     *
+     * 第四行是本卡的红线：这台没有缩放控制时（装机实测 `zoomCtl=false`）连击都不计，
+     * 一发射不出 —— 那条设备事实与空白原文无关，改前改后一样，本卡不假装修了它。
+     */
+    @Test
+    fun blankFramesReleaseTheLadderAndFeedTheFallbackStreak() {
+        val blank = listOf(FrameSymbol("", 296))
+        val counts = frameSymbolCounts(blank)
+        val undecodable = frameCodeRung(counts.readableCodeCount, counts.candidateCodeCount, counts.largestCandidateBoxShortEdgePx)
+        assertEquals("装机那一档（短边 296）改后该落在：", FrameCodeRung.CodeUndecodable, undecodable)
+        val tooSmall = frameSymbolCounts(listOf(FrameSymbol("", 290)))
+        assertEquals(
+            "短边 290（差一格到 291 阈值）：",
+            FrameCodeRung.CodeTooSmall,
+            frameCodeRung(tooSmall.readableCodeCount, tooSmall.candidateCodeCount, tooSmall.largestCandidateBoxShortEdgePx),
+        )
+
+        // 改前的数法：同一枚空白原文按 `rawValue != null` 算"读到了" ⇒ CodeReadable
+        var before = ScanAssistState()
+        // 改后：走准入 ⇒ 空白落 candidates
+        var after = ScanAssistState()
+        var afterTooSmall = ScanAssistState()
+        repeat((ZoomStepFrames * 2).toInt()) {
+            before = advanceScanAssist(before, FrameCodeRung.CodeReadable, true).state
+            after = advanceScanAssist(after, undecodable, true).state
+            afterTooSmall = advanceScanAssist(afterTooSmall, FrameCodeRung.CodeTooSmall, true).state
+        }
+        assertEquals("改前那种数法把可重试连击压死了（兜底永远叫不醒）：", 0L, before.retryableStreak)
+        assertEquals("改前那种数法同时按住了缩放连击：", 0L, before.tooSmallStreak)
+        assertEquals("改后可重试连击必须逐帧攒：", ZoomStepFrames * 2, after.retryableStreak)
+        assertEquals("CodeUndecodable 不该抬视场（焦点的事，缩放帮不上）：", 0L, after.tooSmallStreak)
+        assertEquals("改前误判成 CodeReadable，屏上档位自然也不会翻面：", FrameCodeRung.CodeReadable, before.shownRung)
+        assertEquals("改后屏上档位走到 CodeUndecodable（滞后窗 [RungSettleFrames] 帧之后）：", FrameCodeRung.CodeUndecodable, after.shownRung)
+        assertEquals("CodeTooSmall 那一侧连满两窗就该抬两档：", 2, afterTooSmall.stepIndex)
+        assertEquals("抬过档之后缩放连击清零、可重试连击照旧往上攒：", ZoomStepFrames * 2, afterTooSmall.retryableStreak)
+        assertEquals("发过命令的那一帧缩放连击清零（下一档从这一步之后重数）：", 0L, afterTooSmall.tooSmallStreak)
+
+        // 这台没有缩放控制（装机实测 zoomCtl=false）：命令一发射不出，可重试连击照旧攒
+        var noZoom = ScanAssistState()
+        repeat((ZoomStepFrames * 2).toInt()) {
+            noZoom = advanceScanAssist(noZoom, FrameCodeRung.CodeTooSmall, false).state
+        }
+        assertEquals("没有缩放控制的设备上不该有任何档位：", 0, noZoom.stepIndex)
+        assertEquals("可重试连击不看缩放能力（两本账分家，兜底反而是唯一还能出声的手段）：", ZoomStepFrames * 2, noZoom.retryableStreak)
+    }
+
+    /** T88① 的判据本体：`advanceScanAssist` 里不许有第三本账 —— 空白档不推进判死 */
+    @Test
+    fun noRungWhatsoeverFeedsTheGiveUpRatchet() {
+        // 判据侧的结构事实：四档全喂一遍，帧观测内核只返回 ScanAssistOutcome（没有健康度那颗）
+        for (rung in FrameCodeRung.entries) {
+            val outcome = advanceScanAssist(ScanAssistState(), rung, true)
+            assertNotNull("档位 $rung 没给出下一状态：", outcome.state)
+            assertTrue("档位 $rung 的取值域漂了：", FrameCodeRung.entries.contains(outcome.state.candidateRung))
+            assertFalse("可重试连击出现了负数（判据被谁改写了？）：", outcome.state.retryableStreak < 0L)
+        }
+        // 空白原文那一档既不算失败也不算加分：四档里没有一档能改动 ConsecutiveDecodeFailureLimit 那本账
+        assertEquals("判死的阈值不在恢复内核里（本卡一行都没接）：", 3, ConsecutiveDecodeFailureLimit)
+    }
+
+    private data class SymbolRow(val payload: String?, val readable: Int, val candidates: Int)
+
     private data class RungRow(
         val readable: Int,
         val candidates: Int,
