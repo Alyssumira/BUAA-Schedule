@@ -2434,3 +2434,52 @@ lint 0 错 14 警、签名包 **7,245,205 B**（对上一档全量 7,238,948 是
 `ImportScreen.kt:244` 仍把配对条数念成「N 组时间冲突」——同一类账，本卡没顺手改；
 `WeekDrillCard` 的选中态用 `remember` 而非 `rememberSaveable`（转屏回到收起）；
 Baseline Profile 的交互 CUJ 里没有「展开钻取 / 开冲突向导」这两条（未重生成）。
+
+## T87：ML Kit 那枚「空原文」误检收口（#107 结掉一半）——`a304670`，2 枚 / 4 文件
+
+**先记账再改码，量出来的比卡面上严重**：AVD 虚拟场景那面棋盘格下，**每一帧**都被 ML Kit 解成一枚空原文。
+带临时探针（T67 式，用完 `git checkout --` 逐字节还原，`grep -rn T87PROBE --include=*.kt` = 0）的 98.03 秒窗口里：
+**795 帧 / 794 次解码回调 / 794 次 `len=0`**（`rawValue == null` 0 次、非空白 0 次）⇒ 空原文占 **99.9%**。
+失败卡只弹了 **1 次**，那不是判据的功劳、是提交闸门的功劳 —— 用户一按「重新扫码」`resume()` 清闸门，下一帧就又是一张卡。
+
+**三问的答案（行号取改前 `6a27324`）**：
+(a) 漏点在 `SpocScanScreen.kt:1103-1105`：`val raw = first?.rawValue` 之后那句 `if (raw == null)` **拦不住空串**，
+于是 `""` 一路走到 `SignInViewModel.kt:132-139` 的 `rejectScan`，档级出自 `ScanReject.kt:110`（`trim()` 后为空）→ `NotACode`。
+取的是 `rawValue`，全仓 main 里 `rawBytes` / `displayValue` 零命中。顺带一条实测事实：**兜底那一颗早就滤过空白**
+（`ZxingCppFallbackDecoder.kt:127` 的 `!it.text.isNullOrBlank()`）⇒ 改前漏的只有 ML Kit 这一头。
+(b) **它不推进判死棘轮**，恰恰相反 —— 空原文走的是成功回调，`noteDecodeSucceeded()`（`:1099`）排在最前，
+把 `consecutiveFailures / suspendUntilFrame / suspensionCycles` 整枚清零。⇒ 我卡面上那条担心
+（"对空白墙面也能把扫码页判死"）**不成立**，改前改后各 90 秒的 logcat 里停用/判死/解绑都是 **0 行**。
+(c) 相册挑了一张没码的图 ⇒ `raw == null` ⇒ `reportNoQrCode()`，那句「那张图里没认出二维码」本来就是对的；
+但 ML Kit 若回一枚**空原文**，它就和相机共用同一条 `rejectScan` ⇒ 同一句假话。这一档本卡一并收掉（实机未能无人驱动 Picker ⇒ **仅 JVM 证据**）。
+
+**收口落点**（新文件 `ui/signin/ScanDecodingAdmission.kt`，零 import、零 android、零时钟；来源与帧号当参数传入）：
+判据 `admitted ⟺ payload != null && isNotBlank()`，档级 `None / NoText / EmptyText / WhitespaceOnly`，
+节流账本（第一次必说 + **换档必说** + 每 50 次一次），三档出路 `Submitted / HeldByGate / BlankRejected`。
+接在**两道递交口**而不是状态机里（`submitDecodedText` 是两枚引擎共用的那一颗，另开一道就是两份真相）。
+两处判断值得记：① 留痕用 **Info 不用 Warn** —— 这一档没有失败、界面也没有卡，用 Warn 就是给读日志的人多造一条假故障；
+② `submitDecodedText` 的返回值从 `Boolean` 换成三态 —— 原先那句 `if (submitted) … else "被提交闸门压住"`
+在空白档会**说谎**，现在措辞由内核出，调用点一个字都不拼。空白口径只用 stdlib 那一把尺子
+（U+3000 与 U+00A0 算空白，U+200B 与 NUL 不算），表里逐字钉住、没自造第三档。
+
+**门禁（我在 `a304670` 上跑的干净全量，与代理读数一字不差）**：**1,641 tests / 192 suites / 0 失败 / 0 skipped**、
+lint 0 错 14 警（同集、baseline 未动）、签名包 **7,246,225 B**（对 7,245,205 是 **+1,020 B**）。⇒ **地板现在是 1,641 / 192 / 7,246,225。**
+另有一枚守卫把 `ScanReject.kt` / `SignInViewModel.kt` / `ScanSubmissionGate.kt` / `ScanRecoveryPolicy.kt` /
+`ScanFrameFlowPolicy.kt` / `ScanUiStatus.kt` **六份文件相对 `6a27324` 逐字节钉死**，我自己 `git diff --name-only` 复核过：零改动。
+
+**装机 A/B 我也自己复现了一遍**（改后包 `lastUpdateTime=2026-09-25 08:59:54` GMT，`firstInstallTime` 未变 ⇒ 全程 `install -r`，播种库 22 门课没动）：
+`logcat -d -s ScanSignInParse` = **0 条**（改前那趟是 1 条 `档=NotACode 长度=0`，且那张卡立着 98 秒没消失）；
+`logcat -d -s SpocScanScreen` 里「解码原文不收」按第 **1 / 50 / 100 / 150** 帧节流出来；
+`uiautomator dump` 全页只剩 `返回 / 扫码签到 / 相册识别` 三个文本节点 —— **失败卡没有再出现，取景与解码照旧**。
+
+**这台 AVD 今天自己死了两次**（不是代理关的）：`adb.log` `16:27:30 connection terminated: read failed`，同一秒宿主有一条
+`NVIDIA OpenGL Driver` 事件 ⇒ `-gpu host` 这条路今天不稳。两次都触发 `-read-only` 的 overlay 回滚，
+把当天更早的装机（`08:13:36` 那枚）抹回基础镜像 `2026-09-21 03:25:46`。⇒ **"改前"证据必须现装现量，别指望机上还留着**。
+
+**明留**：① 空原文**仍在污染帧观测** —— `noteFrameRung`（`:1283`）按 `rawValue != null` 计 readable ⇒ 判成
+`FrameCodeRung.CodeReadable`（`ScanCameraAidPolicy.kt:299`）⇒ 误检会**按住检测驱动的缩放阶梯**并清零 `retryableStreak`
+（也就是叫不醒兜底引擎）。本卡只收递交一头 ⇒ **新卡 T88 / #132**。
+② `ScanFrameFlowPolicy.kt:19-21` 那句"实测 2.80 帧/秒"与这两趟的 **8.10（带探针）/ 8.90（不带）** 差近 3 倍，
+没敢改（那颗文件被两枚守卫逐字节钉着，且条件不同）⇒ **新卡 T89 / #133**。
+③ "一按重新扫码就再弹一张"是**推断不是实测**（按钮 bounds 那条命令撞上模拟器第二次崩死）。
+④ 相册那条路与真码端到端：仅 JVM 证据。
