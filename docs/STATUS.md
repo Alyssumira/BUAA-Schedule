@@ -2335,3 +2335,62 @@
 
 **`QrModuleSideBudget = 97` 重算结论：不动**（T83-D）。真码 108 字符确实超 97，但那一档买的是"模块边长预算"
 而不是"整条 URL 装得下"，注释里的例子已从假想值换成这条真码逐字原文。
+
+## T85 + T85b：智学北航那一族整条拆掉，再把文档与备份闸门对上（`cbae446` / `3b28e9d`）
+
+**T85 代码（`cbae446`，40 文件 +446 / −1,840）** —— 删掉 `SpocApi` / `SpocQrParser` / `SpocSession` /
+`SpocTokenStore` / `SpocLoginScreen` 和它们各自的 JVM 单测与 androidTest。三处是要紧的：
+① **课前签到提醒的闸门改挂 `IClassSession.hasSession()`**（`reminder/ReminderReceiver.kt:127`）——
+它原先挂的是 SPOC 会话，拆族时不改这一句，"课前签到提醒"会**静默变成永不触发**而不是报错；
+`&&` 的先后次序照旧（先读开关、后解 KeyStore），省电审计那笔账没被顺手做掉。
+② 常量改名为 `PREF_SIGN_HINT`，但**字面量仍是 `"spoc_sign_hint"`**（`:161`）—— 换字面量等于把已装机
+用户那颗开关悄悄关掉；路由名 `spoc_scan`（`MainActivity.kt:358`）与文件名 `SpocScanScreen.kt` 同理保留。
+③ 拆掉的不只是活代码，还有三处**读不到的分支**：`SignInState.Resolving`、`Signed.alreadySigned`、
+`SignInPlatform` —— 那些语义只有智学北航给得出，留着就是界面上一条永不成立的路。
+
+**接手姿势（一条老坑，第二次踩）**：`ai/T85` 的分支 ref 上**一枚 commit 都没有**，全部改动躺在工作树里
+（代理在"改完没提交"的位置撞上 150 回合上限）。我先 `git diff HEAD --binary` 存成
+`.tmp/T85-wip-full.patch`（198,763 B）再自己提交 —— 数一支代理的成果只数 ref，这次的读数差是整整 40 个文件。
+
+**T85b 文档与备份（`3b28e9d`，4 枚 / 11 文件 +480 / −45，零业务代码改动）**
+T85 一张纸都没改，而 README 还在教人走智学北航登录、PRIVACY 还把 `spoc.buaa.edu.cn` 写成活端点。
+补齐的口径：README 的「扫码签到」整节换成 iClass（含"滚动码，翻旧截图没用"这条用户真会踩的），
+PRIVACY 的凭证表改成"只存一枚加密的 `id`、口令一个字不落盘、`id` 不是学号"，端点清单补上
+`https://iclass.buaa.edu.cn:8181/app/{user/login,course/stu_scan_sign}.action`，并把登录表单里那枚
+`verificationUrl` 讲清——它的值是**发给 iClass 的参数**，本应用从不访问 `:88` 那台校验网关。
+`docs/BUAA_API.md` 的 SPOC 节与 `docs/BUAA_SPOC_SIGNIN_PLAN.md` **内容一字未删**，只加历史横幅。
+
+**新落的一道闸门**：T84 的 `iclass_id_store.xml` 一直没进备份排除名单（T85 的代理记了账但按卡面不许动）。
+补进两套规则的每一块之后，留了一把抓漏排的尺子 ——
+`data/local/BackupRulesCoverCredentialStoresTest.kt`（3 条用例 / 305 行 / 全文件 `import android` 0 次）：
+它扫源码里每一处 `KeystoreBlobStore(` 实例化取 prefs 名，逐个要求出现在对应块里；
+**取不出名字就抛异常而不是静默跳过**，所以新增一枚凭证存储忘登记，`testDebugUnitTest` 当场红。
+我自己验过它真会红：临时删掉 `<cloud-backup>` 那一行 ⇒ 3 条里 2 条红，
+消息逐字是「backup_rules.xml \<cloud-backup\> 没排除 iclass_id_store.xml」，另一条同时抓到两个通道长岔；
+恢复后工作树 clean。
+
+**门禁（两步都是我自己在同一对象上跑的干净全量，非增量）**
+
+| 对象 | tests / suites | fail / skipped | lint | 签名包 | 增量 |
+| --- | --- | --- | --- | --- | --- |
+| `cbae446`（T85） | 1,582 / 185 | 0 / **0** | 0 错 14 警 | 7,238,880 B | **−12,499 B** |
+| `3b28e9d`（T85b） | 1,585 / 186 | 0 / **0** | 0 错 14 警 | 7,238,948 B | **+68 B** |
+
+上一档地板是 1,601 / 188 / 7,251,379 B（T83）。tests 少 19、suites 少 3 全是被删的三枚 SPOC 测试文件，
+包体转负也是删族的应有方向 —— 这一档**只比全量对全量**。
+
+**环境一条（今天烧了两轮门禁才定位）**：`clean` 连着失败两次，报 `Unable to delete directory
+'…\kyant-backdrop\build'` 并附一串 `build\kotlin\...\lookups\*.tab*`。握着句柄的是 **Kotlin 编译守护进程**，
+它是独立于 Gradle 守护进程的另一个 `java.exe`，`gradle --stop` 根本管不到它；而 `TaskStop` 掉后台构建
+会把 Gradle client 和 Kotlin daemon 一起留在场上，于是**下一次** `clean` 必死。
+⇒ `clean` 单独一次调用、确认 exit 0，再谈"干净全量"的字节数。
+
+⚠️ **端到端仍未验，口径没变**：拆族、接 iClass、补文档都落地了，但「课上扫真码 → 签到成功」这一趟
+在真机上**一次都没绿过**（模拟器喂不进相机帧，`id` 只能由真登录拿到）。README 现在写的是**设计行为**，
+不是实测结论 ⇒ #98（扫码页真机回归）的权重比之前更高，而且它现在是"整条签到链"的回归，不只是四态文案。
+动手前要先问用户。
+
+**两笔明留在盘面上没收的**：`SpocSignInEntryWiringGuardTest.kt` 的文件名还带 Spoc（内容早已指向 iClass，
+改名会牵动另一枚守卫里的"刀法照抄"引用）；README 仪器测试那一格仍写着「教务 cookie 与签到 token 落盘」
+—— SPOC 时代措辞，因为卡面钉死不许动那行没跑过的读数。新卡 **#130**：`:app:testDebugUnitTest` 的输入
+不含 `res/xml`，所以改完备份规则单跑 `--tests` 会端上缓存的绿灯（T85b 代理第一次回归实验就是这么假通过的）。
