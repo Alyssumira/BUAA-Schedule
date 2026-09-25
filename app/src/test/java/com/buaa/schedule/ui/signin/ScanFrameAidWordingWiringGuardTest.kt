@@ -182,10 +182,19 @@ class ScanFrameAidWordingWiringGuardTest {
         }
     }
 
-    /** ④ 反向钉：判据侧那几份文件相对本卡起点逐字节未动 —— 本卡只动"话怎么说" */
+    /**
+     * ④ 反向钉：判据侧那几份文件相对本卡起点逐字节未动 —— 本卡只动"话怎么说"。
+     *
+     * ⚠️ [SECOND_ENGINE_FILE] 在 T91（#135）之后换了钉法，口径与 T90 给 `ScanUiStatus.kt` 换的那一种
+     * 一模一样（见 [ScanSecondEngineWiringGuardTest] ④e 与本文件 ③）：整文件逐字节比较换成
+     * **"挖掉 T91 被授权改动的那几段之后逐字节"**。本卡要抓的还是原来那件事 ——
+     * ① 的结论是"误检与真糊码分不开"，所以谁都不许新立第二把空白尺子；T91 被授权的只有
+     * "三次失手之后还许不许再试一发"这一条判据，其余（准入、判档树、停法的另三档、额度与间隔）
+     * 一个字节都没让它漂。被挖的那几段每段都配了靶子，删掉判据来蒙混会当场红。
+     */
     @Test
     fun theJudgingSideWasNotTouchedByThisCard() {
-        for (relative in listOf(ADMISSION_FILE, SECOND_ENGINE_FILE, RECOVERY_FILE, FRAME_FLOW_FILE, GATE_FILE, VIEW_MODEL_FILE)) {
+        for (relative in listOf(ADMISSION_FILE, RECOVERY_FILE, FRAME_FLOW_FILE, GATE_FILE, VIEW_MODEL_FILE)) {
             val path = "$MAIN_PREFIX/$relative"
             val baseline = gitShow(T90_BASELINE, path)
             check(baseline != null) { "git 跑不动或基线取不到（$path@$T90_BASELINE），反向钉无从核对" }
@@ -196,6 +205,22 @@ class ScanFrameAidWordingWiringGuardTest {
                 normalizeNewlines(File(findMainJavaDir(), relative).readText()),
             )
         }
+        // 兜底那颗内核：挖掉 T91 的五段之外逐字节
+        val kernelPath = "$MAIN_PREFIX/$SECOND_ENGINE_FILE"
+        val kernelBaseline = gitShow(T90_BASELINE, kernelPath)
+        check(kernelBaseline != null) { "git 跑不动或基线取不到（$kernelPath@$T90_BASELINE），反向钉无从核对" }
+        val kernelCurrent = normalizeNewlines(File(findMainJavaDir(), SECOND_ENGINE_FILE).readText())
+        assertEquals(
+            "$SECOND_ENGINE_FILE 在 T91 被授权的那几段之外被改过了：这一卡只许改「三次失手之后还许不许再试」，" +
+                "节流常数（额度/间隔/连击）、准入那把唯一的空白尺子与其余三档停法都不许顺手改",
+            cutT91Spans(normalizeNewlines(kernelBaseline), "$kernelPath@$T90_BASELINE", T91Side.Baseline),
+            cutT91Spans(kernelCurrent, SECOND_ENGINE_FILE, T91Side.Current),
+        )
+        // 靶子：被挖掉的确实是本卡那件事（整段删掉判据、或把复探写成无限重试都会红在这里）
+        assertTrue("靶子丢了：复探那颗常数没了（挖掉它就等于把这一卡撤了）：", kernelCurrent.contains("internal const val SecondEngineReprobeFrameGap = 120L"))
+        assertTrue("靶子丢了：复探判据本体没了：", kernelCurrent.contains("internal fun afterMissesReprobeAllowsReprobe("))
+        assertTrue("靶子丢了：复探没有吃同一份额度（封顶那一道闸门不在）：", kernelCurrent.contains("ledger.fires < SecondEngineMaxFiresPerBind &&"))
+        assertTrue("靶子丢了：判死那一档还是旧的「本轮不再请它补解」那句谎：", !kernelCurrent.contains("本轮绑定不再请它补解"))
         // 帧观测的数法与判档树：整段逐字节（本卡没加计数、没改阈值、没改阶梯）
         val ledger = "$MAIN_PREFIX/$FRAME_LEDGER_FILE"
         val ledgerBaseline = gitShow(T90_BASELINE, ledger)
@@ -289,6 +314,86 @@ class ScanFrameAidWordingWiringGuardTest {
     }
 
     private fun normalizeNewlines(text: String): String = text.replace("\r\n", "\n")
+
+    // ---- T91（#135）的挖段重钉：被授权改动的只有「三次失手之后还许不许再试」那一条判据 ----
+
+    /** 挖哪一侧：Current = 工作树，Baseline = `git show` 取回的那一份 */
+    private enum class T91Side { Current, Baseline }
+
+    /**
+     * @param addedByThisCard true = 这一段是 T91 新增的（基线侧必须**找不到**它），
+     *                        false = 这一段 T91 被授权改动（两侧都按同一对锚点挖掉，剩下的字节照比）
+     */
+    private data class T91Span(
+        val start: String,
+        val end: String,
+        val addedByThisCard: Boolean,
+        val what: String,
+        val minChars: Int,
+        val maxChars: Int,
+    )
+
+    private val t91KernelSpans = listOf(
+        T91Span(
+            start = " * ## T91 收的那笔账",
+            end = " * ## 为什么发火判据吃的是",
+            addedByThisCard = true,
+            what = "文件注释里 T91 收账那一节",
+            minChars = 400, maxChars = 4_000,
+        ),
+        T91Span(
+            start = "    // T91：三次失手之后不再一票封死",
+            end = "    ledger.misses >= SecondEngineGiveUpAfterMisses -> SecondEngineDecision.GaveUp",
+            addedByThisCard = true,
+            what = "判据里那一发复探的分支",
+            minChars = 200, maxChars = 2_000,
+        ),
+        T91Span(
+            start = "// T91：复探的常数与判据成对放在这里",
+            end = "/**\n * 第二引擎的探针档位",
+            addedByThisCard = true,
+            what = "复探常数与判据本体",
+            minChars = 1_200, maxChars = 8_000,
+        ),
+        T91Span(
+            start = "    is SecondEngineDecision.GaveUp ->",
+            end = "    is SecondEngineDecision.EngineUnusable ->",
+            addedByThisCard = false,
+            what = "判死那一档的措辞",
+            minChars = 40, maxChars = 900,
+        ),
+        T91Span(
+            start = "    /** 连续几次没解出来",
+            end = "    internal object GaveUp",
+            addedByThisCard = false,
+            what = "GaveUp 那一档的一句话文档",
+            minChars = 20, maxChars = 400,
+        ),
+    )
+
+    /**
+     * 挖掉 [t91KernelSpans] 那几段。三条纪律一枚不少，都是这一族守卫的既有口径：
+     * 锚点找不到就抛（不许退化成"没比也算过"）、段长越出区间也抛（锚点对上但整段被换掉也算漂）、
+     * "本卡新增"的那些段在**基线侧**必须找不到（找得到就是基线取错了 —— 拿今天比今天的尺子量不出事）。
+     */
+    private fun cutT91Spans(text: String, label: String, side: T91Side): String {
+        var rest = text
+        for (span in t91KernelSpans) {
+            val at = rest.indexOf(span.start)
+            if (side == T91Side.Baseline && span.addedByThisCard) {
+                check(at < 0) { "$label 里已经带着 T91 新增的「${span.what}」：基线取错了，这么比量不出任何东西" }
+                continue
+            }
+            check(at >= 0) { "$label 里找不到 T91 段的锚点「${span.what}」（「${span.start.take(20)}」）：那段挪过家了，钉法要跟着重看" }
+            val stop = rest.indexOf(span.end, at + span.start.length)
+            check(stop > at) { "$label 里「${span.what}」的收尾锚点找不到：段边界漂了" }
+            check(stop - at in span.minChars..span.maxChars) {
+                "$label 里「${span.what}」长 ${stop - at} 字符，越出 [${span.minChars},${span.maxChars}]：钉法本身漂了"
+            }
+            rest = rest.removeRange(at, stop)
+        }
+        return rest
+    }
 
     private fun findMainJavaDir(): File {
         var dir: File? = File("").absoluteFile

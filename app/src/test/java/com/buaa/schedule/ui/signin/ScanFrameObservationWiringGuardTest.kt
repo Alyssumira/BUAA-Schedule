@@ -133,7 +133,13 @@ class ScanFrameObservationWiringGuardTest {
     fun theRungTreeAndTheFallbackTriggerWereNotRewritten() {
         assertRegionUnchanged(FRAME_LEDGER_FILE, "internal fun frameCodeRung(", "internal val ZoomLadderRatios")
         assertRegionUnchanged(SECOND_ENGINE_FILE, "internal fun retryableRung(", "internal const val SecondEngineStreakFrames")
-        assertRegionUnchanged(SECOND_ENGINE_FILE, "internal fun secondEngineDecision(", "internal fun secondEngineAfterFire")
+        // ⚠️ 触发判据那一段在 T91（#135）之后换了钉法：整段逐字节换成**"挖掉 T91 被授权的那一发
+        // 复探分支之后逐字节"**（与下面 STATUS_FILE 的 T90 钉法同一口径、同一套三条纪律）。
+        // 本卡要抓的仍是原来那句话：不许有人把"什么时候补解"的第二份真相藏进别的文件 ——
+        // 挖掉的只有那一发复探的分支，其余（判死的次序、连击/间隔/额度/闸门四道、终局优先）
+        // 仍然逐字节等于起点。复探自身的账由 ScanSecondEnginePolicyTest ③/⑧″/⑧‴ 与
+        // ScanFrameAidWiringGuardTest ④（那颗内核的整文件挖段比较）钉住。
+        assertRegionUnchangedExceptT91ReprobeBranch(SECOND_ENGINE_FILE)
         for (relative in listOf(ADMISSION_FILE, SHELL_FILE)) {
             val path = "$MAIN_PREFIX/$relative"
             val baseline = gitShow(T88_BASELINE, path)
@@ -205,11 +211,19 @@ class ScanFrameObservationWiringGuardTest {
         assertEquals("改后的档位分布与装机对不上（CodeUndecodable 帧数）：", 1_143, after.undecodableFrames)
         assertEquals("改后可重试连击必须逐帧攒满（装机探针末帧 1,450）：", 1_450L, after.maxRetryableStreak)
         assertEquals("改后缩放命令仍一发射不出（每段\"太小\"连击都不够一档的预算）：", 0, after.zoomCommands)
-        // 本卡 ② 的那笔决定：发火率不是"每帧"，而是三次失手即整轮封口
-        assertEquals("兜底发火次数不再是 3（本卡判 (c) 的全部依据就是这笔账）：", SecondEngineGiveUpAfterMisses, after.fires)
-        assertTrue("兜底的终局不是判死那一档（三次失手就该闭嘴，不是继续按帧双解）：$after", after.lastDecision is SecondEngineDecision.GaveUp)
+        // 本卡 ② 的那笔决定：发火率不是"每帧"。T88 当时的读数是"三次失手即整轮封口"，
+        // T91（#135）把那一档换成了"停快节奏 + 每 SecondEngineReprobeFrameGap 帧一发"，
+        // 所以同一批误检帧在今天的判据下复算出来是**封顶 8 发**（3 快 + 5 复探）——
+        // 装机复测读到的也是这个数（见 T91 收单报告）。发火总数的上界仍是额度，没变成每帧双解。
+        assertEquals("兜底发火次数不再是封顶那 8 发（复探若另开额度，这条会先红）：", SecondEngineMaxFiresPerBind, after.fires)
+        assertTrue("兜底的终局不是判死那一档（八发花完就该闭嘴，不是继续按帧双解）：$after", after.lastDecision is SecondEngineDecision.GaveUp)
         assertTrue("第一发不许早于连击门槛那一帧（$SecondEngineStreakFrames 帧）：", after.firstFireFrame >= SecondEngineStreakFrames)
         assertTrue("两发补解之间不许短于 $SecondEngineFrameGap 帧：", after.gapBetweenFires.isEmpty() || after.gapBetweenFires.min() >= SecondEngineFrameGap)
+        // T91 新加的一格：判死之后那几发的间隔必须真的落到复探间隔上（快节奏只许出现在前三发）
+        assertTrue(
+            "判死之后的复探比 $SecondEngineReprobeFrameGap 帧还密（那就是把判死换成了按帧双解）：${after.gapBetweenFires}",
+            after.gapBetweenFires.filter { it > SecondEngineFrameGap }.all { it >= SecondEngineReprobeFrameGap },
+        )
         // 复算与装机那一条读数**不同**的地方要说清：装机 tooSmallStreak 恒为 0 是因为这台
         // 没有缩放控制（advanceScanAssist 那一支连计都不计），不是因为框的分布；这里模拟的是
         // "一台有缩放控制的设备"，于是攒到的是每轮 5 帧的连击 —— 仍不够抬一档的预算。
@@ -235,7 +249,7 @@ class ScanFrameObservationWiringGuardTest {
         assertEquals("改后：阶梯必须爬到顶档（四档）才谈得上回滚：", ZoomLadderRatios.size, after.maxStep)
         assertTrue("改后：阶梯必须回滚并封口（抬了没用的工程定义）：$after", after.rolledBack)
         assertEquals("改后：四档加一次回滚共五发命令：", ZoomLadderRatios.size + 1, after.zoomCommands)
-        assertEquals("换序不许把补解改成每帧双解（仍是三次失手封顶）：", SecondEngineGiveUpAfterMisses, after.fires)
+        assertEquals("换序不许把补解改成每帧双解（仍是封顶那 8 发，T91 之后）：", SecondEngineMaxFiresPerBind, after.fires)
         assertTrue("换序后终局仍是判死那一档：$after", after.lastDecision is SecondEngineDecision.GaveUp)
     }
 
@@ -365,6 +379,45 @@ class ScanFrameObservationWiringGuardTest {
         assertTrue("区域比对扫了个空档（$path 的 $startSignature）：", before.isNotBlank())
     }
 
+    /**
+     * 触发判据那一段的"挖掉 T91 那一发复探分支之后逐字节"。
+     *
+     * 三条纪律与 T90 给 STATUS_FILE 换的那一种同口径：锚点找不到就抛、段长越界也抛、
+     * 起点那侧必须**没有**这一段（有就是基线取错了，那是拿今天比今天的假尺子），
+     * 另配一枚"被挖那段确实还在"的靶子 —— 把复探整段删掉来蒙混会红在靶子上。
+     */
+    private fun assertRegionUnchangedExceptT91ReprobeBranch(relative: String) {
+        val path = "$MAIN_PREFIX/$relative"
+        val baseline = gitShow(T88_BASELINE, path)
+        check(baseline != null) { "git 跑不动或基线取不到（$path@$T88_BASELINE）：区域反向钉无从核对" }
+        val start = "internal fun secondEngineDecision("
+        val end = "internal fun secondEngineAfterFire"
+        val before = region(normalizeNewlines(baseline), start, end, path)
+        val current = region(normalizeNewlines(File(findMainJavaDir(), relative).readText()), start, end, path)
+        val after = cutT91ReprobeBranch(current, path)
+        assertEquals(
+            "$relative 的 $start 那一段在 T91 那一发复探之外被改过了：本卡只许改「三次失手之后还许不许再试」，" +
+                "判死与另三道闸门的次序、连击/间隔/额度/闸门的取值都不许顺手改",
+            before,
+            after,
+        )
+        assertTrue("区域比对扫了个空档（$path 的 $start）：", before.isNotBlank())
+        // 靶子：被挖那一段确实还在，而且仍然吃同一份额度（整段删掉 = 把这一卡撤了，红在这里）
+        assertTrue("靶子丢了：复探的分支不在了：", current.contains("afterMissesReprobeAllowsReprobe(ledger, streak, frame, codeInHand, engineUsable)"))
+        assertTrue("靶子丢了：复探判据本体不在了：", File(findMainJavaDir(), relative).readText().contains("internal fun afterMissesReprobeAllowsReprobe("))
+        assertTrue("靶子丢了：起点那一段里本来不该有 T91：", !before.contains("T91"))
+    }
+
+    /** 挖掉 [T91_BRANCH_START] 到 [T91_BRANCH_END] 之间那一段；锚点与段长两道抛，缺一条都不算比过 */
+    private fun cutT91ReprobeBranch(text: String, label: String): String {
+        val at = text.indexOf(T91_BRANCH_START)
+        check(at >= 0) { "$label 里找不到 T91 复探分支的锚点「$T91_BRANCH_START」：那段挪过家了，钉法要跟着重看" }
+        val stop = text.indexOf(T91_BRANCH_END, at + T91_BRANCH_START.length)
+        check(stop > at) { "$label 里 T91 复探分支的收尾锚点找不到：段边界漂了" }
+        check(stop - at in 200..2_000) { "$label 里 T91 复探分支长 ${stop - at} 字符，不像那一发复探该有的长度（钉法本身漂了）" }
+        return text.substring(0, at) + text.substring(stop)
+    }
+
     private fun region(source: String, startSignature: String, endSignature: String, path: String): String {
         val start = source.indexOf(startSignature)
         check(start >= 0) { "$path 里找不到 $startSignature：写法换过了，这条守卫要跟着改" }
@@ -475,6 +528,13 @@ class ScanFrameObservationWiringGuardTest {
 
         /** 本卡的起点（master）：反向钉按这一枚逐字节核对 */
         const val T88_BASELINE = "9e155df"
+
+        /**
+         * T91（#135）被授权改动的那一发复探分支：起点是它的注释第一行，终点是**没被授权动**的
+         * 那行判死。③ 用这一对锚点把那一段截掉之后再逐字节比（口径同 [FRAME_AID_ANCHOR]）。
+         */
+        const val T91_BRANCH_START = "    // T91：三次失手之后不再一票封死"
+        const val T91_BRANCH_END = "    ledger.misses >= SecondEngineGiveUpAfterMisses -> SecondEngineDecision.GaveUp"
 
         /**
          * T90（#134）被授权改动的那一段（帧观测措辞）的锚点：它的 KDoc 第一行。
