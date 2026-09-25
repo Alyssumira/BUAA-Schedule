@@ -505,7 +505,18 @@ fun SpocScanScreen(
                 scanner.process(image)
                     .addOnSuccessListener { codes ->
                         val raw = codes.firstOrNull()?.rawValue
-                        if (raw == null) viewModel.reportNoQrCode() else viewModel.signIn(raw)
+                        // T87：相册那条路同判据、同措辞，只有"来源"这一枚参数不同 ——
+                        // 空原文在这里同样是"这张图没认出来"，不是"你挑错图了"。
+                        // 界面上它落的是「那张图里没认出二维码」那一句（本来就是这个处境），
+                        // 而不是按档说话那张失败卡：那张卡说的是"扫到的东西不是签到码"。
+                        val admission = decodingAdmission(raw, DecodingSource.GalleryImage)
+                        if (!admission.admitted) {
+                            Log.i(
+                                TAG,
+                                decodingAdmissionTraceText(admission, SingleActionOrdinal, NoDecodingFrame),
+                            )
+                        }
+                        if (!admission.admitted || raw == null) viewModel.reportNoQrCode() else viewModel.signIn(raw)
                     }
                     .addOnFailureListener { viewModel.reportNoQrCode() }
             }
@@ -978,6 +989,19 @@ private class QrCodeAnalyzer(
     private var secondEngineStopReported: SecondEngineDecision? = null
 
     /**
+     * T87：本轮绑定为止「空白原文」的留痕账本（第几次 / 上一次是哪一种空白）。
+     *
+     * ⚠️ 与 [secondEngineLedger] 不同，这一枚**必须** `@Volatile` 且整枚换引用：它有两个写者
+     * （主力那一支在 ML Kit 的回调线程上进 [submitDecodedText]，兜底那一支在分析线程上进同
+     * 一颗函数）。两个字段各自 volatile 能读出"新计数 + 旧档位"那种没发生过的组合，
+     * 节流就会按错档；整枚换之后最坏的情况是竞争里少记一格，而"收不收"的判定不读这本账，
+     * 少一格只会让留痕行报的序号偏一格 —— 说清代价，不假称无懈可击。
+     *
+     * 复位点在 [markBindStarted]（新绑定 = 新视场 = 重新数），与补解账本同一处。
+     */
+    @Volatile private var blankDecoding = BlankDecodingLedger()
+
+    /**
      * 绑定成功后调一次：健康度那几行取证要报"这是绑定后第多少毫秒发生的事"。
      * 顺带把首帧标志、交付尺寸标志、帧观测账本与补解账本一起复位（T59b① / T64② / T65①② / T66）——
      * 每一轮绑定都该重新报一次"首帧已到达"和"交付的是多大的帧"，也都该从基线视场重新数档、
@@ -990,6 +1014,8 @@ private class QrCodeAnalyzer(
         assist = ScanAssistState()
         secondEngineLedger = SecondEngineLedger()
         secondEngineStopReported = null
+        // T87：空白原文的留痕序号也按绑定数（旧序号对不上新画面，读日志的人会以为还是那一面墙）
+        blankDecoding = BlankDecodingLedger()
     }
 
     /**
@@ -1282,17 +1308,43 @@ private class QrCodeAnalyzer(
      * 抽出来之后按帧路径的墙钟读点还是三处（这里 + 两条失败留痕），
      * 那个数目由 `ScanSubmissionGateTest` ⑨ 钉着。
      *
-     * @return true = 真的递交了；false = 被闸门压住（调用点据此说实话，不许自称投出去了）
+     * ⚠️ T87 起这里还多一道**准入**：空白原文（`""` 或全是空白）在这里就被收下，
+     * 不递进状态机 —— 让它过去的下场就是那张对着空白墙面弹出来的失败卡（账见
+     * [ScanDecodingAdmission]）。判据与措辞都不在这一颗里，这里只搬运。
+     *
+     * @return 这一份原文的三种出路之一（措辞由 [decodedTextSubmissionClause] 出，不许调用点自己拼）
      */
-    private fun submitDecodedText(raw: String): Boolean {
+    private fun submitDecodedText(raw: String): DecodingSubmission {
+        val admission = decodingAdmission(raw, DecodingSource.CameraFrame)
+        if (!admission.admitted) {
+            noteBlankDecoding(admission)
+            return DecodingSubmission.BlankRejected
+        }
         // 墙钟在调用点读、判据是纯函数（仓库口径）
         val now = System.currentTimeMillis()
-        if (!shouldSubmitScan(handled, raw, now, awaitingUserAction)) return false
+        if (!shouldSubmitScan(handled, raw, now, awaitingUserAction)) return DecodingSubmission.HeldByGate
         // 先置位再回调：回调里就会开始发请求，这期间新帧可能已经进来了
         // （这一句次序钉在 ScanSubmissionGateTest 的形状守卫里）
         handled = ScanHandled(raw, now)
         onCode(raw)
-        return true
+        return DecodingSubmission.Submitted
+    }
+
+    /**
+     * 空白原文的留痕（T87）：记账、节流、说话，三件事一处做完。
+     *
+     * 级别是 Info 而不是 Warn：这一档没有失败、界面上也没有卡，用 Warn 说一件没失败的事
+     * 就是给读日志的人多造一条假故障；而 `Log.d` 在用户那台机器上等于没写
+     * （本页口径，见 [logFirstFrameArrived] 与 `ScanSilentBranchGuardTest` ⑦）。
+     *
+     * 帧号取 [frameCount] 当下那份快照 = "记这一行时分析器已收到的帧数"，不另立一本账；
+     * 相机与相册两条路的措辞都由内核给，调用点一个字都不拼。
+     */
+    private fun noteBlankDecoding(admission: DecodingAdmission) {
+        val trace = traceBlankDecoding(blankDecoding, admission.blankness)
+        blankDecoding = trace.ledger
+        if (!trace.speak) return
+        Log.i(TAG, decodingAdmissionTraceText(admission, trace.occurrence, frameCount))
     }
 
     /**
@@ -1357,13 +1409,13 @@ private class QrCodeAnalyzer(
             return
         }
         secondEngineLedger = secondEngineAfterResult(fired, decoded = true, usable = usable)
-        val submitted = submitDecodedText(text)
+        val submission = submitDecodedText(text)
         Log.i(
             TAG,
             "第二引擎补解命中：第 $frame 帧（本轮第 ${secondEngineLedger.fires}/$SecondEngineMaxFiresPerBind 发，" +
                 "zxing-cpp 计时 ${secondEngine.lastReadMillis()}ms，原文 ${text.length} 字）—— " +
                 "ML Kit 在同一段画面上已连续 ${seen.retryableStreak} 帧没解出原文，" +
-                if (submitted) "这一份按同一道闸门递交签到" else "这一份被提交闸门压住（同一份原文刚投过，或结果卡正等用户按）",
+                decodedTextSubmissionClause(submission),
         )
     }
 
