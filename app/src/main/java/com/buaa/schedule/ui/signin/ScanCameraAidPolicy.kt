@@ -38,9 +38,31 @@ internal const val MinModuleSizePx = 2
 /**
  * 判据采用的 QR 边长模块数：版本 20 = 97 模块/边。
  *
- * 为什么不取极端：版本 40（177 模块）会把下限推到这一页永远够不着；版本 4（33 模块）
- * 又把线放到 640×480 都能过关，等于没放。签到码是长 URL，v10–v20 是实际会遇到的上档，
- * 取 97 是「常见长链接 QR 的实际上界」。改动这个数字必须连下面 [DistantCodeHoleFill] 一起重算。
+ * T83 拿真码重算过一遍，结论是**这一档不动** —— 而"不动"得是算出来的：
+ * 真码逐字原文（投影照片经 zxing-cpp 解出，**108 个字符**）
+ * `http://iclass.buaa.edu.cn:8081/app/course/stu_scan_sign.action?courseSchedId=2488752&timestamp=1790247391994`
+ * 按 ISO/IEC 18004 的 byte 模式容量表逐档复算（本机 `qrcode` 库编一遍，不是查记忆）：
+ * L→v6、M→v7、Q→v8、H→v10，也就是 **41 / 45 / 49 / 57** 模块/边。
+ * 真码要吃的最坏一档是 v10 = 57，比这枚预算的 97 还差 40 模块；反过来说 97 盖得住的链接长度是
+ * 370 字符（H）到 846 字符（L），签到码要翻过它得先长到现在的 3.4 倍以上。
+ * T84 提交时在末尾拼的那串 `&id=<...>` **不算**：它只在提交 URL 上，课堂投影那张码里没有
+ * （带 `id=` 的原文被 [com.buaa.schedule.data.import.IClassQrParser] 直接拒收），
+ * 而这一档量的是"投在幕上那枚 QR 有多少模块"。
+ *
+ * 为什么不顺着真码降到 57（这笔账的现行犯就在这一段）：
+ * ① 这一档不是"这张码有多大"的测量，而是"这一页要求帧撑得住多大"的门槛。降到 57 后
+ *    [minUsefulAnalysisShortEdgePx] 从 626 掉到 **368 px** ⇒ CameraX 默认交付的 640×480
+ *    （短边 480）**过关**，"远距扫不出来"的头号嫌疑就此从取证行上消失；
+ * ② 而 ④ 那一本账按 ≥3 px/模块（[UsefulModulePx]）算，同一枚 v10 码要的是 **552 px** 短边，
+ *    480 依然不够 —— 两本账一读一否，① 说"这帧能用"、④ 说"画面里的码太小"，
+ *    同一张投影码在同一个 480 帧里被判成两件事；
+ * ③ [MinUsefulCandidateBoxPx] 也跟着从 291 掉到 171 px，缩放阶梯会更早停手（帮得更少）。
+ * 留 97 的代价只是把"其实勉强够用"的帧说成"余量不足"，保守方向是安全的那一边。
+ *
+ * 为什么不取更高：版本 40（177 模块）把下限推到 1142 px，这一页永远够不着；
+ * 版本 4（33 模块）把线放到 213 px，640×480 都能过关，等于没放。
+ * 改动这个数字必须连下面 [DistantCodeHoleFill] 与 ④ 的 [MinUsefulCandidateBoxPx] 一起重算，
+ * 反证那三个数（368 / 552 / 171）钉在 `ScanCameraAidPolicyTest` 的 `realSignInCodeStillFitsTheModuleBudget`。
  */
 internal const val QrModuleSideBudget = 97
 

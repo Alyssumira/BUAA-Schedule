@@ -31,6 +31,59 @@ class ScanCameraAidPolicyTest {
         }
     }
 
+    /**
+     * T83④：拿真码把 [QrModuleSideBudget] 这笔账重算一遍，结论是 97 仍然对 ——
+     * 而"仍然对"必须是算出来的，不是把上一版的注释抄一遍。
+     *
+     * 真码逐字原文 108 字符，按 ISO/IEC 18004 的 byte 模式容量表（本机用 `qrcode` 库逐档编码复算，
+     * 不是查记忆）落 v6(L) / v7(M) / v8(Q) / v10(H) ⇒ 41 / 45 / 49 / **57** 模块/边。
+     * 下面三个反证数就是"顺着真码降到 57"的代价：① 的下限掉到 368（默认帧过关）、
+     * 而 ④ 按 3 px/模块要的是 552（同一枚码被两本账一读一否）、候选框阈值掉到 171（阶梯更早停手）。
+     */
+    @Test
+    fun realSignInCodeStillFitsTheModuleBudget() {
+        val realCode = "http://iclass.buaa.edu.cn:8081/app/course/stu_scan_sign.action" +
+            "?courseSchedId=2488752&timestamp=1790247391994"
+        assertEquals("真码原文不再是 108 个字符（这条链的取证形状变了，整笔账要重算）：", 108, realCode.length)
+        assertEquals("QR 版本→边长模块数的公式不是 17 + 4v 了：", 57, 17 + 4 * 10)
+        assertEquals("预算对应的版本不再是 v20：", 97, 17 + 4 * 20)
+        assertTrue("预算已经盖不住真码最坏那一档（v10 = 57 模块/边）：", QrModuleSideBudget >= 57)
+        // ① 与 ④ 两本账都必须把 CameraX 默认那一帧判死 —— 这正是"照着一张码降档"会丢掉的东西
+        val defaultShortEdge = 480
+        assertEquals("① 的下限不再是 2px × 97 ÷ (0.5 × 0.62)：", 626, minUsefulAnalysisShortEdgePx(0.62f))
+        assertTrue(
+            "640×480 在 ① 这一档过关了（那本账的立论当场消失）：",
+            defaultShortEdge < minUsefulAnalysisShortEdgePx(0.62f),
+        )
+        assertEquals("④ 的候选框阈值不再由同一个预算算出：", 291, MinUsefulCandidateBoxPx)
+        // 默认帧（短边 480）给一枚 v10 真码的模块尺寸：码体 480×0.5×0.62 = 148.8 px ÷ 57 = **2.61 px/模块**
+        // —— 到了 ④ 认的 3 px 可用档之下，所以 ① 把这帧判成 BelowFloor 不是"按 97 才判得死"，
+        // 而是这一帧本来就喂不出可用的码：两本账在同一枚真码上同向，这才留得住 97 这档。
+        val realCodeModulePx = defaultShortEdge * DistantCodeHoleFill * 0.62f / 57f
+        assertTrue(
+            "640×480 已经给到真码 $realCodeModulePx px/模块（≥${UsefulModulePx}px）—— 那 ① 判它就是过严，" +
+                "预算该降到 57 而不是 97：",
+            realCodeModulePx < UsefulModulePx,
+        )
+        // 反证：预算降到真码的最坏档 57 ⇒ ① 的下限 368（480 过关）、④ 的可用档 552（480 不过关）
+        assertEquals("降到 v10 档时 ① 的下限：", 368, floorForBudget(57, MinModuleSizePx))
+        assertEquals("降到 v10 档时 ④ 的可用档：", 552, floorForBudget(57, UsefulModulePx))
+        assertEquals("降到 v10 档时的候选框阈值：", 171, UsefulModulePx * 57)
+        assertTrue(
+            "降档之后 640×480 就过关 ①（368 ≤ 480）而仍然不够 ④（480 < 552）—— 两本账会互相打脸",
+            floorForBudget(57, MinModuleSizePx) <= defaultShortEdge && defaultShortEdge < floorForBudget(57, UsefulModulePx),
+        )
+        // T84 提交拼的 &id= 只活在提交 URL 上，不在投影码里（否则这条码要按 121 字符重算）
+        assertEquals("提交形状（原文 + &id=）才是 121 字符：", 121, "$realCode&id=123456789".length)
+    }
+
+    /** 同一套推导，只把 [QrModuleSideBudget] 换成别的模块数再算一遍（只为上面那三个反证数服务） */
+    private fun floorForBudget(modulesPerSide: Int, pxPerModule: Int): Int {
+        val raw = (pxPerModule * modulesPerSide).toFloat() / (DistantCodeHoleFill * 0.62f)
+        val floor = raw.toInt()
+        return if (raw > floor) floor + 1 else floor
+    }
+
     /** 关键表：CameraX 默认的 640×480 必须落在 BelowFloor —— 这张卡的全部立论都钉在这一行上 */
     @Test
     fun verdictTableSeparatesDefaultFromRequest() {
