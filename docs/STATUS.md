@@ -2649,3 +2649,27 @@ lint 0 错 14 警、签名包 **7,247,271 B**（对 7,246,225 是 **+1,046 B**�
 - 它自报的另一条明留**我复核后不成立**：`ScanDecodingAdmission.kt:128-135` 那句"约每 18 秒一行"**并不是一枚裸数** —— 原文同时给了 8.10 帧/秒⇒约每 6 秒与 2.80⇒约每 18 秒，并写明"两个极端都读得到"。⇒ 已经是 T92② 要求的形状，不用返工。
 - `markBindStarted` 在主线程写 `secondEngineLedger`，而 `:993` 声明"它是分析线程的单写者" —— 这个跨线程形状至今没人量（要动账本先立纪律，和 T91 留的那条是同一笔）。
 - 产物层（release apk / mapping）那两类输入**故意留在洞外**，靠门禁顺序与"跳过数记在册"兜着。
+
+## T93（崩单，未合）：第四次 Baseline Profile 重生成跑到 10m40s 时那台 AVD 整个消失 —— 但换签那条前置被实测打掉了
+
+分支 `ai/T93`（基点 `6d84ad9`，7 枚 commit，工作树干净），**没有可合的 profile**：
+`app/src/release/generated/baselineProfiles/*.txt` 与 `master` 逐字节相同（还是第三次生成物，22:42 那份）。⇒ **第四次重生成仍然欠着**。
+
+**做成了的三件（都留在分支与 `.tmp/T93/` 里，续派时不必重做）**：
+1. **① 统计页那条 CUJ 写出来了**：`benchmark/.../InteractionBaselineProfileGenerator.kt` **+231 / −9**，`ui/stats` 那一族历史上**第一次**有可证明的跳（此前四轮生成一直是零规则的盲区）。它自己那趟还纠正了我卡面的一处口径：①b 把判据里写死的"从收起态起步"换成读 dump 的出发态（第一次全量跑红就是这一格）。
+   ⚠️ **押着不合**：它从没跑绿过一次（第一次跑红、改完之后设备就没了）。合进 master 等于把一份未验证的断言塞进下一次生成的必经路径 —— 而 T93 前两次失败恰恰就是断言抛的。等能上机再一起收。
+   ✅ 我今天单独验过它**编得过**：`:benchmark:compileNonMinifiedReleaseKotlin`（UP-TO-DATE，代理那趟编过）+ `:benchmark:compileBenchmarkReleaseKotlin`（新执行）**BUILD SUCCESSFUL in 5s**。
+   唯一一条编译警告 `:526 Redundant call of conversion method`（`it.text?.toString()`）**不是本轮代码** —— `git blame` 落在 `73ead2ab`（09-19，T16 那批），记作既有小账。
+2. **② 数据备份/还原链走通**：现抓的 tar（`databases/` + `shared_prefs/`）在换签重装后能还原，关键是**属主要跟着新 uid 改**（`u0_a225 → u0_a226`）再 `restorecon`，`sqlite3` 复核 `courses=22 / semesters=1 / time_slots=14 / reminders=22` ✓；权限三枚也回得去（`ACCESS_NOTIFICATION_POLICY` 是 install 级、`pm grant` 会报 `not a changeable permission type`，装完就在）。
+3. **③ 一条硬前置被实测推翻（这条最值钱，因为它改的是"下次怎么做才对"）**：我给卡面写的是"**组件已经绑好了，这次不会再丢 widget 覆盖**"。⇒ **错**。真链条是：机上装的是 debug 签名包，而生成链要装 release 签名的 `nonMinifiedRelease` ⇒ 换签必须先 `pm uninstall`（否则 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`），**而那一次 uninstall 就是组件实例的死因**：
+   卸之前 `Hosts:` 下 `hostId=1024 / widgets.size=2`（`id=10 NextClass` + `id=8 Today`）→ uninstall 之后 **host record 还在、`widgets.size=0`、`grep bua` 零行** → 重装 nonMinifiedRelease（44,537,272 B）之后 **仍然 0** ⇒ **重装不会复活**。
+   找回路径逐条试过再放弃：`cmd appwidget` 在这台 API 36 上是 `No shell command implementation.`（没有 bind/create 子命令）；桌面长按后 `uiautomator dump` 只有 4 个 nexuslauncher 根 FrameLayout、零个可点节点 ⇒ **adb 侧拖不回去，要人在桌面上拖一次**。
+   ⇒ 下次生成真正的前置是"**机上本来就装着 release 签名包**"（把 uninstall 那一步省在采集之前），而不是"生成前先把组件绑回去" —— 后者默认了"绑上就能活到采集那一刻"，那一点刚被打掉。
+   ⚠️ 副作用：本轮把组件清掉了。重新起模拟器之后组件在不在，**我没量**（这台是 `-read-only`，理论上冷重启回滚 overlay，但今天两枚组件实例跨过了当天几次自发崩溃还在 ⇒ 那条"哪些落盘会被回滚"的账我并不真清楚）。⇒ 设备恢复后第一件事是重读 `Hosts:` 那一段，别按推断走。
+
+**崩因读数**：第 3 次生成跑到 **10m40s** 时 AVD 从 `adb devices` 上整个消失，`tasklist` 里 `qemu-system-x86_64` 计数 **0** ⇒ 环境故障（这台今天已经自发崩过几次），代理按纪律**停手没重试**、也没碰真机。
+⚠️ **一条环境危险要记档**：模拟器一没，`adb devices` 上**只剩真机 `f128bc02`** ⇒ 任何 `connected*` 任务（含 `generateReleaseBaselineProfile`）会**直接落到那台手机上**，卸掉用户的 app、清掉真实课表。⇒ **没有 AVD 在跑的时候，一律不许派带设备的卡**；派之前先看 `adb devices` 里有没有 `emulator-5554`。
+
+**给我自己的两条纪律**：
+- **`:benchmark` 不在门禁覆盖范围内** —— 五步门禁跑的是 `:app:*`，而 T92① 那份工作树输入面也没有 `benchmark/src`。⇒ 以后凡动 `benchmark/` 的卡，门禁要**额外加一枚 `:benchmark:compileNonMinifiedReleaseKotlin`**，否则一个编译错误要等到 20 分钟的生成跑到一半才炸。
+- ⚠️ **我又踩了一次"给后台命令加管道"**：第一次编译验收入口我写成 `bash x.sh 2>&1 | tail -12`，于是 gradle 明明白白 `BUILD FAILED`（任务名 `compileReleaseKotlin` 在 `:benchmark` 里是歧义的，只有 `compileNonMinifiedReleaseKotlin` / `compileBenchmarkReleaseKotlin`）而通知报的是 **exit 0** —— 管道把退出码换成了 `tail` 的。这条档案里早就写着（两次事故），我照样犯。**去掉管道之后 exit 0 才是 gradle 的 0**。
