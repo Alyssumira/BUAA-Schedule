@@ -2300,3 +2300,38 @@
 **186 suites / 1,583 tests / 0 失败 / 0 skipped**、lint **0 error / 14 warning**、clean 签名包 **7,247,072 B**。
 ⇒ **新地板 1,583 / 186 / 0 / 0，包体 7,247,072 B**；T80-C→T81 之间累计 +11,782 B（iClass 那一族 +9,522、统计页 +181）。
 **本地 19 枚未 push，发版仍未做。**
+
+## T83：解析失败按档说实话（`8254a4c` A / `d58c7dd` B / `2ce1d3b` C / `66754a4` D / `3995dd9` E）
+
+代理撞到子代理最大轮数（150）被截断在"写报告"这一步，**代码五枚 commit 全在 ref 上、工作树干净** ⇒ 不重派，
+我复核 diff + 独立重跑门禁 + 装机验收。**门禁（我在 `3995dd9` 上跑）**：clean 全量签名包 **7,251,379 B**
+（上一档 7,247,072 ⇒ **+4,307 B**）、**1,601 tests / 188 suites / 0 失败 / 0 skipped**、lint **0 error / 14 warning**。
+
+**七档阶梯**（`data/import/ScanReject.kt`，纯 JVM、零 android import、零时钟读取）：
+`Recognized`（两族都说收得下、签到却没开始）/ `NotACode` / `ForeignHost` / `WrongRoute`（host 对、路由不是
+`stu_scan_sign.action`，`stu_auto_sign.action` 那一族落这里）/ `MissingParams` / `BadParamValue` /
+`RequestUrlNotCode`（**形状全对但原文已带 `id` ⇒ 那是一条发过的请求，不是投影那张码**）。
+统一漏斗是 `SignInViewModel.rejectScan(raw)`：分类 → 一行取证日志（tag `ScanSignInParse`）→ 卡片文案 →
+`evidence` 上屏。**日志只记形状与参数名，`参数值=未记录` 是显式写死的一栏**（原文里可能有滚动 `timestamp`）。
+
+**装机真看到的两档**（emulator-5554 / debug 包 `lastUpdateTime=2026-09-25 04:54:36` GMT，取证原件在 `D:/schedule/.tmp/T83/`）：
+```
+05:03:46.024 W ScanSignInParse: 扫码解析失败 档=NotACode 族=None 长度=0 形状=不是链接 参数名=无 参数值=未记录
+05:04:50.032 W ScanSignInParse: 扫码解析失败 档=RequestUrlNotCode 族=IClass 长度=118
+             形状=http://iclass.buaa.edu.cn:8081/app/course/stu_scan_sign.action
+             参数名=courseschedid,timestamp,id 参数值=未记录 不合用=id
+```
+第二档是我自己造的靶子：把那条 108 字符真码加上 `&id=987654` 生成 QR、推进相册走「相册识别」，
+逐字符对上（长度 118、族判 IClass、`不合用=id`）。同一轮卡片侧读到
+「扫到的不是签到码：既不是链接，也不像 32 位的签到 ID。」+ 证据行「不是链接 · 参数=无 · 0 字符」。
+⚠️ **另外三档（`ForeignHost` / `WrongRoute` / `MissingParams`）只有 JVM 证据**：我那个批量脚本把
+`content query` 跑在 MediaProvider 落库之前，`media_rows=0` ⇒ 相册是空的、点了个寂寞，不是 app 的问题。
+别把"两档看到"写成"七档验完"。
+
+**顺带一条给 #107 的新证据**：第一档那行 `长度=0` 不是用户扫的，是**虚拟场景那面棋盘格被 ML Kit 解成一枚空原文的码**
+自动提交的 ⇒ 误检现在会说"扫到的不是签到码"，比改前那句「这不是一张智学北航的签到码」诚实，
+但对用户仍然像在指责他扫错东西（他什么都没扫）。#107 收口评估时这一档要单独想：`长度=0` 应不应该并进
+"这台设备的相机认出了个空东西"那一档。
+
+**`QrModuleSideBudget = 97` 重算结论：不动**（T83-D）。真码 108 字符确实超 97，但那一档买的是"模块边长预算"
+而不是"整条 URL 装得下"，注释里的例子已从假想值换成这条真码逐字原文。
