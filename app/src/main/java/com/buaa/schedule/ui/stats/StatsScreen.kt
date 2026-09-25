@@ -2,6 +2,8 @@ package com.buaa.schedule.ui.stats
 
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,10 +17,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Insights
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -27,12 +34,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.CourseWeekGantt
@@ -43,7 +52,9 @@ import com.buaa.schedule.core.designsystem.GanttRow
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.HeatGridDay
+import com.buaa.schedule.core.designsystem.LocalSemanticPlate
 import com.buaa.schedule.core.designsystem.MiniBar
+import com.buaa.schedule.core.designsystem.ModalTransition
 import com.buaa.schedule.core.designsystem.SectionHeader
 import com.buaa.schedule.core.designsystem.WeekFreeHeatGrid
 import com.buaa.schedule.core.designsystem.WeeklyLoadTrendChart
@@ -51,14 +62,22 @@ import com.buaa.schedule.core.designsystem.courseColor
 import com.buaa.schedule.core.designsystem.coursePlateSceneLuma
 import com.buaa.schedule.core.designsystem.legibleTintPlate
 import com.buaa.schedule.core.designsystem.motionSpec
+import com.buaa.schedule.domain.model.Course
+import com.buaa.schedule.domain.model.Semester
+import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.formatCredit
 import com.buaa.schedule.domain.model.formatCreditTotal
+import com.buaa.schedule.domain.schedule.CourseConflictResolution
 import com.buaa.schedule.domain.schedule.CourseWeekSpans
 import com.buaa.schedule.domain.schedule.SemesterStats
+import com.buaa.schedule.domain.schedule.WeekDaySchedule
 import com.buaa.schedule.domain.schedule.WeekFreeGrid
 import com.buaa.schedule.domain.schedule.WeeklyLoadTrend
 import com.buaa.schedule.ui.ScheduleViewModel
+import com.buaa.schedule.ui.home.ConflictWizardDialog
 import com.buaa.schedule.ui.home.ScheduleHeaderBand
+import com.buaa.schedule.ui.home.applyConflictShift
+import com.buaa.schedule.ui.home.conflictCourseLine
 
 /**
  * 学期统计页。
@@ -91,6 +110,20 @@ import com.buaa.schedule.ui.home.ScheduleHeaderBand
  * 同一块板上摆出两套文字，用户读作"页头文字跳动""跳转前后割裂"。
  * 页头也不再挂进 `Scaffold` 的 topBar 槽：装机量下来那个槽自己排了一次边距，
  * 同一枚容器在里面的 children 落在 y=147 而首页那一行在 y=158（见函数体那段注释）。
+ *
+ * T82 补的是这一页剩下的两块——「算好了没说」与「说不清的那半句」：
+ * 1. **[ConflictCard]**：`state.conflicts` 一直在 ViewModel 里（首页那颗横幅就是吃它的），
+ *    这一页一个字没提。归并走 `CourseConflictResolution.groupConflicts`，处置入口挂的是
+ *    首页那枚 [com.buaa.schedule.ui.home.ConflictWizardDialog] 本体加同一份
+ *    [com.buaa.schedule.ui.home.applyConflictShift] —— 这一页既不产第二套冲突判据，
+ *    也不画第二套处置 UI，两页念的是同一个组数；
+ * 2. **[WeekDrillCard]**：「每周负载」说的是全学期平均与并集，[WeekFreeGrid] 说的是格子，
+ *    谁都没回答"那一周、那一天到底排了哪几门课、第几节到第几节、在哪个教室"。
+ *    判据在 [WeekDaySchedule]，与 T51 那三件共用同一个分母 [SemesterStats.weekAxisLength]。
+ *
+ * 两块加进来会让折下更多，所以同一次改动里做了一件排布调整：**「课程学分」那一列移到列尾**
+ * （它实测 3183px 高，比折下那三块的总和还多），钻取默认收起。内容一块都没删、
+ * 一句都没省 —— 改前/改后的折叠账见 [WeekDrillCard] 里那段注释。
  */
 @Composable
 fun StatsScreen(
@@ -145,6 +178,14 @@ fun StatsScreen(
     val semesterTitle = remember(state.semester) {
         semesterTitleOf(state.semester?.termName, state.semester?.termCode)
     }
+    // 冲突：判据在 ConflictDetector（哪两两撞）与 groupConflicts（把两两撞归并成组）那两份里，
+    // 这一页**一次都不许多算**。归并结果同时喂给卡片与首页那一枚向导，两处看到同一批组。
+    // state.conflicts 是两两配对的条数：三门课互撞是 3 条配对、1 组，所以卡片上那句「几组」
+    // 读的是这一枚 groups 的 size —— 与首页横幅、与点开向导看到的行数同一个数。
+    val conflictGroups = remember(state.conflicts) {
+        CourseConflictResolution.groupConflicts(state.conflicts)
+    }
+    var showConflictWizard by rememberSaveable { mutableStateOf(false) }
     // 柱状图吃的是 7 项平均分钟数；busiest 是 ISO 星期序号（1 = 周一），下标要退一格
     val dayMinutes = remember(summary) { summary.dayLoads.map { it.averageMinutes } }
     val busiestIndex = remember(summary) { summary.busiestDayOfWeek?.minus(1) }
@@ -161,6 +202,11 @@ fun StatsScreen(
     // 那 11px 就是"跳转期间页头上下沿在动"的实底，与两页各自写内衬是同一类账。
     // 改成"Column 的第一个子节点"之后，两页的带由同一个容器的同一份内衬摆位，
     // 槽差从结构上消失，而不是靠这里再补一层 padding 把它抹平（补的那一层下次换壳又会漏）。
+    //
+    // T82 在这同一个 Column 的**末尾**挂了冲突向导那一格：根 Column 没有 spacedBy，
+    // 而它前面的 Crossfade 已经按 fillMaxSize 把剩余高度吃满，所以那一个不占布局的
+    // AlertDialog 节点排进来是 0 高 —— 不会像挂进正文那列（每两张卡之间 spaceM）那样，
+    // 弹窗开着的每一帧都给页面底下多撑出一截空隙来。
     Column(modifier = modifier.fillMaxSize()) {
         // 与首页第一行同一个容器（T80）：带的内衬、下限高同一个来源 ⇒ 跳转期间那条带的
         // 上下沿像素位置一动不动，而板上永远只有一套字（谁在台上由 headerBandOwnerOf 答）。
@@ -210,16 +256,48 @@ fun StatsScreen(
                 ) {
                     CreditHeadline(summary, semesterTitle)
                     DayLoadCard(dayMinutes, busiestIndex, summary)
+                    // 钻取紧跟「每周负载」：那一块说的是全学期平均，这一块说的是某一週。
+                    // 默认收起（装机量的账见 WeekDrillCard 的注释），展开才占地方
+                    WeekDrillCard(
+                        courses = state.courses,
+                        semester = state.semester,
+                        timeSlots = state.timeSlots,
+                        totalWeeks = summary.weekCount,
+                        currentWeek = state.currentWeek,
+                        weeksUnknownCount = ganttBoard.unknownCount,
+                    )
+                    // 冲突卡在首屏内：这件事系统早就算完了，只差一句给人听的话
+                    ConflictCard(groups = conflictGroups, timeSlots = state.timeSlots) {
+                        showConflictWizard = true
+                    }
                     // 趋势紧跟「每周负载」：那张是全学期平均、这张是按周摊开，同一个问题的两半
                     LoadTrendCard(loadTrend)
-                    CreditListCard(summary.perCourse, maxCredit)
                     WeekCoverageCard(ganttBoard)
                     FreeSlotsCard(summary)
                     // 逐周的热力格紧跟全学期并集口径的空档卡，两张对着读才知道"这周真空没空"
                     FreeSlotsGridCard(freeGrid)
+                    // 「课程学分」那一列挪到了最后（T82，内容一个字没删）。理由是装机的账：
+                    // 这一列 18 门课实测占 3183px，是折下那三块的总和还多，摆在第四格
+                    // 就等于把后面所有块都推到两屏之外。它又是全页唯一"要往下找某一门课"
+                    // 才会去读的一块 —— 首屏该留给一眼能扫完的那几块。
+                    CreditListCard(summary.perCourse, maxCredit)
                     Spacer(modifier = Modifier.height(DesignTokens.spaceXL))
                 }
             }
+        }
+        // 处置入口**复用**首页那一枚向导本体（同一个 composable、同一份落库回调），
+        // 统计页不重画第二套处置 UI：那套 UI 里"移到第几节"的判据、"只改这些周"的写法、
+        // 重复位移的保护全都得再来一遍，就是四件能各自算错的事。
+        // 挂在根 Column 末尾而不是正文那一列：见上面那段 0 高的说明。
+        ModalTransition(open = showConflictWizard) { modal ->
+            ConflictWizardDialog(
+                groups = conflictGroups,
+                allCourses = state.courses,
+                timeSlots = state.timeSlots,
+                modifier = modal,
+                onApplyShift = { target, newPeriods -> applyConflictShift(viewModel, target, newPeriods) },
+                onDismiss = { showConflictWizard = false },
+            )
         }
     }
 }
@@ -387,6 +465,347 @@ private fun DayLoadCard(
 
 /** 课程色圆点：行内的颜色标记，不是图标——图标刻度最小档 [DesignTokens.iconSmall] 落在正文行里偏重 */
 private val CourseDotSize = 10.dp
+
+/**
+ * 冲突卡（T82）。
+ *
+ * 这一块的全部内容由 [CourseConflictResolution.groupConflicts] 的归并结果决定，
+ * 页面自己**一次都不算**：`state.conflicts` 是 ViewModel 里 `ConflictDetector.findConflicts`
+ * 的产物（ScheduleViewModel.kt:453），再判一次"谁和谁撞"就是第二套真相。
+ * 逐条课程的「• 课名（节次，教室）」也直接吃首页向导那件 [conflictCourseLine]，
+ * 两页念同一句措辞。
+ *
+ * 没有冲突时这一整块**不隐藏**：卡头照常出、话说"这学期没有撞课的时段"。
+ * 把"没事"表达成"这一栏不在"，用户下一次导入完课表就找不到它去哪了。
+ *
+ * 卡的尺寸是算过的：组内最多摆 [MAX_INLINE_CONFLICT_GROUPS] 组、每组最多三行课，
+ * 其余的一句"还有 N 组"交给按钮后面那一屏（同一枚向导），这样这张卡在真实数据上
+ * 稳定占五行以内 —— 折叠账（见 [WeekDrillCard] 那段）不容许它往上顶成一整屏。
+ */
+@Composable
+private fun ConflictCard(
+    groups: List<CourseConflictResolution.ConflictGroup>,
+    timeSlots: List<TimeSlot>,
+    onOpenWizard: () -> Unit,
+) {
+    val hasConflict = groups.isNotEmpty()
+    GlassSurface(
+        // 有冲突才穿 ALERT：那一档的底板与文字由 GlassSurface 配对（T23 的账），
+        // "没有撞课"是好消息，披一层 error 红是在吓唬人
+        variant = if (hasConflict) GlassVariant.ALERT else GlassVariant.PANEL,
+        semanticTint = if (hasConflict) MaterialTheme.colorScheme.error else null,
+        contentPadding = DesignTokens.spaceL,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
+            SectionHeader("课程冲突")
+            Text(
+                text = conflictHeadlineNote(groups.size),
+                style = MaterialTheme.typography.bodyMedium,
+                color = LocalSemanticPlate.current?.foreground
+                    ?: MaterialTheme.colorScheme.onSurface,
+            )
+            groups.take(MAX_INLINE_CONFLICT_GROUPS).forEach { group ->
+                Column(modifier = Modifier.padding(top = DesignTokens.spaceXS)) {
+                    Text(
+                        text = listOfNotNull(
+                            conflictGroupTitle(group),
+                            sharedPeriodNote(group, timeSlots),
+                        ).joinToString(" · "),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 2,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                    inlineConflictCourses(group).forEach { course ->
+                        Text(
+                            text = conflictCourseLine(course, timeSlots),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = LocalSemanticPlate.current?.foreground
+                                ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                    }
+                    hiddenCourseNote(group)?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = LocalSemanticPlate.current?.foreground
+                                ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            hiddenGroupNote(groups.size - MAX_INLINE_CONFLICT_GROUPS)?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LocalSemanticPlate.current?.foreground
+                        ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // 处置入口：按钮开的是首页那一枚向导本体（同一个 composable、同一份落库回调）。
+            // 没有冲突时这颗按钮不出场 —— 点开一个只会说"当前没有冲突了"的弹窗是骗一次点击。
+            if (hasConflict) {
+                TextButton(
+                    onClick = onOpenWizard,
+                    modifier = Modifier.defaultMinSize(minHeight = DesignTokens.minTouchTarget),
+                ) { Text("按建议处理") }
+            }
+        }
+    }
+}
+
+/** 整周视图里一天最多摆几堂课：一周看 7 天，每天再铺十几行就没人能扫完 */
+private const val MAX_MEETINGS_IN_WEEK_VIEW = 3
+
+/**
+ * 「按周细看」：从全学期平均钻到某一週、某一周几的实排（T82）。
+ *
+ * ## 为什么默认收起
+ *
+ * 装机量的账（这一页 2400px 视口、18 门课的种子数据）：改前第一屏切在「课程学分」
+ * 第 2 门课上，「周次覆盖」「空档」「空档分布」三块整块在折下。往那一列末尾再叠两块
+ * 只会让"内容太少"变成"内容更多但更看不见"，所以：
+ * 1. 这一块**收起时只占两行**（卡头 + 一句提示），展开才把周次胶囊与明细铺出来；
+ * 2. 全页最长的那一块「课程学分」（实测 3183px）移到列尾，让上面这几块能进首屏。
+ *
+ * ## 选中态为什么不许惊动整页
+ *
+ * 三枚状态（expanded / selectedWeek / selectedDay）全部**活在这个 composable 里面**：
+ * 点一下胶囊只重组这一块，[StatsScreen] 那几枚重算（summary / ganttBoard / freeGrid /
+ * loadTrend）的 memoize 键里根本没有选中值，一次都不重跑。
+ * 明细本身走 [WeekDaySchedule.scheduleOf]，包在 `remember(courses, semester, timeSlots, week)`
+ * 里 —— 换一周只重算那一周那一条列表，全学期那张表不重来（T75 复用 VM 的收益不该被
+ * "进页面重算全学期"吃回去）。
+ */
+@Composable
+private fun WeekDrillCard(
+    courses: List<Course>,
+    semester: Semester?,
+    timeSlots: List<TimeSlot>,
+    totalWeeks: Int,
+    currentWeek: Int?,
+    weeksUnknownCount: Int,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var selectedWeek by remember { mutableStateOf<Int?>(null) }
+    // null = 整周；1..7 = 只看那一天（ISO 星期序号，与内核算的是同一个数）
+    var selectedDay by remember { mutableStateOf<Int?>(null) }
+    val schedule = remember(courses, semester, timeSlots, selectedWeek) {
+        selectedWeek?.let { WeekDaySchedule.scheduleOf(courses, semester, timeSlots, it) }
+    }
+    GlassSurface(
+        variant = GlassVariant.PANEL,
+        contentPadding = DesignTokens.spaceL,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
+            // 卡头那一行整行可点：收起时它是入口，展开时它是出口（Role.Button 念得出"按钮"）
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(role = Role.Button) {
+                        if (expanded) {
+                            expanded = false
+                        } else {
+                            expanded = true
+                            // 第一次展开落在当前周上；没有原点（假期 / 学期没锚定）就落第 1 周。
+                            // 这是"用户点开想看的那一周"，不是内核去猜的今天
+                            if (selectedWeek == null) {
+                                selectedWeek = (currentWeek ?: 1).coerceIn(1, totalWeeks.coerceAtLeast(1))
+                            }
+                        }
+                    },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SectionHeader("按周细看", modifier = Modifier.weight(1f))
+                Icon(
+                    imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (expanded) "收起" else "展开",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(DesignTokens.iconSmall),
+                )
+            }
+            if (!expanded) {
+                Text(
+                    text = drillCollapsedHint(currentWeek),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                // 周次缺失的那几门在**任何**一周都看不到它们：这句话收起时就得说，
+                // 否则用户点开了还以为这一页漏了课
+                weeksUnknownNote(weeksUnknownCount)?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
+                ) {
+                    (1..totalWeeks).forEach { week ->
+                        DrillChip(
+                            label = "第 $week 周",
+                            selected = selectedWeek == week,
+                            onClick = { selectedWeek = week },
+                        )
+                    }
+                }
+                if (selectedWeek != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
+                    ) {
+                        DrillChip(
+                            label = "整周",
+                            selected = selectedDay == null,
+                            onClick = { selectedDay = null },
+                        )
+                        (1..SemesterStats.TOTAL_DAYS).forEach { day ->
+                            DrillChip(
+                                label = "周${weekdayChar(day)}",
+                                selected = selectedDay == day,
+                                onClick = { selectedDay = day },
+                            )
+                        }
+                    }
+                }
+                schedule?.let { week ->
+                    drillEmptyNote(week)?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (!week.outOfRange) {
+                        Text(
+                            text = drillWeekNote(week),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        val days = selectedDay?.let { day -> listOfNotNull(week.days.getOrNull(day - 1)) }
+                            ?: week.days.filter { it.meetings.isNotEmpty() }
+                        days.forEach { day ->
+                            if (day.meetings.isEmpty()) {
+                                // 点了没课的那一天：这句得说，画一片空白会被读成"没渲染出来"
+                                Text(
+                                    text = drillDayEmptyNote(day, week.week),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                return@forEach
+                            }
+                            Column(
+                                modifier = Modifier.padding(top = DesignTokens.spaceXS),
+                                verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceMicro),
+                            ) {
+                                Text(
+                                    text = drillDayTitle(day),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                val shown = if (selectedDay == null) {
+                                    day.meetings.take(MAX_MEETINGS_IN_WEEK_VIEW)
+                                } else {
+                                    day.meetings
+                                }
+                                shown.forEach { meeting ->
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(CourseDotSize)
+                                                .clip(CircleShape)
+                                                .background(courseColor(meeting.course)),
+                                        )
+                                        Spacer(modifier = Modifier.width(DesignTokens.spaceS))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = meeting.label,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                maxLines = 1,
+                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                            )
+                                            // 缺项整段跳过：drillMeetingLine 空串时就是一行都不画
+                                            drillMeetingLine(meeting, timeSlots).takeIf { it.isNotEmpty() }?.let {
+                                                Text(
+                                                    text = it,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                drillHiddenMeetingsNote(day, shown.size)?.let {
+                                    Text(
+                                        text = it,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                drillSameCourseNote(day)?.let {
+                                    Text(
+                                        text = it,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                        drillMinutesUnknownNote(week.minutesUnknownCount)?.let {
+                            Text(
+                                text = it,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 一枚可点的周次 / 星期胶囊：选中态实心 primary，未选 surfaceVariant，48dp 触摸下限 */
+@Composable
+private fun DrillChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Box(
+        modifier = Modifier
+            // 下限要在 selectable 之前（口径同 GlassSegmentedControl）：写后面撑大的是内容区，
+            // 点不到的那圈还是点不到
+            .defaultMinSize(minHeight = DesignTokens.minTouchTarget)
+            .clip(RoundedCornerShape(DesignTokens.cornerChip))
+            .background(if (selected) scheme.primary else scheme.surfaceVariant)
+            .selectable(selected = selected, role = Role.Tab, onClick = onClick)
+            .padding(horizontal = DesignTokens.spaceM, vertical = DesignTokens.spaceS),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            // 实心 primary 上必须换 onPrimary，否则就是 T23 那笔 1.39:1 的账重演
+            color = if (selected) scheme.onPrimary else scheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+    }
+}
 
 /**
  * 每门课的学分：名字 + 一行明细（教师/地点/校区/几段合并）+ 一条占比条，
