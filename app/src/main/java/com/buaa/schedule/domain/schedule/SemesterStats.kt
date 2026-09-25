@@ -16,6 +16,8 @@ import kotlin.math.round
  * 只回答四件事：多少学分、每周上多少分钟、每天几门课、哪里空。
  * 输入全部来自既有字段 —— 新增的 [Course.credit] 加上排课本体
  * `dayOfWeek / periods / weeks`，没有为此再往模型里塞任何东西。
+ * （T81 给统计页补"课程明细"时同样守着这条：[CourseCredit.fragments] 只是把
+ *  本文件**已经归并过**的那一组片段交出去，模型与存储一个字段都没加。）
  *
  * ## 贯穿全文件的两个口径
  *
@@ -43,19 +45,25 @@ object SemesterStats {
     const val TOTAL_DAYS: Int = 7
 
     /**
-     * 一门课（按 [courseGroupKey] 归并后的一个组）的学分。
+     * 一门课（按 [courseGroupKey] 归并后的一个组）的学分与片段侧事实。
      *
      * @param groupKey 课程身份键，见 [courseGroupKey]
-     * @param course 组内第一个片段，供展示层取名称/别名/颜色（统计本身不用外观字段）
+     * @param course 组内第一个片段，供展示层取名称/别名/颜色（统计本身不用外观字段）。
+     *   它就是 [fragments] 的第一项，留着只为"叫哪个名/涂哪个色"这两件事不必绕一圈
      * @param credit 该门课学分；组内没有任何片段带学分时为 null（= 不知道，不是 0）
-     * @param fragmentCount 该门课占了几条排课片段（UI 可据此说明"由 N 个片段合并"）
+     * @param fragments 组内**全部**排课片段，保持传入顺序（口径 1 归并的产物本身）
+     * @param fragmentCount 该门课占了几条排课片段（UI 可据此说明"由 N 个片段合并"）。
+     *   写成 [fragments] 的派生属性而不是又一个构造参数：这两枚一旦各存一份，
+     *   "几段合并"就会变成能从片段数上算错的第二套真相
      */
     data class CourseCredit(
         val groupKey: String,
         val course: Course,
         val credit: Double?,
-        val fragmentCount: Int,
-    )
+        val fragments: List<Course>,
+    ) {
+        val fragmentCount: Int get() = fragments.size
+    }
 
     /**
      * 一个星期几的负载。
@@ -134,6 +142,11 @@ object SemesterStats {
     /**
      * 每门课的学分：按 [courseGroupKey] 归并，组内**取最大值**（口径 1），
      * 全组都没有学分时为 null。
+     *
+     * T81 起顺带把**组内片段**交出去：教师 / 地点 / 校区都是片段级的
+     * （`Course.kt:26-28`，理论课与实验课可以各有教师与教室），只递 [CourseCredit.course]
+     * 那一项等于替整门课宣称第一个片段的那位教师。归并仍然只在这一个函数里发生一次，
+     * 界面上再 groupBy 一遍就是第二套"一门课"的定义（文件头口径 1）。
      */
     fun creditsByCourse(courses: List<Course>): List<CourseCredit> {
         val grouped = LinkedHashMap<String, MutableList<Course>>()
@@ -145,7 +158,7 @@ object SemesterStats {
                 groupKey = key,
                 course = fragments.first(),
                 credit = fragments.mapNotNull { CourseConstraints.normalizeCredit(it.credit) }.maxOrNull(),
-                fragmentCount = fragments.size,
+                fragments = fragments.toList(),
             )
         }
     }

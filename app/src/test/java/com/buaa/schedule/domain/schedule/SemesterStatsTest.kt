@@ -6,16 +6,19 @@ import com.buaa.schedule.domain.model.TimeSlot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * [SemesterStats] 的统计口径。
  *
- * 重点钉两件事：
+ * 重点钉三件事：
  * 1. 「一门课」按 [SemesterStats.courseGroupKey] 归并 —— 拆成两段周次的课
  *    不能被算成两门、学分也不能加成两份（教务在每一行上都重写一遍整门课的学分）；
- * 2. 所有指标对空输入都不抛：统计页是最后一步，崩在这里等于用户看整页错误。
+ * 2. 所有指标对空输入都不抛：统计页是最后一步，崩在这里等于用户看整页错误；
+ * 3. 归并之后**片段侧的事实不许丢**（T81）：教师/地点/校区挂在片段上，
+ *    [SemesterStats.CourseCredit] 交出去的那一组就是这一门课的全部片段。
  */
 class SemesterStatsTest {
 
@@ -34,10 +37,14 @@ class SemesterStatsTest {
         periods: List<Int> = listOf(1, 2),
         weeks: List<Int> = (1..16).toList(),
         credit: Double? = null,
+        teacher: String? = "张三",
+        location: String? = "J3-101",
+        campus: String? = null,
     ) = Course(
         name = name,
-        teacher = "张三",
-        location = "J3-101",
+        teacher = teacher,
+        location = location,
+        campus = campus,
         dayOfWeek = dayOfWeek,
         periods = periods,
         weeks = weeks,
@@ -82,6 +89,55 @@ class SemesterStatsTest {
         assertEquals(3.5, credits.single().credit!!, 0.0)
         // 并成一条预览行/两个片段都只算一次：3.5 而不是 7
         assertEquals(3.5, SemesterStats.totalCredits(listOf(firstHalf, secondHalf)), 0.0)
+    }
+
+    /**
+     * T81：教师 / 地点 / 校区是**片段级**字段（`Course.kt:26-28`），统计页要逐门课列出它们
+     * 就必须在归并之后仍然拿得到整组片段 —— 这是 [SemesterStats.CourseCredit.fragments]
+     * 存在的全部理由，也是下面三条钉子（拿到的是整组、顺序是传入序、
+     * [SemesterStats.CourseCredit.course] 就是它的第一项）要钉的东西。
+     */
+    @Test
+    fun courseCreditExposesEveryFragmentOfTheGroup() {
+        val lecture = course("大学物理", groupKey = "GF", dayOfWeek = 1, teacher = "王教授", location = "J3-101")
+        val lab = course("大学物理", groupKey = "GF", dayOfWeek = 5, teacher = "李工程师", location = "M201")
+
+        val credit = SemesterStats.creditsByCourse(listOf(lecture, lab)).single()
+
+        // 两段都在：界面据此才能说"这门课有两位教师、两间教室"，而不是只报第一个片段的
+        assertEquals(listOf(lecture, lab), credit.fragments)
+        assertEquals(2, credit.fragmentCount)
+        // 归并只做一次：这门课仍是一条
+        assertEquals(1, SemesterStats.creditsByCourse(listOf(lecture, lab)).size)
+    }
+
+    @Test
+    fun fragmentCountIsTheFragmentsSizeNeverASecondTruth() {
+        val lone = course("新生研讨课", groupKey = "GL")
+
+        val credits = SemesterStats.creditsByCourse(listOf(lone, lone.copy(dayOfWeek = 2), lone.copy(dayOfWeek = 3)))
+
+        // fragmentCount 是 fragments.size 的派生属性：没有第二份可写错的计数器
+        val single = credits.single()
+        assertEquals(single.fragments.size, single.fragmentCount)
+        assertEquals(3, single.fragmentCount)
+    }
+
+    @Test
+    fun creditCourseIsTheFirstFragmentOfItsOwnGroup() {
+        val first = course("A", groupKey = "KA", teacher = "甲")
+        val second = course("B", groupKey = "KB", teacher = "乙")
+        val third = course("A", groupKey = "KA", teacher = "丙")
+
+        val credits = SemesterStats.creditsByCourse(listOf(first, second, third))
+
+        // 首次出现序不变（界面的排序键是学分，不许这里就先乱一次）
+        assertEquals(listOf("A", "B"), credits.map { it.course.name })
+        // 每组交出去的是自己那组，顺序 = 传入顺序；course 就是那组的第一条片段
+        assertEquals(listOf(first, third), credits[0].fragments)
+        assertEquals(listOf(second), credits[1].fragments)
+        assertSame(third, credits[0].fragments[1])
+        assertSame(first, credits[0].course)
     }
 
     @Test
