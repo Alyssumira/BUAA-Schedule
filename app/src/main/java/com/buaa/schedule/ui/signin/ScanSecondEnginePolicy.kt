@@ -45,6 +45,23 @@ package com.buaa.schedule.ui.signin
  * 兜底自己也不把空白当命中，所以这种帧上补解**唯一**可能的收益是读出与 ML Kit 不同的那份
  * 非空白原文 —— 那正是"ML Kit 误检而第二引擎检对"那一档，也是这三发花得不冤的原因。
  *
+ * ## T91 收的那笔账：三次失手不再一票封死，改成"每 120 帧再许一发"
+ *
+ * 上面那句"明留"到今天有数了。先量的是**复位路径**（逐行 + 装机）：账本唯一的复位点是
+ * [SpocScanScreen] 里 `markBindStarted()`（新绑定），而 `重新扫码` 那颗按钮走的是闸门那条
+ * （`resume()` 只清 `handled`/`awaitingUserAction`）、回到前台在解码器健康时不换键、转屏不在
+ * 绑定 effect 的键表里 ⇒ **页开着不动 = 兜底从此永久哑**，用户手上没有任何一个页内动作能把它
+ * 叫回来。装机实测两枚对照窗口：同一轮绑定里封死之后连跑 1,713 帧（209 秒）零发火；
+ * 只有退出这一页再进来（= 新绑定、帧号从 1 重数）才重新发出那 3 发。
+ *
+ * 反向那半句也要订正：真正在省电的不是这一条判死，而是 [SecondEngineMaxFiresPerBind]
+ * 那枚 8 发封顶（它在 [secondEngineDecision] 里排在判死之后，同是一轮绑定的硬上界），
+ * 所以"不封死就是持续 5%–11% 单核"这笔账算错了对象 —— 按 15 帧的节奏一路补解到封顶也只有
+ * 8 发 ≈ 80 ms。于是收法很省：**复探吃同一份额度**，一轮绑定的补解总数一个字没变，
+ * 只是把"三次失手 ⇒ 立刻终局"换成"三次失手 ⇒ 快节奏停下来、每 [SecondEngineReprobeFrameGap]
+ * 帧再试一发，八发花完才是终局"。占空比、装机复测的"仍然发火"证据行都记在
+ * [SecondEngineReprobeFrameGap] 自己身上，这里不重复第二份。
+ *
  * ## 为什么发火判据吃的是「上一帧为止的连击」而不是「这一帧的档位」
  *
  * 第二引擎跑在分析线程上、`scanner.process()` 把帧交出去**之前**（理由见 SpocScanScreen 里
@@ -127,7 +144,7 @@ internal sealed class SecondEngineDecision {
     /** 本轮额头发完 */
     internal object OutOfBudget : SecondEngineDecision()
 
-    /** 连续几次没解出来，本轮判死 */
+    /** 连续几次没解出来 ⇒ 本轮的快节奏补解停掉，只剩按 [SecondEngineReprobeFrameGap] 的那一发（T91） */
     internal object GaveUp : SecondEngineDecision()
 
     /** 第二引擎自身不可用：构造失败过（缺 `.so`）或解帧抛过，本轮不再碰 */
@@ -154,7 +171,8 @@ internal fun secondEngineStopText(decision: SecondEngineDecision): String? = whe
     is SecondEngineDecision.OutOfBudget ->
         "本轮绑定的第二引擎额度已用完（$SecondEngineMaxFiresPerBind 次），之后只由 ML Kit 解帧"
     is SecondEngineDecision.GaveUp ->
-        "第二引擎连续 $SecondEngineGiveUpAfterMisses 次没解出原文，本轮绑定不再请它补解（画面里那枚码它也没办法）"
+        "第二引擎连续 $SecondEngineGiveUpAfterMisses 次没解出原文，本轮暂停按 $SecondEngineFrameGap 帧的节奏补解：" +
+            "之后最多每 $SecondEngineReprobeFrameGap 帧再试一发，本轮 $SecondEngineMaxFiresPerBind 发花完就不再试"
     is SecondEngineDecision.EngineUnusable ->
         "第二引擎在这台设备上不可用（解码库没带这一档，或解码时抛了），本轮只用 ML Kit"
 }
@@ -202,6 +220,13 @@ internal fun secondEngineDecision(
     // 终局排前面是有意的：那三档一旦成立就说一句成句的实话（[secondEngineStopText]），
     // 把它排在连击后面，等于连击不归零时永远听不到「为什么这一轮不再试了」。
     // 连击那一档紧随其后，因为它是绝大多数帧的出口（画面好的时候 streak 一直是 0）。
+    // T91：三次失手之后不再一票封死 —— 改成每 SecondEngineReprobeFrameGap 帧再许一发复探
+    // （判据本体在 afterMissesReprobeAllowsReprobe，那一发**吃同一份** SecondEngineMaxFiresPerBind
+    // 额度，所以一轮绑定的补解总数一个字没变）。它插在下面那行判死**之前**是次序即语义：
+    // 复探成立才轮到 Fire，不成立就原样落回那行 GaveUp —— 于是"从没判过死"与"复探也花完了"
+    // 两档说的话、走的分支，全都和改前一字不差。
+    ledger.misses >= SecondEngineGiveUpAfterMisses &&
+        afterMissesReprobeAllowsReprobe(ledger, streak, frame, codeInHand, engineUsable) -> SecondEngineDecision.Fire
     ledger.misses >= SecondEngineGiveUpAfterMisses -> SecondEngineDecision.GaveUp
     ledger.unusableSeen || !engineUsable -> SecondEngineDecision.EngineUnusable
     ledger.fires >= SecondEngineMaxFiresPerBind -> SecondEngineDecision.OutOfBudget
@@ -236,6 +261,67 @@ internal fun secondEngineAfterResult(
     },
     unusableSeen = ledger.unusableSeen || !usable,
 )
+
+// T91：复探的常数与判据成对放在这里（紧挨着唯一使用它们的那颗判据），所以没跟上面那族节流常数排在一起
+/**
+ * 判死之后的复探间隔：连续 [SecondEngineGiveUpAfterMisses] 次失手把 [SecondEngineFrameGap]
+ * 那档快节奏停下来，换成「每这么多帧再许一发」。120 帧。
+ *
+ * ## 为什么要有这一条（T91 / 台账 #135）
+ *
+ * 判死的三发额度现在会花在**画面里根本没有码**的误检帧上（T88 之后空白原文算候选码，
+ * 这台 AVD 每一帧都是那种帧）。而封死的复位路径量下来只有一条：新绑定
+ * （`SpocScanScreen.markBindStarted`）——「重新扫码」那颗按钮只清闸门（`resume()` 动的是
+ * `handled`/`awaitingUserAction`，不碰这本账），回到前台在解码器健康时连绑定 effect 的键都不换，
+ * 转屏根本不在键表里。⇒ 用户把页开着不动，兜底就**整轮**哑掉；后来真出现的那张糊码等不到补解。
+ *
+ * ## 占空比（这是本常数唯一的存在理由，改数值就得重算）
+ *
+ * 一发补解的实测耗时：这台 AVD 六个样本逐字 **6 / 9 / 8 / 10 / 4 / 5 ms**（两轮绑定各三发，
+ * 合计 23 ms 与 19 ms）⇒ 取上界 10 ms。送帧率同轮量到 **8.69 帧/秒**（留痕帧号第 1 → 850 帧
+ * / 97.674 秒）⇒ 120 帧 = 13.8 秒一发 ⇒ 占空比 `10 ms / 13.8 s` = **0.072% 单核**。
+ * 真机按 30 帧/秒那一档算是 4 秒一发 = **0.25%**（帧数是设备侧事实，本内核不吃秒数，
+ * 所以这一条的墙上时间含义天然随送帧率漂 —— 与 [SecondEngineFrameGap] 同一个已知形状）。
+ * 判死之后额外最多 `SecondEngineMaxFiresPerBind - SecondEngineGiveUpAfterMisses = 5` 发
+ * × 10 ms = **50 ms/轮**，覆盖到绑定后第 8 发（本机第 637 帧 ≈ 73 秒；30 帧/秒 ≈ 21 秒）。
+ *
+ * ⚠️ 别把它读成"复探另开了一本额度"：复探走的就是 [SecondEngineMaxFiresPerBind] 那 8 发，
+ * 所以**一轮绑定的补解总数与改前同界**（8 发 × 10 ms = 80 ms 封顶），变化的只是"什么时候花完"。
+ * 常数放在判据旁边而不是上面那一族里：它只服务于 [afterMissesReprobeAllowsReprobe] 一颗。
+ */
+internal const val SecondEngineReprobeFrameGap = 120L
+
+/**
+ * 已经判死的那一帧，还许不许再补一发。**纯 JVM、零 android import、零时钟**（仓库口径）：
+ * 帧号、连击、闸门里有没有原文、探针档位 —— 全部是调用点已经在手里的设备侧事实，
+ * 本函数不新增任何一本账，也不去认识 `ImageProxy`。
+ *
+ * 五道闸门一枚都不能少，每一道都在挡一件具体的事：
+ * - `!codeInHand`：闸门里已有原文 / 结果卡正等用户按 ⇒ 补了也投不出去，白花一发；
+ * - `engineUsable && !ledger.unusableSeen`：引擎已经报过不可用（缺 `.so` / 解帧抛过）⇒
+ *   那一档的终局话由 [SecondEngineDecision.EngineUnusable] 说，复探不许绕过它去撞第二次；
+ * - `ledger.fires < SecondEngineMaxFiresPerBind`：**这一条才是省电的那一条**。判死只是把节奏
+ *   停下来，封顶才是一轮绑定的硬上界 —— 复探吃它的余额，所以本卡没有"无限重试"那条滑坡；
+ * - `streak >= SecondEngineStreakFrames`：连击不足说明画面已经干净了（用户把手机放下、
+ *   或者镜头被遮住）⇒ 那一发留到真有坏消息的时候再花，别在好画面上预支；
+ * - `frame - lastFireFrame >= SecondEngineReprobeFrameGap`：间隔，账见上面那颗常数。
+ *
+ * 帧号倒退（`frame < lastFireFrame`）落在这五道的最后一道上：差值是负的 ⇒ 不发火，
+ * 与 [SecondEngineFrameGap] 那一档同形，不需要额外分支。
+ */
+internal fun afterMissesReprobeAllowsReprobe(
+    ledger: SecondEngineLedger,
+    streak: Long,
+    frame: Long,
+    codeInHand: Boolean,
+    engineUsable: Boolean,
+): Boolean =
+    !codeInHand &&
+        engineUsable &&
+        !ledger.unusableSeen &&
+        ledger.fires < SecondEngineMaxFiresPerBind &&
+        streak >= SecondEngineStreakFrames &&
+        frame - ledger.lastFireFrame >= SecondEngineReprobeFrameGap
 
 /**
  * 第二引擎的探针档位 —— **三态**的口径与 [NativeLibVerdict] 完全一致，这里说清为什么必须是三态：

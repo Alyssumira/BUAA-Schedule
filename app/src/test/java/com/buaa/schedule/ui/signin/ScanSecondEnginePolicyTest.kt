@@ -53,12 +53,20 @@ class ScanSecondEnginePolicyTest {
         assertEquals("帧间隔漂了（单发最坏耗时的四倍余量）：", 15L, SecondEngineFrameGap)
         assertEquals("每轮额度漂了（8×15=120 帧的持续输出）：", 8, SecondEngineMaxFiresPerBind)
         assertEquals("判死的连击漂了（≈1.5–2 秒）：", 3, SecondEngineGiveUpAfterMisses)
+        // T91：判死之后那一发复探的间隔。数值本身就是占空比那笔账（算式写在常数的注释里），
+        // 漂了就等于悄悄改了电量：120 帧 @8.69fps=13.8s/发，@30fps=4s/发
+        assertEquals("复探间隔漂了（判死后每发的墙上时间）：", 120L, SecondEngineReprobeFrameGap)
         // 关系一：门槛小于间隔 —— 否则"刚攒够连击"必然撞上"间隔还没到"，第一发的时机没人说得清
         assertTrue("连击门槛不许大于等于帧间隔：", SecondEngineStreakFrames < SecondEngineFrameGap)
         // 关系二：判死先于额度 —— 否则「兜底在这台上根本没在起作用」这一档永远轮不到说话
         assertTrue("三次判死不许高于封顶：", SecondEngineGiveUpAfterMisses < SecondEngineMaxFiresPerBind)
         // 关系三：补解必须比降级文案先动（屏上档位的滞后窗是 RungSettleFrames 帧）
         assertTrue("兜底不许比降级文案还晚出声：", SecondEngineStreakFrames < RungSettleFrames)
+        // 关系四（T91）：复探必须比快节奏**疏**，否则"暂停快节奏"只是换了个名字
+        assertTrue("复探间隔不许短于快节奏：", SecondEngineFrameGap < SecondEngineReprobeFrameGap)
+        // 关系五（T91）：复探**不另开额度** —— 一轮绑定的补解总数仍是 SecondEngineMaxFiresPerBind
+        // 发封顶，判死之后最多再花掉 8-3=5 发。这一条是"有界"两个字的可执行版本
+        assertTrue("判死至少要给复探留出额度（否则复探这一档形同虚设）：", SecondEngineGiveUpAfterMisses < SecondEngineMaxFiresPerBind)
     }
 
     // ---- ③ 发火判据：全表 ----
@@ -110,6 +118,46 @@ class ScanSecondEnginePolicyTest {
             Row(
                 "两次失手仍可再试", misses = SecondEngineGiveUpAfterMisses - 1, streak = 40,
                 expected = SecondEngineDecision.Fire,
+            ),
+            // ---- T91：判死之后那一发复探。间隔两侧各一格（差一帧不发 / 恰好到线才发），
+            // 再把 afterMissesReprobeAllowsReprobe 的五道闸门各单独挡一次：少一道都是一类失效 ----
+            Row(
+                "刚判死、复探间隔没到", fires = 3, misses = SecondEngineGiveUpAfterMisses,
+                lastFireFrame = 37L, frame = 100L, streak = 99, expected = SecondEngineDecision.GaveUp,
+            ),
+            Row(
+                "复探差一帧", fires = 3, misses = SecondEngineGiveUpAfterMisses,
+                lastFireFrame = 37L, frame = 37L + SecondEngineReprobeFrameGap - 1L, streak = 99,
+                expected = SecondEngineDecision.GaveUp,
+            ),
+            Row(
+                "复探恰好到线 ⇒ 再试一发", fires = 3, misses = SecondEngineGiveUpAfterMisses,
+                lastFireFrame = 37L, frame = 37L + SecondEngineReprobeFrameGap, streak = 99,
+                expected = SecondEngineDecision.Fire,
+            ),
+            Row(
+                "复探被闸门挡（有原文在手）", fires = 3, misses = SecondEngineGiveUpAfterMisses,
+                lastFireFrame = 37L, frame = 157L, streak = 99, codeInHand = true,
+                expected = SecondEngineDecision.GaveUp,
+            ),
+            Row(
+                "复探被连击挡（画面已经干净）", fires = 3, misses = SecondEngineGiveUpAfterMisses,
+                lastFireFrame = 37L, frame = 157L, streak = SecondEngineStreakFrames - 1,
+                expected = SecondEngineDecision.GaveUp,
+            ),
+            Row(
+                "复探被封顶挡（额度花完才是真终局）", fires = SecondEngineMaxFiresPerBind,
+                misses = SecondEngineGiveUpAfterMisses, lastFireFrame = 37L, frame = 157L, streak = 99,
+                expected = SecondEngineDecision.GaveUp,
+            ),
+            Row(
+                "复探不许去撞已判不可用的引擎", fires = 3, misses = SecondEngineGiveUpAfterMisses,
+                lastFireFrame = 37L, frame = 157L, streak = 99, unusableSeen = true,
+                expected = SecondEngineDecision.GaveUp,
+            ),
+            Row(
+                "帧号倒退时复探不发", fires = 3, misses = SecondEngineGiveUpAfterMisses,
+                lastFireFrame = 200L, frame = 100L, streak = 99, expected = SecondEngineDecision.GaveUp,
             ),
             // 引擎自身不可用的两个入口：账本里记着 / 探针当下就不可用
             Row("账本记着不可用", streak = 40, unusableSeen = true, expected = SecondEngineDecision.EngineUnusable),
@@ -236,6 +284,11 @@ class ScanSecondEnginePolicyTest {
             "判死那档没报连击数字：",
             requireNotNull(secondEngineStopText(SecondEngineDecision.GaveUp)).contains(SecondEngineGiveUpAfterMisses.toString()),
         )
+        // T91：判死那一档从此有第二种结局（复探 / 额度花完），所以它必须把**两个数**都报出来 ——
+        // 只说"本轮不再请它补解"的那一句在复探到线之后就成了假话，这一格钉的是"不许说谎"
+        val gaveUpLine = requireNotNull(secondEngineStopText(SecondEngineDecision.GaveUp))
+        assertTrue("判死那档没报复探间隔（说了停却没说什么时候再试）：$gaveUpLine", gaveUpLine.contains(SecondEngineReprobeFrameGap.toString()))
+        assertTrue("判死那档没报封顶额度（不许把复探读成无限重试）：$gaveUpLine", gaveUpLine.contains(SecondEngineMaxFiresPerBind.toString()))
         // 四档都不许把用户指向已经不存在的入口（手输签到码 2026-09-21 删、手电/补光 2026-09-22 撤）
         for (decision in speaking) {
             val line = requireNotNull(secondEngineStopText(decision))
@@ -299,6 +352,69 @@ class ScanSecondEnginePolicyTest {
         assertEquals("发火次数就该等于判死门槛：", SecondEngineGiveUpAfterMisses, loop.ledger.fires)
         assertSame(
             "第 120 帧仍在判死之外：",
+            SecondEngineDecision.GaveUp,
+            secondEngineDecision(loop.ledger, loop.assist.retryableStreak, loop.frame, false, true),
+        )
+    }
+
+    /**
+     * ⑧″ T91 那笔账的可证伪版：**三次误检失手之后，后来那张真码仍有一发可被补解**。
+     *
+     * 这条断言在改前必红（那时 misses>=3 就是一票封死，第 157 帧和后面所有帧都只会返回
+     * [SecondEngineDecision.GaveUp]），所以它钉的不是"现在行为如此"这种顺口的话，而是
+     * 本卡换来的那件用户可见的事：兜底对"页开着不动、后来才对准的那张糊码"重新变得可达。
+     * 复探命中之后失手清零、节奏回到 [SecondEngineFrameGap] —— 那一发不是只许打空炮的安慰档。
+     */
+    @Test
+    fun threeMissesOnGarbageStillLeaveOneProbeForALaterRealCode() {
+        val loop = FrameLoop(decodedText = null)
+        repeat(156) { loop.step(FrameCodeRung.CodeUndecodable) }
+        assertEquals("前三发按快节奏落在门槛+间隔上：", listOf(7L, 22L, 37L), loop.fired)
+        assertEquals("三次失手已判死：", SecondEngineGiveUpAfterMisses, loop.ledger.misses)
+        assertSame(
+            "复探之前（第 38 帧）就该闭嘴：",
+            SecondEngineDecision.GaveUp,
+            secondEngineDecision(loop.ledger, loop.assist.retryableStreak, 38L, false, true),
+        )
+        val ledger = loop.ledger
+        assertSame(
+            "第 157 帧（判死后到线的那一发）不许仍是封死：",
+            SecondEngineDecision.Fire,
+            secondEngineDecision(ledger, loop.assist.retryableStreak, 157L, false, true),
+        )
+        // 这一发改成"兜底真解开了"（同一颗内核函数，只是结果不同）：命中必须把判死翻回来
+        val hit = secondEngineAfterResult(secondEngineAfterFire(ledger, 157L), decoded = true, usable = true)
+        assertEquals("复探命中不清零失手的话，下一张糊码还是哑的：", 0, hit.misses)
+        assertEquals("复探吃的是同一份额度（3 快 + 1 复探）：", 4, hit.fires)
+        assertSame(
+            "命中之后节奏必须回到 $SecondEngineFrameGap 帧那一档（不再走复探间隔）：",
+            SecondEngineDecision.Fire,
+            secondEngineDecision(hit, loop.assist.retryableStreak, 172L, false, true),
+        )
+    }
+
+    /**
+     * ⑧‴ 复探**不另开额度**：一路坏下去仍是 8 发封顶，之后才是真终局。
+     *
+     * 这一条是本卡"有界"那半个红线的可执行版本：如果哪天有人把复探改成独立计数或者把间隔
+     * 调到 15 帧，这一档就会红 —— 那时一轮绑定的补解总数就不再是 8 发了。
+     * 帧号 [7,22,37] + 每 120 帧五发 = 8 发，本机 8.69 帧/秒下最后一发落在第 637 帧 ≈ 73 秒。
+     */
+    @Test
+    fun reprobesSpendTheSameBudgetAndThenSealForReal() {
+        val loop = FrameLoop(decodedText = null)
+        repeat(1_000) { loop.step(FrameCodeRung.CodeUndecodable) }
+        val first = SecondEngineStreakFrames + 1
+        assertEquals(
+            "发火节奏不对（前三发按门槛+间隔，判死后每 $SecondEngineReprobeFrameGap 帧一发）：",
+            listOf(7L, 22L, 37L, 157L, 277L, 397L, 517L, 637L),
+            loop.fired,
+        )
+        assertEquals("复探多花了一发额度：", SecondEngineMaxFiresPerBind, loop.ledger.fires)
+        assertEquals("失手计数仍停在判死门槛上：", SecondEngineGiveUpAfterMisses, loop.ledger.misses)
+        assertEquals("第一发仍落在门槛之后一帧：", first, loop.fired.first())
+        assertSame(
+            "第 1,000 帧：额度花完 ⇒ 这一档才是真终局：",
             SecondEngineDecision.GaveUp,
             secondEngineDecision(loop.ledger, loop.assist.retryableStreak, loop.frame, false, true),
         )
