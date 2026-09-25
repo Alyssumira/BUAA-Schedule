@@ -1269,6 +1269,15 @@ private class QrCodeAnalyzer(
      * 框坐标本来就在**已旋转**的分析画面空间（与 [analysisMeteringPointForTap] 吃的
      * `rotationDegrees` 同一口径），短边原样报数，这里不做几何变换。
      *
+     * ⚠️ T88①：这里原本写着 `if (code.rawValue != null) readable++` —— 那一支把 ML Kit
+     * 每帧交回来的**空原文**（长度 0，不是 null）算成"读到了一枚有原文的码"，于是
+     * 帧观测判成 `CodeReadable`：检测驱动的缩放阶梯一枚命令都不发、第二引擎的触发连击
+     * 每帧清零（装机账见 [frameSymbolCounts]）。现在这一支不再自己判"读到了"：
+     * 每枚符号只递「原文 + 框短边」两颗观测，判与数都在内核里（尺子是 T87 那颗
+     * [decodingAdmission]，全仓只此一把）。本函数与 [submitDecodedText] 从此说的是同一件事：
+     * 空白原文既投不出去，也不算读到了 —— 而它两种都不算的那一面（不推进判死棘轮）
+     * 由 [noteBlankDecoding] 那一条纪律守着，本卡一个字没改。
+     *
      * 代价说清：本函数在 ML Kit 回调线程上、每成功帧跑一次，[advanceScanAssist] 每次
      * 产一枚小不可变对象 —— 它不在 analyze 入口快路径上（那条路的零分配守卫在
      * `ScanSilentBranchGuardTest` ③），与 InputImage 同一量级，可以付。
@@ -1276,22 +1285,18 @@ private class QrCodeAnalyzer(
      * 用户听的（[scanFrameAidText]），日志不是它的听众。
      */
     private fun noteFrameRung(codes: List<Barcode>) {
-        var readable = 0
-        var candidates = 0
-        var largestEdge = -1
-        for (code in codes) {
-            if (code.rawValue != null) {
-                readable++
-                continue
-            }
-            candidates++
-            val box = code.boundingBox ?: continue
-            // Rect.width()/height() 是 Int 方法（不是 compose Rect 的属性）；退化框（≤0）
-            // 原样把负数 largestEdge 留给内核 —— [frameCodeRung] 对它有显式的不可信档
-            val edge = minOf(box.width(), box.height())
-            if (edge > largestEdge) largestEdge = edge
-        }
-        val rung = frameCodeRung(readable, candidates, largestEdge)
+        val counts = frameSymbolCounts(
+            codes.map { code ->
+                val box = code.boundingBox
+                // Rect.width()/height() 是 Int 方法（不是 compose Rect 的属性）；框缺失递哨兵，
+                // 退化框（≤0）原样把短边留给内核 —— [frameCodeRung] 对它有显式的不可信档
+                FrameSymbol(
+                    rawValue = code.rawValue,
+                    boxShortEdgePx = if (box == null) NoCandidateBoxShortEdgePx else minOf(box.width(), box.height()),
+                )
+            },
+        )
+        val rung = frameCodeRung(counts.readableCodeCount, counts.candidateCodeCount, counts.largestCandidateBoxShortEdgePx)
         val outcome = advanceScanAssist(assist, rung, zoomControlAvailable)
         assist = outcome.state
         val ratio = outcome.zoomRatio

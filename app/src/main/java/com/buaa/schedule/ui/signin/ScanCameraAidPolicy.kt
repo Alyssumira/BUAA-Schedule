@@ -22,6 +22,12 @@ package com.buaa.schedule.ui.signin
  * T66 在这一本账上多挂了一枚 [ScanAssistState.retryableStreak]（「ML Kit 看见了候选码却没解出
  * 原文」的连续帧数）：它是第二引擎（zxing-cpp 兜底）唯一的触发量，节流与停法在
  * [ScanSecondEnginePolicy]，这一边只负责把观测量数准。
+ *
+ * T88① 动的是**数准**那一半：④ 的"这一帧读到了东西"改由 [frameSymbolCounts] 数，
+ * 尺子是 T87 那颗 [decodingAdmission]（空白原文不算读到）。改前调用点用
+ * `rawValue != null` 判，于是模拟器上每帧一枚 `len=0` 的误检被算成 [FrameCodeRung.CodeReadable]
+ * —— 阶梯与兜底两本账同时被一个假前提按住（实测 151 秒 1,389 帧全中，账写在
+ * [frameSymbolCounts] 的注释里）。判死那本账（[ScanRecoveryPolicy]）本卡一行都没接。
  */
 
 // ---- ① 交付帧够不够 ----
@@ -239,6 +245,97 @@ internal fun clampedZoomRatio(
 // ---- ④ 画面里有没有码、有码为什么解不开 ----
 
 /**
+ * T88①：一帧里解码器交回来的每一枚「符号」的紧凑观测。
+ *
+ * 只有两样：原文本体（**没解出来就是 null，解出来是空白也算解出来过**，见下面那颗
+ * [frameSymbolCounts]）与检测框的短边。框缺失由调用点递 [NoCandidateBoxShortEdgePx]。
+ *
+ * ⚠️ 刻意写成**普通类而不是 data class**：`data class` 的 `toString()` 会把 [rawValue] 带上，
+ * 这一枚哪天被人拼进取证行就把原文写进日志了 —— 本仓的口径是「值不外流」（同
+ * [DecodingAdmission] 只装长度、`ScanRejectInfo` 只装档级）。它只在调用点与内核之间活一次，
+ * 不进任何账本，也不参与任何 equality。
+ */
+internal class FrameSymbol(val rawValue: String?, val boxShortEdgePx: Int)
+
+/** 检测框缺失的哨兵：调用点与内核共用这一枚，不许两边各写一个字面量 -1 */
+internal const val NoCandidateBoxShortEdgePx = -1
+
+/** [frameSymbolCounts] 的结论：三颗数，正是 [frameCodeRung] 的三个入参 */
+internal class FrameSymbolCounts(
+    val readableCodeCount: Int,
+    val candidateCodeCount: Int,
+    val largestCandidateBoxShortEdgePx: Int,
+)
+
+/**
+ * 把一帧的符号数成档位判据要的那三个数（T88①）。**这一颗是本卡真正的修法**：
+ * 改前那三颗数是在调用点（`QrCodeAnalyzer.noteFrameRung`）手算的，而"读到了没有"那一支
+ * 用的是 `code.rawValue != null` —— 于是 ML Kit 交回来的**空原文**（长度 0，不是 null）
+ * 被算成"读到了一枚有原文的码"。
+ *
+ * 装机实测那一发（这台 AVD 虚拟场景的棋盘格，临时探针量得、探针未入库）：
+ * **151.4 s 里 1,389 帧，100% 是 `nCodes=1 / len=0 / bytes=0 / corners=4`、框短边
+ * 284..303 px（中位 293）** ⇒ 1,389/1,389 帧全被判成 [FrameCodeRung.CodeReadable]，
+ * 后果与 T87 收的那一半是同一件事的两个面：
+ * - 检测驱动的缩放阶梯被按住（[ScanAssistState.tooSmallStreak] 实测**恒为 0**，一帧都没攒过）；
+ * - [ScanAssistState.retryableStreak] 每帧清零 ⇒ 第二引擎（zxing-cpp 兜底）**151 秒 0 发火**
+ *   （139 次采样决策全是 Waiting）。这就是 T66 之后"这台模拟器永远叫不醒兜底"的那笔账的成因。
+ *
+ * ## 空白原文为什么归到候选那一侧，而不是 `CodeReadable`
+ *
+ * [FrameCodeRung.CodeReadable] 的合同是一句断言：「这一帧至少解开了一枚**有原文**的码：
+ * 什么都不用帮」。空白原文没有兑现这件事 —— 它一个字都没交到用户手上（T87 已经量明：
+ * 794/795 帧的空白原文一路穿到状态机才是那张假卡的来源）。留在 `CodeReadable` 上，
+ * 阶梯与兜底两本账都是拿一个假前提换来的：判据说"读到了"，界面上什么都没发生。
+ *
+ * 而它在观测上的身份恰好与 `rawValue == null` 那档同族：**解码器声称看见了一枚符号
+ * （带框、带四枚角点），却没交出可用的原文** —— 这正是 `candidates` 数的那个东西，
+ * 也是 [frameCodeRung] 里"太小"与"解不开"两档的定义域。所以它落 candidates 那一侧，
+ * 由框的短边决定是哪一档，本卡一个字都不改那颗判据。
+ *
+ * ## 它既不算"检测失败"，也不算"成功解码的加分项"
+ *
+ * - **不推进判死/停帧**：那本账（[ScanDecoderHealth.consecutiveFailures]）只有两个写点 ——
+ *   ML Kit 的 `onFailure` 与 `process()` 同步抛，都走 `noteDecodeFailed`。空白原文走的是
+ *   **成功回调**（任务正常返回），本卡一行都不往那本账上接：对着棋盘格把扫码页判死、
+ *   再把帧流停掉，是比弹一张假卡更坏的失效（T87 的留痕那一档同样碰不到棘轮，
+ *   `ScanBlankDecodingWiringGuardTest` ③ 钉着，这条纪律本卡照抄）。
+ * - **也不算"读到了码"的加分**：`noteDecodeSucceeded` 数的是"这颗解码器还活着"，
+ *   那一本账在 [frameCodeRung] 之外、本卡也不动 —— 空白原文确实证明了解码器活着（它跑完了），
+ *   但**不证明画面里有码**。两本账分开的这件事在 T87 那句"这一档没有失败"里说的是同一件事：
+ *   级别是 Info 而不是 Warn，因为它既没失败、也没成功。
+ *
+ * ## 副作用要说清（不许只报好处）
+ *
+ * 屏上那句提示从此会对这种帧说话（[scanFrameAidText] 的「看见二维码了，但一时解不开」/
+ * 「小到解不出来」）。主语是**解码器交回来的那枚框**，不是对用户说"你扫到了东西"：
+ * 与 T87 那行 Info 同一主语纪律。而第二引擎从此会在这种帧上发火 —— 那是本卡 ② 单独量过、
+ * 单独判过的一笔（发火频率与代价见 `ScanFrameObservationWiringGuardTest` 的 KDoc 与收单报告）。
+ *
+ * 空白口径**只有 [decodingAdmission] 那一把尺子**（T87 立的）：这里直接吃它，
+ * 不再写第二个 `isBlank()`。"收不收"与"读没读到"必须是同一个判断，否则递交侧与观测侧
+ * 迟早漂成两个数 —— 那正是这一族修过三轮的病名。
+ */
+internal fun frameSymbolCounts(symbols: List<FrameSymbol>): FrameSymbolCounts {
+    var readable = 0
+    var candidates = 0
+    var largestEdge = NoCandidateBoxShortEdgePx
+    for (symbol in symbols) {
+        // 相机帧是这一本账唯一的读者（帧观测只发生在分析流上），所以 source 递死值不是敷衍：
+        // [decodingAdmission] 的判据本来不看来源（来源只进措辞），传对它是为了不再多开一颗缝
+        if (decodingAdmission(symbol.rawValue, DecodingSource.CameraFrame).admitted) {
+            readable++
+            continue
+        }
+        candidates++
+        // 退化框（≤0）与缺失框（哨兵）原样带上：[frameCodeRung] 对它们有显式的"不可信"档，
+        // 在这里就地把它们折成"没框"就是把"不敢抬视场"那一条判据抹了
+        if (symbol.boxShortEdgePx > largestEdge) largestEdge = symbol.boxShortEdgePx
+    }
+    return FrameSymbolCounts(readable, candidates, largestEdge)
+}
+
+/**
  * 判档采用的 px/模块：3。
  *
  * 出处分两层：ML Kit 文档的 2 px 是「最小有意义单元」的**存在性下限**，不是识别率下限；
@@ -264,7 +361,13 @@ internal const val MinUsefulCandidateBoxPx = UsefulModulePx * QrModuleSideBudget
 
 /** 一帧观测的档位。UI 措辞（[scanFrameAidText]）与缩放阶梯都只许按这四档说话。 */
 internal enum class FrameCodeRung {
-    /** 这一帧至少解开了一枚有原文的码：什么都不用帮 */
+    /**
+     * 这一帧至少解开了一枚**有可用原文**的码：什么都不用帮。
+     *
+     * ⚠️ "有可用原文"不等于"解码器递回来一个字符串"：空串与全空白由 [frameSymbolCounts]
+     * 归到候选那一侧，尺子是 T87 那颗 [decodingAdmission]（T88① —— 装机实测那种
+     * 每帧 `len=0` 的误检改前正是被这里判成 readable，于是阶梯与兜底两本账一起被按住）。
+     */
     CodeReadable,
 
     /** 一枚候选都没看见：是瞄的问题，不是帧的问题，不许据此抬缩放 */
@@ -279,7 +382,8 @@ internal enum class FrameCodeRung {
 
 /**
  * 一帧的紧凑测量 → 档位。测量由调用点从 ML Kit 的结果里抠出来当参数传（仓库口径：
- * [Barcode.boundingBox] 只在调用点读，本文件不认识 Barcode 这个类）。
+ * [Barcode.boundingBox] 只在调用点读，本文件不认识 Barcode 这个类）；三个入参本身
+ * 由 [frameSymbolCounts] 数出来（T88① 起调用点不再手算，"读到了没有"也不在调用点判）。
  *
  * 前提是 scanner 开了 `enableAllPotentialBarcodes()`： bundled 实现真的兑现这颗开关
  * （其字节码引用 PotentialBarcode），「检测到但解不开」的候选会带着框进来 —— 而 ML Kit 的
