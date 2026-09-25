@@ -723,6 +723,21 @@ fun SpocScanScreen(
                         color = LocalSemanticPlate.current?.foreground
                             ?: MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    // T83③：失败卡还得说得出**扫到了什么**（host、路径、参数名、字符数）。
+                    // 只有一句断言的卡片归不了因 —— 这一页上一轮定位根因靠的是用户口述
+                    // "屏幕上写了什么"，而形状由判据算好、与 logcat 那一行同源同口径：
+                    // 页面这里一个字都不许自己拼（接线守卫在 ScanRejectWiringGuardTest）。
+                    val evidence = (state as? SignInState.Failed)?.evidence
+                    if (evidence != null) {
+                        Text(
+                            text = evidence,
+                            style = MaterialTheme.typography.bodySmall,
+                            // 同一处取墨：ALERT 底板上那行小字要是走 onSurfaceVariant，
+                            // 改前那张红卡读不出的问题就从第二行复活了
+                            color = LocalSemanticPlate.current?.foreground
+                                ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     when (val s = state) {
                         is SignInState.Failed -> Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
                             val cardAction = Modifier
