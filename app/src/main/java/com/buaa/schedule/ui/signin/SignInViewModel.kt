@@ -1,12 +1,14 @@
 package com.buaa.schedule.ui.signin
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.buaa.schedule.data.import.IClassApi
 import com.buaa.schedule.data.import.IClassSession
+import com.buaa.schedule.data.import.ScanRejectClassifier
 import com.buaa.schedule.data.import.ScanTarget
 import com.buaa.schedule.data.import.ScanTargetParser
 import com.buaa.schedule.data.import.SpocApi
@@ -14,6 +16,9 @@ import com.buaa.schedule.data.import.SpocCredential
 import com.buaa.schedule.data.import.SpocSession
 import com.buaa.schedule.data.import.SpocSessionExpiredException
 import com.buaa.schedule.data.import.SpocSignTarget
+import com.buaa.schedule.data.import.scanRejectCardText
+import com.buaa.schedule.data.import.scanRejectEvidenceText
+import com.buaa.schedule.data.import.scanRejectForensicLine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -52,11 +57,15 @@ sealed interface SignInState {
     /**
      * @param relogin true 表示服务端已经认不得这次的凭证，界面该给「去登录」出口
      * @param platform 这个出口要通向哪一族的登录页（[SignInPlatform] 的类注释写了送错的代价）
+     * @param evidence 失败卡第二行：**扫到的东西长什么样**（host / 路径 / 参数名 / 字符数，
+     *   由 [ScanRejectClassifier] 的形状件拼出来，一个参数值都不在里面）。
+     *   只有解析失败那一档带得出形状，服务端拒绝那几档没有形状可说 ⇒ null（不许编一份）。
      */
     data class Failed(
         val reason: String,
         val relogin: Boolean,
         val platform: SignInPlatform = SignInPlatform.Spoc,
+        val evidence: String? = null,
     ) : SignInState
 }
 
@@ -102,7 +111,7 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
         if (flight.value) return
         val target = ScanTargetParser.parse(raw)
         if (target == null) {
-            _state.value = SignInState.Failed("这不是一张北航课堂签到码（智学北航与 iClass 都不认）", relogin = false)
+            rejectScan(raw)
             return
         }
         flight.value = true
@@ -116,6 +125,30 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
                 flight.value = false
             }
         }
+    }
+
+    /**
+     * 解析失败：按档说一句人话，再留一行**扫到了什么**的取证（T83①②③）。
+     *
+     * 三件事必须同时做，少一件就是第四条静默死路的形状：
+     * - 界面按档说话（[scanRejectCardText]）—— 一句"两族都不认"在 T84 之后已经是错的了，
+     *   而且它把"根本不是码"与"是码但不是这两族的"糊在一起，用户与编排者都归不了因；
+     * - 取证行记下第二站交出来的**形状**（[scanRejectForensicLine]）—— 这一站以前一行日志都没有，
+     *   于是"屏幕上写了什么"只能靠用户描述；这次定到根因靠的是一张投影照片 + zxing-cpp 手解；
+     * - ⚠️ 只有形状，没有原文也没有参数值：iClass 那张码带 `timestamp`，是**滚动码**，
+     *   完整原文进 logcat 等于把"还能再签一次"的凭证写给任何拿到这台设备的人（口径见那颗文件）。
+     *
+     * 一行、按次不按帧：这条路排在提交闸门之后（同一份原文压着不再投，见 [shouldSubmitScan]），
+     * 所以这一发不是按帧刷屏的那一类，用 `Log.w` 明说这是失败。
+     */
+    private fun rejectScan(raw: String) {
+        val info = ScanRejectClassifier.classify(raw)
+        Log.w(TAG, scanRejectForensicLine(info))
+        _state.value = SignInState.Failed(
+            reason = scanRejectCardText(info),
+            relogin = false,
+            evidence = scanRejectEvidenceText(info),
+        )
     }
 
     /**
@@ -262,6 +295,14 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     companion object {
+        /**
+         * 扫码链第三站（判格式）的 tag：`logcat -d -s ScanSignInParse` 一行一档，
+         * 与相机侧那几行（`SpocScanScreen`）分得开 —— 那几行说"帧到没到、解没解出原文"，
+         * 这一行说"解出来的那段文字被判成什么档"。级别口径与那一页一致（只有 Info/Warn，
+         * 用户的机器把 logcat 砍到 Info、release 又剥 Verbose，`Log.d` 等于没写）。
+         */
+        private const val TAG = "ScanSignInParse"
+
         // Locale 必须钉死：这是回给用户看的"签到时间"凭证文本。跟随默认 locale 时，
         // th-TH 系统按佛历输出（年份 +543）、ar/fa 输出阿拉伯-印度数字（项目同族
         // formatter 如 TeachingScheduleParser 都钉了 Locale.US）。
