@@ -216,6 +216,8 @@ class ScanBlankDecodingWiringGuardTest {
         val aidBody = balancedBlock(withoutComments(current), "internal fun scanFrameAidText(")
         assertEquals("「看见二维码了」只许出现在有证据那一支（两句）：\n$aidBody", 2, occurrences(aidBody, "看见二维码了"))
         assertEquals("无证据那一支「还没扫出内容」只许两句（两档各一句）：\n$aidBody", 2, occurrences(aidBody, "还没扫出内容"))
+        // 两档**各自**按证据位分支：只留一处分支就是有一档的断语被改回无条件（⑨a 那种假绿）
+        assertEquals("两档各自都要按「本轮读出过原文没有」分一次支：\n$aidBody", 2, occurrences(aidBody, "if (readableCodeSeen)"))
         assertEquals("帧观测措辞出口只能有一颗（第二份=页面自算口径）：", 1, occurrences(current, "internal fun scanFrameAidText("))
     }
 
