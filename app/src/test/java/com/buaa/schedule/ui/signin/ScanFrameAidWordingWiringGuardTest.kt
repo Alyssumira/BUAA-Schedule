@@ -191,10 +191,15 @@ class ScanFrameAidWordingWiringGuardTest {
      * ① 的结论是"误检与真糊码分不开"，所以谁都不许新立第二把空白尺子；T91 被授权的只有
      * "三次失手之后还许不许再试一发"这一条判据，其余（准入、判档树、停法的另三档、额度与间隔）
      * 一个字节都没让它漂。被挖的那几段每段都配了靶子，删掉判据来蒙混会当场红。
+     *
+     * ⚠️ T92（#133）又按同一套换法处理了 [FRAME_FLOW_FILE]（**不是放松**：被挖那段配了三枚靶子）——
+     * T92 被授权改的是那颗内核头部"空转有多少帧"那一段的**读数口径**（旧文本把一个 2.80 帧/秒
+     * 写成了这一页的固有属性）。判据、措辞与停帧那条取证行的全文都在被挖段之外，照旧逐字节。
+     * 见 [cutT92FrameFlowSpan]，口径与 [ScanBlankDecodingWiringGuardTest] ⑤b 同一份。
      */
     @Test
     fun theJudgingSideWasNotTouchedByThisCard() {
-        for (relative in listOf(ADMISSION_FILE, RECOVERY_FILE, FRAME_FLOW_FILE, GATE_FILE, VIEW_MODEL_FILE)) {
+        for (relative in listOf(ADMISSION_FILE, RECOVERY_FILE, GATE_FILE, VIEW_MODEL_FILE)) {
             val path = "$MAIN_PREFIX/$relative"
             val baseline = gitShow(T90_BASELINE, path)
             check(baseline != null) { "git 跑不动或基线取不到（$path@$T90_BASELINE），反向钉无从核对" }
@@ -205,6 +210,28 @@ class ScanFrameAidWordingWiringGuardTest {
                 normalizeNewlines(File(findMainJavaDir(), relative).readText()),
             )
         }
+        // 帧观测那颗内核的头部：挖掉 T92 的「空转速率」一段之外逐字节（同一把尺子，另一枚文件）
+        val flowPath = "$MAIN_PREFIX/$FRAME_FLOW_FILE"
+        val flowBaseline = gitShow(T90_BASELINE, flowPath)
+        check(flowBaseline != null) { "git 跑不动或基线取不到（$flowPath@$T90_BASELINE），反向钉无从核对" }
+        val flowCurrent = normalizeNewlines(File(findMainJavaDir(), FRAME_FLOW_FILE).readText())
+        assertEquals(
+            "$FRAME_FLOW_FILE 在「空转有多少帧」那一段之外被改过了：T92 只许改那一段的读数口径，" +
+                "停帧判据与三档措辞都长在别处，一个字都不该跟着漂",
+            cutT92FrameFlowSpan(normalizeNewlines(flowBaseline), "$flowPath@$T90_BASELINE"),
+            cutT92FrameFlowSpan(flowCurrent, FRAME_FLOW_FILE),
+        )
+        // 靶子：基线侧那段带着被改掉的裸数、且没有本轮补的复现法（挖错地方/换错基线都会红）
+        val baselineSpan = t92FrameFlowSection(normalizeNewlines(flowBaseline))
+        assertTrue("靶子丢了：基线侧那一段里没有旧文本写死的 2.80 —— 挖错了地方，这么比量不出任何东西", baselineSpan.contains("2.80"))
+        assertTrue("基线侧那一段已经带着「$T92_RECIPE_ANCHOR」：基线取错了（拿今天比今天的尺子量不出事）",
+            !baselineSpan.contains(T92_RECIPE_ANCHOR))
+        // 靶子：工作树那段确实还在，而且是"区间 + 争用档 + 复现法"那个形状，也没退回裸数
+        val span = t92FrameFlowSection(flowCurrent)
+        for (anchor in listOf("8.01", "4.73", "2.60", "2.80", T92_RECIPE_ANCHOR, "logcat -d -v year")) {
+            assertTrue("空转速率那一段少了「$anchor」（区间、争用档、旧读数或复现法被删了）：\n$span", span.contains(anchor))
+        }
+        assertFalse("又退回没有口径的裸数（「模拟器实测该页 X 帧/秒」那一形状）：\n$span", span.contains("模拟器实测该页"))
         // 兜底那颗内核：挖掉 T91 的五段之外逐字节
         val kernelPath = "$MAIN_PREFIX/$SECOND_ENGINE_FILE"
         val kernelBaseline = gitShow(T90_BASELINE, kernelPath)
@@ -407,6 +434,32 @@ class ScanFrameAidWordingWiringGuardTest {
         throw IllegalStateException("找不到 app/src/main/java：当前目录 ${File("").absolutePath}")
     }
 
+    // ---- T92（#133）的挖段重钉：被授权改动的只有 ScanFrameFlowPolicy 头部「空转有多少帧」那一段 ----
+
+    /**
+     * 挖掉那一段。三条纪律与 [cutT91Spans] 同源：起始锚点必须唯一（不唯一=边界不成立）、
+     * 收尾锚点找不到就抛、段长越界就抛。两个锚点本身都**不在**被挖范围内，所以"挪个位置再改"
+     * 与"改掉锚点"都会红。基线侧与工作树侧走同一对锚点，剩下的字节照比。
+     */
+    private fun cutT92FrameFlowSpan(text: String, label: String): String = text.removeRange(t92FrameFlowRange(text, label))
+
+    /** 只取那一段（靶子用） */
+    private fun t92FrameFlowSection(text: String): String = text.substring(t92FrameFlowRange(text, FRAME_FLOW_FILE))
+
+    private fun t92FrameFlowRange(text: String, label: String): IntRange {
+        val at = text.indexOf(T92_FRAME_FLOW_START)
+        check(at >= 0) { "$label 里找不到空转速率那一段的起始锚点「$T92_FRAME_FLOW_START」：那段挪过家或改了措辞，钉法要跟着重看" }
+        check(text.indexOf(T92_FRAME_FLOW_START, at + 1) < 0) {
+            "$label 里起始锚点「$T92_FRAME_FLOW_START」出现两次：被挖段的边界不唯一，逐字节比较无从谈起"
+        }
+        val stop = text.indexOf(T92_FRAME_FLOW_END, at)
+        check(stop > at) { "$label 里那一段的收尾锚点「$T92_FRAME_FLOW_END」找不到：段边界漂了" }
+        check(stop - at in T92_FRAME_FLOW_MIN..T92_FRAME_FLOW_MAX) {
+            "$label 里那一段长 ${stop - at} 字符，越出 [$T92_FRAME_FLOW_MIN,$T92_FRAME_FLOW_MAX]：不像是一段读数（钉法本身漂了）"
+        }
+        return at until stop
+    }
+
     private fun findRepoRoot(): File {
         var dir: File? = File("").absoluteFile
         repeat(5) {
@@ -433,5 +486,20 @@ class ScanFrameAidWordingWiringGuardTest {
 
         /** 本卡的起点（master d7af6f8）：④ 那几处反向钉按这一枚逐字节核对 */
         const val T90_BASELINE = "d7af6f8"
+
+        /**
+         * T92（#133）被授权改动的那一段（[FRAME_FLOW_FILE] 头部"空转有多少帧"的读数）的两个锚点，
+         * 与 [ScanBlankDecodingWiringGuardTest] ⑤b 用的是同一对（两边各留一份副本，同这一族
+         * 其它工具的既有口径）。起始那句是上一句的尾巴、改动前后逐字保留；收尾那句是下一节的开头。
+         */
+        const val T92_FRAME_FLOW_START = "这就是本卡的账"
+        const val T92_FRAME_FLOW_END = "所以这里只问三件事"
+
+        /** 139 = 基线（T90 起点）那段实际长度；1,815 = T92 本轮那段实际长度 */
+        const val T92_FRAME_FLOW_MIN = 100
+        const val T92_FRAME_FLOW_MAX = 4_000
+
+        /** "复现法确实写进去了"的靶子锚点 */
+        const val T92_RECIPE_ANCHOR = "怎么复现"
     }
 }

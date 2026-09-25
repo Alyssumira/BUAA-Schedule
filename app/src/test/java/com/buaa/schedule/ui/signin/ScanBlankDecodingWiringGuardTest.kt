@@ -173,7 +173,7 @@ class ScanBlankDecodingWiringGuardTest {
      * ⚠️ T90（#134）改过这条钉法，改的是**形状**不是**松紧**：
      * [STATUS_FILE] 原来也在这份"整文件逐字节"的清单里，而 T90 被授权改的恰恰是它那一段
      * 帧观测措辞（误检帧不再被宣称"看见二维码了"）。于是这一条换成两半：
-     *  1. 其余五份文件照旧整文件逐字节对 [T87_BASELINE]（本卡不许碰的就是这五份）；
+     *  1. 其余四份文件照旧整文件逐字节对 [T87_BASELINE]（本卡不许碰的就是这四份）；
      *  2. [STATUS_FILE] 改成**挖掉被授权那一段之后**逐字节对同一枚基线 —— 也就是
      *     "除了帧观测措辞那一段，这个文件相对 T87 起点仍然一个字都没动"。锚点找不到就抛，
      *     所以"把那段挪个位置再改"也红（见 [stripFrameAidSection]）。
@@ -182,10 +182,15 @@ class ScanBlankDecodingWiringGuardTest {
      * 而"这一句只能由内核给、调用点一个字都不拼"由 [ScanFrameAidWordingWiringGuardTest] 钉。
      * 这里另留两枚靶子：允许动的那一段确实还长着 T90 那个形状（按证据分支、两套建议都在），
      * 否则上面那些守卫扫的就是空气。
+     *
+     * ⚠️ T92（#133）把同一套换法用到 [FRAME_FLOW_FILE] 上（**仍不是放松**，是被挖那段配了三枚靶子）：
+     * T92 被授权改的是那颗内核头部"空转有多少帧"那一段的**读数口径**（旧文本把一个 2.80 帧/秒
+     * 写成了这一页的固有属性，被 T87/T88/T91 六个读数打到 3.1–3.3 倍）。判据、措辞、取证行全文
+     * 都在被挖段之外，照旧逐字节。见 [cutFrameFlowRate]。
      */
     @Test
     fun filesThisCardMustNotTouchAreByteIdenticalToBaseline() {
-        for (relative in listOf(REJECT_FILE, VIEW_MODEL_FILE, GATE_FILE, RECOVERY_FILE, FRAME_FLOW_FILE)) {
+        for (relative in listOf(REJECT_FILE, VIEW_MODEL_FILE, GATE_FILE, RECOVERY_FILE)) {
             val path = "$MAIN_PREFIX/$relative"
             val baseline = gitShow(T87_BASELINE, path)
             check(baseline != null) { "git 跑不动或基线取不到（$path@$T87_BASELINE），反向钉无从核对" }
@@ -219,7 +224,63 @@ class ScanBlankDecodingWiringGuardTest {
         // 两档**各自**按证据位分支：只留一处分支就是有一档的断语被改回无条件（⑨a 那种假绿）
         assertEquals("两档各自都要按「本轮读出过原文没有」分一次支：\n$aidBody", 2, occurrences(aidBody, "if (readableCodeSeen)"))
         assertEquals("帧观测措辞出口只能有一颗（第二份=页面自算口径）：", 1, occurrences(current, "internal fun scanFrameAidText("))
+        // ---- T92（#133）：ScanFrameFlowPolicy 的"空转速率那一段"之外逐字节，钉法与上面同一套 ----
+        val flowPath = "$MAIN_PREFIX/$FRAME_FLOW_FILE"
+        val flowBaseline = gitShow(T87_BASELINE, flowPath)
+        check(flowBaseline != null) { "git 跑不动或基线取不到（$flowPath@$T87_BASELINE），反向钉无从核对" }
+        val flowCurrent = normalizeNewlines(File(findMainJavaDir(), FRAME_FLOW_FILE).readText())
+        assertEquals(
+            "$FRAME_FLOW_FILE 在「空转有多少帧」那一段之外被改过了：T92 只被授权改那一段的读数口径，" +
+                "停帧判据（frameFlowStop）、三档措辞与那条取证行的全文（frameFlowStopLogText）都不许顺手改",
+            cutFrameFlowRate(normalizeNewlines(flowBaseline), flowPath),
+            cutFrameFlowRate(flowCurrent, FRAME_FLOW_FILE),
+        )
+        // 靶子 1：基线侧那一段确实带着被改掉的那个裸数，而且**还没有**本轮补的复现法
+        //         （反过来说明挖的就是那一段，也说明基线没被偷偷换成今天）
+        val baselineRateSpan = frameFlowRateSection(normalizeNewlines(flowBaseline))
+        assertTrue("靶子丢了：基线侧那一段里没有旧文本写死的 2.80 —— 挖错了地方，这么比量不出任何东西",
+            baselineRateSpan.contains("2.80"))
+        assertTrue("基线侧那一段已经带着「$FRAME_FLOW_RECIPE_ANCHOR」：基线取错了（拿今天比今天的尺子量不出事）",
+            !baselineRateSpan.contains(FRAME_FLOW_RECIPE_ANCHOR))
+        // 靶子 2：工作树那一段确实还在，而且是"带条件的区间 + 复现法"那个形状
+        //         （整段删掉、或改回一句没有口径的裸数，都会红在这里）
+        val rateSpan = frameFlowRateSection(flowCurrent)
+        for (anchor in listOf(
+            "8.01", "4.73", "2.60", "2.80", FRAME_FLOW_RECIPE_ANCHOR, "logcat -d -v year",
+        )) {
+            assertTrue("空转速率那一段少了「$anchor」（区间、争用档、旧读数或复现法被删掉了）：\n$rateSpan", rateSpan.contains(anchor))
+        }
+        assertFalse(
+            "空转速率又退回没有口径的裸数（「模拟器实测该页 X 帧/秒」那一形状，正是 #133 收的账）：\n$rateSpan",
+            rateSpan.contains("模拟器实测该页"),
+        )
     }
+
+    /**
+     * T92 被授权改动的那一段（[FRAME_FLOW_FILE] 头部"空转有多少帧"的读数）在文本里的区间。
+     * 三条纪律照本文件 [stripFrameAidSection] 与 [ScanFrameAidWordingWiringGuardTest] 的 `cutT91Spans`：
+     * 起始锚点必须**唯一**（不唯一就是段边界不成立）、收尾锚点找不到就抛、段长越界就抛。
+     * 两个锚点本身都不在被挖的范围内 ⇒ "把那段挪个位置"或"改掉锚点"都会红。
+     */
+    private fun frameFlowRateRange(text: String, label: String): IntRange {
+        val at = text.indexOf(FRAME_FLOW_RATE_START)
+        check(at >= 0) { "$label 里找不到空转速率那一段的起始锚点「$FRAME_FLOW_RATE_START」：那段挪过家或改了措辞，钉法要跟着重看" }
+        check(text.indexOf(FRAME_FLOW_RATE_START, at + 1) < 0) {
+            "$label 里起始锚点「$FRAME_FLOW_RATE_START」出现两次：被挖段的边界不唯一，逐字节比较无从谈起"
+        }
+        val stop = text.indexOf(FRAME_FLOW_RATE_END, at)
+        check(stop > at) { "$label 里那一段的收尾锚点「$FRAME_FLOW_RATE_END」找不到：段边界漂了" }
+        check(stop - at in FRAME_FLOW_RATE_MIN..FRAME_FLOW_RATE_MAX) {
+            "$label 里那一段长 ${stop - at} 字符，越出 [$FRAME_FLOW_RATE_MIN,$FRAME_FLOW_RATE_MAX]：不像是一段读数（钉法本身漂了）"
+        }
+        return at until stop
+    }
+
+    /** 只取那一段（靶子用） */
+    private fun frameFlowRateSection(text: String): String = text.substring(frameFlowRateRange(text, FRAME_FLOW_FILE))
+
+    /** 挖掉那一段，剩下的字节照比 */
+    private fun cutFrameFlowRate(text: String, label: String): String = text.removeRange(frameFlowRateRange(text, label))
 
     /** 被授权改动那一段：帧观测措辞的 KDoc 起、到文件末尾（锚点没了就抛，不许退化成不比较） */
     private fun frameAidSection(text: String): String {
@@ -347,6 +408,22 @@ class ScanBlankDecodingWiringGuardTest {
          * 而不是退化成"没比也算过"。
          */
         const val FRAME_AID_ANCHOR = "T65① 新增：「画面里有码"
+
+        /**
+         * T92（#133）被授权改动的那一段（[FRAME_FLOW_FILE] 头部"空转有多少帧"的读数）的两个锚点。
+         *
+         * 起始那句在改动前后逐字保留（它是上一句的尾巴），收尾那句是下一节的开头 —— 两者都
+         * **不在**被挖的范围内，所以锚点一漂就抛，改锚点也等于红。
+         */
+        const val FRAME_FLOW_RATE_START = "这就是本卡的账"
+        const val FRAME_FLOW_RATE_END = "所以这里只问三件事"
+
+        /** 139 = 基线（T87 起点）那一段的实际长度；1,815 = T92 本轮那一段的实际长度 */
+        const val FRAME_FLOW_RATE_MIN = 100
+        const val FRAME_FLOW_RATE_MAX = 4_000
+
+        /** "复现法确实写进去了"的靶子锚点（两边都用它证明挖的是同一段） */
+        const val FRAME_FLOW_RECIPE_ANCHOR = "怎么复现"
 
         /** 本卡的起点（master）：⑤b 那几份"本卡不许碰"的文件按这一枚哈希逐字节核对 */
         const val T87_BASELINE = "6a27324"
