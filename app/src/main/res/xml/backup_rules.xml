@@ -8,9 +8,12 @@
     文件，但已经装过的设备上它还在（没有代码会去清它），所以这一条排除**不许跟着删**：
     少一行就是 quietly 把别人设备上的凭证密文送上云。密钥在设备安全硬件里，
     密文迁到新设备也解不开，属纯冗余；
-  - ⚠️ 本卡记下但**没有改**的一笔账：T84 新增的 iclass_id_store.xml（iClass 签到 id 的
-    同一套密文）至今不在下面的名单里，它与上面两枚同形、按同一条理由该被排除。
-    那一族是 iClass 的存储契约、本卡明令不许动，所以这里只记账、不改行为，收口归单独一张卡。
+  - iclass_id_store.xml：T84 新增的北航 iClass（轻新课堂）签到 `id` 的密文，
+    与上面 `buaa_cookie_store.xml` 同一套 KeystoreBlobStore 实现、同一条排除理由。
+    已在本卡（T85b-A）补进下面的两个块里。
+    ⚠️ 这条名单由 `app/src/test/java/com/buaa/schedule/data/local/BackupRulesCoverCredentialStoresTest`
+    当场把尺：它从源码里数出所有走 KeystoreBlobStore 的 prefs 名，逐个要求出现在两份规则文件里，
+    新增凭证存储却忘了登记的人会在 `testDebugUnitTest` 上直接看到红灯。
   - buaa_session.xml：会话保留标志（PREF_RETAINED）。若不排除，
     新设备冷启动会带着"应当恢复会话"的标记去加载 byxt，白跑一次恢复流程。
   - 整个 database 域不排除：课表 Room 库必须能备份，否则换机丢课表。
@@ -22,12 +25,14 @@
     <cloud-backup>
         <exclude domain="sharedpref" path="buaa_cookie_store.xml" />
         <exclude domain="sharedpref" path="spoc_token_store.xml" />
+        <exclude domain="sharedpref" path="iclass_id_store.xml" />
         <exclude domain="sharedpref" path="buaa_session.xml" />
         <exclude domain="root" path="app_webview" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="buaa_cookie_store.xml" />
         <exclude domain="sharedpref" path="spoc_token_store.xml" />
+        <exclude domain="sharedpref" path="iclass_id_store.xml" />
         <exclude domain="sharedpref" path="buaa_session.xml" />
         <exclude domain="root" path="app_webview" />
     </device-transfer>

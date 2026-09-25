@@ -6,7 +6,10 @@
   - buaa_cookie_store.xml  ← BuaaCookieStore.PREFS
   - spoc_token_store.xml   ← 老版本残留：T85 起本仓不再写这个文件（SpocTokenStore 已删），
     但装过旧版的设备上它还在，排除这一行**不许跟着删**（详见 backup_rules.xml 里同一条的理由）。
-    同处还记着一笔没改的账：T84 的 iclass_id_store.xml 至今不在名单里，收口归单独一张卡。
+  - iclass_id_store.xml    ← IClassIdStore 的 prefsName = "iclass_id_store"：T84 新增的北航
+    iClass 签到 id 的密文，与 buaa_cookie_store 同一套 KeystoreBlobStore、同一条排除理由。
+    补上这一行的是 T85b-A，它由 BackupRulesCoverCredentialStoresTest 把尺 ——
+    新增凭证存储却忘了在这里登记的话，那枚测试直接红。
   - buaa_session.xml       ← BuaaWebSession.PREFS_NAME
 
   此前这里写的是 secure_session.xml —— 项目里根本不存在这个 prefs，
@@ -18,6 +21,7 @@
 <full-backup-content>
     <exclude domain="sharedpref" path="buaa_cookie_store.xml" />
     <exclude domain="sharedpref" path="spoc_token_store.xml" />
+    <exclude domain="sharedpref" path="iclass_id_store.xml" />
     <exclude domain="sharedpref" path="buaa_session.xml" />
     <exclude domain="root" path="app_webview" />
 </full-backup-content>
