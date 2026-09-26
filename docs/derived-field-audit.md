@@ -135,6 +135,30 @@
 
 `ui/ScheduleViewModel.kt:1378` `_calendarSync.update { it.copy(syncing = true, message = null, diff = null) }` 把 `diff` 清空却没清 `skippedOccurrences`，而两者是 `CalendarSyncManager.computeDiff` 一次返回的同一对（`ui/ScheduleViewModel.kt:1394,1395` 成对写、`dismissCalendarSyncDiff` 在 `:1430` 成对清）。它**不满足 (a)**（`skippedOccurrences` 不是 `diff` 的函数，两枚都来自外部那趟计算），且现在读不到旧值：唯一渲染点在 `ui/settings/SettingsScreen.kt:1914`，而它整块长在 `ModalTransition(payload = calendarSync.diff)`（`:1903`）里，`diff == null` 时不组合。所以不列进主表，只在此留一行。
 
+**【T100⓪ 判定：两处漏清都是缺陷，收法＝三处清空成对】** 上面"不算本族"成立（它确实不是 `f(diff)`），但"该不该一起清"问的是**寿命归谁**，三条读数都朝"这一份 diff 的附属说明"：
+
+- **① 生产者只有一枚，且成对**：`data/calendar/CalendarSyncManager.kt:98`
+  `suspend fun computeDiff(calendarId: Long): Pair<CalendarSyncPlanner.Diff, Int>?`，那枚 `Int` 就是同一趟
+  `ScheduleOccurrences.build(semester, courses, timeSlots)`（`:108`）的 `build.skipped`，`:111` 与 `Diff` 装进同一个 `Pair` 返回。
+  `ui/ScheduleViewModel.kt:1394` + `:1395` 是**全仓唯一**的写点；`computed == null` 那一档（`:1389-1392`）两枚一起不写 ⇒
+  这枚数从来没有独立于 diff 的产生路径。
+- **② `:1409` 之后那条链不再产它、也不再读它**：`confirmCalendarSync` 的应用段（`:1411-1425`）那次 `copy` 只带
+  `syncing` 与 `message`，而 `ApplyResult`（`data/calendar/CalendarSyncManager.kt:40-47`）只有
+  `inserted/updated/deleted/failed`、**没有** skipped 字段 ⇒ "同步完成后仍想知道刚才跳过几节"这件事在代码里没有承载体
+  （成功文案 `:1419` 念的也只有新增/更新/删除三个数）。
+- **③ 唯一读点锁在 diff 的挂载闸门里**：`ui/settings/SettingsScreen.kt:1914` + `:1916` 是全仓唯一消费点（另一枚同名的是
+  `data/export/IcsExporter.kt:26`，走 `:1573/1574`，与本卡无关），它整块长在
+  `ModalTransition(payload = calendarSync.diff)`（`:1903`）内；那一层的 payload 版（`core/designsystem/ModalTransition.kt:84-100`）
+  外壳开合只看 `payload != null`（`:95`），收场期间画锚住的**上一次** payload（`:91`/`:93`/`:100`）⇒ 块的可见窗口由那份 diff 关掉。
+
+⇒ 采"附属说明"这一读法：`diff` 清空而它留着 = 一对里漏一半，`grep -rn "diff = null" app/src/main/java --include=*.kt` 恰好 3 条
+（`:1378`/`:1409`/`:1430`），其中只有 `:1430` 成对 ⇒ `:1378`、`:1409` 各补一枚 `skippedOccurrences = 0`。
+另一种读法（"独立事实"⇒ 改渲染口径把它挪出 `ModalTransition(payload = diff)`）**弃**：②已证它没有"留着以后还要用"的消费方，
+把它挪出弹窗等于凭空给界面添一行常驻文案。
+读法 A 的代价如实记一条：清 0 之后，收场那几帧里锚住的旧 `diff` 三个数还在淡出、这一行当场消失 —— 这正是 `:1430`
+**现在已有**的行为，本卡只是把它对齐到另外两处。改完 `startCalendarSync` 整条链（含 `:1389-1392` 那档）不存在
+"diff 为空而 `skippedOccurrences` 非零"的可读窗口，因为起手 `:1378` 已经清过。
+
 ## 3. 我查过但排除的
 
 程序化两遍（第一遍：实参表达式里**字面出现同表另一枚参数名**，命中 19 处；第二遍：多枚实参**共享同一个取值根**，命中 48 处）之后逐条人工判。落进 a 的是 **25 枚类**（主表：1 潜在 + 24 无害）。剩下的按下面六类排除，每类给原文。
