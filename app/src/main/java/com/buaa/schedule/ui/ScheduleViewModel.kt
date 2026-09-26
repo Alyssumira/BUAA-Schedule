@@ -98,6 +98,13 @@ data class CalendarSyncUiState(
     val targetName: String? = null,
     val reminderMinutes: String = "10",
     val diff: com.buaa.schedule.data.calendar.CalendarSyncPlanner.Diff? = null,
+    /**
+     * 「这一份 [diff] 的附属说明」：与 `diff` 同为 `CalendarSyncManager.computeDiff` 一次返回的
+     * 同一对（`Pair<Diff, Int>`），全仓唯一读点长在 `ModalTransition(payload = calendarSync.diff)`
+     * 那块弹窗里 ⇒ 寿命由 `diff` 关掉。它**不是** `f(diff)`（`Diff` 里没有这个数，两枚各有各的源），
+     * 收成类体派生属性那一刀在这里落不下去（T97 审计 §2.2 同一句结论），所以规矩只能钉在写侧：
+     * **清空 `diff` 的每一处站点都必须同时把它清 0** —— 漏一处就是让上一份的说明活到下一份之前。
+     */
     val skippedOccurrences: Int = 0,
     val message: AppMessage? = null,
     val showPicker: Boolean = false,
@@ -1375,7 +1382,12 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     /** 同步入口：读日历列表 → 没有目标日历就打开选择器 → 否则算差异等用户确认 */
     fun startCalendarSync() {
         viewModelScope.launch {
-            _calendarSync.update { it.copy(syncing = true, message = null, diff = null) }
+            // T100①：`diff` 与 `skippedOccurrences` 是 `computeDiff` 一次返回的同一对（下面那条
+            // 非空分支成对写、`dismissCalendarSyncDiff` 成对清），起手清场也须成对 —— 少清一半就是
+            // "这一份 diff 的附属说明"活到了下一份之前（渲染点整块锁在 payload=diff 的弹窗里）。
+            _calendarSync.update {
+                it.copy(syncing = true, message = null, diff = null, skippedOccurrences = 0)
+            }
             ensureCalendarsLoaded()
             val current = _calendarSync.value
             when {
@@ -1406,7 +1418,10 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         val calendarId = _calendarSync.value.targetId
         val minutes = _calendarSync.value.reminderMinutes.toIntOrNull()?.coerceIn(0, 24 * 60) ?: 10
         settingsPrefs.edit { putInt("calendar_sync_reminder_minutes", minutes) }
-        _calendarSync.update { it.copy(diff = null, reminderMinutes = minutes.toString()) }
+        // 同上：这份 diff 就此作废，它的附属说明跟着一起清（应用结果的文案只报新增/更新/删除）
+        _calendarSync.update {
+            it.copy(diff = null, skippedOccurrences = 0, reminderMinutes = minutes.toString())
+        }
         viewModelScope.launch {
             _calendarSync.update { it.copy(syncing = true) }
             val result = suspendCatching { calendarSyncManager.apply(calendarId, pending, minutes) }.getOrNull()
