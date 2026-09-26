@@ -404,7 +404,10 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
 
 ### 6.2 候选账（本遍判了 14 枚）
 
-档位分布：**真漏清 1 枚 · 已被钉住 3 枚 · 结构不可能 9 枚 · 越界形状 1 枚**（共 14 枚进表）。
+档位分布（**T103 当时判的**）：**真漏清 1 枚 · 已被钉住 3 枚 · 结构不可能 9 枚 · 越界形状 1 枚**（共 14 枚进表）。
+**T106 之后的账**：#7 `(message, permissionPermanentlyDenied)` 从"结构不可能"搬到**真漏清（已修）** ⇒ 本表按现状读是
+**真漏清 2 枚（#1 与 #7，后者已由 T106 收掉）· 已被钉住 3 枚 · 结构不可能 8 枚 · 越界形状 1 枚**；
+#1 `saving`/`saveError` 那枚仍挂在 §6.8⑤ 等排卡。旧分布不抹，因为它就是 T103 那一遍的读数。
 ⚠️ 那 9 枚"结构不可能"里有 2 枚（#10 #12）**按 §6.0 的定义根本不该进候选账** —— 它们成对写、
 却一处"只清一半"都没有；我把它们留在表上是因为卡面的起手式第二条直接要求读每一枚 data class 的
 成对字段表，但**档位那一格对它们是硬套的**，口径问题见 §6.9 驳回②。
@@ -417,7 +420,7 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
 | 4 | `conflicts` ， `excludedKeys`/`addedCount`/`changedCount`/`keptCount` | `PendingImport`（`ui/ScheduleViewModel.kt:136`） | 五枚全取 `resolveImportSelection(...)` 交回的同一枚 `ImportSelection` + 同一次 `findConflicts` | 2 处 copy（`:809`、`:830`），两处**五枚全点齐** | **已被钉住** | `app/src/test/java/com/buaa/schedule/ui/PendingImportConflictGroupTest.kt:207` 那句断言的消息就是「两处逐条勾选的 copy 站点都还在按子集重算 conflicts」 |
 | 5 | `fetchState` ， `fetchWeek`/`fetchTotal` | `ui/importing/BuaaLoginScreen.kt` 三枚 remembered var | `onProgress = { week, total -> fetchWeek = week; fetchTotal = total; fetchState = "正在获取课表：第 $week/$total 周..." }` 一处写三枚 | 写点 3 组 / 清点 6 处（`fetchState = null` 就有 4 处，`fetchWeek = 0`/`fetchTotal = 0` 各 1 处） | **结构不可能** | 读点 `BuaaLoginScreen.kt:344` `val fetchFraction = if (fetchTotal > 0 && fetchStateText != null) {` ⇒ 两枚计数器唯一的读者恒在 `fetchState != null` 驱动的括号里 |
 | 6 | `colorMode` ， `backgroundColor` | `WidgetAppearance`（`widget/WidgetAppearance.kt:30`） | 换预设那一档整枚搬过来：`widget/WidgetConfigActivity.kt:346` `preset.appearance.copy(rowFields = appearance.rowFields)` ⇒ 配色来源与那支自定义色出自同一枚预设、一起落 | 12 处 `appearance.copy(`，其中 `:380` `appearance.copy(colorMode = it)` 与 `:404`/`:417` `appearance.copy(backgroundColor = argb)` **各改一枚** | **结构不可能** | 两枚读点都自带闸门：`widget/WidgetConfigActivity.kt:393` `if (appearance.colorMode == WidgetAppearance.COLOR_MODE_CUSTOM) {`（自定义色那一行只在这个分支里组合）与 `:624` `val baseColor = if (appearance.colorMode == WidgetAppearance.COLOR_MODE_SYSTEM) {`（SYSTEM 那一支也只把 `backgroundColor` 当 `:626` `?: appearance.backgroundColor` 的**回退**读，自定义色那一行整块不在 else 之外组合） |
-| 7 | `message` ， `permissionPermanentlyDenied` | `CalendarSyncUiState` | `ui/ScheduleViewModel.kt:1496` 那次 copy 同时写 `permissionPermanentlyDenied = !canAskAgain` 与 `message = AppMessage(... "日历权限已被永久拒绝，请到系统设置手动开启")` | 成对写点 1 处；**两处分头清**：`:1389` 只清 `message`、`:1508` `it.copy(permissionPermanentlyDenied = false)` 只清旗标 | **结构不可能**（两个方向各有一道闸，机制见 §6.4-B） | 读点 `ui/settings/SettingsScreen.kt:1677` `if (calendarSync.permissionPermanentlyDenied) {`，它整块长在 `:1664` `item(key = "status", visible = calendarSync.message != null) {` + `:1665` `calendarSync.message?.let {` 里面 |
+| 7 | `message` ， `permissionPermanentlyDenied` | `CalendarSyncUiState` | `ui/ScheduleViewModel.kt:1496` 那次 copy 同时写 `permissionPermanentlyDenied = !canAskAgain` 与 `message = AppMessage(... "日历权限已被永久拒绝，请到系统设置手动开启")` | **改前**：成对写 1 处 + **两处分头清**（`:1389` 只清 `message`、`:1508` `it.copy(permissionPermanentlyDenied = false)` 只清旗标）。**现状（T106）**：`:1389` 已连旗标一起撤（`it.copy(syncing = true, message = null, permissionPermanentlyDenied = false, diff = null, skippedOccurrences = 0)`），清点仍 2 处，`:1508` 那处保持只清旗标（它长在 launcher「全部授予」那一档里，那条档上句子本来就该留） | **真漏清 —— T106 已修**（T103 当时判的"结构不可能"有半边是错的，两个方向的账见 §6.4-B） | 读点 `ui/settings/SettingsScreen.kt:1677` `if (calendarSync.permissionPermanentlyDenied) {`，它整块长在 `:1664` `item(key = "status", visible = calendarSync.message != null) {` + `:1665` `calendarSync.message?.let {` 里面 ⇒ ⚠️ 这道闸**只在 `message == null` 那一段挡得住**，而 `:1429-1439` 那句「同步完成：新增 …」恰好又把它填非空。守卫：`app/src/test/java/com/buaa/schedule/ui/CalendarSyncTargetPairingGuardTest.kt` 的 ③ 那一族三枚 `@Test`（写侧枚数 / 两道闸作第二层 / 全部入口都在权限闸里） |
 | 8 | `menuFor` ， `lastMenu` | `ui/home/WeekView.kt` 两枚 remembered var | `:558` `if (menuFor != null) lastMenu = menuFor` —— 一次写两枚（**故意**留一份给退场动画） | 成对写点 1 处；`menuFor = null` **4 处**（`:876`、`:1001`、`:1175`、`:1218`）一处都不跟着清 `lastMenu` | **结构不可能** | `lastMenu` 全仓唯一读者 `WeekView.kt:1173` `lastMenu?.let { menu ->`，它挂的浮层 `visible` 由 `menuFor` 关掉：`:1217` `visible = menuFor != null,` ⇒ 清一半正是设计意图（收场期间画锚住的那一份），不是残值 |
 | 9 | `text` ， `isError`/`isSuccess` | `AppMessage`（`ui/ScheduleViewModel.kt:130`） | 每一句提示的「文案」与「染色」出自同一个构造 | 全仓 `AppMessage(` **45 处**构造、`.copy(` **0 处** | **结构不可能** | 复算：`grep -rn "AppMessage(" app/src/main/java --include='*.kt' \| wc -l` ⇒ 45；`grep -rnE "AppMessage\([^)]*\)\.copy\(\|message\.copy\(" app/src/main/java --include='*.kt' \| wc -l` ⇒ **0**。三枚字段被同一枚对象包着 ⇒ `copy` 站点根本不存在，一半都漏不掉 |
 | 10 | `targetId` ， `targetName` | `CalendarSyncUiState` | `:1462` `it.copy(targetId = calendarId, targetName = displayName, showPicker = false)` 与 `:1528-1529` 那个 `if (targetGone)` 双写 | 成对写点 3 处（含初值 `:1373-1374`）/ **分头清点 0 处** | **结构不可能**（本遍判据下**根本没进候选**：见 §6.9 的档位口径驳回） | 唯一读者 `ui/settings/SettingsScreen.kt:1623` `summary = calendarSync.targetName ?: "未选择",` —— 它**不在**任何 `targetId` 驱动的块里 ⇒ 今天不漏，将来加一处「只把 `targetId` 打回 -1L」的站点就会漏，且**无守卫**（登记进 §6.8①） |
@@ -487,8 +490,12 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
   `grep -n "saving = " app/src/main/java/com/buaa/schedule/ui/editor/CourseEditorScreen.kt` ⇒ 4 行
   （`:231`、`:247`、`:614`、`:620`），其中**只有** `:231` 旁边跟着那句 `saveError = null`。
 
-**判零依据（为什么全仓只有这一枚落进这一档）**：另外 6 枚「成对写 + 分头清」的候选，其**读侧全部落在闸门里**
-（#5 #6 #7 #8 #11 #14 六枚：#5 #6 #8 #11 #14 的闸门原文点在 §6.2 各行最后一格，#7 两向各一道、在 §6.4-B 展开）；
+**判零依据（为什么全仓只有这一枚落进这一档）**：⚠️ 这句"**只有**一枚"**已被 T106 证否** —— #7 也是真漏清，
+本节当时判它零枚靠的是把 `:331` 那道短路读成护栏（账见 §6.4-B「这一带的两处错」）。下面这段按原文留着，
+读的时候要把它当 **T103 当时的账**，不是现状。
+另外 6 枚「成对写 + 分头清」的候选，其**读侧全部落在闸门里**
+（#5 #6 #7 #8 #11 #14 六枚：#5 #6 #8 #11 #14 的闸门原文点在 §6.2 各行最后一格，#7 两向各一道、在 §6.4-B 展开
+—— #7 那两道**其中一道当场被证不成立**，其余五枚本节复核过仍在）；
 再加 #9 那一枚属**载体级别**的免疫（`AppMessage` 全仓 45 处构造、0 处 `copy`，一半都漏不掉），
 #10 #12 两枚压根没有分头清点的站点；而本仓真正**没有闸门**的读点只有两类载体 —— 编辑器/登录页这类「底栏常驻一行」，
 其中只有编辑器这一枚同时满足「两枚字段由同一仪式成对写」与「清点仪式被复制成两半」。
@@ -512,20 +519,57 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
 并且 `:1512` `if (_calendarSync.value.calendarsLoaded) return` 会让这一页**再也不同步重试**）。
 登记进 §6.8②。
 
-**B. #7 `(message, permissionPermanentlyDenied)`：两个方向各有一道闸。**
-- 清 `message` 而留旗标（`ui/ScheduleViewModel.kt:1389` 那一档 `it.copy(syncing = true, message = null, diff = null, skippedOccurrences = 0)`
-  确实没点 `permissionPermanentlyDenied`）⇒ **看不见**：那枚旗标全仓只有一个读者
+**B. #7 `(message, permissionPermanentlyDenied)`：改前判"两个方向各有一道闸"—— 那半边是错的，T106 已修。**
+
+**改前的形状（T103 那一遍的原文，行号按 `4b1c4a4`，照抄不抹）**：
+- 清 `message` 而留旗标（`ui/ScheduleViewModel.kt:1389` 那一档当时写 `it.copy(syncing = true, message = null, diff = null, skippedOccurrences = 0)`
+  确实没点 `permissionPermanentlyDenied`）⇒ 本节当时写「**看不见**：那枚旗标全仓只有一个读者
   `ui/settings/SettingsScreen.kt:1677` `if (calendarSync.permissionPermanentlyDenied) {`，
   而它整块长在 `:1664` `item(key = "status", visible = calendarSync.message != null)` 与
   `:1665` `calendarSync.message?.let {` 两层之内 —— 句子一撤，那颗「去系统设置开启日历权限」的按钮跟着没了。
-  这与 §2.2 里 `ModalTransition(payload = calendarSync.diff)` 那道闸同一形状，只是驱动它的是 `message`。
+  这与 §2.2 里 `ModalTransition(payload = calendarSync.diff)` 那道闸同一形状，只是驱动它的是 `message`」。
 - 清旗标而留句子（`:1508` `onCalendarPermissionGranted` 整颗函数就是 `it.copy(permissionPermanentlyDenied = false)`）⇒
-  **走不到**：`onCalendarPermissionGranted()` 全仓唯一调用点是 `ui/settings/SettingsScreen.kt:317`，
-  它在 `:316` `if (grants.isNotEmpty() && grants.values.all { it })` 里；要拿到"旗标为 true 时句子还没被清"，
-  需要先有一次 `onCalendarPermissionDenied(canAskAgain = false)`（`:325`），而勾了「不再询问」之后
-  `:330-338` 那个 `withCalendarPermission` 的入口 `:331` `if (viewModel.hasCalendarPermission())` 要么直接放行
-  （**根本不启动 launcher，也就到不了 `:317`**），要么 launcher 直接回全 false 再走 `:325`。
-  ⇒ 这一方向是被 `hasCalendarPermission()` 这道闸挡住的，同样**不是**字段对自身的性质；登记进 §6.8③。
+  「**走不到**：`onCalendarPermissionGranted()` 全仓唯一调用点是 `ui/settings/SettingsScreen.kt:317`，
+  它在 `:316` `if (grants.isNotEmpty() && grants.values.all { it })` 里；…… `:331`
+  `if (viewModel.hasCalendarPermission())` 要么直接放行（**根本不启动 launcher，也就到不了 `:317`**），
+  要么 launcher 直接回全 false 再走 `:325`」。
+
+**这一带的两处错，逐条对上读数**：
+1. **第一档「看不见」把闸的有效期当成了永久**。闸 B 的判据是 `message != null`，它只买"`message == null` 那一段"。
+   而 `:1389` 撤完句子之后，同一条 `startCalendarSync` 链上有**三枚**站点会把 `message` 重新写非空：
+   `:1394-1395`（`NO_WRITABLE_CALENDAR_MESSAGE`）、`:1401-1403`（「暂无可同步的课表，请先导入课程并设置学期」）、
+   以及最要命的 `:1429-1439`（`confirmCalendarSync` 落「同步完成：新增 …」/ 两句失败文案）。
+   ⇒ 句子一非空，`:1664` 那格重新可见，`:1677` 读的就是那枚**旧**旗标。它与 §2.2 的 `diff` 闸**不同一形状**：
+   `ModalTransition(payload = calendarSync.diff)` 的 payload 与它驱动的块出自同一次重建，而 `message` 与旗标不是。
+2. **第二档「走不到」把拦路虎当成了护栏**。`:331` 那道 `hasCalendarPermission()` 短路正是让
+   `onCalendarPermissionGranted()`（当时旗标**唯一**的复位入口）**永不被调**的那件事：
+   用户按"永久拒绝"提示去系统设置里手动开好日历权限 → 回来点「同步到系统日历」（`SettingsScreen.kt:1641`
+   `onClick = { startCalendarSync() }` → `:341` `fun startCalendarSync() = withCalendarPermission { … }`）→
+   `:331` 判"已有权限" ⇒ 直接 `action()`，`:335` 那枚 `calendarPermissionLauncher.launch(` 根本不启动 →
+   `:319` `(action ?: viewModel::startCalendarSync).invoke()` 那条分支走不到 ⇒ 旗标常驻。
+   ⇒ 全程不需要任何异常时序，**每次都成立**。
+
+**现状（T106 收的）**：`ui/ScheduleViewModel.kt:1389` 起手那次 copy 改成
+`it.copy(syncing = true, message = null, permissionPermanentlyDenied = false, diff = null, skippedOccurrences = 0)`
+—— 与它本来就成对清的 `diff`/`skippedOccurrences`（T100①）并成**一次清两对**，形状同 T100（`diff`/`skipped`）与
+T104（`saving`/`saveError`）。这是**同行改写**：`ScheduleViewModel.kt` 与 `SettingsScreen.kt` 都没增删行
+（1683 / 2154 行不变）⇒ 本档那批 `X.kt:NNN` 锚点一处不漂。
+选它的前提是「**进到 `startCalendarSync()` 时权限必然已到手**」，这条对**每一个入口**都成立（`grep -rn "startCalendarSync" app/src/main/java`
+⇒ 5 处提及，逐条：`:1383` 定义、`SettingsScreen.kt:319` 在"全部授予"那一档内、`:341` 在闸的 `action` 里、
+`:1641` 调的是 `:341` 那枚本地包装、`ScheduleViewModel.kt:1463` 在 `selectCalendarTarget`（`:1457`）体内 ——
+它是唯一一枚不过 `withCalendarPermission` 的调用点，但它的宿主只能被 `:1625`
+`onClick = { withCalendarPermission { viewModel.openCalendarPicker() } }` 或 `:1397`（长在 `startCalendarSync` 体内）
+打开的选择器那一层触发，而 `showPicker = true` 全仓就这两枚写点）⇒ 旗标被清的那一刻权限是真的，
+这句话不是假话。弃另一条（把 `:1677` 的读侧改成「旗标为真**且**当前确实没权限」）的理由：它让那颗按钮的可见性
+从此**每次重组都查一次实时权限**，且界面同时信两把尺子（旗标仍是脏的，只是不念）——
+本仓对派生字段的规矩是"值 = f(同表参数) 才许做成派生"（§6.0），这枚旗标的值是"系统权限 + 上一次申请结果"的函数，
+不符合；一枚起手成对清覆盖 `startCalendarSync` 全部下游落点，比在读侧补判据更省。
+钉住它的守卫：`app/src/test/java/com/buaa/schedule/ui/CalendarSyncTargetPairingGuardTest.kt` ③ 那一族三枚 `@Test`
+—— `thePermissionFlagAndTheMessageAreWrittenTogetherOnceAndClearedPairedAtTheSyncEntry`（旗标赋值 3 处 /
+`message = null` 1 处且必须带旗标）、`thoseTwoGatesAreNowTheSecondLayerBehindThePairedClearAtTheSyncEntry`
+（两道闸降级为第二层保险，仍两头钉）、`everyRouteIntoTheSyncEntryStandsInsideAPermissionGate`
+（上面那 5 枚入口逐条钉，含 `precedingFunHead` 认宿主）。
+⚠️ 仍**没有装机证据**：这颗按钮在真机上不再挂出来，本节只有代码级推断（见 §4.1、§6.7 那一格）。
 
 ### 6.5 已被钉住那三枚的点名单
 
@@ -612,7 +656,7 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
 | --- | --- | --- |
 | ① | `ui/ScheduleViewModel.kt:1462` `it.copy(targetId = calendarId, targetName = displayName, showPicker = false)` 与 `:1528-1529` 那两行 `if (targetGone) -1L` / `if (targetGone) null` | `targetId`/`targetName` 三处写点今天全成对，但**没有任何守卫**钉住"成对"。唯一读者 `ui/settings/SettingsScreen.kt:1623` 不在闸门里 ⇒ 与 T100 改前的 `diff`/`skippedOccurrences` 只差一枚守卫。该补的是 `CalendarSyncDiffClearPairingGuardTest` 那一形状的第二份实例 |
 | ② | `data/calendar/CalendarSyncManager.kt:71` `runCatching {` + `:90` `.onFailure { Log.w(TAG, "读取日历列表失败", it) }` + `:91` `return result` | 它把"查询失败"洗成"这台设备没有日历"，是 §6.4-A 那道**外来**闸门的来源；同时它使 `ui/ScheduleViewModel.kt:1517` 那句「读取日历列表失败，请检查日历权限」几乎永不显示。另附同族一笔：`calendarsLoaded` 全仓**没有任何**复位站点（`grep -rn "calendarsLoaded = false" app/src/main/java --include='*.kt'` ⇒ 0 行），于是 `calendars` 是进程寿命的缓存，用户在系统日历里删掉一个日历后选择器会一直列着那个死 id |
-| ③ | `ui/ScheduleViewModel.kt:1508` `_calendarSync.update { it.copy(permissionPermanentlyDenied = false) }` | 清旗标不清句子；今天被 `ui/settings/SettingsScreen.kt:331` 那道 `hasCalendarPermission()` 短路挡着（§6.4-B）。这句注释该留在两处之一：要么把它做成成对清，要么把「靠哪道闸不念旧账」写进 KDoc |
+| ③ | **已由 T106 收掉**：`ui/ScheduleViewModel.kt:1389` 起手那次 copy（改后原文 `it.copy(syncing = true, message = null, permissionPermanentlyDenied = false, diff = null, skippedOccurrences = 0)`）；`ui/ScheduleViewModel.kt:1508` `_calendarSync.update { it.copy(permissionPermanentlyDenied = false) }` 保持只清旗标 | **改前登记的原话**：「清旗标不清句子；今天被 `ui/settings/SettingsScreen.kt:331` 那道 `hasCalendarPermission()` 短路挡着（§6.4-B）。这句注释该留在两处之一：要么把它做成成对清，要么把『靠哪道闸不念旧账』写进 KDoc」。**现状**：那一格判错了 —— `:331` 不是挡住漏清的闸，而是**造成**漏清的那件事（已授权时它让 launcher 根本不启动 ⇒ `:1508` 的 `onCalendarPermissionGranted()` 永不被调），而 `:1664` 那格会被 `:1429-1439`「同步完成…」重新点亮 ⇒ 真漏清。修法取了第一个选项：**把起手做成成对清**，并把可达路径枚举钉成守卫（§6.4-B「现状」那一段有取舍与为什么不选改读侧）|
 | ④ | `ui/signin/SpocScanScreen.kt:283` `cameraProviderMissing = true` 与 `ui/signin/ScanUiStatus.kt:87`/`:93` 那两支 | 跨生产者残值（§6.6）：`cameraError` 以「读不出那张图」开头时，梯子在说相册、而真病因是 provider。判据该按**来源**分支，不是按**写入先后**赌 |
 | ⑤ | `ui/editor/CourseEditorScreen.kt:614` `saving = true` | 本遍唯一的真漏清。修法与红线冲突（不许动 `app/src/main/**`），留一卡：删除这条链要不要复用 `saving` 这枚旗标本身也值得重判 —— 复用它是 `:310` 那句「保存中…」在删除时说假话的原因 |
 | ⑥ | `ui/settings/SettingsScreen.kt:1814` `ModalTransition(payload = if (showPrivacyDialog) privacyConsentAt else null) { consentAt, modal ->` 与它上面 `:1812-1813` 那两行注释 | 这一对的"不漏"完全靠**那一行的写法** + 一段注释维持：`:1817`/`:1853` 两处 `showPrivacyDialog = false` 都不归零 `privacyConsentAt`，谁把它改回 `ModalTransition(open = showPrivacyDialog)`（本仓另一种常用写法，见同文件 `:1859` 那一层）或把 `privacyConsentAt` 添第二个读者，收场那几帧就当场翻成「未同意」。**这正是 T100 那枚守卫该钉的第二份实例**，形状一模一样、只欠写它 —— 本卡不许新增/修改测试，故只登记 |
@@ -638,6 +682,10 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
   （一枚靠被调方的 `runCatching`、一枚靠 launcher 的短路），本节为它们各写了一句「这句话必须记着」，
   见 §6.4-A/B。卡面那句「判这档要给机制」满足了，但**机制可被别处一行改动挪走**，
   这与 §2.1 当年批评"正确性挂在一行运行期早返回上"是同一件事 ⇒ 这两枚实际强度低于 #5 #6 #8 #14。
+  ⚠️ **T106 应了这句话，而且比本节预计的更糟**：#7 不是"被别处一行改动挪走"，而是那道闸**当天就不成立**
+  （`:331` 的 `hasCalendarPermission()` 短路不是护栏、是漏清的成因，§6.4-B）。#11 那枚靠别人 `runCatching`
+  的闸本节复核仍在（`grep -rn "calendarsLoaded = false" app/src/main/java --include='*.kt'` ⇒ 0 行，
+  它仍是 §6.8② 那格），但"这一档的机制可被别处一行挪走"这条规矩对**下一遍**只强不弱。
 
 ### 6.10 本节的锚点普查（在 §6 最后一次编辑之后量的，按 §0.4 第 4 条那一格的口径）
 
