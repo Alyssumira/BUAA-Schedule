@@ -87,6 +87,14 @@ fun IClassLoginScreen(
                     saved = true
                     // 口令只在这次请求的内存里存在过：成功之后连引用都不留
                     password = ""
+                    // ⚠️ 这一档**故意不落 `submitting`** —— 与失败档那句 `submitting = false`
+                    // 不对称是刻意的，别"补齐对称"：这枚旗是这一页唯一的重入闸（`submit()`
+                    // 开头那句短路）、三处 `enabled` 与键盘 Done 那记短路共同的来源。
+                    // 成功之后到这一页真正离场之间还有一段窗口（`MainActivity` 给这一页提供了
+                    // `LocalAnimatedVisibilityScope` ⇒ 旧页在退场动画期间仍在组合），
+                    // 在这里落旗等于在那段窗口里把表单放开、并允许第二趟登录 POST ——
+                    // 而第二趟一旦失败就会写 `serverMessage`，把「已登录」那句话染成失败卡。
+                    // 这一档界面要说的话由下面的阶段梯子读 `saved` 来说，不靠这里落旗。
                     onLoggedIn()
                 }
                 .onFailure { error ->
@@ -97,11 +105,30 @@ fun IClassLoginScreen(
         }
     }
 
-    val statusText = when {
-        saved -> "已登录北航 iClass，正在进入扫码页…"
-        submitting -> "正在登录…"
-        serverMessage != null -> "登录失败：$serverMessage"
-        else -> null
+    // 这一页的阶段 —— 三枚裸旗**唯一**被读成"界面上怎么说"的地方，谁的出口最近谁在前
+    // （与扫码页 `scanUiStatus` 同一口径：档位判一次，措辞按档位取）。
+    //
+    // 状态句、那颗按钮的字、那张卡的语义色三处**都从这一枚阶段值投影**，谁都不许再自己判一次。
+    // 从前按钮写着 `Text(if (submitting) "正在登录…" else "登录")`，是躲在状态句梯子旁边的
+    // 第二个读者，而它不看 `saved` —— 于是登录成功之后、这一页交出去之前，同一列两行话互相打架：
+    // 上面那支梯子里 `saved` 赢下第一档、念「已登录北航 iClass，正在进入扫码页…」，
+    // 下面那颗按钮照旧念「正在登录…」。这与 #114 那枚"顶栏与 body 两个日期源"是同一族病。
+    //
+    // 单一真源在这里是**有机制**的、不是"两处看起来一致"：投影侧一律 `when (phase)` / 比阶段值，
+    // 将来加一档而忘了改投影，`when (phase)` 不穷尽就编译不过。
+    val phase = when {
+        saved -> LoginPhase.Saved
+        submitting -> LoginPhase.Submitting
+        serverMessage != null -> LoginPhase.Failed
+        else -> LoginPhase.Idle
+    }
+
+    val statusText = when (phase) {
+        LoginPhase.Saved -> "已登录北航 iClass，正在进入扫码页…"
+        LoginPhase.Submitting -> "正在登录…"
+        // 失败原因逐字来自服务端 ERRMSG，一个字都不加工，所以这句话在拼接处才碰 serverMessage
+        LoginPhase.Failed -> "登录失败：$serverMessage"
+        LoginPhase.Idle -> null
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -157,7 +184,7 @@ fun IClassLoginScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
-            ) { Text(if (submitting) "正在登录…" else "登录") }
+            ) { Text(phase.buttonLabel) }
             TextButton(
                 onClick = onBack,
                 modifier = Modifier.defaultMinSize(minHeight = DesignTokens.minTouchTarget),
@@ -165,7 +192,8 @@ fun IClassLoginScreen(
         }
 
         if (statusText != null) {
-            val isError = serverMessage != null
+            // 语义色也按阶段取，不许再自己读一遍 serverMessage（读法与上面那支梯不一致就是第二枚读者）
+            val isError = phase == LoginPhase.Failed
             GlassSurface(
                 variant = if (isError) GlassVariant.ALERT else GlassVariant.PANEL,
                 semanticTint = if (isError) MaterialTheme.colorScheme.error else null,
@@ -192,6 +220,32 @@ fun IClassLoginScreen(
             }
         }
     }
+}
+
+/**
+ * [IClassLoginScreen] 的阶段（判据在函数体里那一支 `phase` 梯子，这里只负责"这一档按钮上怎么说"）。
+ *
+ * 分工与扫码页 `ScanUiStatus.kt` 同口径：档位判一次、措辞按档位取，页面不扣住任何一份字面量。
+ * 状态句不放进这里，因为失败那一档要说服务器给的原文（逐字来自 ERRMSG，得在拼接处才成形）。
+ */
+private enum class LoginPhase(val buttonLabel: String) {
+    /** 什么都没发生：表单可填、按钮可点 */
+    Idle("登录"),
+
+    /** 登录请求在飞 */
+    Submitting("正在登录…"),
+
+    /** 服务器给了原因：这句话的正文由调用点拼，按钮回到「登录」让用户改口令再来一趟 */
+    Failed("登录"),
+
+    /**
+     * 已经登进去、这一页正在交出去（退场动画走完之前它仍在组合）。
+     *
+     * 按钮念「已登录」：不是「正在登录…」—— 那一句话上面那行状态句已经在说了，
+     * 两行互斥就是从前这枚读者自己判 `submitting` 判出来的；也不是「登录」——
+     * 那会让这一页看着像"闲下来了、可以再来一趟"，而闸门从头到尾没松过。
+     */
+    Saved("已登录"),
 }
 
 private const val TAG = "IClassLoginScreen"
