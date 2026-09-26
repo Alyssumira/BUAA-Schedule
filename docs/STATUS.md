@@ -3158,3 +3158,86 @@ lint **0 error / 14 warning**、九档 per-id 与地板逐档相同；`:benchmar
 锚点普查 `.kt` 589 / 本档 268 / 本档 `-c` 146 / `.md:行号` 那族 24 —— 全部与文档里写的现值一致，
 且 `docs/TESTING.md` 引的那两枚 STATUS 行号锚（第 3076 行、第 3093 行）在我"保持行数不变"的订正之后仍落在原句上。
 **T111 与 T112 都没有装机证据**（纯静态/构建层），两笔也都**没动过设备**。
+
+## T114：第三遍评估卡 —— §6.8④ 复核 + 起手块这一族第一次成表（`eec2228` `34fadd8`，2 枚 / 1 文件 +394 / −1，**零代码、零 gradle、零设备**）
+
+**这张卡干了我此前没干过的一件事：驳我的卡面尺子，而且是两把。** 我卡面上给的四条宇宙计数命令，
+它逐枚复现（35 / 14 / 21 / 5 一字不差），然后指出**这两把尺都不够格**：
+`MutableStateFlow(` 不吃带泛型实参的声明 ⇒ 真值 **14**（漏的 9 枚正是 `_importMessage` / `_pendingImport` /
+`_state` 这一族，它三枚候选全靠这些）；`viewModelScope.launch` 与 `scope.launch` 两把**大小写敏感**，
+补上 `[A-Za-z]Scope\.launch` 还有 **27** 处 ⇒ 全集 **76**、我卡面盖住的只有 **64%**，
+而且**换一把尺就多一枚候选**（#10 长在 `downloadScope.launch` 上）。⇒ 这条已经进我的派卡纪律
+（见记忆 [[ai-orchestrator-role]]：**卡面的尺子要先拿一枚"明知该被数到"的样本自测**）。
+
+**§7 = §6.8④ 那一格判"还剩一小截真的"**，并把我卡面那句推断钉回盘上：按来源分叉**早就在**
+（`ui/signin/ScanUiStatus.kt` 第 88 行那句 `startsWith(GalleryUnreadablePrefix)`），但落地者是 **`1eac187`（T45）** 不是我猜的
+T90 `abfd38c` —— 复算 `git log -S "startsWith(GalleryUnreadablePrefix)"` 只命中 `1eac187`，而 `abfd38c` 的 stat 是
+两枚 `app/src/test` 文件、**main 侧 0 文件**；决定性的一条是 `git merge-base --is-ancestor 1eac187 1c6b7bd` ⇒ YES，
+**分叉早于 §6.8④ 自己写下的时刻**，所以"整格作废"不成立。剩下那一小截：**分叉只分措辞、不分哪一支赢** ——
+第 88 那一支从头到尾没读 `cameraProviderMissing`。它给的可达时序是：provider 拿不到（第 283 行置真）⇒
+用户挑一张读不出的图 ⇒ 第 534 行写进前缀 ⇒ 梯子在"相册刚失败"这一支赢下 ⇒ 屏幕说「换一张图，或**重新对准二维码再扫**」，
+而此时绑定那颗 effect 早在第 318 行就断了、一帧都不到；第 93 行那句真病因**永不出口**。
+守卫空档也点了名：现有的两枚阶梯判据都在 `cameraProviderMissing = false` 的基线上打，
+"相册前缀 × provider 缺失"这一格**零覆盖**。⚠️ **改它的代价很硬**：`ScanCameraAidWiringGuardTest` 用 `ladderRegion`
+把 `internal fun scanUiStatus(` 到 `internal const val GalleryUnreadablePrefix` **整段逐字比 git 基线** ⇒
+动阶梯必重钉（这一条我此前只当作"别人的事"，现在它是下一张卡的前置）。
+
+**§8 = 起手块这一族第一次成表**：宇宙 76 处 `...Scope.launch`，进表 **10 枚**，档位
+**真漏清 3 · 已被钉住 1 · 结构不可能 5 · 新第四档 1 · 越界 0** —— 并且**第一次启用**了 §6.9 驳回② 建议的那一档
+「成对但暂无分头站点（无守卫观察项）」，走它的只有 #9 一枚，本节如实写了"没有第二枚够格"。
+上限声明那格是这卡最值钱的部分之一：它明写**63 处不立旗的起手块一枚都没立成候选**（UI 侧"点了就走"、
+设计系统那 12 处 `animationScope.launch`、服务侧 `ioScope`/`applicationScope`），并单列一条
+「**一档完全没扫**：纯 `LaunchedEffect` 里的 UI 侧旗标、不走 StateFlow 的裸 `var`、`withContext` 里嵌的写点、
+以及**隐式接收者的 `launch { }`（这把尺我没立，所以这句是"没数"、不是"没有"）」。**它自己抓到两处自己的错**
+（候选池那把尺只吃 `launch` 后三行 ⇒ 会把被 KDoc 推到第 5 行的 `startCalendarSync` 起手漏掉；
+`cameraError` 那对字段的落点先数成 16、重跑才得 19），都写进 §8.8。
+
+**收单**：纯文档，`docs/` 对构建惰性的**第六次**证实（本卡零 gradle，我没为它重跑门禁）；
+三把 `.kt` 普查尺与 `.md` 那族**一字未动**（268 / 589 / 146 / 24），因为它全程用裸 `:NNN` + 符号名、
+一枚连写都没补 —— 这是 §6.10 那条计数器规矩**第一次被下一轮真正执行到**。
+我这边独立复核到的：13 枚代码行指针逐枚回读全部命中（`ScanUiStatus` 与 `SpocScanScreen` 那 13 处一字未漂）；
+我那两把尺的错**我自己复算确认**（`MutableStateFlow<` 也算 ⇒ 14；`[A-Za-z]Scope\.launch` ⇒ 62 = 35 + 27）。
+**待排卡的来源 = §8.7 明留那六条**，其中 #5（iClass 登录页成功档不落旗）已经由 **T115** 收掉，见下一节。
+
+## T115：iClass 登录页"两枚读者各判一次"收口成单一真源（`6595d75` `42f3fd5` `d7c424c` `3f32d79`，4 枚 / 3 文件 +166 / −10）
+
+**症状**（§8 表 #5，本遍唯一一枚"当下就发作"的）：`ui/signin/iclass/IClassLoginScreen.kt` 的 `submit()` 起手成对
+（第 82 行立 `submitting`、第 83 行收 `serverMessage`），失败档收尾也成对（写句子 + 落旗），**唯独成功档只写
+`saved = true`、不落旗** —— 而按钮的字（改前第 160 行 `Text(if (submitting) "正在登录…" else "登录")`）
+**是躲在状态句梯子旁边的第二枚读者**，它不看 `saved`。于是登录成功到这一页真正交出去之间那段窗口里，同列两行互斥：
+上面那支梯子 `saved` 赢下第一档、念「已登录北航 iClass，正在进入扫码页…」，下面那颗按钮照旧念「正在登录…」。
+窗口存在的原因我自己在盘上核过：`MainActivity` 那档 `composable("iclass_login")`（第 949-963 行）在 `:950` 提供了
+`LocalAnimatedVisibilityScope`、`onLoggedIn` 用 `popUpTo(…){ inclusive = true }` 换页 ⇒ **旧页在退场动画期间仍在组合**。
+⚠️ **这段窗口有几帧/几毫秒，两边都没量过**（这台环境今天禁一切设备），入账只钉"窗口存在、里面两枚读者不许各判一次"。
+
+**修法选"单一真源 + 编译期穷尽"，不是"补齐对称"**：新增一枚 `val phase = when { saved → submitting → serverMessage → else }`
+与 `private enum class LoginPhase(val buttonLabel: String)`，状态句 / 按钮的字 / 失败卡那枚语义色
+**三处一律从它投影**。机制理由（这句是这卡最值得抄的）：**投影侧全走 `when (phase)`，将来加一档而漏改投影就编译不过**
+—— "两处看起来一致"不算单一真源。
+**它带机制驳回了我给的方向 1（成功档补 `submitting = false`）**：那枚旗不只是措辞读者，它同时是**唯一的重入闸**
+（`submit()` 开头那句短路）+ 三处 `enabled` + 键盘 Done 短路的共同来源 ⇒ 落旗会让两枚输入框当场翻回可编辑、
+键盘那一支当场**放行第二趟登录 POST**；而第二趟一旦失败就写 `serverMessage`、`saved` 仍为真 ⇒ 原来那枚
+`isError = serverMessage != null` 会把「已登录…」那句**染成 ALERT 失败卡**，比原来那句错话更贵。
+它给的实话是按钮念「已登录」：只说发生过的真事，不假装页面闲下来，也不松闸。
+
+**守卫**：判据加进既有那枚 `IClassSignInWiringGuardTest`（6 → **7** 枚 `@Test`，**没新建文件**），
+`loginPhaseIsJudgedOnceAndEveryOnScreenReaderProjectsFromIt`。`d7c424c` 是它自己补的牢：第一版只数
+"梯子里出现 `LoginPhase.` 四枚" ⇒ **抓不到"兜底那一档落到别的阶段值"**，改成四档逐字钉才红。
+代理侧六臂（朝宽 3 / 朝紧 3）全红、还原全对；**我这侧另下两臂，扭的是它没扭的洞**：
+把语义色改回 `serverMessage != null`、把按钮的字改回"局部再判一次"（`if (phase == LoginPhase.Submitting) …`），
+**两臂都红在同一枚 ⑦ 上**，变异 md5 与基线不同、还原回 `86f099fe…` 逐字符、porcelain 全程 0 行。
+
+**收单证据（我自己在 `3f32d79` 上重跑的冷门禁）**：`--stop`→java 0→`clean` 一次过→`:app:assembleRelease`
+**86 executed** ⇒ 签名包 **7,249,143 B**；`:app:testDebugUnitTest --rerun-tasks` 两跑 **1,696 / 200 / 0 / 0 / 0**、
+时间戳 `18:55:36Z → 18:55:41Z`（新证）；lint **0e/14w**、九档 per-id 与地板逐档相同；benchmark **10 executed**；
+行首锚 `@Test` 全仓复算 **1,696** == 门禁 XML（T108 那把尺第二次被增量检验）、单测文件数仍 **194**（未添文件）。
+⚠️⚠️ **包体这一档出了我上一节刚写的带（7,248,542–7,248,616），但不该报警**：代理那侧独立全量给的是
+**同一个 7,249,143 B、逐字节相同**，而这枚改动**新增一枚 `private enum class`（4 档）+ 一份字符串字面量** ⇒ 有真东西进 dex。
+⇒ **上一节那条"带内规则"的适用条件要写清：只适用于"零 dex 改动"的档**（纯文档、纯注释、只动 `src/test`）；
+一旦有可进 dex 的新增，就问"两次独立全量对不对得上"——对得上就把新数记成**新的地板**、别塞回旧带里。
+**新地板 = 1,696 tests · 200 suites · 0 失败 · 0 skipped / lint 0e·14w / 干净全量签名包 7,249,143 B**
+（上一档 7,248,542–7,248,616 属 T110，**已被本档取代**）。
+**明留**：`onClick = onBack` 那颗 `TextButton`（改后第 189 行）与顶栏 `GlassTopBar(onBack = onBack)` 在 Saved 档
+**全时可点**，代理判"不是本族病、且两颗出口一起 disable 会在导航失败时让人无处可退"，本卡不扩界面行为面 ⇒ 留在 §8.7；
+`docs/TESTING.md` 与 `README.md` 的 tests 现值又被顶新一格（1,695 ⇒ 1,696）⇒ **排一张 T117 纯文档卡收**，
+它顺带把 §8 那几处未修明留与本轮 T114/T115 的账对一遍。
