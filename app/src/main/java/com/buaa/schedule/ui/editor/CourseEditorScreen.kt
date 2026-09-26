@@ -612,6 +612,10 @@ fun CourseEditorScreen(
                         val target = initialCourse ?: return@TextButton
                         scope.launch {
                             saving = true
+                            // 与 performSave() 起手那两行是同一枚仪式（立旗标 + 收回上一句错）：
+                            // 底栏那条红条常驻、读者不在删除弹窗里，漏清这一半就会在删课途中
+                            // 继续念着上一次保存的失败。形状钉在 CourseEditorSaveErrorClearPairingGuardTest。
+                            saveError = null
                             if (onDelete(target)) {
                                 onBack()
                             } else {
