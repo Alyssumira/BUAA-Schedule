@@ -3024,15 +3024,77 @@ T103 / T104 / T105 / T106 / T108 五节补在上面。**规矩：每合并一张
 本轮欠了 5 张卡、跨约 3.5 小时，直接后果是 T108 想立的文档职权划分落不了地。
 
 **排队中的三笔残账**（都来自 T103 §6.8，按红线当时没动）：
-- **T107**（§6.8②）：`calendarsLoaded` 全仓**零复位站点**（`grep -rn "calendarsLoaded = false" app/src/main/java --include='*.kt'` ⇒ 0 行）
-  ⇒ `calendars` 是进程寿命的缓存；`ui/ScheduleViewModel.kt:1523-1529` 那个 `if (targetGone)` 只重置内存里的
-  `targetName`/`targetId`，**不清偏好** ⇒ 下次冷启动把死日历 id 又捞回来。
-- **T109**：`removeSyncedEvents()` 那条链同样不清 `permissionPermanentlyDenied` ⇒ T106 那处起手成对清盖不住它
-  （它是另一条入口，不走 `startCalendarSync`）。
+- ~~**T107**（§6.8②）~~ **→ 已由 T110 收掉，见下一节。** 登记时的原文留着：`calendarsLoaded` 全仓**零复位站点**
+  （`grep -rn "calendarsLoaded = false" app/src/main/java --include='*.kt'` ⇒ 0 行）⇒ `calendars` 是进程寿命的缓存；
+  `ui/ScheduleViewModel.kt:1523-1529` 那个 `if (targetGone)` 只重置内存里的 `targetName`/`targetId`，**不清偏好**
+  ⇒ 下次冷启动把死日历 id 又捞回来。**那两条读数现在分别是 1 行与"已连带撤偏好"——它们是改前的。**
+- ~~**T109**~~ **→ 同样由 T110 收掉。** 登记时的原文：`removeSyncedEvents()` 那条链同样不清
+  `permissionPermanentlyDenied` ⇒ T106 那处起手成对清盖不住它（它是另一条入口，不走 `startCalendarSync`）。
 - §6.8④：`cameraError` / `cameraProviderMissing` 是**跨生产者残值**，`ui/signin/ScanUiStatus.kt:87`/`:93` 那条
   梯子按"写入先后"赌，判据该按**来源**分支。
-- 另有三处**注释里的过期数字**：`app/build.gradle.kts:424`/`:428`/`:439`（"约 60 枚"→现 73 枚、"1,660 枚"→实测 1,692）。
-  ⚠️ 这枚文件是**构建输入**，不像 `docs/` 惰性 ⇒ 动它就欠一次全量门禁 + 包体对照，别和纯文档卡混。
+- 另有三处**注释里的过期数字**：`app/build.gradle.kts:424`/`:428`/`:439`（"约 60 枚"→现 73 枚、"1,660 枚"→实测 1,692，
+  T110 之后是 **1,695**）。⚠️ 这枚文件是**构建输入**，不像 `docs/` 惰性 ⇒ 动它就欠一次全量门禁 + 包体对照，别和纯文档卡混。
 
 T107 与 T109 同文件、同函数区（`ScheduleViewModel` 日历同步那一段）、同一枚守卫文件 ⇒ **合成一张卡串行派**，
-不并行。
+不并行。——这条已照办，合出来就是下面的 T110。
+
+## T110：日历同步那一族的两条"漏清"一起收（`b8a3915` `cf4d776` `2c41ee3` `890306f`，4 枚 / 3 文件 +491 / −41）
+
+**一张卡装两笔**（原本登记成 T107 与 T109）：同文件、同函数区、同一枚守卫文件 ⇒ 按规矩合卡串行，不并行。
+
+**A. 死目标日历的两枚偏好 key 成对撤 + 每次开窗复位缓存旗标**（`b8a3915`）
+- 病：`ui/ScheduleViewModel.kt:1523` 那次 `targetGone` 检测只把**内存里**两枚打回 `-1L` / `null`，偏好一行不动 ⇒
+  起手 `:1373-1374` 下一次冷启动又把死 id 与死名字捞回来。用户读到的是 `:1623` 那行裸念一个已经不存在的日历名，
+  真去同步时 `CALENDAR_ID` 打进死 id、异常被 `CalendarSyncManager` 那颗 `runCatching` 吞掉 ⇒
+  落到 `:1432`「同步失败：日历写入异常」——**真因被洗成"写入异常"**。
+- 修法：`:1538` 那一档把 `calendar_sync_target_id` 与 `calendar_sync_target_name` **一起** `remove`，
+  并且 `loaded.isNotEmpty()` 才动手 —— 查询失败交回来的也是一份空列表，那一刻分不清「日历被删了」与
+  「provider 抖了一下」，**宁可让偏好多留一次，也不要在一次抖动里抹掉用户选好的日历**。
+- 同档收了另一半：`:1449` 开窗那行连带写 `calendarsLoaded = false`（同行改写）⇒ 复位站点 **0 行 → 1 行**，
+  `calendars` 不再是进程寿命缓存、`targetGone` 每次开窗都跑一趟。**有意不给同步入口加复位**：每点一次同步
+  多 1–2 趟 provider 查询，而同步链自己已经要跑 Room 读 + 逐课次内容摘要 + Events 查询 ⇒
+  "同一进程里第二次点同步用的是上一份列表"这一格残态如实留着。代理给的代价账是**趟数 / 线程 / 频次**三格，
+  ⚠️ 不是耗时 —— 单次查询的毫秒与电量在这台环境没有设备就量不到。
+  选择器画的是 `calendarSync.calendars`（`SettingsScreen.kt:1870` 判空 + 下面逐行 clickable），
+  **不是**那枚旗标 ⇒ 刷新期不会闪成空列表；这一条我自己回读了界面代码才收。
+
+**B. 移除链起手成对清**（`cf4d776`）：`:1481` 改成 `it.copy(syncing = true, message = null, permissionPermanentlyDenied = false)`，
+与 `:1389` 同一枚仪式。**弃"再套一道权限闸"那一支**，理由带读数：这条链今天就已经在唯一那道闸里
+（`SettingsScreen.kt:1654` `onClick = { withCalendarPermission { viewModel.requestRemoveSyncedEvents() } }`，
+复算 `grep -rn "withCalendarPermission {" app/src/main/java` ⇒ 3 处，我自己数过），而 `:331` 那句短路的 true 分支
+直接 `action()`、launcher 根本不启动 ⇒ "再套一道闸"既不撤旗标，又把**造成这枚病的**那件短路再犯一遍。
+残态只有"确认框开着那几秒回系统设置把权限关掉再点移除"那一格，方向安全：落的是 `:1487` 那句自己就写着要检查权限的文案。
+
+**守卫**：白名单那枚文件 1,150 → **1,564 行**、7 → **10 枚 `@Test`**（③ 那一族按新盘面把旗标赋值 3→4、
+`message = null` 1→2 且"必须带旗标"改成**逐处**取；新添 `everyRouteIntoTheRemoveChain…`）。
+`2c41ee3` 那枚改判值得单记：它把「两枚 key 在同一次 `edit` 里撤」**从文本相等改成按位置判** ——
+两条一模一样的 `settingsPrefs.edit { }` 并排放，块头文本相等而"分头撤"是真病。
+**这是本仓第一次有代理在自己交的卡里把自己写的判据判红并当场补牢。**
+
+**收单证据（我自己在 `890306f` 上跑的冷门禁）**：`--stop`→drain（java.exe 0）→`clean` 一次过→
+`:app:assembleRelease` **86 executed** ⇒ 签名包 **7,248,542 B**（地板 7,247,258，**+1,284 B**，与 12 行真代码同量级）；
+`:app:testDebugUnitTest --rerun-tasks` 两跑都是 **1,695 tests / 200 suites / 0 failures / 0 errors / 0 skipped**、
+时间戳 `2026-09-26T16:32:11Z → 16:32:17Z`（新证，非 FROM-CACHE）；lint **0 error / 14 warning**、九档 per-id
+与地板逐档相同；`:benchmark:compileNonMinifiedReleaseKotlin` **10 executed**。
+⚠️ **代理那侧的包体格不可比**：它的 worktree 没配发布签名 ⇒ 交回的是 `app-release-unsigned.apk` 7,211,137 B，
+差的 36 KB 是 v1+v2 签名块、不是回归。**以后卡面一律先写"把主仓 `local.properties` `cp` 进 worktree（只 cp、绝不打开）"**，
+否则每次收单都要重算这一格。
+**我这侧七枚红臂全红、七次还原 md5 全部回中、工作树全程 0 行**：撤单枚 key 红、两条 `edit` 并排放红、
+去掉 `targetGone` 前提红（三枚都落在 `theDeadTargetIsDropped…`）；删掉开窗那行复位红、给同步入口补一枚复位红
+（后者同时把 `thePermissionFlagAnd…` 一起拉红）；撤掉移除链那半枚旗标清空红 2 枚；在确认框开档多添一枚旗标写点红。
+⚠️⚠️ **我自己的脚本又踩了一次多行锚点匹配**：两臂的模式里带 `\n`，而文件是 CRLF ⇒ python 在 `newline=''`
+读进来的文本里根本找不到那串 ⇒ `assert` 中止 ⇒ 变异没落地。这次**被上一张卡立的"变异后 md5 必须变"那条断言当场拦下**
+（日志里直接写 `!! ABORT: mutation did not land, this arm proves nothing`），补做的 `T110-arm2.sh` 加了按
+`crlf` 开关换行符的 `P()` 才算真跑。**规矩：红臂模式一律优先用单行原文；要跨行就必须显式匹配 `\r\n`。**
+**锚点账**：main 净 **+10 行**（VM 1,683 → **1,693**），两枚同行改写、插行全落在 `:1531` 之后 ⇒
+指向这颗文件的 56 枚文档锚点里**只有 `docs/derived-field-audit.md:206` 那一格要 +10**
+（`:1588`/`:1589`→`:1598`/`:1599`，我在基点与改后各读一遍确认），其余 55 枚原位命中。三把锚点普查尺
+**一字未动**（585 / 268 / 146）：代理新写的行号一律用裸 `:NNN` + 符号名、没补 `文件.kt:行号` 连写，
+这正是 §6.10 那格想要的形状。**T108 换的那把新尺第一次被增量检验**：行首锚 `@Test` 全仓 1,695 == 门禁 XML 1,695。
+
+**明留 / 随之过期**：① `CalendarSyncManager.kt:71`/`:90`/`:91` 那颗吞异常的 `runCatching` 一字未动（仍挂 §6.8② 前半）；
+② 同步入口 `:1391` 仍吃缓存（有意取舍）；③ `confirmCalendarSync` 起手 `:1426` 仍只立 `syncing`（同族第三处入口，
+上游已成对清，本卡不扩权）；④ **`docs/TESTING.md` 的门禁数字当场过期一格**（`:32` 的 1692→1695、`:59-60` 那族守卫
+6/7 枚→10 枚、`:136` 点名的四处旧尺差集行号漂移）⇒ **派 T111 纯文档卡收**；
+⑤ `docs/derived-field-audit.md` §6.2 表 #7 / #10 / #11 三格按卡面授权范围没动（#7 那句"清点仍 2 处"现是 3 处、
+#10 那句"无守卫"自 T105 起就过期）；⑥ **两笔都仍无装机证据** —— "那颗按钮在真机上不再挂出来"是代码级推断。
