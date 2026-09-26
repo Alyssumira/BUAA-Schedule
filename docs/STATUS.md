@@ -2737,3 +2737,34 @@ lint 0 错 14 警、签名包 **7,247,271 B**（对 7,246,225 是 **+1,046 B**�
 **地板抬到 1,675 / 196 / 7,247,140 B**。
 
 **明留**：① `ImportConflictCopyTest.kt:26` 与 `:292` 两处**注释文字**仍写「组数只在 `showPendingImport` 归并一次」—— 归并仍恰好一次，但位置在 `PendingImport` 类体（同一份文件）；断言不受影响，将来它红的时候消息会指错地方。② 屏幕上那行字的实际变化、逐条勾选的手感 —— **没量过**（零设备），押到 #98/#143 那批有机器的时候。③ T93 那条统计页 CUJ（`ai/T93`，`openStatsAndDrill`）**至今从没跑绿过一次**，而本卡给它的对照组证明"组数会跟着子集走"这条链在 JVM 侧是通的 —— 两边不互相替代。
+
+
+## T96：SPOC 拆族后盘面上那两笔明留，收掉（`4b6e883` / `d334917`，2 枚 / 5 文件 +6 / −6，零 main 源码改动）
+
+**① 改名**：`ui/signin/SpocSignInEntryWiringGuardTest.kt` → `ScanSignInEntryWiringGuardTest.kt`（`git mv`，相似度 99%）。牵动面 = 类声明 1 行 + 三枚邻居的 KDoc「刀法照抄」引用（`ui/home/StatsEntryWiringGuardTest.kt:13`、`ui/signin/IClassSignInWiringGuardTest.kt:20`/`:148`、`ui/SpecialDayRefreshWiringGuardTest.kt:27`），**包名、断言、`@Test` 枚数（6）一字未动**。定名理由（代理给的，我认）：这枚文件本来就自述是「扫码签到那条**入口**的接线守卫」，`Spoc` 在 T85 拆族之后是一枚**假的平台归属**。
+⚠️ 有意未动：路由字符串 `"spoc_scan"`、回调名 `onSpocSignIn`、页名 `SpocScanScreen` **仍在主源码里活着**，而且正是这枚守卫逐字钉着的对象（它 `:37/:38/:73/:97` 数的是 `composable("spoc_scan")` 恰好一处、`onSpocSignIn` 参数还在不在）。改它们要连带动 intent 放行名单与通知侧 EXTRA，不属本卡。
+
+**② README:189 那一格**：`65 → 66`，「教务 cookie 与签到 token 落盘」→「教务 Cookie 与 iClass 签到 id 两份加密存储的落盘与两边隔离」。
+枚数那一格**做了一次考古**（代理给的，我逐条复算对上）：README 写 65 那天是 `96f0483` —— 我 `git show 96f0483:` 逐文件数 `@Test` = **65**，与 README 严丝合缝；后来 T84/T85 把 `SpocTokenStoreTest`（5 枚）换成 `IClassIdStoreTest`（6 枚）⇒ `65 − 5 + 6 = 66`，而**文件数恰好不变（14）** ⇒ 错只藏在枚数里，那格的「14」一直是对的。措辞的依据我也回读了：`IClassIdStoreTest` 六枚是 `saveThenLoadRoundTrips` / `persistedBlobIsNotPlaintext` / `blankPayloadClearsInsteadOfStoringEmptyId` / `clearingIClassLeavesTheCookieStoreAlone` / `clearingTheCookieStoreLeavesIClassAlone` / `theTwoStoresDoNotShareAPrefsFile` ⇒ 落的是 **id**、且三枚在钉"两边隔离"，不是 token。
+我自己的反查（另一种数法）：剥掉 `//` 与 `/* */` 之后逐文件正则数 = **66 / 14 文件**，与改后一致。⚠️ **这是静态计数，那 66 枚仪器测试一枚都没跑过**（无可跑设备）。README 下文「跑在 API 29 + API 34 模拟器上（CI 同配置）」是同一族的过期自述，本卡越界未动 ⇒ **记 #147**。
+
+**门禁（我自己在 `d334917` 上跑的六步，与代理报的数逐格相同）**：`--stop` → `clean` → `assembleRelease` → `testDebugUnitTest --rerun-tasks` → `lint --rerun` → 再跑一次测试 → `:benchmark:compileNonMinifiedReleaseKotlin`，**exit 全 0、每步 `BUILD SUCCESSFUL` 各 1 行**；**1,675 tests / 196 suites / 0 失败 / 0 errors / 0 skipped**（改名没丢任何一枚，新名在册 1 份结果 XML、旧名 0 份）、lint **0 错 14 警**且九枚 id 逐枚同形（BatteryLife 1 / ConfigurationScreenWidthHeight 3 / FrequentlyChangingValue 2 / GradleDependency 3 / InlinedApi 1 / ObsoleteSdkInt 1 / OldTargetApi 1 / UseKtx 1 / WebViewApiAvailability 1 = 14）、签名包 **7,247,140 B** 与地板**逐字节等值**。⚠️ 这一档"零增量"是**预期内的**：测试类改名与 README 都不进 release dex ⇒ 与「别把包体没涨读成改动免费」不矛盾，那条规矩讲的是"该涨的档没涨要怀疑"，不是"这档本该涨"。
+
+## T97：派生构造参数这一族到底还有几处（`748e3d5`…`1715862`，4 枚 / 1 文件 +273，**零代码改动**）
+
+问题是从 T94 那枚我合进 master 的回归长出来的：**它是孤例还是一族？** 交付物是 `docs/derived-field-audit.md`。判据三档：(a) 构造参数的值是**同表另一枚参数的函数**、(b) 存在改源却不重算它的 `copy(...)` 站点、(c) copy 之后真有人读它。
+**结论：真回归 0 枚 · 潜在 1 枚 · 无害 24 枚**，而且 (b) 那一格是**闭合**的：全仓只有 18 枚自有 `data class` 有 `copy` 站点（141 处里 70 处是 `Color.copy`/`TextStyle.copy`/`Constraints.copy` 这类平台类型），其余 156 枚连一处 copy 都没有 ⇒ 档位天然封顶在"无害"。
+
+**它打掉了我卡面两处数字，两条我都认**：
+- `.copy(` 我写 126，**它报 140**。我换了五种数法复算（`grep -ro` 原样、`--include='*.kt'` 加引号、从不同目录跑、`find -print0 | xargs -0`、python 遍历）**五次全给 140** ⇒ 我那个 126 复现不出来，按 140 记账。⚠️ 教训不是"数错了"，是**我卡面上的规模数字从来没有第二次读数**——以后带"全仓有多少处"的句子必须自带复算方法。
+- 它还出 1 处**隐式 `copy(`**：`ui/home/WeekGridGeometry.kt:253` 在扩展函数 `CourseDragState.advancedBy` 里写 `return copy(...)`，**没有接收者、只 grep `.copy(` 会整条漏掉**。这条进以后派卡的查法。
+- 第三格订正：我卡面说 T94 引入 `conflictGroupCount` 在 `189fd0a`，`git log -S conflictGroupCount` 只指到 **`030f8d8`**（`189fd0a` 是 T94②′，diff 只碰 `ScanFrameFlowPolicy.kt` 4 行）。T95 的修复哈希 `45e7fc1` 对得上。
+
+**唯一那枚"潜在"**：`ui/signin/ScanRecoveryPolicy.kt:65` 的 `giveUpReason` 在参数表上，唯一赋值 `:160` 是 `consecutiveFailures`/`suspensionCycles` 的拼接，而 `:165`/`:167` 两处 copy 改了这两枚源却不重算它 —— 现在不发火**只靠 `:150` 那行运行期早返回** `if (health.giveUpReason != null) return health`，没有任何静态守卫钉着。我复核过它的三格证据与"生产侧赋值恰好一处"（main 里 `grep "giveUpReason ="` 只有 `:160`；`:116` 那处是 `==` 比较，别当成第二处赋值）。⇒ 记 **#148**（三条钉法在报告 §2.1）。
+它同时给出 **①/② 的分工线**，这条是本卡最值钱的产出：**只有派生值是同表参数的纯函数时"挪进类体"才成立**。`giveUpReason` 那枚还吃"判到哪一档"这个上下文，走 T95 那一刀要把判据（`:155`）复制进类体 ⇒ 一处判据变两处，而且会丢掉测试在用的「回到前台额度用完」那一档（生产代码从不产生它，`ScanRecoveryPolicyTest.kt:210`）。⇒ **能写成 `f(同表参数)` 的走类体属性，写不出的走守卫把运行期前提钉成静态前提；留在参数表而不点名，就是 T94。**
+
+**报告顺手量到的两笔不属于本族的**：① `ScheduleUiState.conflicts`（`ui/ScheduleViewModel.kt:471` 就是 `:468` 那枚参数的函数，形状与 T94 一模一样）**全仓 0 处 copy**、唯一生产者是那个 `combine` 块 ⇒ 结构上永远不发火，但"将来谁给它加一处 copy"就是下一个 T94，报告 §3.3 把这句话钉在了那里；② `ui/ScheduleViewModel.kt:1378` 清 `diff` 却不连同源的 `skippedOccurrences` 一起清（现被 `SettingsScreen.kt:1903` 的 `ModalTransition(payload = diff)` 挡着读不到）⇒ 记 **#149**。
+
+⚠️ **这份审计的证据等级要写清**：它全程**零 gradle、零设备**（卡面禁止它跑构建，隔壁 T96 正在跑门禁），所以"真回归 0 枚"的准确说法是**按这三档判据读码读不出来**，不是"装机看不见错"。合并它只多一个 `docs/` 文件：T92① 声明的守卫输入面不含 `docs/`，且 `src/test` 里出现 `docs/*.md` 的 8 处全是 KDoc 叙述（我 grep 过）⇒ **这份文档对构建与测试是惰性的，地板不动**（1,675/196 那一组读数就是合并前在 `d334917` 上取的，合并 T97 之后无需重跑）。
+
+**明留（两张卡合起来记）**：① 改名之后 `docs/STATUS.md:705`/`:728` 那两处历史叙述仍写旧文件名 —— **有意不改**，那里记的是当时创建的名字；`#:2393` 那笔明留由本节销账。② README 还剩两格自述与实测对不上（单元测试那格写 `1585 | 186`、地板已是 **1,675 / 196**；「跑在 API 29 + API 34 模拟器上（CI 同配置）」）⇒ **#147**，并且要先判这张测试覆盖表到底该不该留在 README（README 面向用户）。③ 仪器测试的 66 是**静态计数**，这台机器给不出"跑过"。④ T97 报告的行号锚点随代码推进会漂，它自己没声明保鲜期 ⇒ 用之前先按 `file:line` 回读一次原文。
