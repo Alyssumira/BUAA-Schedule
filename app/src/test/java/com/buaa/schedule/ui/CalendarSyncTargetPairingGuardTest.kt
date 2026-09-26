@@ -80,7 +80,7 @@ import org.junit.Test
  * （同族第二回，`saving` / `saveError`，T104 刚写完）。那两枚各自钉死的字段与本文件**不重叠**：
  * `diff = null` / `skippedOccurrences = 0` 的三处成对账归前者，`saveError` 一族归后者。
  *
- * 十枚 `@Test` 全是**纯 JVM 源码核对**：只 import `java.io.File` 与 JUnit，零 android import、
+ * 十一枚 `@Test` 全是**纯 JVM 源码核对**：只 import `java.io.File` 与 JUnit，零 android import、
  * 零时钟读取（不碰 `System.currentTimeMillis()` / `LocalDate.now()` 之类）。
  * 行号按 `4b1c4a4` 盘面复算；T106 只把 `ScheduleViewModel.kt:1389` 那一枚 copy **同行改写**（没有增删行）
  * ⇒ 本文件点名的行号在 `688b191`＋T106 之上仍然成立，只有 ③ 那一族的**枚数**按新盘面重钉
@@ -90,6 +90,12 @@ import org.junit.Test
  * 两枚都是**同行改写**、零漂移，唯一的插行是 `ensureCalendarsLoaded` 末尾那档撤偏好（`:1532-1541`，净 +10）
  * ⇒ 本文件点名的 `:1531` 之前的行号一处不漂，那颗文件从 1,683 行变 1,693 行；③ 那一族的枚数按新盘面
  * 再重钉一次（旗标赋值 3→4、成对清 1→2、句子清点 1→2），① 添偏好那一半与缓存旗标那一半。
+ *
+ * **T116 给 ③ 添的第三条链（§8 表 #1）**：`confirmCalendarSync` 起手那一枚 `it.copy(syncing = true)`
+ * 一枚对岸都不收 —— 本文件不修它（判"不动 main"的理由与代价写在 `theConfirmChainClearsNoPairItselfAndThreeOtherLinesHoldItShut`
+ * 那枚判据的 KDoc 里），钉的是"它今天不红究竟靠哪三枚别处的行"：那三枚各占一格，**哪一格被改掉都先红在这里**。
+ * 同一枚 data class 的第四条链（`removeSyncedEvents` 起手不收 `diff`/`skippedOccurrences`，§8 表 #2）
+ * 归 `CalendarSyncDiffClearPairingGuardTest` 的第三枚判据 —— 那一格判据的是那一对的清点宇宙，不归本文件。
  */
 class CalendarSyncTargetPairingGuardTest {
 
@@ -1039,6 +1045,223 @@ class CalendarSyncTargetPairingGuardTest {
         )
     }
 
+    /**
+     * ③ 的第三条链（**T116 收 §8 表 #1**）：`confirmCalendarSync` 起手那一枚
+     * `_calendarSync.update { it.copy(syncing = true) }` —— **一枚对岸都不收**。
+     *
+     * 本判据钉的是「全靠别人那一行」这件事本身，不是一枚当下的症状（这一格今天念不出错，
+     * §8.4-A 因此把它判成「结构不可能·可挪走」）。现在不红的凭据是**三枚别处的行**，
+     * 每条各被本判据的一格钉住，被改掉都会先红在这里、而不是先在用户屏幕上红：
+     * 1. `diff` 全仓只有一枚生产者（`diff = computed.first`），它长在 `startCalendarSync` 体内、
+     *    且**在同一函数体内位于 `:1389` 那次五枚一起落地的成对清之后** ⇒ 「手里有一份 diff」今天
+     *    蕴含「起手刚把句子与旗标收过一遍」。谁把那次成对清挪到 `computeDiff` 之后、或挪出那枚函数体，
+     *    枚数不变而这一格先红（T115②′ 记下的那个洞就在这儿）。
+     * 2. 那颗「同步」的 onClick 长在 `ModalTransition(payload = calendarSync.diff)` 那一层之内，
+     *    弹窗独占输入 ⇒ 没人能在 diff 还挂着时把 `message`/旗标写进来（候选只有
+     *    `onCalendarPermissionDenied` 那一枚立旗站点，本判据顺手钉它**不在** confirm 体内）。
+     * 3. 全仓 `app/src/main/java` 里提到 `confirmCalendarSync` 的文件恰好是那两枚（定义 + 那一句 onClick）
+     *    ⇒ 没有第二条入口。这一格按**树扫**取，上面两枚都抓不到「第三枚文件里冒出一枚调用点」的形状。
+     *
+     * **为什么"照 `:1389` 那枚仪式补收"这一支本卡不走**（这才是它值得钉的原因，不是随手写的 1==1）：
+     * 起手清旗标在语义上等于**宣布此刻已授权**（T110 那笔账），`:1389` 与 `:1481` 都拿「入口在 `:331`
+     * 那道闸里」当凭据；confirm 的凭据只是**传递性**的（它那扇窗由 startCalendarSync 开），中间还隔着
+     * 一次 `calendarSyncManager.apply()` —— 权限在弹窗开着的那几秒里被系统收回时，收尾落的正是
+     * `:1432`/`:1437` 那句「…请重试或检查日历权限」，那一刻把旗标清掉就等于**在失败文案旁边撤掉唯一那颗出路按钮**。
+     * 另一枚字段 `message` 压根不需要收：收尾 `:1428-1440` 是整枚重建、每一档都无条件写新句子。
+     * ⇒ 这一族正确的落点是「生产 diff 之前」那一枚（已经收了），不是「应用 diff 之前」。
+     *
+     * 两头都钉：
+     * - **朝宽**（把责任推给别人）：成对清挪到生产之后 / 挪出函数体 → 位置判据红；onClick 搬出弹窗
+     *   （改常驻卡，本仓另一种常见写法）→ 窗口包含判据红；第三枚文件里添调用点 → 树扫红；
+     * - **朝紧**（把它改成收）：`:1426` 的实参表不再是**逐字** `syncing = true` → 本判据红。那一支不是
+     *   禁止，是**收费**：补收之前得先回答上面那句「清旗标凭什么算已授权」，并把 §8.4-A 那一格一起重钉。
+     * ⚠️ 与 T115②′ 同一课：本判据**逐处 + 按位置 + 逐字**取，一枚都不靠"数出现次数"——
+     *   「枚数对但落点错」正是这一族最容易蒙过去的形状。
+     */
+    @Test
+    fun theConfirmChainClearsNoPairItselfAndThreeOtherLinesHoldItShut() {
+        val code = blankCommentsKeepingLiterals(readMainSource(SCHEDULE_VIEW_MODEL))
+        val screen = blankCommentsKeepingLiterals(readMainSource(SETTINGS_SCREEN))
+        // ---- 这条链的骨架：函数头 1 处、体内三枚写点、那道早返回在最前 ----
+        val heads = indexOfAll(code, CONFIRM_HEAD)
+        assertEquals("靶子：`$CONFIRM_HEAD` 不再是恰好 1 处：" + lineHints(code, heads), 1, heads.size)
+        val head = heads.first()
+        val bodyEnd = code.indexOf(MEMBER_FUN_SEP, head + CONFIRM_HEAD.length)
+        check(bodyEnd > head) {
+            "靶子：`confirmCalendarSync` 之后找不到下一枚成员函数头 —— 这颗函数体切不出来，宿主判据要重写法"
+        }
+        val updates = indexOfAll(code, UPDATE_SITE).filter { it in head until bodyEnd }
+        assertEquals(
+            "`confirmCalendarSync` 体内的 `_calendarSync.update {` 写点不再是 3 处（体外作废 diff 一枚 / " +
+                "起手立旗一枚 / 收尾落旗一枚）。这一格是**按宿主切块**取的：「枚数还是 3、但其中一枚被搬进 " +
+                "helper 或搬去别的函数」同样落不进这个区间，也就同样红：" + lineHints(code, updates),
+            3,
+            updates.size,
+        )
+        for ((index, at) in updates.withIndex()) {
+            assertEquals(
+                "这条链第 ${index + 1} 枚写点的宿主不再是 `fun confirmCalendarSync() {`（现宿主：" +
+                    precedingFunHead(code, at) + "）—— 抽 helper 或搬家，「它什么时候真的会跑」都要重推",
+                CONFIRM_HEAD,
+                precedingFunHead(code, at),
+            )
+        }
+        val guard = code.indexOf(CONFIRM_EARLY_RETURN)
+        val launchAt = code.indexOf(SCOPE_LAUNCH, head)
+        check(guard in head until bodyEnd && launchAt in head until bodyEnd) {
+            "靶子：那道 `?: return` 早返回或那一次 `viewModelScope.launch {` 已经不在 confirmCalendarSync 体内 " +
+                "—— 这条链的骨架换了，本判据的宇宙要跟着挪"
+        }
+        assertEquals(
+            "靶子：`val pending = _calendarSync.value.diff ?: return` 全仓不再恰好 1 枚 —— 它就是 §8.4-A " +
+                "那句「进不到这条链除非 diff 非空」的载体：",
+            1,
+            occurrences(code, CONFIRM_EARLY_RETURN),
+        )
+        assertTrue(
+            "那道早返回不再是这条链的第一件事（" + lineAt(code, guard) + " 已经不在第一枚写点之前）—— " +
+                "「进到这条链时 diff 必然非空」这句前提换了位置，残值判据要从头重推",
+            guard < updates.first(),
+        )
+        assertTrue(
+            "起手立旗不再是「体外那次 diff 作废之后、协程之内」：体外" + lineAt(code, updates.first()) +
+                " 与 launch" + lineAt(code, launchAt) + " 与起手" + lineAt(code, updates[1]) +
+                " 的次序变了 —— 这个次序就是 §8.2 表 #1 那一格读的形状（体内第一行才立旗），" +
+                "换了就要重判「残值窗口有多长」那一格",
+            updates[0] < launchAt && launchAt < updates[1],
+        )
+        // ---- 三枚写点的实参表：逐处取、逐字比 ----
+        val args = updates.mapIndexed { index, at ->
+            updateArguments(code, at, if (index + 1 < updates.size) updates[index + 1] else bodyEnd)
+        }
+        assertTrue(
+            "体外那一枚写点不再成对作废 diff（实参表：" + args[0].trim() + "）—— 成对这一半归 " +
+                "`CalendarSyncDiffClearPairingGuardTest` 第一枚判据管，本判据只钉它**长在协程之外**：" +
+                "diff 是在立旗之前就被作废的，不是在飞行途中：",
+            args[0].contains(DIFF_CLEARED) && args[0].contains(SKIPPED_CLEARED),
+        )
+        assertFalse(
+            "体外那一枚写点开始立旗（实参表：" + args[0].trim() + "）—— 立旗与协程边界脱钩，" +
+                "上面那条「体外一枚、体内两枚」的位置判据与 §8.2 表 #1 那一格都要重钉：",
+            args[0].contains("syncing ="),
+        )
+        assertEquals(
+            "`:1426` 起手那枚 copy 的实参表不再是**逐字** `$CONFIRM_ENTRY_ARGS`（现在是：" + args[1].trim() +
+                "）—— 这一格钉的就是本卡 #1 的判词「起手一枚对岸都不收」。**少一枚**（连 `syncing` 都不立了）" +
+                "= 那条链在飞的时候 `:1643` 那颗 `enabled = !calendarSync.syncing` 没人管；**多一枚**" +
+                "（补收 `message`/旗标，或连 `diff`/`skippedOccurrences` 一起收）= 本卡判「不动 main」那一支被反着做，" +
+                "先回答 KDoc 第二段那句「清旗标凭什么算已授权」，再把 §8.4-A 那一格与 :1389/:1481 两枚仪式一起重钉" +
+                "（补收 diff 那一头还会把本文件第一枚判据的 3 处清点顶成 4 处）：",
+            CONFIRM_ENTRY_ARGS,
+            args[1].trim(),
+        )
+        assertTrue(
+            "收尾那枚不再落旗（实参表：" + args[2].trim() + "）—— 这条链自己就是 `syncing` 的读者 " +
+                "(`SettingsScreen.kt:1643` `enabled = !calendarSync.syncing`) 的载体，旗落不下来那两颗按钮就永久按不动：",
+            args[2].contains("syncing = false"),
+        )
+        assertTrue(
+            "收尾那枚不再**无条件**写句子（`message = when {` 不见了，实参表：" + args[2].trim() +
+                "）—— 这就是 confirm 起手不必收 `message` 的全部理由：每一档都落一句新话，旧句子被覆盖。" +
+                "它一旦改成有条件写（比如成功那档不写句子），旧句子就能活过这条链，本判据的方向要整个反过来：",
+            args[2].contains(CONFIRM_TAIL_MESSAGE_SHAPE),
+        )
+        assertFalse(
+            "收尾那枚开始撤旗标（实参表：" + args[2].trim() + "）—— 那是把责任从「生产 diff 之前」搬来" +
+                "「应用 diff 之后」，形状换了：`:1389` 那次成对清就从承重件降级成多余的一刀，" +
+                "③那一族的「成对写 1 / 成对清 2 / 单清 1」三枚数与 §8.4-A 都要按两枚落点重钉：",
+            args[2].contains(FLAG_ASSIGNED),
+        )
+        // ---- 承重前提 1：凡有 diff，必先过 :1389 那次成对清（位置判据，不是枚数判据）----
+        val produced = indexOfAll(code, DIFF_PRODUCED)
+        assertEquals(
+            "`diff` 的生产者（`diff = computed.first`）不再是全仓唯一一枚（§8.5 第 13 条那笔账的静态版）—— " +
+                "**多一枚** = 多一条不经过 :1389 就能拿到 diff 的路，本卡 #1 当场从「结构不可能」搬进「真漏清」：" +
+                lineHints(code, produced),
+            1,
+            produced.size,
+        )
+        val syncEntry = code.indexOf(SYNC_ENTRY_HEAD)
+        check(syncEntry >= 0) { "靶子：找不到 `$SYNC_ENTRY_HEAD` —— 同步入口改过名，③那一族与本判据都要重钉" }
+        val syncEnd = code.indexOf(MEMBER_FUN_SEP, syncEntry + SYNC_ENTRY_HEAD.length)
+        check(syncEnd > syncEntry) { "靶子：startCalendarSync 之后找不到下一枚成员函数头，那枚函数体切不出来" }
+        assertTrue(
+            "diff 的生产者跑出了 `startCalendarSync` 体内（现宿主：" + precedingFunHead(code, produced.first()) +
+                "）—— 「唯一生产者被那枚成对清罩着」这句话没了载体，本判据第一格要按新宿主重写：" +
+                lineAt(code, produced.first()),
+            produced.first() in syncEntry until syncEnd,
+        )
+        val pairedClears = indexOfAll(code, SYNC_ENTRY_PAIRED_COPY)
+        assertEquals(
+            "靶子：`:1389` 那次「syncing + message + 旗标 + diff + skippedOccurrences 五枚一起落地」的成对清原文 " +
+                "不再是恰好 1 处：" + lineHints(code, pairedClears),
+            1,
+            pairedClears.size,
+        )
+        assertTrue(
+            "那次成对清也跑出了 `startCalendarSync` 体内（现宿主：" +
+                precedingFunHead(code, pairedClears.first()) + "）：" + lineAt(code, pairedClears.first()),
+            pairedClears.first() in syncEntry until syncEnd,
+        )
+        assertTrue(
+            "**朝宽那一格**：成对清还在、枚数也对，却落到了 diff 生产**之后**（" +
+                lineAt(code, pairedClears.first()) + " vs " + lineAt(code, produced.first()) +
+                "）—— 「手里有一份 diff」就此不再蕴含「起手刚收过句子与旗标」，而 confirm 起手不收" +
+                "全部凭据就是这一条。这正是 T115②′ 记下的「枚数对但落点错」那一型：",
+            pairedClears.first() < produced.first(),
+        )
+        // ---- 承重前提 2：那扇弹窗（界面上唯一一条进这条链的路在窗口之内）----
+        val diffModal = indexOfAll(screen, DIFF_MODAL_HEAD)
+        assertEquals(
+            "靶子：`$DIFF_MODAL_HEAD` 不再是恰好 1 处 —— diff 的渲染方式换了载体（改成常驻卡就是 §8.4-A 说的" +
+                "「别处一行」，那一格本判据要反过来重判）：" + lineHints(screen, diffModal),
+            1,
+            diffModal.size,
+        )
+        val modalAt = diffModal.first()
+        val nextModal = screen.indexOf(MODAL_SEP, modalAt + DIFF_MODAL_HEAD.length)
+        check(nextModal > modalAt) { "靶子：diff 弹窗之后找不到下一层 ModalTransition 边界，窗口切不出来" }
+        val calls = indexOfAll(screen, CONFIRM_CALL)
+        assertEquals(
+            "界面上 `viewModel.confirmCalendarSync()` 的调用点不再是 1 处（现在只有弹窗里那颗「同步」）：" +
+                lineHints(screen, calls),
+            1,
+            calls.size,
+        )
+        assertTrue(
+            "那颗「同步」跑出了 diff 弹窗那一层（onClick" + lineAt(screen, calls.first()) + " 不在 " +
+                "L" + screen.substring(0, modalAt).count { it == '\n' } + 1 + " 到 L" +
+                screen.substring(0, nextModal).count { it == '\n' } + 1 + " 之间）—— 弹窗不再独占输入，" +
+                "于是能有一句旧 `message` 或一枚旧旗标在 diff 挂着时被写进来、而 confirm 起手不收：" +
+                "§8.4-A 那句「靠 Compose 对话框的输入独占」当场作废，这一格搬进「真漏清」：",
+            calls.first() in modalAt until nextModal,
+        )
+        // ---- 承重前提 3：没有第二条路（全仓 main 树扫，不止本文件点名的那两枚文件）----
+        assertEquals(
+            "全仓 `app/src/main/java` 里提到 `confirmCalendarSync` 的文件不再恰好是那两枚 —— " +
+                "第三枚文件里冒出来的调用点是上面两格**都抓不到**的形状（它既不在弹窗里、也不经过 :331 那道闸）：" +
+                "「进到这条链时 diff 必然非空、且起手刚成对清过」这句前提要按新入口重推",
+            listOf(SCHEDULE_VIEW_MODEL, SETTINGS_SCREEN),
+            mainFilesMentioning(CONFIRM_REF),
+        )
+        assertEquals("靶子：VM 里 `confirmCalendarSync` 这个符号不再恰好 1 枚（定义那一行）：", 1, occurrences(code, CONFIRM_REF))
+        assertEquals("靶子：SettingsScreen 里它不再恰好 1 枚（那一句 onClick）：", 1, occurrences(screen, CONFIRM_REF))
+        // ---- 残值的唯一生产者：它不许搬进 confirm 体内 ----
+        val raised = indexOfAll(code, FLAG_RAISED)
+        assertEquals(
+            "靶子：把 `permissionPermanentlyDenied` 立成 true 的那枚站点（:1497 " +
+                "`permissionPermanentlyDenied = !canAskAgain,`）不再恰好 1 处：" + lineHints(code, raised),
+            1,
+            raised.size,
+        )
+        assertFalse(
+            "那枚立旗站点跑进了 `confirmCalendarSync` 体内（" + lineAt(code, raised.first()) + "）—— " +
+                "那么「起手不收旗标」立刻从「全靠别人挡着」变成「自己把自己写脏」，本判据的方向要整个反过来重钉：" +
+                "这一格不是禁止，但它一改，§8.4-A 那一格读的就不是同一枚病了：",
+            raised.first() in head until bodyEnd,
+        )
+    }
+
     // ---------------- ⑥ showPrivacyDialog / privacyConsentAt ----------------
 
     /**
@@ -1265,6 +1488,23 @@ class CalendarSyncTargetPairingGuardTest {
     }
 
     /**
+     * 那一处 `_calendarSync.update {` **之内**那次 `copy(` 的实参表。
+     *
+     * [limit] 是下一枚写点（或函数体末尾）：`copy(` 必须落在 `[updateAt, limit)` 之内才认。
+     * 这一条是"逐处"两字的落实 —— 拿"同一行"或"全局搜一遍"当判据都会把隔壁那枚写点的实参表
+     * 误交到手上来（T116 收 §8 表 #1 时撞到的形状：三枚写点里两枚的实参表都含 `syncing =`）。
+     */
+    private fun updateArguments(source: String, updateAt: Int, limit: Int): String {
+        val open = source.indexOf("copy(", updateAt)
+        check(open in updateAt until limit) {
+            "那一处 " + lineAt(source, updateAt) + " 到下一枚写点之间没找到 copy(（命中的 copy 在 " +
+                (if (open < 0) "文件末尾之外" else "L${source.substring(0, open).count { it == '\n' } + 1}") +
+                "）—— 写法换过了（直接赋值？抽成函数？中间塞了第二枚 copy？），本守卫要跟着改"
+        }
+        return rebuildArguments(source, open + "copy(".length)
+    }
+
+    /**
      * [hit] 处**由外到内**每一层花括号块的"头"：那层 `{` 前面、到上一个换行 / `;` / 花括号为止的文本。
      *
      * 用来判"那行 summary 有没有被 `targetId` 套住"（①的读侧）。与
@@ -1342,6 +1582,23 @@ class CalendarSyncTargetPairingGuardTest {
         val file = File(findMainJavaDir(), relativeFromMainJava)
         assertTrue("找不到 ${file.path}：文件挪过家的话这条守卫要跟着改路径", file.isFile)
         return file.readText()
+    }
+
+    /**
+     * 全仓 `app/src/main/java` 里（抹注释后）**仍然提到** [needle] 的文件，相对路径、正斜杠、已排序。
+     *
+     * 只在被点名的那两枚文件里数调用点，漏的是"第三枚文件里新长出来的一枚"—— 那种形状既不在
+     * 现有弹窗窗口里、也不在 `withCalendarPermission` 那道闸里，而 §8.4-A/B 那两格读的都是
+     * 「界面上唯一那一条路」。与 `ClassProgressRescheduleWiringTest` / `SemanticGlassPlateTest`
+     * 那几枚树扫判据同一把刀（`.kt` 全集 + 逐文件读文本；本仓 202 枚，成本可忽略）。
+     */
+    private fun mainFilesMentioning(needle: String): List<String> {
+        val root = findMainJavaDir()
+        val files = root.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
+        assertTrue("${root.path} 下一个 .kt 都没有，扫描路径不对", files.isNotEmpty())
+        return files.filter { needle in blankCommentsKeepingLiterals(it.readText()) }
+            .map { it.relativeTo(root).path.replace('\\', '/') }
+            .sorted()
     }
 
     private fun findMainJavaDir(): File {
@@ -1497,6 +1754,22 @@ class CalendarSyncTargetPairingGuardTest {
         const val REMOVE_CONFIRM_OPENED = "showRemoveConfirm = true"
         const val REMOVE_REQUEST_HEAD = "fun requestRemoveSyncedEvents() {"
         const val REMOVE_REQUEST_CALL = "viewModel.requestRemoveSyncedEvents()"
+
+        // ---- ③ 的第三条链：`confirmCalendarSync` 起手（T116 收 §8 表 #1）----
+        const val CONFIRM_HEAD = "fun confirmCalendarSync() {"
+        const val CONFIRM_EARLY_RETURN = "val pending = _calendarSync.value.diff ?: return"
+        const val CONFIRM_ENTRY_ARGS = "syncing = true"
+        const val CONFIRM_TAIL_MESSAGE_SHAPE = "message = when {"
+        const val CONFIRM_CALL = "viewModel.confirmCalendarSync()"
+        const val CONFIRM_REF = "confirmCalendarSync"
+        const val UPDATE_SITE = "_calendarSync.update {"
+        const val MEMBER_FUN_SEP = "\n    fun "
+        const val SCOPE_LAUNCH = "viewModelScope.launch {"
+        const val DIFF_PRODUCED = "diff = computed.first"
+        const val DIFF_MODAL_HEAD = "ModalTransition(payload = calendarSync.diff)"
+        const val MODAL_SEP = "ModalTransition("
+        const val DIFF_CLEARED = "diff = null"
+        const val SKIPPED_CLEARED = "skippedOccurrences = 0"
 
         /** 入口 3 是唯一一枚不过闸的调用点：宿主 `fun selectCalendarTarget(…)`（VM :1457），
          *  唯一界面触发点 `viewModel.selectCalendarTarget(`（SS :1888）的 click 长在 `showPicker`
