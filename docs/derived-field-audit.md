@@ -683,7 +683,7 @@ T104（`saving`/`saveError`）。这是**同行改写**：`ScheduleViewModel.kt`
 | ① | `ui/ScheduleViewModel.kt:1462` `it.copy(targetId = calendarId, targetName = displayName, showPicker = false)` 与 `:1528-1529` 那两行 `if (targetGone) -1L` / `if (targetGone) null` | `targetId`/`targetName` 三处写点今天全成对，但**没有任何守卫**钉住"成对"。唯一读者 `ui/settings/SettingsScreen.kt:1623` 不在闸门里 ⇒ 与 T100 改前的 `diff`/`skippedOccurrences` 只差一枚守卫。该补的是 `CalendarSyncDiffClearPairingGuardTest` 那一形状的第二份实例。**现状（守卫已由 T105 立、偏好那一半由 T110 收）**：守卫落在 `app/src/test/java/com/buaa/schedule/ui/CalendarSyncTargetPairingGuardTest.kt` ① 那一族（两枚各赋值 3 处、逐处成对、界面读者 1 枚且不在 `targetId` 驱动的块里）。T110 收的是**同一对字段在偏好里的那一头** —— 改前的形状是 `:1523` 那次 `targetGone` 检测只把内存里两枚打回 `-1L` / `null`、偏好一行不动 ⇒ 起手 `:1373-1374` 在下一次冷启动又把死 id 与死名字捞回来：`:1623` 那行裸读继续念一个已经不存在的日历名，真去同步时 `CALENDAR_ID` 打进死 id、异常被 `runCatching` 吞掉，用户读到的是 `:1432`「同步失败：日历写入异常」（真因被洗成"写入异常"）。现在 `:1538` 那一档把两枚 key **一起** `remove`（与内存那两枚同样成对），且 `loaded.isNotEmpty()` 才动手（查询失败交回来的也是空列表，那一刻分不清「日历被删了」与「provider 抖了一下」）。新判据 `theDeadTargetIsDroppedFromPreferencesAsAPairOfKeysAndNotOnlyFromMemory`：两枚各撤一次、同一次 `edit` **按位置**判（两条一模一样的 `edit { }` 并排放，块头文本相等而分头清是真病）、闸门同时含 `targetGone` 与 `loaded.isNotEmpty()`、落点在那颗函数体内、两枚 key 各自出现 3 次（读 1 + 写 1 + 撤 1） |
 | ② | `data/calendar/CalendarSyncManager.kt:71` `runCatching {` + `:90` `.onFailure { Log.w(TAG, "读取日历列表失败", it) }` + `:91` `return result` | 它把"查询失败"洗成"这台设备没有日历"，是 §6.4-A 那道**外来**闸门的来源；同时它使 `ui/ScheduleViewModel.kt:1517` 那句「读取日历列表失败，请检查日历权限」几乎永不显示。另附同族一笔：`calendarsLoaded` 全仓**没有任何**复位站点（`grep -rn "calendarsLoaded = false" app/src/main/java --include='*.kt'` ⇒ 0 行），于是 `calendars` 是进程寿命的缓存，用户在系统日历里删掉一个日历后选择器会一直列着那个死 id。**现状（T110 只收了后半笔）**：那颗 `runCatching` 吞异常的本体**一字未动**（本卡的范围是 VM 那一段区，:71 / :90 / :91 这三行仍挂在上面那一格里，等下一张卡）。后半笔收了 —— 上面那句「0 行复位」是**改前读数**，留着；T110 之后 `calendarsLoaded = false` 有 **1 枚复位站点**（`:1449` 开窗那一档连带写；复算 `grep -rn "calendarsLoaded = false" app/src/main/java` ⇒ 1 行），`calendars` 因此不再是"进程寿命"的缓存、`targetGone` 那次检测每次开窗都跑一趟。取的修法是"每次开窗强制刷新"而不是拆掉 `:1512` 那次早返回：**同步入口那一档今天不带复位**（有意 —— 每点一次同步多 1–2 趟 provider 查询，而同步链自己已经要跑 Room 读 + 逐课次内容摘要 + Events 查询），于是"同一进程里第二次点同步用的是上一份列表"这一格残态如实留着，它不影响死 id 被撤（每进程头一次开窗或头一次同步都必查）。守卫 `theCalendarListCacheHasExactlyOneResetSiteAndItIsThePickerOpening`：复位站点 1 处、宿主 `openCalendarPicker`、位置在那次查询之前、生命点 5、`:1512` 早返回仍在、`:1389` 那档**不带**它（正解若要改这一支，本判据故意先红） |
 | ③ | **已由 T106 收掉**：`ui/ScheduleViewModel.kt:1389` 起手那次 copy（改后原文 `it.copy(syncing = true, message = null, permissionPermanentlyDenied = false, diff = null, skippedOccurrences = 0)`）；`ui/ScheduleViewModel.kt:1508` `_calendarSync.update { it.copy(permissionPermanentlyDenied = false) }` 保持只清旗标 | **改前登记的原话**：「清旗标不清句子；今天被 `ui/settings/SettingsScreen.kt:331` 那道 `hasCalendarPermission()` 短路挡着（§6.4-B）。这句注释该留在两处之一：要么把它做成成对清，要么把『靠哪道闸不念旧账』写进 KDoc」。**现状**：那一格判错了 —— `:331` 不是挡住漏清的闸，而是**造成**漏清的那件事（已授权时它让 launcher 根本不启动 ⇒ `:1508` 的 `onCalendarPermissionGranted()` 永不被调），而 `:1664` 那格会被 `:1429-1439`「同步完成…」重新点亮 ⇒ 真漏清。修法取了第一个选项：**把起手做成成对清**，并把可达路径枚举钉成守卫（§6.4-B「现状」那一段有取舍与为什么不选改读侧）|
-| ④ | `ui/signin/SpocScanScreen.kt:283` `cameraProviderMissing = true` 与 `ui/signin/ScanUiStatus.kt:87`/`:93` 那两支 | 跨生产者残值（§6.6）：`cameraError` 以「读不出那张图」开头时，梯子在说相册、而真病因是 provider。判据该按**来源**分支，不是按**写入先后**赌 |
+| ④ | `ui/signin/SpocScanScreen.kt:283` `cameraProviderMissing = true` 与 `ui/signin/ScanUiStatus.kt:87`/`:93` 那两支 | 跨生产者残值（§6.6）：`cameraError` 以「读不出那张图」开头时，梯子在说相册、而真病因是 provider。判据该按**来源**分支，不是按**写入先后**赌。**现状（T114① 在基点 `ee68e23` 上复算，上面那句原文一字未抹）**：本格"按来源分支"这一刀**在 §6.8④ 写下之前就已经长在盘上**——分叉那一支由 `1eac187`（T45「拆掉手输签到码整条入口」，2026-09-21）落的，而 `1eac187` 是本节基点 `1c6b7bd` 的祖先（⇒ T103 当时就看得见它，§6.6 引的那句「这张图读不出来，换一张图，或重新对准二维码再扫。」正是分叉**之后**的产物）。⚠️ 卡面 09-27 猜的 T90 `abfd38c` **驳回**：那枚 commit 只动两枚测试文件、main 侧 0 文件。所以这一格**不能整格判作废**：剩下的那一小截是"**哪一支赢**仍然按静态先后赌"——`:88` 那一支从头到尾没读 `cameraProviderMissing`，provider 档 `:93` 排在它后面就永远轮不到；五步可达时序、守卫空档（相册前缀 × provider 缺失零覆盖）、改它要一起重钉的两枚守卫与代价全在 §7.3，复算命令在 §7.4。本格的"该改什么"由此从"补分叉"改成"**把 provider 那一枚读进 `:88` 那一支**"，等排卡 |
 | ⑤ | `ui/editor/CourseEditorScreen.kt:614` `saving = true` | 本遍唯一的真漏清。修法与红线冲突（不许动 `app/src/main/**`），留一卡：删除这条链要不要复用 `saving` 这枚旗标本身也值得重判 —— 复用它是 `:310` 那句「保存中…」在删除时说假话的原因 |
 | ⑥ | `ui/settings/SettingsScreen.kt:1814` `ModalTransition(payload = if (showPrivacyDialog) privacyConsentAt else null) { consentAt, modal ->` 与它上面 `:1812-1813` 那两行注释 | 这一对的"不漏"完全靠**那一行的写法** + 一段注释维持：`:1817`/`:1853` 两处 `showPrivacyDialog = false` 都不归零 `privacyConsentAt`，谁把它改回 `ModalTransition(open = showPrivacyDialog)`（本仓另一种常用写法，见同文件 `:1859` 那一层）或把 `privacyConsentAt` 添第二个读者，收场那几帧就当场翻成「未同意」。**这正是 T100 那枚守卫该钉的第二份实例**，形状一模一样、只欠写它 —— 本卡不许新增/修改测试，故只登记 |
 
@@ -766,4 +766,150 @@ T104（`saving`/`saveError`）。这是**同行改写**：`ScheduleViewModel.kt`
   要点名一件事：
   `docs/` 的锚点保鲜声明那一节说的是**本档 §1–§5** 的行号对应 `e47a18e`；
   本节 §6 的行号对应 **`1c6b7bd`**，下一轮若动了被引文件，两批行号要**分开**重核。
+  ⚠️ §7 与 §8 的行号对应 **`ee68e23`**（T114 的基点，`6d6d121` 之后的纯文档盘面）—— 本节 §6 那批
+  与它们**不共版**：`ScheduleViewModel` 与 `SettingsScreen` 这两枚被引最密的文件在 `1c6b7bd`→`ee68e23`
+  之间被 T104/T106/T110 动过，重核时分三批（§1–§5 / §6 / §7–§8）逐批对哈希，别一把梭。
+
+## 7. T114 第三遍·§7：复核 §6.8④ 那一格（评估卡 · 只量不修）
+
+分支 `ai/T114`，基点 `ee68e23`。本节与 §8 同出一枚卡、分两枚 commit（本节是第①枚，`T114①`）。
+**零 main 改动、零测试改动、零 gradle（连 `--stop` 都没碰）、零 adb、零设备、零 `local.properties`**；
+本节全部读数来自 `git log -S` / `git show` / `git merge-base` / `grep -n` / `awk 'NR==N'`。
+本节**没有改动 §0–§6 任何一格的结论**，只在 §6.8④ 那一格末尾追加了一段「现状」（旧登记原文一字未抹，按本档规矩）。
+⚠️ 本节新增文本**一枚 `文件.kt:行号` 连写都没有**（全部写成裸 `:NNN` + 同框符号名/原文片段，理由见 §6.10 末与 §7.6 那一格）。
+
+### 7.0 这一节问的问题与卡面给的那句读数
+
+卡面（T114）把 §6.8④ 登记的修法读成「**早就落地了**」，并猜落地者是 T90 `abfd38c`，要本节复算、允许驳回。
+三档结论都合法，本节读盘面的结果是**第 2 档：还剩一小截真的** —— 但剩下的是哪一小截，与 §6.8④
+当年写的"该改什么"**不是同一刀**。逐条：
+
+- **"按来源分支"确实已经存在** ⇒ 卡面这句对（复算见 §7.2）。
+- **落地者不是 T90 `abfd38c`，而是 T45 `1eac187`（2026-09-21）** ⇒ 卡面那句猜错了，而且错得有关系：
+  `1eac187` 是 **§6 自己的基点 `1c6b7bd` 的祖先**，也就是说 §6.8④ 写下的那一刻分叉**已经在盘上**，
+  而 §6.6 引用的正是分叉**之后**的那句 `:89` 字面量（`1c6b7bd` 版第 88 行就是那枚 `startsWith`，复算命令在 §7.2 第 5 条）。
+  ⇒ "判已实现、本格作废"这一档**只对半格**：作废掉的应当是"补分叉"这一读法，不是这一整格。
+- **剩下的一小截**：分叉只分**措辞**，不分**哪一支赢** —— `:88` 那一支从头到尾没有读 `cameraProviderMissing`，
+  provider 那一档 `:93` 排在它后面就永远轮不到。于是 §6.8④ 那个"赌"字仍然成立，只是赌注从"两枚字段谁先写"
+  缩到了"梯子第 4 档赢的时候，第 5 档的真病因有没有被说出口"。具体形状、可达时序、守卫空档在 §7.3。
+
+### 7.1 卡面那八处行号逐枚复算（当场 `awk 'NR==N'`，与同框符号名对得上才写）
+
+`ScanUiStatus` 那枚文件 182 行、`SpocScanScreen` 那枚 1626 行（`wc -l`，本节复算用）。
+
+| 卡面写的指针 | 盘面读到的原文（截断到可核对的那半句） | 判定 |
+| --- | --- | --- |
+| ScanUiStatus 的 `:85-86` | 两行注释，起句「⚠️ 必须按来源分两支：cameraError 以「读不出那张图」开头 ⇒ 相册刚刚才失败，」 | ✅ 一字不差 |
+| 的 `:87` | `cameraError != null ->` | ✅ |
+| 的 `:88` | `if (cameraError.startsWith(GalleryUnreadablePrefix)) {` | ✅ |
+| 的 `:89` | `"这张图读不出来，换一张图，或重新对准二维码再扫。"` | ✅ |
+| 的 `:91` | `"相机不可用（$cameraError），请改用相册识别。"` | ✅ |
+| 的 `:93` | `cameraProviderMissing -> "相机服务没把摄像头交给这一页（CameraX 起不来）…"` | ✅ |
+| SpocScanScreen 的 `:157` | `var cameraProviderMissing by remember { mutableStateOf(false) }`（`:158` 是 `var cameraError`，`:155` 是那句「它和 cameraError 是两件事」） | ✅ |
+| 的 `:279` / `:283` | `cameraProviderMissing = false` / `cameraProviderMissing = true`（同一颗 `LaunchedEffect(granted)`，键在 `:274`，早返回在 `:278`） | ✅ 两枚 |
+| 的 `:398` | `if (cameraError != null) cameraError = null` | ✅ |
+| 的 `:411` | `cameraError = reason` | ✅ |
+| 的 `:467` | `cameraError = null`（判据在 `:464` `val bindErrorToRetry = cameraError?.startsWith(GalleryUnreadablePrefix) == false`） | ✅ |
+| 的 `:534` | `.onFailure { cameraError = "$GalleryUnreadablePrefix：${it.message}" }` | ✅ |
+| 的 `:310` 与 `:672-673` | 读侧传参：`:310` 长在 `scanCameraLive(` 那枚实参表里（`cameraError = cameraError,`），`:672-673` 是 `scanUiStatus(` 的两枚实参（`cameraError =` / `cameraProviderMissing =`） | ✅ 三处 |
+
+⇒ **卡面这八处（拆开来是十三枚指针）逐枚复现，无一处漂移**。本节另外补两枚卡面没点名的读者锚点：
+`scanUiStatus` 的返回值只被 `:675` `if (hintText != null) {` 那格画出来，而**同一列**下面那颗 frameAid
+在 `:687` 写着 `if (cameraLive && hintText == null)` —— 本仓在这里**会**写闸，`:89` 那一支没写。
+
+### 7.2 「修法已落地」的对账：落地了，但落地时间早于 §6.8④ 本身（五条命令）
+
+```
+# 1 谁写进那枚常量的（main 侧全量）
+git log -S "GalleryUnreadablePrefix" --oneline -- app/src/main/java            ⇒ 70975fe 1eac187（两支，都是 signin 侧）
+# 2 谁写出那枚分叉的（精确到表达式 + 文件）
+git log -S "startsWith(GalleryUnreadablePrefix)" --oneline -- …/ui/signin/ScanUiStatus.kt   ⇒ 只有 1eac187
+# 3 卡面猜的那枚 commit 改了什么
+git show --stat --format= abfd38c                                              ⇒ 两枚 app/src/test 文件、+334 行、main 侧 0 文件
+# 4 那枚分叉是否早于 §6 的基点
+git merge-base --is-ancestor 1eac187 1c6b7bd && echo YES                       ⇒ YES
+# 5 §6 自己看见过它（决定性的一条：T103 基点上第 88 行就是那枚 startsWith）
+git show 1c6b7bd:…/ui/signin/ScanUiStatus.kt | grep -n "startsWith(GalleryUnreadablePrefix)"  ⇒ 88: 命中
+git log --format="%h %ad %s" --date=short -1 1eac187                           ⇒ 1eac187 2026-09-21 refactor(signin): 拆掉「手输签到码」整条入口，降级文案六档逐条改口径
+```
+
+⇒ 结论：**"已实现"这一档驳回，"还剩一小截真的"这一档成立**。`abfd38c`（T90-B）连 main 都没碰，
+不可能是它；分叉是 T45 那一遍"降级文案逐条改口径"里落的，而 §6.6/§6.8④ 是在看得见它的前提下写的。
+另一枚相关 commit `70975fe`（T59「解码棘轮可恢复 + 绑定失败可就地重试」）只往 `cameraError` 那三枚
+写点里添了 `:398` 与 `:464`/`:467` 那一族（回前台重试），**没有动梯子的次序**，也没动 `:88` 那支的判据。
+
+### 7.3 剩下那一小截的具体形状（照 §6.3 的证据形状写）
+
+- **字段对 / 宿主**：`(cameraError, cameraProviderMissing)`，宿主是 SpocScanScreen 那枚文件里的
+  两枚 remembered var（声明 `:157`、`:158`）。§6.2 #13 已把这对判成**越界形状**（生产者不是同一次），
+  本节**不推翻那一档**：本节量的不是"漏清"，是**读侧那一格阶梯**少读了一枚字段。
+- **哪一枚能被留在非空**：`cameraError` 能以相册前缀非空，而同一时刻 `cameraProviderMissing == true`。
+  写侧没有任何一处会把它俩的关系说清楚：`cameraError` 的四处写点 `:398`/`:411`/`:467`/`:534` 没有一处读
+  `cameraProviderMissing`，`:279`/`:283` 两处也没一处读 `cameraError`（复算见 §7.4 第 2、3 条 ⇒ 互不点名 = 0 处）。
+- **全序（不需要任何异常时序，全程可点）**：
+  1. 冷启动进这一页，`granted` 已经是 true ⇒ `:274` 那颗 `LaunchedEffect(granted)` 头一趟就跑，
+     `:278` 的早返回放行（此刻 `provider` 仍是 null），`cameraProviderWithRetry` 首试 + 重试都拿不到
+     ⇒ `:283 cameraProviderMissing = true`；
+  2. 相册那颗按钮**照常可点**：`:707` `enabled = scanner != null && !inFlight` —— 两枚条件都不含 provider；
+  3. 用户挑了一张读不出来的图 ⇒ `:534` 写进 `cameraError = "$GalleryUnreadablePrefix：…"`；
+  4. 梯子 `:87` 那支赢 ⇒ 屏幕上说的是 `:89`「这张图读不出来，换一张图，或**重新对准二维码再扫**。」
+     而 provider 为 null 时绑定那颗 effect 在 `:318` `val cameraProvider = provider ?: return@LaunchedEffect`
+     就断了，一帧都不会到 —— **"重新对准再扫"在这一格是死路**，而 `:93` 那句真病因（相机服务没把摄像头交给这一页）
+     永远不出口。
+  5. 这句残值**不会**被相机那一侧洗掉：`:398` 要绑定成功才清，`:467` 那一支被 `:464` 的
+     `bindErrorToRetry` 明确把相册前缀排除在外 ⇒ 撤掉它的唯一途径是"换一张真能读出来的图"（或退出重进这一页）。
+- **`:81-84` 那段注释自己承认了它管不到这一格**：`:81` 那句「绑定失败与 provider 缺失可以同时成立吗？不能」
+  只对**绑定**那个写点成立，`:82-84` 立刻补了"但相册那条也借这个字段…所以这一支排在前面"。
+  于是这一支的排序理由就是**写入先后**（"更具体的原因先说"），§6.8④ 那个"赌"字在此仍然生效，
+  只是范围从整条梯缩到了这一支。
+- **守卫账（这一格是测试矩阵的空档，不是测试允许的行为）**：`ScanUiStatusTest` 里
+  `cameraErrorBranchesByItsWriter`（第 167 行那枚 `@Test`）两支都在 `cameraProviderMissing = false`
+  的 healthy 基线上打（基线那张表在 `:41`）；`ladderPriorityFollowsTheNearestWayOut`（`:91`）那枚
+  "两枚同时成立"的格子只试了**绑定原文**那一支（`:105` 传的是 `"cameraError" to "绑定失败：x"`）。
+  ⇒ **相册前缀 × provider 缺失**这一格零覆盖。整枚文件的复算命令在 §7.4 第 4 条（8 行命中，逐行点名）。
+- **代价（改它要付什么）**：措辞那一刀的代价很小（`scanUiStatus` 多读一枚参数、`:88` 那一支再分两档），
+  但它**当场红**两处守卫：`ScanCameraAidWiringGuardTest` 的"放弃阶梯逐字比对"（`:248`/`:253` 那两行把
+  `internal fun scanUiStatus(` 起到 `GalleryUnreadablePrefix` 声明之前整段钉成区域，右界就写死在那枚常量上）
+  与 `ScanUiStatusTest` 的 `missingCameraProviderSpeaks`（`:65` 那枚 `@Test` 断言"七档文案彼此都不能重复"，
+  新添一档就要跟着改那枚 7）。⇒ 排卡时这两处要**一起重钉**，别指望只改一句文案。
+- **值不值（本节只给账，不替编排者判）**：不改变任何状态、不影响任何一条链的走向，覆盖面只在
+  "provider 拿不到 + 相册又恰好读不出"这一格双故障；用户在这一格里已经看见的是"一块不会动的黑预览 +
+  一句让他去重新对准的话"。与本仓 #117 那枚 deferred 同一形状（真的、但排不上号）。
+
+### 7.4 本节四条复算命令（表格里放不下的那几格都指到这里）
+
+```
+# 1 阶梯两支的"互不点名"——cameraError 侧读不读 provider（⇒ 0 行）
+grep -n "cameraError" app/src/main/java/com/buaa/schedule/ui/signin/SpocScanScreen.kt | grep -c "cameraProviderMissing"
+# 2 反向同样为 0：provider 那两枚写点点没点名 cameraError
+grep -n "cameraProviderMissing" app/src/main/java/com/buaa/schedule/ui/signin/SpocScanScreen.kt | grep -c "cameraError"
+# 3 这对字段在 main 侧的全部落点（19 行，逐行都在 §7.1 那张表里）
+grep -n "cameraError\|cameraProviderMissing" app/src/main/java/com/buaa/schedule/ui/signin/SpocScanScreen.kt
+# 4 守卫矩阵：那枚测试文件里 provider 出现的 8 行，与 cameraError 同框的只有 :105 那一枚（非相册前缀）
+grep -n "cameraProviderMissing" app/src/test/java/com/buaa/schedule/ui/signin/ScanUiStatusTest.kt
+```
+读数（在 `ee68e23` 上）：第 1 条 **0**、第 2 条 **0**、第 3 条 **19**、第 4 条 **8**（`:41`、`:53`、`:66`、
+`:94`、`:102`、`:105`、`:263`、`:301`）。第 3 条那 19 行 = 声明 2（`:157`、`:158`）+ 注释 6（`:155`、`:333`、
+`:396`、`:403`、`:664`、`:1536`）+ 写点 6（`:279`、`:283`、`:398`、`:411`、`:467`、`:534`）
++ 传参 3（`:310`、`:672`、`:673`）+ 判据 1（`:464`）+ 日志 1（`:466` 那句「上一次的失败原因是…」）。
+
+### 7.5 本节没验到的（不写成"没有"）
+
+- ⚠️ **零装机证据**：上面那条五步时序是**代码可达性推断**，"provider 首试 + 重试都拿不到"这一格在
+  这台环境上从没被复现过（`cameraProviderWithRetry` 要真机/模拟器才验得到，而本卡红线禁设备）。
+  与 §4.1、§6.7 末格同一档：那句「屏幕上是一句让他重新对准的话」本节**证不了它念了多久**，只证了它能被念到。
+- **没扫 UI 侧那半屏**：`:707` 那颗按钮的 `enabled` 只查了 `scanner` 与 `inFlight` 这一句是本节读到的，
+  本节没有把这一页所有以 provider 为条件的可见性列成表（`cameraLive` 那枚纯函数除外，它在 `:304`）。
+- **没重开 §6.2 #13 那档**：越界形状那一判（"生产者不是同一次，不进 §6.2 主账"）本节照抄不动。
+  §7 量的这一小截是**读侧阶梯**，不是新的字段对，于是它落在 §6.8④ 那一格里、不另立新格。
+
+### 7.6 本节改动了文档哪两处（防"静默删除雷"的自证）
+
+1. §6.8 表格 ④ 那一格的第三列**末尾追加**一段「现状（T114①）」，上面那句"判据该按**来源**分支，
+   不是按**写入先后**赌"**原样留着**；这一格改完回读过列首的「④」与下一行列首的「⑤」都在。
+2. §6.10 末尾**追加**一行「§7 与 §8 的行号对应 `ee68e23`」，上一行「本节 §6 的行号对应 **`1c6b7bd`**…」
+   原样保留。
+3. 三把普查尺在本节**两次**编辑之后重跑（命令在 §0.4 第 4 条与 §6.10 那三格）：本档 `-o` 仍 **268**、
+   全仓 `-o` 仍 **589**、本档 `-c` 仍 **146** —— §7 全文没添一枚连写，所以 §6.10 那三格**不需要重钉**。
+   ⚠️ 这一句写在 §7 里，量在 §7 落盘之后（读数写进回执）。
 
