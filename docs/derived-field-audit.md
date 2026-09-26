@@ -962,7 +962,7 @@ grep -n "cameraProviderMissing" app/src/test/java/com/buaa/schedule/ui/signin/Sc
 | 2 | `syncing` × （`diff`，`skippedOccurrences`） | VM 的 `removeSyncedEvents`：`:1480` 起协程、`:1481` 起手 | 同一枚 `computeDiff` 的产物（§6.2 #2）＋ `:1486`「已移除 N 个日程」把 `:1664` 那格重新点亮 | 起手清了 `message` 与旗标（T110），**没清 `diff`/`skipped`** | `skippedOccurrences` 的唯一读者长在 `ModalTransition(payload = calendarSync.diff)` 那块里（SettingsScreen `:1903` 起） | **结构不可能**（机制见 §8.4-B，可挪走那一类）；⚠️ 现有那枚 diff 守卫**管不到它**，理由见 §8.4-B 末 |
 | 3 | `_buaaRefreshing` × `_importMessage` | VM 的 `refreshFromBuaa`：`:927` 立旗、`:928` 起协程 | `:941` 那句进度（「正在刷新课表：第 x/y 周…」）与 `:988` 那次落旗出自同一趟刷新 | **三枚入口只有一枚补了句子**：ImportScreen `:378` 调完立刻 `:379` `showMessage("正在刷新课表...")`；HomeScreen `:643`（`onTermSelected`）与 `:853`（菜单「刷新课表」）**都不写** | 首页读者 `:468-471` 是**读完即清**（`showSnackbar` 紧跟 `clearImportMessage()`）；ImportScreen `:392` 与 SettingsScreen `:705` 两枚读者是常驻横幅，**不自清** | **真漏清**（形状齐全，当下无可达残值 ⇒ 全靠首页那一行 `clearImportMessage()`） |
 | 4 | `_buaaRefreshing` × `buaaRefreshJob` | 同一枚链的**收尾**：`:988` 在 `finally` 里落旗 | `:928` 把新 Job 交给那枚可变量、`:1002` 在取消时把它交回 null ⇒ 旗标与句柄是"同一件事在忙"的两半 | 收尾 `:988` 只落旗、**不清句柄**（改后仍留着一枚已完成的 Job） | 唯一读者 `:1003` `if (job.isActive)` —— 已完成的 Job 永远不 active ⇒ 读不出假话 | **结构不可能**（机制见 §8.4-C，可挪走那一类：两道闸都在别人身上） |
-| 5 | `submitting` × （`saved`，`serverMessage`） | IClassLoginScreen 的 `submit()`：`:82` 立旗、`:83` 收句子、`:84` 起协程 | 三枚是同一次登录的三种产物：在忙 / 成功了 / 服务器给了原因 | 起手**成对**（`:82`+`:83`，与 §6.3 改前的编辑器同一形状）；**成功那一档分头**：`:87` `saved = true` 与 `:89` `password = ""` 连写，`:90` 走人，**没有 `submitting = false`**（只有失败那一档的 `:95` 落旗） | `statusText` 那一支 `when`（`:101-103`）按 `saved` → `submitting` → `serverMessage` 排；但**同一列**那颗按钮的字 `:160` `Text(if (submitting) "正在登录…" else "登录")` **不吃那条梯** | **真漏清（本遍唯一一枚当下就发作的）**，展开见 §8.3-B |
+| 5 | `submitting` × （`saved`，`serverMessage`） | IClassLoginScreen 的 `submit()`：`:82` 立旗、`:83` 收句子、`:84` 起协程 | 三枚是同一次登录的三种产物：在忙 / 成功了 / 服务器给了原因 | 起手**成对**（`:82`+`:83`，与 §6.3 改前的编辑器同一形状）；**成功那一档分头**：`:87` `saved = true` 与 `:89` `password = ""` 连写，`:90` 走人，**没有 `submitting = false`**（只有失败那一档的 `:95` 落旗） | `statusText` 那一支 `when`（`:101-103`）按 `saved` → `submitting` → `serverMessage` 排；但**同一列**那颗按钮的字 `:160` `Text(if (submitting) "正在登录…" else "登录")` **不吃那条梯** | **真漏清（本遍唯一一枚当下就发作的）**，展开见 §8.3-B。**现状（T115①/②/②′ 在基点 `34fadd8` 之后已修；上面那四格读数与这一句档位原文都留着，它量的是改前盘面）**：修的不是"成功档少落一枚旗"，而是**两枚读者各判一次**这件事本身 —— 三枚裸旗从此只在一枚 `val phase = when { saved → submitting → serverMessage → else }` 里被读成界面话，状态句、那颗按钮的字（新起 `private enum class LoginPhase(val buttonLabel: String)`，Saved 那一档说「已登录」）、失败卡那层语义色三处一律投影自阶段值。**没有**采纳"成功档补 `submitting = false` 与失败档对称"：那枚旗同时是本页唯一的重入闸 `if (submitting) return` 与三处 `enabled = !submitting`、键盘 Done 短路的共同来源，落旗等于在这一页交出去之前（存在这段窗口 —— 路由那一侧给这一页提供了 `LocalAnimatedVisibilityScope`；⚠️ 它有多长今天禁设备、没量过）把表单放开并允许第二趟登录 POST，而第二趟一旦失败就写 `serverMessage`、把「已登录」那句染成失败卡。**成功档故意不落旗、失败档照旧落**这一对不对称本身钉进守卫（`IClassSignInWiringGuardTest` 第 ⑦ 枚，枚数 6 ⇒ **7**） |
 | 6 | `checking` × `checks` | OnboardingScreen 的 `runChecks()`：`:143` 短路、`:144` 立旗、`:145` 起协程 | `:150` 一次写 `checks`、`:151` 同趟落 `checking` | 起手只立旗，**不收上一轮那份清单** | 部分在闸里：`:476` `if (checking && checks == null)` 只在头一趟画 spinner、`:482` 与 `:486` 那两处 `enabled = !checking`、`:251` `nextEnabled = !checking && …` | **真漏清 → 判 deferred**（先例 #117）：重跑期间旧结论文字仍读得出来，但同一屏那颗按钮自己写着「正在检测…」（`:489`），且每一张卡的 Fix 入口都被 `enabled` 按住 ⇒ 代价=措辞，本遍认为不值 |
 | 7 | `flight` × `_state` | SignInViewModel 的 `signIn`：`:104` 领闸、`:105` 起协程、`:113` 在 `finally` 归还 | `_state` 是 sealed 那族（`Idle` / `Submitting` / `Signed` / `Failed`），一次成功写 `:159` | 起手不收上一张结果卡 | 上一张卡**不可能被单独读到**：那条链每一档都是整枚重建（`:135`、`:153`、`:159`、`:164`、`:172`、`:183`、`:199`、`:218`） | **结构不可能**（**结构上挡死**那一类：`.copy(` 0 处，一半都漏不掉；§6.2 #9 同一型） |
 | 8 | `specialDayFetchInFlight` × 本轮落盘与日志 | VM 的 `refreshSpecialDays`：`:375` 在协程**外** `compareAndSet` 领闸 | `:383` 的归还在同一颗协程的 `finally` 里，且带 `if (claimed)` | 领闸者必归还；未领到的人**故意不归还**（`:383` 那行） | 闸门的读者是它自己（`:375` 那一行 + `runSpecialDayFetch(…, fetchInFlight = !claimed)`），`_specialDays` 的读者不读这枚旗 ⇒ 它压根没有"上一轮残值"这一说 | **已被钉住**：`SpecialDayRefreshWiringGuardTest` 里点名这枚闸门（main 侧 3 行、测试侧 4 行，命令见 §8.5 第 9 条） |
@@ -1008,6 +1008,14 @@ grep -n "cameraProviderMissing" app/src/test/java/com/buaa/schedule/ui/signin/Sc
   那枚编辑器"退场动画那几帧"同一档。⚠️ 本节**没有装机证据**它念了多久（§8.6 第 3 条）。
 - **为什么它比 #3 更该排卡**：#3 的残值当下不可达（要靠改别人），#5 的残值**每次登录成功都走到**。
   守卫账：`grep -rn "submitting\|serverMessage" app/src/test --include='*.kt' | wc -l` ⇒ **0 行**（§8.5 第 12 条）。
+  ⚠️ 这一句是**改前读数**，留着：T115② 之后重跑同一条命令 ⇒ **20 行**，20 行全在 `IClassSignInWiringGuardTest`
+  那一枚文件里（第 ⑦ 枚判据），别处仍然 0 —— 也就是说这一族的守卫只有这一处、且是静态源码核对，
+  不是运行期测试（这一页是 `@Composable`，本仓没有 Compose 运行时单测的架子）。
+  **现状（T115 已修）**：那一格展开的四步里，改的是最后一步 —— 残旗照旧留在 `submitting` 上（故意的，
+  理由与代价见 §8.2 #5 那一格「现状」），但界面上那三处读者不再各判一次，而是全部投影自同一枚阶段值。
+  ⚠️ 本节当时写的"窗口有多长"那一格（`:90` 的导航跳转 + 退场动画期间旧页仍在组合）**今天仍然没量过**：
+  T115 这一趟照样禁设备，所以"存在这段窗口、这段窗口里两行不许互斥"钉成了判据，"这段窗口占几帧/几毫秒"
+  一个字都没写。
 
 ### 8.4 那五枚"结构不可能"的机制（卡面硬要求：闸在哪、凭什么挡、属于哪一类）
 
@@ -1086,7 +1094,7 @@ grep -rn "refreshFromBuaa" app/src/main/java --include=*.kt                     
 # 11 那枚刷新旗的守卫账
 grep -rn "buaaRefreshing" app/src/test --include=*.kt | wc -l                   # ⇒ 0
 # 12 #5 那三枚字段的守卫账
-grep -rn "submitting\|serverMessage" app/src/test --include=*.kt | wc -l        # ⇒ 0
+grep -rn "submitting\|serverMessage" app/src/test --include=*.kt | wc -l        # ⇒ 0（改前读数）；T115② 之后重跑 ⇒ 20，20 行全在 IClassSignInWiringGuardTest 那一枚文件的第 ⑦ 枚判据里
 # 13 confirmCalendarSync 的界面入口枚数（#1 那道闸的"唯一"）
 grep -rn "confirmCalendarSync" app/src/main/java --include=*.kt                 # ⇒ 2 行
 # 14 showRemoveConfirm 的写点枚数（#2 那道闸的"唯一"）
@@ -1119,13 +1127,16 @@ grep -rnE "state\.value\.copy\(|SignInState\.[A-Za-z]+\([^)]*\)\.copy\(" app/src
   ⇒ 本档 `-o` **268**、全仓 `-o` **589**、本档 `-c` **146**，三格一字未动（命令见 §8.5 之外的那三条，
   已写在 §6.10 里）。本节把行号一律写成"第 N 行"或裸 `:N` + 同框符号名/原文片段，
   **没有往本档补过一枚连写** —— §6.10 那三格因此不需要重钉，这与 T111 那一趟是同一件事。
+  ⚠️ **补记（T115 在这一节动了三格：§8.2 表 #5 的现状、§8.3-B 的守卫账、§8.7 明留① 划掉，外加 §8.5 第 12 条
+  那条命令的现状读数）**：改完最后一次编辑之后重跑同三条命令 ⇒ **268 / 589 / 146 一字未动**
+  —— 那一趟新写的行号同样全是裸 `:N` + 符号名（文件名一律不与其行号连写），本档这格没添连写。
 - **没跑门禁**：零 gradle、零 adb、零设备、零 `local.properties`，所有结论只来自 `grep` / `awk` / `git log`。
 
 ### 8.7 明留（按红线一枚没动，逐条带锚点）
 
 | 编号 | 位置（锚点） | 该改什么（不写方案细节，等排卡） |
 | --- | --- | --- |
-| ① | IClassLoginScreen 那枚文件：`:82` 立旗、`:87` 与 `:89` 与 `:90`（成功档那三行）、`:160` 那颗按钮的字、`:101-103` 那支 `when` | **本遍唯一一枚当下发作的**：登录成功那一档不落 `submitting` ⇒ 同一列两行话互相打架（「已登录…正在进入扫码页…」 vs 「正在登录…」）。形状与 §6.3 那枚编辑器改前**同一族**（一次生产的两半被写到两处、其中一处漏了），差别只在窗口是退场那几帧。零守卫（§8.5 第 12 条 ⇒ 0 行） |
+| ① ~~本遍唯一一枚当下发作的~~ ⇒ **已收（T115① 修 main、T115②/②′ 立守卫；文档这一格只划掉、不删字）** | IClassLoginScreen 那枚文件：`:82` 立旗、`:87` 与 `:89` 与 `:90`（成功档那三行）、`:160` 那颗按钮的字、`:101-103` 那支 `when` | ~~**本遍唯一一枚当下发作的**：登录成功那一档不落 `submitting` ⇒ 同一列两行话互相打架（「已登录…正在进入扫码页…」 vs 「正在登录…」）。形状与 §6.3 那枚编辑器改前**同一族**（一次生产的两半被写到两处、其中一处漏了），差别只在窗口是退场那几帧。零守卫（§8.5 第 12 条 ⇒ 0 行）~~ **现状（在基点 `34fadd8` 之后，改前那三格读数与档位原文全留着）**：收的是**判定点**而不是那枚旗 —— 三枚裸旗从此只在一枚 `val phase = when { … }` 阶段梯里被读成界面话，状态句、那颗按钮的字、失败卡的语义色三处都投影自它（新起一枚 `private enum class LoginPhase`，成功那一档按钮说「已登录」）。"成功档补一句 `submitting = false`"那一支**驳回**：`submitting` 同时是本页唯一的重入闸与三处 `enabled` 加键盘短路的共同来源，落旗等于在这一页交出去之前（`LocalAnimatedVisibilityScope` ⇒ 存在这段窗口；⚠️ 有多长今天禁设备、没量过）松开表单、允许第二趟登录 POST，而它一旦失败就写 `serverMessage`、把「已登录」那句染成失败卡。守卫：`IClassSignInWiringGuardTest` 第 ⑦ 枚（该类枚数 6 ⇒ **7**；四组格子 —— 阶段梯的序与四档逐字、三处投影都不许再读裸旗、Saved 那一档的措辞两边都不许撞、那对不对称的闸门），六臂变异全红（朝宽三臂 W1 把 `Text(if (submitting) …)` 放回来 / W2 换梯序 / W3 成功档落旗，朝紧三臂 T1 失败档不落旗 / T2 Saved 措辞撞成在飞那句 / T3 兜底那一档落错阶段值）。**这一臂 T3 逼出一格新账**：`occurrences(梯子里的阶段值) == 4` 那把尺只数枚数、不数落点，四档改成逐字钉才抓得到（本节 §8.5 那几把"数枚数"的尺在下一遍都要按这个教训重看一遍） |
 | ② | VM 的 `confirmCalendarSync`（`:1425` 起协程、`:1426` 只写 `syncing = true`）与 `removeSyncedEvents`（`:1481` 起手清了两枚、没清 `diff`/`skipped`） | **同一枚 data class 的第三、四条链的起手形状**。`:1389` 与 `:1481` 已经证明"起手成对清"这刀在这两枚文件里做得出来；剩下的问题不是"今天漏不漏"（都不漏，机制见 §8.4-A/B 那道模态窗），而是**这两格今天一行守卫都没有**：`CalendarSyncDiffClearPairingGuardTest` 那枚判据数的是 `diff = null` 清点点、`CalendarSyncTargetPairingGuardTest` 那族数的是 `message = null` 与旗标 —— `:1426` 一枚都不在它们宇宙里（§8.5 第 13、14 条给出入口唯一性）。建议按 §6.8①/⑥ 那两格的形状补第三份守卫实例 |
 | ③ | UpdateCheck 的 `install()` 三条失败支（`:340`、`:357`、`:366`）与 `pendingInstall` 的唯一读者 `retryInstall`（`:189`）、UpdateDialog 的 `:83` 那一档 | `pendingInstall` 与 `_state` 的成对关系今天由**弹窗分支**兜着（§8.4-D）。谁往 `Failed` 那张卡上补一颗「重试安装」，这一格当场变真漏清（拿陈旧 `(info, file)` 去装一个可能已经不存在的包）。要么起手清，要么把"靠哪一档不念旧账"写进 KDoc（这正是 §6.8③ 当年那句原话的第二份实例） |
 | ④ | HomeScreen 的 `:420` / `:442` / `:452`、CourseManagementScreen 的 `:181` / `:214`、ConflictWizardDialog 的 `:79`、ImportScreen 的 `:151` / `:172` / `:485` | 这 9 处起手块**一枚旗标都不立** ⇒ 操作飞着的时候那颗按钮仍可点、可重复触发（与 §8.6 第二条合起来读）。**本节没给它们判档**，因为本节的判据是"对岸清没清"，不是"该不该有旗"。要收这一族得先立判据（哪些操作值得按灭、哪些按"重复提交比吃掉更糟"的口径走 SignInViewModel 那套闸门） —— 这是**下一轮排卡的唯一来源里最大的一块**，本节按"一枚没动"如实挂着 |
