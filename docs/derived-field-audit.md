@@ -913,3 +913,250 @@ grep -n "cameraProviderMissing" app/src/test/java/com/buaa/schedule/ui/signin/Sc
    全仓 `-o` 仍 **589**、本档 `-c` 仍 **146** —— §7 全文没添一枚连写，所以 §6.10 那三格**不需要重钉**。
    ⚠️ 这一句写在 §7 里，量在 §7 落盘之后（读数写进回执）。
 
+## 8. T114 第三遍·§8：起手块这一遍（评估卡 · 只量不修）
+
+分支 `ai/T114`，基点 `ee68e23`（§7 之后，第②枚 commit `T114②`）。
+**零 main 改动、零测试改动、零 gradle（连 `--stop` 都没碰）、零 adb、零设备**；全部读数来自 `grep` / `awk` /
+逐枚读原文。与 §7 一样，本节新增文本**一枚 `文件.kt:行号` 连写都没有**（§8.6 第 5 条把这句话自己也数了一遍）。
+
+### 8.0 这一遍问的问题（与 §0–§5、§6 都不是同一枚）
+
+- §0–§5 问的是**字段表**：这枚参数是不是同表另一枚的函数。
+- §6 问的是**成对字段的清点对岸**：有没有一处写点同时写 A 与 B、又有没有一处只清其中一枚。
+- **本节问的是起手那几行**：每一条 `...Scope.launch { … }`（以及它体外两行以内的那次"开始一件事"）
+  把头几行该立的旗立起来时，**有没有把上一次的产物一起收回去**。判据形状照 §6.0，只把"写点"换成"起手块"：
+  1. 这枚旗的**对岸**是谁 —— 同一次操作产生的句子 / 错误 / 上一轮结果，**包括持久化偏好那一头**（T110 就栽在这上头）；
+  2. 起手块清没清对岸？**每一个入口都问**，不只一条链（T110 的病是"起手清了、第二条链没清"）；
+  3. 它的读者在不在闸门里 —— 不在闸里的裸读者就是"今天不漏、明天漏"的位置。
+档位沿用 §6 那四档（真漏清 / 已被钉住 / 结构不可能 / 越界形状），**并首次启用 §6.9 驳回② 提议的第四档
+「成对但暂无分头站点（无守卫观察项）」** —— 走这一档的是 **#9 一枚**（`buaaTermsFetching` × `_buaaTermOptions`），
+本节没有第二枚够格，这一句本身要如实写出来。
+
+### 8.1 尺子与宇宙（卡面那四把尺逐把重量）
+
+| 量 | 复算命令 | 卡面给的 | 本节复算 | 用的哪把尺 / 漏了什么 |
+| --- | --- | --- | --- | --- |
+| `viewModelScope.launch` | 命令见 §8.5 第 1 条 | 35 | **35** ✅ | 命中行数；一行一处，与出现次数同值 |
+| `scope\.launch` 与 `coroutineScope\.launch` | 命令见 §8.5 第 1 条 | 14 | **14** ✅ | ⚠️ **这把尺是大小写敏感的**：它吃全小写接收者（`scope.launch`），**不吃驼峰接收者**（`settingsScope.launch` 那串里是小写 s 后面接大写 S，模式对不上）⇒ 见下一行 |
+| **卡面那两把尺漏掉的第三类接收者** | 命令见 §8.5 第 2 条 | 未提 | **27** | `applicationScope` / `animationScope`（12 处，设计系统那几个动效文件）/ `lifecycleScope` / `ioScope` / `rowScope` / `settingsScope` / `downloadScope` / `refetchScope` / `dragScope` —— **本节把这 27 处一起扫了**（其中真的立旗的只有 `downloadScope.launch` 那两处，见 #10） |
+| 起手宇宙**全集** | 命令见 §8.5 第 3 条 | — | **76** | = 35 + 14 + 27，三把尺**两两不交**（本节实测：并起来正好 76，无一行被数两次）⇒ 卡面的 35+14=49 **只盖住全集的 64%** |
+| `_[a-zA-Z]+\.update \{` | 命令见 §8.5 第 4 条 | 21 | **21** ✅ | ⚠️ 这把尺量到的 21 行**全部**是同一枚接收者（`_calendarSync`）、全部长在 ScheduleViewModel 那一枚文件里 ⇒ 它**不是**"整仓 StateFlow 写面"，只是那一枚状态机的写面。同文件里 `_importMessage` / `_pendingImport` / `_pendingBackup` / `_specialDays` 那几枚走的是 `.value =` 那一族，这把尺一行都不吃 |
+| **`.value =` 那一族（补尺）** | 命令见 §8.5 第 5 条 | 未提 | **84 处**（ScheduleViewModel 一枚占 59） | 上一行那句盲区的定量账：本遍真正判的 #3 / #4 / #7 / #9 三枚旗**全在**这把尺上，卡面那把尺看不见它们 |
+| `MutableStateFlow(` 声明 | 命令见 §8.5 第 6 条 | 5 | **5**（照抄卡面那把尺） | ⚠️ **这把尺给的数不可用**：它不吃带泛型实参的声明（`MutableStateFlow<AppMessage?>(null)` 那一族一行都不命中）。换 §8.5 第 7 条那把 ⇒ **14**。漏掉的 9 枚恰恰是这一族最该被数的几枚（`_importMessage`、`_pendingImport`、`_pendingBackup`、`_pendingEmptyRestore`、`_specialDays`、`_state` ×2、`_buaaTermOptions`、`specialDayVisibleMonths`） |
+| 起手块会立旗 / 领闸 / 交柄的站点 | 见 §8.5 第 8 条（池子命令）+ 逐枚读原文 | 未给 | **13 处 / 宿主 6 枚文件** | 池子命令给 **28 行**，扣掉"收尾写 false"、"对话框开关"、`CourseSaveOptions(… = true)` 这类实参噪声后是 13 处。**⚠️ 本节自己踩到一次**：池子那把尺吃的是 `launch` 之后三行，而 startCalendarSync 起手那次成对清写在体外第 5 行（KDoc 注释把它推下去了），单跑池子命令会把它漏成一枚不立旗的链 ⇒ 13 处里含它，靠的是逐枚读原文，**不靠那把尺** |
+
+**这四把尺合起来仍不是"起手块的全宇宙"**：只走 `LaunchedEffect { … }`、只走 `scope.launch` 之外的
+`launch { }`（裸 `CoroutineScope.launch` 的隐式接收者）、以及 `viewModel.scope` 那类别名本节没数，见 §8.6。
+
+### 8.2 候选账（本遍判 10 枚）
+
+档位分布：**真漏清 3 枚（#3 #5 #6）· 已被钉住 1 枚（#8）· 结构不可能 5 枚（#1 #2 #4 #7 #10）·
+第四档「成对但暂无分头站点（无守卫观察项）」1 枚（#9）· 越界形状 0 枚**。
+⚠️ 那 5 枚"结构不可能"里**只有 #7 属于"结构上挡死"**（载体级免疫，§6.2 #9 那一型），
+其余 4 枚（#1 #2 #4 #10）用的都是**别处的一道闸**，全部落在 §6.9 驳回② 那句"可被别处一行改动挪走"里 ——
+机制逐枚写在 §8.4，本节一次都没有用"应该没事"。
+
+| # | 旗标 × 对岸 | 起手块（宿主） | 生产者／把两枚绑在一起的证据 | 分头站点 | 读者在不在闸门里 | 判定 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `syncing` × （`message`，`permissionPermanentlyDenied`） | VM 的 `confirmCalendarSync`：体外 `:1425` 起协程、体内 `:1426` 只写 `it.copy(syncing = true)` | `:1416` 那颗函数与 `:1383` 那颗同属"一次会写日历的操作"；`:1428-1439` 收尾把 `message` 写非空 | **起手清对岸 0 枚**（同族另两处 `:1389` 清 4 枚、`:1481` 清 2 枚） | `message` 的读者 `:1664` `item(key = "status", visible = calendarSync.message != null)` **不含 `syncing`**；旗标的读者 `:1643` `enabled = !calendarSync.syncing` 只管那两颗按钮 | **结构不可能**（机制见 §8.4-A，可挪走那一类） |
+| 2 | `syncing` × （`diff`，`skippedOccurrences`） | VM 的 `removeSyncedEvents`：`:1480` 起协程、`:1481` 起手 | 同一枚 `computeDiff` 的产物（§6.2 #2）＋ `:1486`「已移除 N 个日程」把 `:1664` 那格重新点亮 | 起手清了 `message` 与旗标（T110），**没清 `diff`/`skipped`** | `skippedOccurrences` 的唯一读者长在 `ModalTransition(payload = calendarSync.diff)` 那块里（SettingsScreen `:1903` 起） | **结构不可能**（机制见 §8.4-B，可挪走那一类）；⚠️ 现有那枚 diff 守卫**管不到它**，理由见 §8.4-B 末 |
+| 3 | `_buaaRefreshing` × `_importMessage` | VM 的 `refreshFromBuaa`：`:927` 立旗、`:928` 起协程 | `:941` 那句进度（「正在刷新课表：第 x/y 周…」）与 `:988` 那次落旗出自同一趟刷新 | **三枚入口只有一枚补了句子**：ImportScreen `:378` 调完立刻 `:379` `showMessage("正在刷新课表...")`；HomeScreen `:643`（`onTermSelected`）与 `:853`（菜单「刷新课表」）**都不写** | 首页读者 `:468-471` 是**读完即清**（`showSnackbar` 紧跟 `clearImportMessage()`）；ImportScreen `:392` 与 SettingsScreen `:705` 两枚读者是常驻横幅，**不自清** | **真漏清**（形状齐全，当下无可达残值 ⇒ 全靠首页那一行 `clearImportMessage()`） |
+| 4 | `_buaaRefreshing` × `buaaRefreshJob` | 同一枚链的**收尾**：`:988` 在 `finally` 里落旗 | `:928` 把新 Job 交给那枚可变量、`:1002` 在取消时把它交回 null ⇒ 旗标与句柄是"同一件事在忙"的两半 | 收尾 `:988` 只落旗、**不清句柄**（改后仍留着一枚已完成的 Job） | 唯一读者 `:1003` `if (job.isActive)` —— 已完成的 Job 永远不 active ⇒ 读不出假话 | **结构不可能**（机制见 §8.4-C，可挪走那一类：两道闸都在别人身上） |
+| 5 | `submitting` × （`saved`，`serverMessage`） | IClassLoginScreen 的 `submit()`：`:82` 立旗、`:83` 收句子、`:84` 起协程 | 三枚是同一次登录的三种产物：在忙 / 成功了 / 服务器给了原因 | 起手**成对**（`:82`+`:83`，与 §6.3 改前的编辑器同一形状）；**成功那一档分头**：`:87` `saved = true` 与 `:89` `password = ""` 连写，`:90` 走人，**没有 `submitting = false`**（只有失败那一档的 `:95` 落旗） | `statusText` 那一支 `when`（`:101-103`）按 `saved` → `submitting` → `serverMessage` 排；但**同一列**那颗按钮的字 `:160` `Text(if (submitting) "正在登录…" else "登录")` **不吃那条梯** | **真漏清（本遍唯一一枚当下就发作的）**，展开见 §8.3-B |
+| 6 | `checking` × `checks` | OnboardingScreen 的 `runChecks()`：`:143` 短路、`:144` 立旗、`:145` 起协程 | `:150` 一次写 `checks`、`:151` 同趟落 `checking` | 起手只立旗，**不收上一轮那份清单** | 部分在闸里：`:476` `if (checking && checks == null)` 只在头一趟画 spinner、`:482` 与 `:486` 那两处 `enabled = !checking`、`:251` `nextEnabled = !checking && …` | **真漏清 → 判 deferred**（先例 #117）：重跑期间旧结论文字仍读得出来，但同一屏那颗按钮自己写着「正在检测…」（`:489`），且每一张卡的 Fix 入口都被 `enabled` 按住 ⇒ 代价=措辞，本遍认为不值 |
+| 7 | `flight` × `_state` | SignInViewModel 的 `signIn`：`:104` 领闸、`:105` 起协程、`:113` 在 `finally` 归还 | `_state` 是 sealed 那族（`Idle` / `Submitting` / `Signed` / `Failed`），一次成功写 `:159` | 起手不收上一张结果卡 | 上一张卡**不可能被单独读到**：那条链每一档都是整枚重建（`:135`、`:153`、`:159`、`:164`、`:172`、`:183`、`:199`、`:218`） | **结构不可能**（**结构上挡死**那一类：`.copy(` 0 处，一半都漏不掉；§6.2 #9 同一型） |
+| 8 | `specialDayFetchInFlight` × 本轮落盘与日志 | VM 的 `refreshSpecialDays`：`:375` 在协程**外** `compareAndSet` 领闸 | `:383` 的归还在同一颗协程的 `finally` 里，且带 `if (claimed)` | 领闸者必归还；未领到的人**故意不归还**（`:383` 那行） | 闸门的读者是它自己（`:375` 那一行 + `runSpecialDayFetch(…, fetchInFlight = !claimed)`），`_specialDays` 的读者不读这枚旗 ⇒ 它压根没有"上一轮残值"这一说 | **已被钉住**：`SpecialDayRefreshWiringGuardTest` 里点名这枚闸门（main 侧 3 行、测试侧 4 行，命令见 §8.5 第 9 条） |
+| 9 | `buaaTermsFetching` × `_buaaTermOptions` | VM 的 `refreshBuaaTerms`：`:708` 双条短路、`:709` 立旗、`:710` 起协程 | `:714` 那一档把列表交给 cache、`:718` 同趟落旗 | **成对写点 0 处、分头清点 0 处**：cache 全仓**没有任何**复位站点（写点只有 `:714` 那一处，唯一初值长在声明处 `:697`）⇒ 按 §6.0"存在一处只写其中一枚"根本进不了候选 | `:708` 读 cache 判非空，HomeScreen 那侧 `:637` `if (termOptions.isNotEmpty())` 决定那颗学期按钮**画不画** ⇒ 空 cache 的读者是"整块不组合" | **第四档：成对但暂无分头站点（无守卫观察项）** ← **本遍唯一一枚走新档的**。⚠️ 另记一句：这枚旗是**裸 `var`、不是 StateFlow**（`:701`）⇒ 它压根没有界面读者，"在忙"这件事用户永远看不见，而这正是 `:373` 那段注释拿它当反例点名过的原因 |
+| 10 | `downloadJob` × （`_state`，`pendingInstall`） | UpdateCheck 的 `startDownload` `:184` 与 `retryInstall` `:194`：把新 Job **交给句柄**当起手 | 句柄=「在下载/在装」，`_state = Downloading(…)`（`:219`）与 `pendingInstall = info to file`（`:345`、`:350`）是同一件事的三半 | `install()` 里**三条失败支只写 `_state`、不清 `pendingInstall`**：`:340`、`:357`、`:366` 各一处；对照成对那两处：`:345`+`:346`、`:350`+`:351` 是**连号两行**，`:173`+`:174` 与 `:369`+`:370` 也是 | 唯一读者 `retryInstall`（`:189` 拆那枚 Pair）只从 UpdateDialog 的 NeedsInstallPermission 那一档进（`:67` 传参、`:318` 那颗「重试安装」）；Failed 那一档走 `:83` `SimpleDialog`，**没有**那颗按钮 | **结构不可能**（机制见 §8.4-D，可挪走那一类） |
+
+### 8.3 两枚值得展开的
+
+**A. #3 `_buaaRefreshing` / `_importMessage` —— T110 那一型换了载体**
+
+- **对岸是谁**：`_importMessage` 里**上一趟刷新留下的那一句**。它与旗标同生：`:941` 每次进度都写它，
+  `:988` 落旗的那趟同一条链上一句也刚写过（`:966`「刷新完成，但教务系统没有返回课程」/
+  `:983`「刷新失败：…，可稍后重试」）。它**不是**持久化偏好，但 T110 那一课在这里同样成立 —— 要问的是**每一个入口**。
+- **每个入口都问的结果**：`grep -rn "refreshFromBuaa" app/src/main/java` ⇒ **5 行**（§8.5 第 10 条），逐枚：
+  VM `:923` 定义、VM 内部无第二处调用、ImportScreen `:378`（**后面紧跟 `:379` 补句**）、
+  HomeScreen `:643` `onTermSelected = { code -> viewModel.refreshFromBuaa(code) }`（**不补**）、
+  HomeScreen `:853` `if (!viewModel.refreshFromBuaa()) onImportBuaa()`（**不补**）⇒ **三枚入口、一枚补、两枚不补**。
+- **当下为什么不发作**（这句必须写出来，否则下一轮会把它当"真 bug"排掉）：那两枚不补的入口都长在首页，
+  而首页读 `_importMessage` 的方式是**吃掉再清**：`:468` `LaunchedEffect(importMessage)` → `:470` `showSnackbar(message.text)`
+  → `:471` `viewModel.clearImportMessage()`。⇒ 走到 `:853` 那一刻，句子早已被首页自己清成 null。
+- **为什么本节仍判"真漏清"而不是"结构不可能"**：挡住它的不是字段对自身的性质，而是**另一枚文件里的一行
+  `clearImportMessage()`**。§6.9 驳回② 已经把这条判据的强度问题写清楚了（#7 就是这么翻车的），
+  本节不重复犯错。谁把首页改成"横幅常驻不自动清"（ImportScreen 与 SettingsScreen **今天就是这样**：
+  `:392` 与 `:705` 两枚读者都不自清），#3 当场从"不发作"变成"删除链的兄弟"。
+- **代价与改法方向（本节不给方案）**：与 T106/T110 同一刀 —— 起手成对清（在 `:927` 立旗那一行旁边补一句
+  `_importMessage.value = null`，或把"正在刷新"这句由 VM 自己写而不是让调用方补），
+  好处是三枚入口一次盖住；代价是 `refreshFromBuaa` 在"已在忙"那一档（`:924` 短路 return true）也会清句子，
+  而 ImportScreen `:379` 今天正是在这一档**故意**再写一遍"正在刷新" —— 两处的口径得先对齐再动。
+- **守卫账**：`grep -rn "buaaRefreshing" app/src/test --include='*.kt' | wc -l` ⇒ **0 行**（§8.5 第 11 条）⇒ 零覆盖。
+
+**B. #5 IClassLoginScreen 的 `submitting` —— 成功那一档把旗忘在原地**
+
+- **生产者的证据**：`submit()` 体外的连号两行 `:82 submitting = true` / `:83 serverMessage = null`
+  —— 这一半**已经做对了**（就是 §6.3 那枚编辑器改前缺的仪式，T104 补的那一刀在这里是原样存在的）。
+  病在**收尾**：失败那一档 `:94`+`:95` 连号（写句子、落旗），成功那一档 `:87` `saved = true` → `:89` `password = ""`
+  → `:90` `onLoggedIn()` —— **三行里没有 `submitting = false`**。
+- **谁能读到那枚残旗**：`statusText` 那支 `when`（`:101` → `:102` → `:103`）里 `saved` 排在 `submitting` 前面，
+  所以提示行说的是「已登录北航 iClass，正在进入扫码页…」；而**同一列**下面那颗按钮的字 `:160`
+  `Text(if (submitting) "正在登录…" else "登录")` **不吃那条梯** ⇒ 登录成功后这一屏同时写着
+  「已登录…正在进入扫码页…」与「正在登录…」。四枚 `enabled = !submitting`（`:134`、`:146`、`:156` 与
+  `:152` 那处短路）方向安全（点不动是对的），错的是**那句话**。
+- **窗口有多长**：`:90` 的 `onLoggedIn()` 是一次导航跳转，旧页在退场动画期间仍在组合 ⇒ 与 §6.3
+  那枚编辑器"退场动画那几帧"同一档。⚠️ 本节**没有装机证据**它念了多久（§8.6 第 3 条）。
+- **为什么它比 #3 更该排卡**：#3 的残值当下不可达（要靠改别人），#5 的残值**每次登录成功都走到**。
+  守卫账：`grep -rn "submitting\|serverMessage" app/src/test --include='*.kt' | wc -l` ⇒ **0 行**（§8.5 第 12 条）。
+
+### 8.4 那五枚"结构不可能"的机制（卡面硬要求：闸在哪、凭什么挡、属于哪一类）
+
+**A. #1 `confirmCalendarSync` 起手。** 闸＝**那扇模态窗**。`:1417` `val pending = _calendarSync.value.diff ?: return`
+⇒ 进不到这条链除非 `diff` 非空；而 `diff` 唯一的读者块是 SettingsScreen 的
+`ModalTransition(payload = calendarSync.diff)`（`:1903` 起），里面那颗「同步」的 onClick 就是 `:1932`，
+**全仓唯一一枚**（`grep -rn "confirmCalendarSync" app/src/main/java` ⇒ 2 行：定义 + 那一处，见 §8.5 第 13 条）。
+⇒ 想在这一刻带着一句旧 `message` 走进来，必须有另一条链在弹窗开着的时候写 `message =`；
+候选只有 `onCalendarPermissionDenied`（`:1494-1505`，一次写两枚）与 `removeSyncedEvents`（`:1486-1487`），
+而它们各自的入口都在弹窗**底下那层**的设置列表里，`AlertDialog` 把列表整页挡住 ⇒ 写不进来。
+**凭什么挡得住**：靠 Compose 对话框的输入独占，不靠这枚 data class 的任何性质。
+**属于哪一类**：**可被别处一行挪走** —— 谁把 `diff` 从弹窗改成常驻卡（本仓另一种常见写法），
+或者给那扇窗添一颗能触发权限申请的第二按钮，#1 立刻搬到"真漏清"，且错的方向与 §6.4-B 那枚一模一样
+（「同步完成」旁边挂着「去系统设置开启日历权限」）。⇒ 登记 §8.7②。
+
+**B. #2 `removeSyncedEvents` 起手不清 `diff`/`skipped`。** 闸＝**两扇弹窗互斥**。移除那条链的入口
+只有 `:1941` 那扇 `ModalTransition(open = calendarSync.showRemoveConfirm)` 里的「移除」那颗，
+而它要开着就得先点列表里那一行（`showRemoveConfirm = true` 全仓唯一写点，见 §8.5 第 14 条）；
+`diff` 非空同样要开一扇模态窗（A 那一格）。两扇窗彼此挡住对方的入口 ⇒ 起手那一刻 `diff` 必为 null。
+**⚠️ 现有守卫管不到这一格**，这一点要说死：`CalendarSyncDiffClearPairingGuardTest` 第一枚判据数的是
+**`diff = null` 那类清点点**（钉"3 处、每处都带 `skippedOccurrences = 0`"），而 `:1481` 根本不写 `diff` ⇒
+它不在这枚判据的宇宙里；`:1426` 同理。⇒ **这一格零守卫**，登记 §8.7②。
+**属于哪一类**：可被别处一行挪走（同 A，且挪走的是同一道闸）。
+
+**C. #4 刷新链收尾。** 两道闸，**都不是这枚字段对的性质**：
+① `:1003` `if (job.isActive)` —— 已完成的 Job 永远不 active，所以"旗已落、句柄还留着"读不出假话；
+② `withImportLock`（`:664-668`，拿不到锁就写「已有导入正在进行，请稍候」并返回 null）——
+它是本节真正担心的那一格（取消后旧协程的 `finally` 迟到落旗 ⇒ `:924` 那记重入闸短暂失效 ⇒ 允许第二趟刷新）
+的兜底：两趟真并发也会被这把锁挡回来。
+**凭什么挡得住**：`isActive` 是 Job 自己的状态机；`importMutex` 是三条写库链共用的互斥量。
+**属于哪一类**：**可被别处一行挪走**（①把 `if (job.isActive)` 去掉就漏；②谁给 `refreshFromBuaa` 换一把
+自己的锁、绕开 `withImportLock`，#4 立刻变成"取消能踢开正在跑的导入"）。⇒ 登记 §8.7③。
+
+**D. #10 UpdateCheck。** 闸＝**弹窗按 sealed 分支渲染**。`pendingInstall` 的唯一读者是 `retryInstall`
+（`:189` 拆那枚 Pair），而调它的只有 `UpdateDialog` 里 NeedsInstallPermission 那一档传进去的回调
+（`:67` 传参、`:318` 那颗「重试安装」）；`Failed` 那一档走的是 `:83` `SimpleDialog`，**没有那颗按钮**
+⇒ `:340` / `:357` / `:366` 三条"只写 `_state` 不清 `pendingInstall`"的支路今天都读不出来。
+**凭什么挡得住**：靠 `when (shown)` 那几支的分支覆盖，不靠字段对。
+**属于哪一类**：**可被别处一行挪走** —— 谁在 `Failed` 那张卡上顺手补一颗「重试安装」（这张卡今天已经有
+「打开发布页」一颗按钮，加一颗是一行的事），点下去就会拿一份陈旧的 `(info, file)` 去装一个可能已经不存在的包，
+而屏幕上说的是另一回事。⇒ 登记 §8.7③。
+
+**E. #7 `flight` / `_state`（唯一一枚"结构上挡得住"的）。** 闸不在别人身上，在**载体本身**：
+`SignInState` 那族每一档都是整枚重建（`:135`、`:153`、`:159`、`:164`、`:172`、`:183`、`:199`、`:218`
+八处 `_state.value = SignInState.X(…)`），全仓 `SignInState` 一处 `.copy(` 都没有
+（复算见 §8.5 第 15 条 ⇒ **0**）⇒ 想"只写一半"在这枚载体上**没有落点**。这就是 §6.2 #9 那枚 `AppMessage`
+的免疫，判"结构不可能"不欠一道外来的闸。**唯一前提**：下一个人别给 `SignInState` 加可 copy 的字段表
+（sealed 的 `data class` 分支一旦长出 `.copy(`，这枚就降级成"可被一行挪走"）—— 这句话归 §8.6 的上限，不归明留。
+
+### 8.5 本遍十五条复算命令
+
+```
+# 1  卡面那两把尺（逐字照抄，读数 35 / 14）
+grep -rn "viewModelScope.launch" app/src/main/java --include=*.kt | wc -l
+grep -rn "scope\.launch\|coroutineScope\.launch" app/src/main/java --include=*.kt | wc -l
+# 2  卡面漏掉的第三类接收者（⇒ 27）
+grep -rnE "[A-Za-z]Scope\.launch" app/src/main/java --include=*.kt | grep -v viewModelScope | wc -l
+# 3  起手宇宙全集（⇒ 76 = 35 + 14 + 27，两两不交）
+grep -rnE "[A-Za-z]*[sS]cope\.launch" app/src/main/java --include=*.kt | wc -l
+# 4  第三把尺（⇒ 21，且 21 行全是同一枚接收者）
+grep -rnE "_[a-zA-Z]+\.update \{" app/src/main/java --include=*.kt | wc -l
+grep -rhoE "_[a-zA-Z]+\.update \{" app/src/main/java --include=*.kt | sort | uniq -c
+# 5  补尺：.value = 那一族（⇒ 84；单看 ScheduleViewModel 是 59）
+grep -rnE "_[a-zA-Z]+\.value = " app/src/main/java --include=*.kt | wc -l
+# 6  卡面第四把尺（⇒ 5，本节判它"数错了"）
+grep -rn "MutableStateFlow(" app/src/main/java --include=*.kt | wc -l
+# 7  换掉之后真正数到声明的尺（⇒ 14）
+grep -rnE "val [A-Za-z_]+ = *(kotlinx\.coroutines\.flow\.)?MutableStateFlow" app/src/main/java --include=*.kt | wc -l
+# 8  起手立旗的候选池（⇒ 28 行，逐枚读原文缩到 13 处）
+grep -rn -B2 -A3 "[sS]cope\.launch" app/src/main/java --include=*.kt | grep -E '=[[:space:]]*(true|false)|compareAndSet\(' | sort -u | wc -l
+# 9  一枚旗标的两侧覆盖（#8 已被钉住 / #3、#5 零覆盖）
+grep -rn "specialDayFetchInFlight" app/src/main/java --include=*.kt | wc -l    # ⇒ 3
+grep -rn "specialDayFetchInFlight" app/src/test --include=*.kt | wc -l          # ⇒ 4
+# 10 refreshFromBuaa 的入口枚举（#3 那句"三枚入口一枚补"）
+grep -rn "refreshFromBuaa" app/src/main/java --include=*.kt                     # ⇒ 5 行
+# 11 那枚刷新旗的守卫账
+grep -rn "buaaRefreshing" app/src/test --include=*.kt | wc -l                   # ⇒ 0
+# 12 #5 那三枚字段的守卫账
+grep -rn "submitting\|serverMessage" app/src/test --include=*.kt | wc -l        # ⇒ 0
+# 13 confirmCalendarSync 的界面入口枚数（#1 那道闸的"唯一"）
+grep -rn "confirmCalendarSync" app/src/main/java --include=*.kt                 # ⇒ 2 行
+# 14 showRemoveConfirm 的写点枚数（#2 那道闸的"唯一"）
+grep -rn "showRemoveConfirm = true" app/src/main/java --include=*.kt | wc -l    # ⇒ 1
+# 15 #7 的载体级免疫：整枚重建 vs copy
+grep -rnE "_state\.value = SignInState" app/src/main/java/com/buaa/schedule/ui/signin/SignInViewModel.kt | wc -l   # ⇒ 8
+grep -rnE "state\.value\.copy\(|SignInState\.[A-Za-z]+\([^)]*\)\.copy\(" app/src/main/java --include=*.kt | wc -l  # ⇒ 0
+```
+
+### 8.6 上限声明（这一遍扫的是什么、没扫到什么）
+
+- **扫的到底是什么**：`[sS]cope\.launch` 全集 76 处（§8.5 第 3 条）里，**体外两行以内会立旗、领闸、
+  或把 Job 句柄交出去**的那 13 处（宿主 6 枚文件），逐枚读完原文判档。这一档本节**判完了，没有剩**。
+- **没扫到的一族（数得出来，不是"没找到"）**：76 处里剩下的 **63 处起手块本节一枚都没有立成候选**，
+  因为它们**不立旗** —— 典型的三类：① UI 侧"点了就走"（HomeScreen 的拖课/改节次/删除三处、
+  CourseManagementScreen 的换色与删组两处、ConflictWizardDialog 那一处、ImportScreen 那两处读文件）；
+  ② 设计系统那 12 处 `animationScope.launch`（`animateTo` 的驱动协程）；③ 服务/组件那几处
+  `ioScope` / `refetchScope` / `applicationScope`。⚠️ **"不立旗"本身是一条别的账**：这些站点在操作飞着的时候
+  按钮仍可点、可重复触发（例如 HomeScreen 删除与课程管理删组那一族），那是**缺旗标**，
+  与本节判的"起手漏清对岸"**不是同一族病**，本节不给它们判任何一档 —— 要排卡得先立判据（转 §8.7④）。
+- **一档完全没扫**：纯 `LaunchedEffect { … }` 里的 UI 侧旗标（本仓另一种起手，量级不小：
+  仅 SpocScanScreen 那一枚文件本节就点过 10 颗 `LaunchedEffect`），`remember` 之外、
+  不走 StateFlow 的裸 `var`（唯一撞见的一枚是 #9 的 `buaaTermsFetching`，本节顺手记进明留），
+  `withContext(Dispatchers.X) { … }` 里嵌的写点，以及**隐式接收者的 `launch { }`**（本节没有为它写尺子，
+  没数过它到底是 0 处还是几处 ⇒ 这句是"没数"，不是"没有"）。
+- **仪器测试覆盖不到的路径**：#3 与 #5 的"当下是否真被用户看见"取决于**退场动画与导航跳转各占几帧**，
+  这只有装机能定档（与 §4.1、§6.7 末格同一档）；#1 / #2 / #10 的"模态窗挡住入口"本节是从代码分支读出来的，
+  **没有跑过任何一条真机点击序列**。本卡红线禁设备 ⇒ 这几句只到代码可达性为止。
+- **普查尺自证（本节自己的连写普查）**：§7 与 §8 全文写完之后重跑 §0.4 第 4 条与 §6.10 那三格
+  ⇒ 本档 `-o` **268**、全仓 `-o` **589**、本档 `-c` **146**，三格一字未动（命令见 §8.5 之外的那三条，
+  已写在 §6.10 里）。本节把行号一律写成"第 N 行"或裸 `:N` + 同框符号名/原文片段，
+  **没有往本档补过一枚连写** —— §6.10 那三格因此不需要重钉，这与 T111 那一趟是同一件事。
+- **没跑门禁**：零 gradle、零 adb、零设备、零 `local.properties`，所有结论只来自 `grep` / `awk` / `git log`。
+
+### 8.7 明留（按红线一枚没动，逐条带锚点）
+
+| 编号 | 位置（锚点） | 该改什么（不写方案细节，等排卡） |
+| --- | --- | --- |
+| ① | IClassLoginScreen 那枚文件：`:82` 立旗、`:87` 与 `:89` 与 `:90`（成功档那三行）、`:160` 那颗按钮的字、`:101-103` 那支 `when` | **本遍唯一一枚当下发作的**：登录成功那一档不落 `submitting` ⇒ 同一列两行话互相打架（「已登录…正在进入扫码页…」 vs 「正在登录…」）。形状与 §6.3 那枚编辑器改前**同一族**（一次生产的两半被写到两处、其中一处漏了），差别只在窗口是退场那几帧。零守卫（§8.5 第 12 条 ⇒ 0 行） |
+| ② | VM 的 `confirmCalendarSync`（`:1425` 起协程、`:1426` 只写 `syncing = true`）与 `removeSyncedEvents`（`:1481` 起手清了两枚、没清 `diff`/`skipped`） | **同一枚 data class 的第三、四条链的起手形状**。`:1389` 与 `:1481` 已经证明"起手成对清"这刀在这两枚文件里做得出来；剩下的问题不是"今天漏不漏"（都不漏，机制见 §8.4-A/B 那道模态窗），而是**这两格今天一行守卫都没有**：`CalendarSyncDiffClearPairingGuardTest` 那枚判据数的是 `diff = null` 清点点、`CalendarSyncTargetPairingGuardTest` 那族数的是 `message = null` 与旗标 —— `:1426` 一枚都不在它们宇宙里（§8.5 第 13、14 条给出入口唯一性）。建议按 §6.8①/⑥ 那两格的形状补第三份守卫实例 |
+| ③ | UpdateCheck 的 `install()` 三条失败支（`:340`、`:357`、`:366`）与 `pendingInstall` 的唯一读者 `retryInstall`（`:189`）、UpdateDialog 的 `:83` 那一档 | `pendingInstall` 与 `_state` 的成对关系今天由**弹窗分支**兜着（§8.4-D）。谁往 `Failed` 那张卡上补一颗「重试安装」，这一格当场变真漏清（拿陈旧 `(info, file)` 去装一个可能已经不存在的包）。要么起手清，要么把"靠哪一档不念旧账"写进 KDoc（这正是 §6.8③ 当年那句原话的第二份实例） |
+| ④ | HomeScreen 的 `:420` / `:442` / `:452`、CourseManagementScreen 的 `:181` / `:214`、ConflictWizardDialog 的 `:79`、ImportScreen 的 `:151` / `:172` / `:485` | 这 9 处起手块**一枚旗标都不立** ⇒ 操作飞着的时候那颗按钮仍可点、可重复触发（与 §8.6 第二条合起来读）。**本节没给它们判档**，因为本节的判据是"对岸清没清"，不是"该不该有旗"。要收这一族得先立判据（哪些操作值得按灭、哪些按"重复提交比吃掉更糟"的口径走 SignInViewModel 那套闸门） —— 这是**下一轮排卡的唯一来源里最大的一块**，本节按"一枚没动"如实挂着 |
+| ⑤ | OnboardingScreen 的 `:144`（起手只立 `checking`）与 `:476` / `:482` / `:489` 三处读者 | 判 **deferred**（先例 #117）：旧结论文字在重跑期间仍然读得出来，但同一屏那颗按钮自己写着「正在检测…」、每张卡的 Fix 入口被 `enabled` 按住 ⇒ 代价=措辞，本遍不值。谁哪天把 `enabled = !checking` 那一族去掉，这一格自动升级 |
+| ⑥ | VM 的 `refreshBuaaTerms`（`:701` 声明、`:709` 立旗、`:718` 归还） | 第四档那一枚。要留意的不是漏清，是**这枚旗是裸 `var`、没有界面读者**："正在拉学期列表"这件事用户永远看不见，而 `:373` 那段注释已经把它当反面教材点名过一次（"旧写法的 buaaTermsFetching 就是这个形状"）⇒ 下一遍若要给它换 StateFlow，记得同批看 `:708` 那记双条件短路要不要跟着改 |
+
+### 8.8 卡面对账：四把尺复现、一句要驳、两处本节自己踩到
+
+**复现（带命令与读数）**：`viewModelScope.launch` **35** ✅、`scope\.launch|coroutineScope\.launch` **14** ✅、
+`_[a-zA-Z]+\.update \{` **21** ✅、`MutableStateFlow(` **5** ✅ —— 四条**照抄卡面命令**都能一字不差复现。
+§7 那八处行号（拆开十三枚指针）也逐枚复现，账在 §7.1。
+
+**驳回 ①（"第四把尺给的数不可用"）**：卡面用 `MutableStateFlow(` 数"有几枚状态"，读到 5，本节**照抄也对上 5**，
+但这一格本节必须驳：**这把尺漏掉了全部带泛型实参的声明**（`MutableStateFlow<AppMessage?>(null)` 那种写法一行都不命中），
+真正数声明的尺（§8.5 第 7 条）给 **14** ⇒ **漏 9 枚**，而漏掉的正是这一族最该被数的
+`_importMessage` / `_pendingImport` / `_pendingBackup` / `_pendingEmptyRestore` / `_specialDays` /
+`_state` ×2 / `_buaaTermOptions` / `specialDayVisibleMonths`。**这一条对本节的直接影响**：
+本节判的 #3、#7、#10 三枚旗标里，只有 `_buaaRefreshing` 与 `flight` 长在卡面那 5 枚里，
+其余全在那 9 枚里 —— 拿卡面那把尺起手，这三枚候选根本不会出现。
+**下一遍若要复用这四把尺，请把第 4 条换成第 7 条。**
+
+**驳回 ②（宇宙只盖住 64%）**：卡面那两把 `launch` 尺是**大小写敏感**的，`[A-Za-z]Scope\.launch` 去掉
+`viewModelScope` 之后还有 **27** 处（§8.5 第 2 条），全集是 **76**（第 3 条）。这 27 处里本节真读到立旗的
+只有 `downloadScope.launch` 那两处（候选 #10）—— 也就是说**换一把尺就多一枚候选**，
+"卡面那 49 处扫完了"与"起手宇宙扫完了"是两件事。⚠️ 本节**没有**声称这 27 处判完：
+`animationScope` 那 12 处是动效驱动协程，本节只确认它们不立业务旗标（读原文，未程序化配对）。
+
+**本节自己踩到的两处（如实写，别让它变成下一轮的"读数不一致"）**：
+1. §8.5 第 8 条那把"候选池"尺吃的是 `launch` 之后**三行**，而 `startCalendarSync` 起手那次成对清被 KDoc
+   推到体外第 5 行 ⇒ 单跑池子命令会把全仓最标准的那一枚起手漏掉。13 处里含它，靠的是逐枚读原文。
+   ⇒ 下一遍别拿池子命令的 28 当答案，那只是**噪声占多数的候选面**。
+2. 本节一度把 `cameraError` 那两枚字段在 main 侧的落点数成 16，重跑 §7.4 第 3 条得 **19** 才改过来 ——
+   写进 §7.4 的是复算之后的读数（分解表同格）。**这就是 §0.4 第 4 条那句"数字旁边必须带命令"的用途。**
+
