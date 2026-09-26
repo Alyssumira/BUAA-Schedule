@@ -42,11 +42,24 @@ Framework 环境，API 34 一档覆盖的是 Android 14 那批行为收紧里我
 **列名先说清**：第二列「用例数」是 `@Test` 方法的枚数，钉死的写法是**行首（含缩进）第一个 token 就是
 `@Test`** 那把尺（不是"这串字符出现几次"，理由见下一节那条换尺记录），第三列「文件数」是 `.kt`
 **源文件**的枚数 —— 它**不等于** JUnit 报告里的 testsuite 数（一个文件里可以有不止一枚测试类）。
-当前单测这一族是 192 枚文件跑出 198 枚 testsuite：192 + 6 = 198。差额**枚数没变、出资人也没换** ——
-这句本轮重新量过而不是接着抄：T99 与 T100 各添一枚守卫文件，`ScanGiveUpReasonDerivationGuardTest`
-名下 6 枚 `@Test`、`CalendarSyncDiffClearPairingGuardTest` 名下 2 枚，两枚**各自只有一枚顶层类**，
-所以这一轮加的是「2 枚文件 / 2 枚 suite / 8 枚用例」，那 6 枚差额还是下面这五枚文件出的。逐枚点名
-（括号里是该类名下的 `@Test` 枚数）：
+当前单测这一族是 194 枚文件跑出 200 枚 testsuite：194 + 6 = 200。**差额枚数没变、出资人也没换** ——
+但这句本轮是**重量过**而不是接着抄的，因为 T104 / T105 / T106 三张卡各自动过这一族，而它们贡献的形状
+各不相同：T104 与 T105 各添一枚守卫文件（`CourseEditorSaveErrorClearPairingGuardTest` 名下 2 枚
+`@Test`、`CalendarSyncTargetPairingGuardTest` 名下 6 枚），T106 净添 **0 枚文件** —— 它先在 `76b75fc`
+立了一枚 `CalendarSyncPermissionFlagClearGuardTest`，又在 `db235e4` 按红线把它删掉、将可达路径枚举
+**折回 T105 那枚文件**（于是那枚文件 6 枚 → 7 枚）。三张卡添的都是"一枚文件装一枚顶层类"的形状 ⇒
+两列各 +2、用例 +9（2 + 6 + 1），**一枚都没进差额**，那 6 枚还是下面那五枚文件出的（第六枚点名的是
+减数）。判据是一条命令，零命中就等于"没有多类文件"：
+
+```bash
+for f in $(find app/src/test -name "*.kt"); do
+  n=$(grep -cE '^(public |internal |private |abstract |open |sealed |data |value )*class ' "$f")
+  [ "$n" -gt 1 ] && echo "$n $f"
+done                                                # ⇒ 6 枚文件：3 + 2 + 2 + 2 + 2 + 2 = 13 枚顶层类
+```
+
+13 枚类塞在 6 枚文件里 ⇒ 多出来 13 − 6 = **7** 枚；这 7 枚里有一枚名下零 `@Test`（下面那枚 `Quad`），
+扣掉它才是 **6**。逐枚点名（括号里是该类名下的 `@Test` 枚数，逐枚与门禁 XML 的 `tests="…"` 对过）：
 
 - `ScheduleChartsT51Test.kt` 装着 `ChartGeometryTest`（13）+ `ChartDescriptionTest`（9）—— 两枚类名
   与文件名都不相同，所以这枚文件**不给**出一枚叫 `ScheduleChartsT51Test` 的 suite；
@@ -54,17 +67,28 @@ Framework 环境，API 34 一档覆盖的是 Android 14 那批行为收紧里我
 - `ImportPlannerTest.kt`（11）多一枚 `CourseFilterTest`（2）；
 - `WeekGridSummaryTest.kt` 装着三枚：`WeekGridSummaryTest`（5）+ `WeekGridDensityTest`（3）+
   `WidgetItemKeyTest`（3）—— 只有它一枚出 2 枚差额；
-- `WidgetAppearanceTest.kt`（11）多一枚 `WidgetTodayHighlightTest`（4）。
+- `WidgetAppearanceTest.kt`（11）多一枚 `WidgetTodayHighlightTest`（4）；
+- `GlassJankDecisionTest.kt`（7）多一枚 `private data class Quad`（**0**）—— 它**不出**差额，
+  它是那 7 减到 6 的减数。
 
-1 + 1 + 1 + 2 + 1 = 6。两列的口径必须同一把尺子，所以仪器测试那一行同样是**文件数**（14）。
+1 + 1 + 1 + 2 + 1 + 0 = 6。两列的口径必须同一把尺子，所以仪器测试那一行同样是**文件数**（14）。
+
+这 6 枚还有一条与静态尺**完全无关**的对法，本轮在那批门禁 XML 上跑过：把 200 枚 `<testsuite>` 的类名
+简名与 194 枚 `.kt` 的文件名 basename 做两次 `comm` ⇒ "有 suite、无同名文件"恰好 **7** 枚
+（`ChartGeometryTest` / `ChartDescriptionTest` / `DayTimelineSegmentsTest` / `CourseFilterTest` /
+`WeekGridDensityTest` / `WidgetItemKeyTest` / `WidgetTodayHighlightTest`），"有文件、无同名 suite"
+恰好 **1** 枚（`ScheduleChartsT51Test.kt`，就是上面说的那枚两类型文件）⇒ 193 + 7 = 200。静态那条
+"7 枚多出来的类再减掉 `Quad`"与这条 XML 名集差，两把尺各走各的路，落在同一个 6 上 —— 这比"两个数
+看着一样"值钱，因为它排除了"多出来的类名恰好都跟某个文件名重名"这种巧合。⚠️ 这半条同样只在**那批
+XML 还在**的那棵 worktree 里可复算，出处见上面「现值 1,692 / 200」那一段。
 
 **差额只可能来自"一枚文件里多枚顶层类"，别的原因在本仓都不成立**：JVM 单测这一族没有一枚用
 `@Nested`、`@ParameterizedTest` 或 `@RunWith`（下面「testsuite 数」那条给命令），所以"内部类各自成 suite""参数化
 拆成多枚"这两条常见来路在这里枚数为 0，suite 与测试类一一对应。而"测试类"的判据还要再窄一格：
-**一枚顶层 `class` 声明，且自己名下挂着 ≥1 枚 `@Test`**。全仓顶层 `class` 声明共 199 枚，比 198 多的
+**一枚顶层 `class` 声明，且自己名下挂着 ≥1 枚 `@Test`**。全仓顶层 `class` 声明共 201 枚，比 200 多的
 那一枚是 `core/designsystem/GlassJankDecisionTest.kt:186` 的 `private data class Quad`（表驱动用的
 四元组容器，名下一枚 `@Test` 都没有）⇒ 它不成 suite。这条边界值得写死：数「顶层类」与数「测试类」
-在这棵树差 1，抄错的人分不出自己抄的是哪一个。
+在这棵树差 1（201 对 200），抄错的人分不出自己抄的是哪一个。
 
 - 文件数（本机可用，秒级）与"每枚文件都有用例"这条前提：
 
@@ -123,16 +147,21 @@ Framework 环境，API 34 一档覆盖的是 Android 14 那批行为收紧里我
 - testsuite 数与"为什么是 6 枚差额"（离线可数，本机两条路都给）：
 
   ```bash
-  grep -rh "^class " app/src/test --include=*.kt | wc -l                          # 静态 ⇒ 198
+  grep -rh "^class " app/src/test --include=*.kt | wc -l                          # 静态 ⇒ 200
   grep -rhE "^(public |internal |private |abstract |open |sealed |data |value )*class " \
-       app/src/test --include=*.kt | wc -l                                        # 顶层 class 声明总数 ⇒ 199
+       app/src/test --include=*.kt | wc -l                                        # 顶层 class 声明总数 ⇒ 201
   grep -rho "@Nested\|@ParameterizedTest\|@RunWith" app/src/test --include=*.kt | wc -l   # ⇒ 0
   ```
 
   第一条吃的是本仓写法：测试类一律写成顶格的裸 `class X {`，而全仓唯一一枚带 modifier 的顶层类就是那枚
-  `private data class Quad`，于是 199 − 198 = 1 正好等于"名下零枚 `@Test` 的顶层类"。**写法一变这条就骗人**：
+  `private data class Quad`（两把尺的差集实测就是它那一行，一条命令：
+  `diff <(grep -rhnE '^(public |internal |private |abstract |open |sealed |data |value )*class ' \
+  app/src/test --include=*.kt | cut -d: -f2- | sort) <(grep -rh '^class ' app/src/test --include=*.kt | sort)`），
+  于是 201 − 200 = 1 正好等于"名下零枚 `@Test` 的顶层类"。**写法一变这条就骗人**：
   有人给测试类加 modifier ⇒ 少报；有人拿裸 `class` 声明一枚不含 `@Test` 的顶层辅助类 ⇒ 多报。所以它是
-  秒级自查，不是权威。第三条是那两条"常见来路"为零的证据。
+  秒级自查，不是权威。第三条是那两条"常见来路"为零的证据。⚠️ 单位上这里**不用**在两条 `class` 尺前加
+  `-o`：锚在行首 ⇒ 一行最多命中一次，"命中行数"与"出现次数"必然相等（这与上面「用例数」那格不同，
+  那里的 `@Test` 不设锚时一行可以出现两回）。
 
   权威仍是门禁的 XML：跑完 `:app:testDebugUnitTest --rerun-tasks` 之后数
   `app/build/test-results/testDebugUnitTest/*.xml` 的 `<testcase>` / `<testsuite>` 节点，
