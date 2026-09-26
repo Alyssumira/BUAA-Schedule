@@ -2768,3 +2768,26 @@ lint 0 错 14 警、签名包 **7,247,271 B**（对 7,246,225 是 **+1,046 B**�
 ⚠️ **这份审计的证据等级要写清**：它全程**零 gradle、零设备**（卡面禁止它跑构建，隔壁 T96 正在跑门禁），所以"真回归 0 枚"的准确说法是**按这三档判据读码读不出来**，不是"装机看不见错"。合并它只多一个 `docs/` 文件：T92① 声明的守卫输入面不含 `docs/`，且 `src/test` 里出现 `docs/*.md` 的 8 处全是 KDoc 叙述（我 grep 过）⇒ **这份文档对构建与测试是惰性的，地板不动**（1,675/196 那一组读数就是合并前在 `d334917` 上取的，合并 T97 之后无需重跑）。
 
 **明留（两张卡合起来记）**：① 改名之后 `docs/STATUS.md:705`/`:728` 那两处历史叙述仍写旧文件名 —— **有意不改**，那里记的是当时创建的名字；`#:2393` 那笔明留由本节销账。② README 还剩两格自述与实测对不上（单元测试那格写 `1585 | 186`、地板已是 **1,675 / 196**；「跑在 API 29 + API 34 模拟器上（CI 同配置）」）⇒ **#147**，并且要先判这张测试覆盖表到底该不该留在 README（README 面向用户）。③ 仪器测试的 66 是**静态计数**，这台机器给不出"跑过"。④ T97 报告的行号锚点随代码推进会漂，它自己没声明保鲜期 ⇒ 用之前先按 `file:line` 回读一次原文。
+
+
+## T98：README 那张「测试覆盖」表整节搬进 `docs/TESTING.md`（4 枚 / 3 文件 +93 / −19，零 main 源码改动）
+
+**归属判成"搬"**，理由两条我都认：这张表是**逐卡会变的账**（本卡之前已经错过两次：`1585 | 186` 与仪器测试那格的 65），而仓里已有先例 —— `docs/BUAA_API.md:3`、`docs/STATUS.md:3` 开头都写着「从 README 挪出来的一节」。README 原处（`:179-183`）只剩三行指路，另在「文档」索引表补一行（`README.md:210`）；两边不留两份（全仓 `grep -n 1585` 现在只剩历史叙述与订正说明）。
+两格按实测订正成 `1675 | 190`，**"文件数"口径写进文档里**：`.kt` 源文件数，与仪器测试那行的「14」同一把尺；190 枚文件 ↔ 196 个 testsuite 的六枚差额（一枚文件里装多枚类）逐枚点名进文档，读表的人不必猜。覆盖范围那一列旧清单漏了玻璃 / 首页守卫 / 扫码帧流 / 冷启动 / 节假日 / 编辑器这些大族，改成按七个包报方向。
+- ⚠️ **它搬动时把 CI 那一段逐字节照抄**（我拿改前 `README.md:191-194` 与改后 `docs/TESTING.md:27-30` 做了 `diff`，四行**完全相同**，只有 KNOWN_ISSUES 的 href 改成同目录相对路径）。上一张卡把那句「跑在 API 29 + API 34 模拟器上（CI 同配置）」记成"同样过期"，**那句是它的误判、我已收回**：`.github/workflows/android.yml:87` 就是 `api-level: [ 29, 34 ]`、`:122` 就是 `./gradlew :app:connectedDebugAndroidTest --stacktrace` ⇒ 真话，一个字不许动。
+- **另两笔过期指路话**（`ui/importing/ImportConflictCopyTest.kt:26` 与 `:292`）改成「归并只长在 `PendingImport` 类体那枚派生属性里，每次构造与每次 `copy()` 按当下 `conflicts` 重算」——**断言本体、`occurrences` 的第二实参、禁句清单一字未动，`@Test` 11 → 11**。
+- ⚠️ 明留一条是它自己交代的：它先跑了一发定向 `--tests` 再跑 `assembleRelease` ⇒ 它那次包体是**增量产物**，"逐字节等值"只是复确认。所以下面那组数是我**冷重建**量的。
+
+## T99：`giveUpReason` 的运行期不发火前提，钉成六枚静态守卫（`a6b889f` + `d5c5e8d`，1 文件 +353，**主源码一字未动**）
+
+新守卫 `ui/signin/ScanGiveUpReasonDerivationGuardTest`（6 枚 `@Test`，只 import `java.io.File` + JUnit ⇒ 纯 JVM）。四条钉子按 T97 报告 §2.1 的推荐起步、它自己加到六条：
+① **逐字节**钉 `ScanRecoveryPolicy.kt:150` 整行原文（连 4 空格缩进），并钉它**仍是函数体第一条语句**（晚一条语句，`:152`/`:154` 就已经先按新帧记账、界面念的还是旧串）；② **数出现次数**：`giveUpReason` 的赋值恰 1 处，且必须还长在判死分支里；③ **数出现次数**：改源却不重算的 copy 站点**恰 2 处**（本文件 `consecutiveFailures = consecutive` 共 3 处 = 判死那支 1 + 不重算 2，三个数互核，只动一处就红）；④ 复位两档仍是整枚新构造而非 `copy`；⑤ **读形状**钉输入面（抹注释后该文件 `giveUpReason` 恰 6 次 = 1 声明 + 3 读取 + 1 保护 + 1 赋值）；⑥ **跨全 main 普查**：别的文件不许 `health.copy(` 或写它的源字段。每条都带"被钉那段确实还在"的靶子。
+- 分工线（它自己划的，我核过原文）：既有 `ScanFrameFlowGuardTest.kt:352`/`:363` 管**读取点**（判死档不许长出第二份、页面不许自己算账），本枚管**产地**（保护行 / 赋值处数 / 不重算的 copy 站点数）。
+- 为什么**不能改主源码**（这条是我卡面先核过、写进卡里的，它照办了）：`ScanRecoveryPolicy.kt` 被 4 枚整文件逐字节反向钉着（`ScanBlankDecodingWiringGuardTest.kt:192`、`ScanFrameAidWordingWiringGuardTest.kt:202`、`ScanSecondEngineWiringGuardTest.kt:315`、`ScanFrameFlowGuardTest.kt:388`），另有 `ScanSilentBranchGuardTest.kt:230` 读它查"不许出现 import" ⇒ 加一行锚点注释就当场打红四枚。它选了"把抹注释用在读取侧"而不是动那颗内核。
+- **五臂实验**（它做的，命令与 exit 都报了）：绿（只跑本枚 6/0）；红①删 `:150` 整行 → 3 枚红；红②在 `:165` 补一处赋值 → 4 枚红；红③在本文件加第三处 copy → 2 枚红；红④**在别的文件**加一处 copy → 只第⑥条红（证明那条普查是独立咬住的，不是前几条的副产品）。每臂之后 `git checkout --` 还原 + `git status` 空 + 归一化 md5 对上。
+- ⚠️ **它驳回我两处数字，两条都成立**：① 卡面那句「main 里 `giveUpReason =` 只 1 处」在字面量层面是 **2 处** —— `:116` 的 `health.giveUpReason == null` 共享 `giveUpReason =` 前缀，它改用 `giveUpReason\s*=(?!=)` 才把"赋值"与"比较"分开，并**反过来把 `:116` 那枚 `==` 单独钉成靶子**防口径漂；② 我写「测试侧 5 处手搓」（转抄 T97 报告的"4 处"）实测 **7 处**（`ScanRecoveryPolicyTest.kt:154`/`:158` 那两行的 `.copy(giveUpReason = …)` 两份口径都漏了）。⇒ 记进记忆：**从上一份报告里抄的数与不量等价**，只有我自己 grep 过的才许进卡面。
+
+**地板抬到 1,681 / 197 / 签名包 7,247,140 B（冷量、与地板逐字节等值）**：我自己在集成对象 `cdfd9ab`（T99 两枚 + T98 四枚 rebase 成线性）上跑的冷全量 —— `--stop` 后 `java.exe` 归零 → `clean`（3 executed）→ `assembleRelease` → `testDebugUnitTest --rerun-tasks` → `lint --rerun` → 再跑一次测试 → `:benchmark:compileNonMinifiedReleaseKotlin`，**六步 exit 全 0、每步 `BUILD SUCCESSFUL` 各 1 行、测试那两步各 43 tasks executed（不是 UP-TO-DATE）**；**1,681 tests / 197 suites / 0 失败 / 0 errors / 0 skipped**（对 1,675/196 恰是 +6 tests / +1 suite，全出自 T99 那枚新守卫；`ScanGiveUpReasonDerivationGuardTest` 6/0/0/0 在册、`ImportConflictCopyTest` 仍 11/0/0/0）、lint **0 错 14 警**且九枚 id 逐枚计数与基线**完全相同**、包体**未涨一个字节**（两枚卡都只碰 `src/test` + `README` + `docs/`）。
+⚠️ 顺带把我这侧的一条"惰性"结论**实测化**了：`grep -rn "README.md|docs/TESTING" app/src/main app/src/test` 零命中 ⇒ 搬文档确实不进任何判据。
+
+**明留**：① 仪器测试那 66 枚仍是**静态计数**（无可跑设备），`docs/TESTING.md` 里已按这个口径写；② 新守卫钉的是"产地形状"，`giveUpReason` 若被改坏**用户念到哪一句、多久被下一帧盖掉**仍要装机才读得出（押到 #98/#143）；③ `docs/derived-field-audit.md` §2.1 那句「测试侧 4 处手搓」**仍是错的**（实测 7 处），已排进 T100 顺手订正 —— 文档不是构建输入，改它不必重跑门禁。
