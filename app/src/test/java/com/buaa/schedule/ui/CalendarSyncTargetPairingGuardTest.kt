@@ -197,10 +197,10 @@ class CalendarSyncTargetPairingGuardTest {
         val at = screen.indexOf(TARGET_SUMMARY_SHAPE)
         check(at >= 0) { "找不到 $TARGET_SUMMARY_SHAPE：目标日历那一行换写法了，本守卫要跟着改" }
         val heads = enclosingBlockHeads(screen, at)
+        val gating = heads.firstOrNull { it.contains("targetId") } ?: "无"
         assertTrue(
-            "目标日历那行 summary 外面套上了由 `targetId` 驱动的块（块头 " +
-                "${heads.firstOrNull { it.contains("targetId") } ?: "无"}）—— 见上面那条 0 值判据的话：" +
-                "这一族的档位要重判，name 单独残留在界面上不再念得出来",
+            "目标日历那行 summary 外面套上了由 `targetId` 驱动的块（块头 $gating）—— " +
+                "见上面那条 0 值判据的话：这一族的档位要重判，name 单独残留在界面上不再念得出来",
             heads.none { it.contains("targetId") },
         )
         assertTrue(
@@ -572,7 +572,7 @@ class CalendarSyncTargetPairingGuardTest {
     private fun previousCodeLine(source: String, hit: Int): String {
         val lineStart = source.lastIndexOf('\n', hit).let { if (it < 0) 0 else it + 1 }
         var from = lineStart
-        while (from > 0) {
+        while (from > 1) {
             val previousEnd = from - 1
             val previousStart = source.lastIndexOf('\n', previousEnd - 1).let { if (it < 0) 0 else it + 1 }
             val text = source.substring(previousStart, previousEnd).trim()
