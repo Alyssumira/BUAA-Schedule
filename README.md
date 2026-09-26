@@ -209,6 +209,7 @@ powershell -ExecutionPolicy Bypass -File release.ps1 0.2.0
 | [`docs/RELEASE.md`](docs/RELEASE.md) | 发版与自更新 |
 | [`docs/TESTING.md`](docs/TESTING.md) | 两族测试怎么跑、当前用例与文件数、覆盖族与 CI 的 API 档 |
 | [`docs/STATUS.md`](docs/STATUS.md) | 功能状态清单：已落地 / 不做 / 待实现 |
+| [`docs/derived-field-audit.md`](docs/derived-field-audit.md) | 派生构造参数审计（现状描述型，行号按头部标注的 commit 保鲜）；**含文档锚点规矩** |
 | [`docs/BUAA_API.md`](docs/BUAA_API.md) | 北航教务接口参考（改导入链时看）。里面**智学北航那一节是已拆除链路的历史记录**，别照着它改签到代码 |
 | [`docs/BUAA_SPOC_SIGNIN_PLAN.md`](docs/BUAA_SPOC_SIGNIN_PLAN.md) | **历史记录**：智学北航扫码签到的取证与落地偏差。那条链已于 T85 整族拆除，只有包体 / ABI 那部分是活账 |
 | [`docs/THIRD_PARTY_NOTICES.md`](docs/THIRD_PARTY_NOTICES.md) | 第三方代码逐条许可证、取用位置与署名全文 |
