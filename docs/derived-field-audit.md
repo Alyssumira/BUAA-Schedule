@@ -355,3 +355,259 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
 1. **一句话判据**：新加一枚 data class 构造参数时，若它的值 = f(同表另一枚参数)，只有两条正当落点 —— ① 类体 `val x = f(…)`（永远不过期，代价是不进 `equals`/`componentN`），② 留在参数表但给它**每一个** copy 站点配一条"数出现次数"守卫。**没有第三条**：留在参数表而不点名，就是 T94。
 2. **① 与 ② 的分工线**（本卡新量到的）：只有当派生值是**同表参数的纯函数**时 ① 才成立。`ui/signin/ScanRecoveryPolicy.kt:160` 那枚是"判到哪一档"这件事的格式化产物，判据本体（`:155` 的 `cycles >= MaxDecodeSuspensionCycles`）搬进类体会造成第二处判据，所以那一枚只能走 ②。
 3. **守卫钉得住已知、钉不住未知**：形状守卫能钉"`conflictGroupCount` 不再出现在参数表上"（`app/src/test/java/com/buaa/schedule/ui/PendingImportConflictGroupTest.kt:196` 读形状 + `:200` 逐字节 + `app/src/test/java/com/buaa/schedule/ui/importing/ImportConflictCopyTest.kt:301` 数出现次数 = 3 处读点（`3, occurrences(viewModel, "groupCount = pending.conflictGroupCount")`）），但**下一枚新加的派生字段它一个字都不会说**。所以真正该配的还是"改源之后立刻读派生"那条表驱动用例（`app/src/test/java/com/buaa/schedule/ui/PendingImportConflictGroupTest.kt:175` 的 2 → 1 → 0 三档读数 + `:210` 那处"两处 copy 站点还在"的计数）。给本族的收单问题保持两条：这枚字段的每个拷贝站点被钉了吗？有没有一枚用例真的"改了源再去读它"？
+
+
+## 6. T103 第二遍账：成对字段的「清点对岸」（评估卡 · 只量不修）
+
+分支 `ai/T103`，基点 `1c6b7bd`。本节是 T103 新增，**没有改动上面任何一节的结论与行号**。
+本节全部读数来自 `grep` / 一段一次性的只读 Python 筛选脚本（跑在 `D:/tmp/`，没落进仓库），
+**没有跑过任何 gradle 命令、没有碰过任何设备、没有读过 `local.properties`**。
+
+### 6.0 这一遍问的问题与 §0–§5 不是同一枚
+
+§1 的主表判据 (a) 问的是「这枚参数是不是同表另一枚参数的**函数**」。T100 收掉的那对**不满足 (a)**
+（`skippedOccurrences` 不是 `f(diff)`，两枚各有各的源，见 §2.2 那句「它不满足 (a)」），
+却照样是缺陷。所以第二遍换了问题：**这两枚字段是不是由同一次生产一起写出来的？清点它们的是不是同一处？**
+判据形状照 `app/src/test/java/com/buaa/schedule/ui/CalendarSyncDiffClearPairingGuardTest.kt`
+的两枚 `@Test`（`:45` `everyDiffClearInViewModelAlsoClearsSkippedOccurrences` 数清点点、
+`:77` `thePairedProducerIsTheOnlyWriterAndTheOnlyReaderSitsInsideTheDiffModal` 钉「唯一读者在闸门里」）。
+
+由此本节的「候选」定义：**存在一处写点同时写 A 与 B（同一次生产），又存在一处写/清点只写其中一枚**。
+两枚都不满足的成对字段（全仓 4 枚，见 §6.6）不进候选账。
+
+### 6.1 尺子与宇宙（每一格都标用的是哪把尺）
+
+| 量 | 复算命令（原样可粘贴） | 读数 | 用的哪把尺 |
+| --- | --- | --- | --- |
+| `app/src/main/java` 里 `data class` 声明 | `grep -rnE "data class " app/src/main/java --include='*.kt' \| wc -l` | **177**（与卡面一致；去重后 174 个类名，同 §4.3） | 命中**行**数；一行一枚，故与出现次数同值 |
+| `.copy(` 出现**次数** | `grep -rhoE "\.copy\(" app/src/main/java --include='*.kt' \| wc -l` | **140**（与卡面一致） | `grep -o` |
+| `.copy(` 命中**行数** | `grep -rnE "\.copy\(" app/src/main/java --include='*.kt' \| wc -l` | **139** | `grep -n`，即 `-c` 那一把；与上一行差的那 1 是 `core/designsystem/ScheduleCharts.kt:1061`（`scheme.primary.copy(alpha = 0.45f), scheme.primary.copy(alpha = 0.06f)` 一行两处） |
+| **隐式 `copy(` 盲区（卡面要求自证）** | `grep -rnE "(^\|[^.[:alnum:]_])copy\(" app/src/main/java --include='*.kt'` | **6 行命中**，其中**代码只有 1 处**：`ui/home/WeekGridGeometry.kt:253` 的 `return copy(`（`CourseDragState.advancedBy` 的隐式接收者）；其余 5 行全在注释/KDoc 里（`ui/home/HomeScreen.kt:1338`、`ui/ScheduleViewModel.kt:160,162,165,794`） | 命中行数 ⇒ **盲区不是零，但只有 1 处，且与 T97 §0.1 同一枚**（这一族自 09-26 至今没长新的） |
+| copy 密度 top（按**次数**那把尺） | `grep -rcE "\.copy\(" app/src/main/java --include='*.kt' \| grep -v ':0$' \| sort -t: -k2 -rn \| head -8` | `ui/ScheduleViewModel.kt` 25、`widget/WidgetConfigActivity.kt` 16、`core/designsystem/ScheduleCharts.kt` 13、`ui/home/WeekView.kt` 10、`data/repository/ScheduleRepository.kt` 7、`core/designsystem/liquid/LiquidBottomTabs.kt` 7、`core/designsystem/LiquidGlass.kt` 6、`ui/home/HomeScreen.kt` 5 | **卡面这八格逐格复现**（`grep -c` 与 `grep -o` 在这八个文件上同值：没有一个文件把两处 copy 写在同一行） |
+| 把 `.copy(` 与「置空」并起来的站点 | `grep -rnE "\.copy\(" app/src/main/java --include='*.kt' \| grep -cE "= *(null\|0\b\|false\|\"\")"` | **40 行** —— ⚠️ 这一把**噪声占大头**：40 行里 `Color.copy(alpha = 0.xx)` 一档就占 27 行（`ui/home/WeekView.kt` 5、`core/designsystem/ScheduleCharts.kt` 9、`core/designsystem/liquid/*` 6、`core/designsystem/SettingsStack.kt` 3、`widget/WidgetConfigActivity.kt:648`、`ui/home/DayView.kt` 2、`ui/importing/ImportScreen.kt` 2）。同一条筛法换 `grep -o \| wc -l` 也给 **40**（这次两把尺重合，因为命中行里没有一行两处） | 先按行、再按次数 |
+| **自有 data class 的 copy 站点宇宙** | 一次性脚本：解析 `data class` 参数表 → 取每处 `copy(` 的**括号配平实参表**（不是同一行）→ 留下实参名命中参数表的站点 → 按手写类型归属表分类（归属表逐枚读原文定，脚本只负责切实参表） | **18 枚类 / 72 处站点**（= T97 §0.4 那张表，逐格核对**没有变化**：T100 只往既有站点里加了实参，没添新站点） | 站点数按 `(文件, 行)` 去重 |
+| remembered var（Compose 局部状态槽） | `grep -rcE "\bvar [A-Za-z_][A-Za-z0-9_]* by (remember\|rememberSaveable)" app/src/main/java --include='*.kt' \| grep -v ':0$' \| awk -F: '{s+=\$2} END {print s" 行 / "NR" 文件"}'` | **169 枚 / 28 枚文件** | 命中行数 |
+| 其中**至少有一枚被单独置空过**的文件 | 同上一段脚本 + 「按文件列 `NAME = null/0/false/""` 赋值点」那一遍 | **14 枚文件**（`MainActivity.kt`、`ui/editor/CourseEditorScreen.kt` 25 枚、`ui/home/WeekView.kt` 17 枚、`ui/importing/BuaaLoginScreen.kt` 13 枚、`ui/signin/SpocScanScreen.kt` 13 枚、`ui/settings/SettingsScreen.kt` 26 枚、其余 9 枚见 §6.7） | 文件数 |
+
+**这两遍筛法各漏了什么（不许读者替我补）**：
+
+- 「自有类 18 枚」那一格吃的是**类型归属表**，而归属表是手写的 ⇒ 如果谁新加了一枚自有 data class 并给它开了
+  `copy` 站点，而我没把它列进归属表，这一遍就漏。压住这件事的是**站点总数**：脚本按「实参名命中某枚自有
+  `data class` 参数表」数出来 130 处，其中 58 处落在 `alpha` / `fontWeight` / `copyOn…` 这类**平台类型也有的同名槽位**
+  （表里那一枚 `TintPlate` 被算到 57 处就是这个原因，`Color.copy(alpha=)` 与 `TintPlate.alpha` 撞名），
+  扣掉之后落进 18 枚自有类的是 72 处 —— **这个差是分类出来的，不是程序化证明出来的**。
+- 「同一枚字段在别处与另一枚一起被写」这一格吃的是 `copy(` 的实参表，**不吃整枚重建**
+  （`_importMessage.value = AppMessage(...)` 那 30 处是重建，两枚字段必然一起写，本来就不构成漏清）。
+- remembered var 那一遍**没有**做「同一处块里一起写、别处只清一枚」的程序化配对（那是 data class 那一遍做的事），
+  只列了每枚 var 的写点与清点，配对是逐枚读出来的 ⇒ 剩下 8 枚文件里可能还藏着同族，见 §6.7。
+- **按位置构造的实参↔参数对应关系仍未程序化解析**（§0.3 那条限制对本节同样成立）。
+
+### 6.2 候选账（本遍判了 13 枚）
+
+档位分布：**真漏清 1 枚 · 已被钉住 3 枚 · 结构不可能 8 枚 · 越界形状 1 枚**（共 13 枚进表）。
+⚠️ 那 8 枚"结构不可能"里有 2 枚（#10 #12）**按 §6.0 的定义根本不该进候选账** —— 它们成对写、
+却一处"只清一半"都没有；我把它们留在表上是因为卡面的起手式第二条直接要求读每一枚 data class 的
+成对字段表，但**档位那一格对它们是硬套的**，口径问题见 §6.9 驳回②。
+
+| # | 字段对（A，B） | 状态类 | 生产者（把它们绑在一起的证据） | 写点/清点数 | 判定 | 证据锚点 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `saving` ， `saveError` | `ui/editor/CourseEditorScreen.kt` 的两枚 remembered var（不是 data class 字段，见 §6.3） | `performSave()` 那一句 `saving = true` + 下一句 `saveError = null` 是同一次「开始一件会写库的操作」 | 写点 7 处 / 清点 3 处 | **真漏清** | `CourseEditorScreen.kt:231-232`、`:245`、`:247`、`:614`、`:618`、`:620`、读点 `:282`+`:295` |
+| 2 | `diff` ， `skippedOccurrences` | `CalendarSyncUiState`（`ui/ScheduleViewModel.kt:93`） | `data/calendar/CalendarSyncManager.kt:98` `suspend fun computeDiff(calendarId: Long): Pair<CalendarSyncPlanner.Diff, Int>?` 一次返回同一对 | 写点 4 处 / 清点 3 处，**三处全成对** | **已被钉住** | `app/src/test/java/com/buaa/schedule/ui/CalendarSyncDiffClearPairingGuardTest.kt:45`+`:77`（细节见 §2.2，本节不重开） |
+| 3 | `consecutiveFailures`+`suspensionCycles` ， `giveUpReason` | `ScanDecoderHealth`（`ui/signin/ScanRecoveryPolicy.kt`） | 同一枚字符串由那两枚计数器拼出来（§2.1 的 (a)） | 3 处 `health.copy(`，其中 2 处不重算 | **已被钉住** | `app/src/test/java/com/buaa/schedule/ui/signin/ScanGiveUpReasonDerivationGuardTest.kt` 五枚 `@Test`：`:61` `theOnlyEarlyReturnGuardIsStillVerbatimAndStillFirstStatement`、`:105` `productionAssignsTheDerivedFieldAtExactlyOneSite`、`:140` `theCopySitesThatChangeTheSourcesWithoutRecomputingAreStillExactlyTwo`、`:182` `theResetPathsStillBuildAFreshInstanceInsteadOfCopying`、`:204` `theCountersScanOnlyTheMainKernelFile`（§2.1 当年说「没有任何静态守卫钉着」，T98 之后这句已经过期，本节按现状改判） |
+| 4 | `conflicts` ， `excludedKeys`/`addedCount`/`changedCount`/`keptCount` | `PendingImport`（`ui/ScheduleViewModel.kt:136`） | 五枚全取 `resolveImportSelection(...)` 交回的同一枚 `ImportSelection` + 同一次 `findConflicts` | 2 处 copy（`:809`、`:830`），两处**五枚全点齐** | **已被钉住** | `app/src/test/java/com/buaa/schedule/ui/PendingImportConflictGroupTest.kt:207` 那句断言的消息就是「两处逐条勾选的 copy 站点都还在按子集重算 conflicts」 |
+| 5 | `fetchState` ， `fetchWeek`/`fetchTotal` | `ui/importing/BuaaLoginScreen.kt` 三枚 remembered var | `onProgress = { week, total -> fetchWeek = week; fetchTotal = total; fetchState = "正在获取课表：第 $week/$total 周..." }` 一处写三枚 | 写点 3 组 / 清点 6 处（`fetchState = null` 就有 4 处，`fetchWeek = 0`/`fetchTotal = 0` 各 1 处） | **结构不可能** | 读点 `BuaaLoginScreen.kt:344` `val fetchFraction = if (fetchTotal > 0 && fetchStateText != null) {` ⇒ 两枚计数器唯一的读者恒在 `fetchState != null` 驱动的括号里 |
+| 6 | `colorMode` ， `backgroundColor` | `WidgetAppearance`（`widget/WidgetAppearance.kt:30`） | 换预设那一档整枚搬过来：`widget/WidgetConfigActivity.kt:346` `preset.appearance.copy(rowFields = appearance.rowFields)` ⇒ 配色来源与那支自定义色出自同一枚预设、一起落 | 12 处 `appearance.copy(`，其中 `:380` `appearance.copy(colorMode = it)` 与 `:404`/`:417` `appearance.copy(backgroundColor = argb)` **各改一枚** | **结构不可能** | 两枚读点都自带闸门：`widget/WidgetConfigActivity.kt:393` `if (appearance.colorMode == WidgetAppearance.COLOR_MODE_CUSTOM) {`（自定义色那一行只在这个分支里组合）与 `:624` `val baseColor = if (appearance.colorMode == WidgetAppearance.COLOR_MODE_SYSTEM) {`（SYSTEM 那一支也只把 `backgroundColor` 当 `:626` `?: appearance.backgroundColor` 的**回退**读，自定义色那一行整块不在 else 之外组合） |
+| 7 | `message` ， `permissionPermanentlyDenied` | `CalendarSyncUiState` | `ui/ScheduleViewModel.kt:1496` 那次 copy 同时写 `permissionPermanentlyDenied = !canAskAgain` 与 `message = AppMessage(... "日历权限已被永久拒绝，请到系统设置手动开启")` | 成对写点 1 处；**两处分头清**：`:1389` 只清 `message`、`:1508` `it.copy(permissionPermanentlyDenied = false)` 只清旗标 | **结构不可能**（两个方向各有一道闸，机制见 §6.4-B） | 读点 `ui/settings/SettingsScreen.kt:1677` `if (calendarSync.permissionPermanentlyDenied) {`，它整块长在 `:1664` `item(key = "status", visible = calendarSync.message != null) {` + `:1665` `calendarSync.message?.let {` 里面 |
+| 8 | `menuFor` ， `lastMenu` | `ui/home/WeekView.kt` 两枚 remembered var | `:558` `if (menuFor != null) lastMenu = menuFor` —— 一次写两枚（**故意**留一份给退场动画） | 成对写点 1 处；`menuFor = null` 3 处（`:876`、`:1001`、`:1175`+`:1218`）不跟着清 `lastMenu` | **结构不可能** | `lastMenu` 全仓唯一读者 `WeekView.kt:1173` `lastMenu?.let { menu ->`，它挂的浮层 `visible` 由 `menuFor` 关掉：`:1217` `visible = menuFor != null,` ⇒ 清一半正是设计意图（收场期间画锚住的那一份），不是残值 |
+| 9 | `text` ， `isError`/`isSuccess` | `AppMessage`（`ui/ScheduleViewModel.kt:130`） | 每一句提示的「文案」与「染色」出自同一个构造 | 全仓 `AppMessage(` **45 处**构造、`.copy(` **0 处** | **结构不可能** | 复算：`grep -rn "AppMessage(" app/src/main/java --include='*.kt' \| wc -l` ⇒ 45；`grep -rnE "AppMessage\([^)]*\)\.copy\(\|message\.copy\(" app/src/main/java --include='*.kt' \| wc -l` ⇒ **0**。三枚字段被同一枚对象包着 ⇒ `copy` 站点根本不存在，一半都漏不掉 |
+| 10 | `targetId` ， `targetName` | `CalendarSyncUiState` | `:1462` `it.copy(targetId = calendarId, targetName = displayName, showPicker = false)` 与 `:1528-1529` 那个 `if (targetGone)` 双写 | 成对写点 3 处（含初值 `:1373-1374`）/ **分头清点 0 处** | **结构不可能**（本遍判据下**根本没进候选**：见 §6.9 的档位口径驳回） | 唯一读者 `ui/settings/SettingsScreen.kt:1623` `summary = calendarSync.targetName ?: "未选择",` —— 它**不在**任何 `targetId` 驱动的块里 ⇒ 今天不漏，将来加一处「只把 `targetId` 打回 -1L」的站点就会漏，且**无守卫**（登记进 §6.8①） |
+| 11 | `calendars` ， `calendarsLoaded` | `CalendarSyncUiState` | 同一次 `ensureCalendarsLoaded()`：成功那一档 `:1526-1527` `calendars = loaded,` + `calendarsLoaded = true,` 成对写 | 成对写点 1 处；**分头写点 1 处** `ui/ScheduleViewModel.kt:1516` 那一档只落 `calendarsLoaded = true,` | **结构不可能**（但那道闸**不在本族的位置**，见 §6.4-A） | 那一档长在 `:1513-1515` `val loaded = suspendCatching { calendarSyncManager.queryCalendars() }.getOrElse { _calendarSync.update { it.copy(` 里；`queryCalendars()` 自己把异常吞成空列表（`data/calendar/CalendarSyncManager.kt:71` `runCatching {` + `:90` `.onFailure { Log.w(TAG, "读取日历列表失败", it) }` + `:91` `return result`）⇒ `getOrElse` 走不到 |
+| 12 | `boundCamera` ， `analysisUseCase` | `ui/signin/SpocScanScreen.kt` 两枚 remembered var | 绑定成功那档 `:381-382` `boundCamera = camera` + `analysisUseCase = analysis` 成对写 | 写点 2 组 / 清点 3 组，**三组全是连号两行**（`:330-331`、`:409-410`、`:448-449`） | **结构不可能**（同 10：无分头站点，不进候选） | 复算 `grep -n "boundCamera = null\|analysisUseCase = null" app/src/main/java/com/buaa/schedule/ui/signin/SpocScanScreen.kt` ⇒ 3 行 + 3 行，行号相邻 |
+| 13 | `cameraError` ， `cameraProviderMissing` | `ui/signin/SpocScanScreen.kt` 两枚 remembered var | **不是同一次生产** —— `:155` 的注释就写着「它和 cameraError 是两件事」，两枚各有独立生产者（provider 效果 vs 绑定/相册失败） | 各自 2/6 处写点，**互不点名** | **越界形状**：本卡三档给不了它（见 §6.6） | 读侧是一条**优先级梯**而不是闸门：`ui/signin/ScanUiStatus.kt:87` `cameraError != null ->` 排在 `:93` `cameraProviderMissing ->` 之前，而 `:81-84` 那段注释正是拿「两枚会不会同时成立」在解释这个排序 |
+
+### 6.3 真漏清那一档（本遍 1 枚，展开）
+
+**#1 `CourseEditorScreen` 的 `saving` / `saveError`**
+
+- **这两枚为什么是一对**：底栏那一格的「在忙」与「上一趟为什么没成」是同一枚操作状态的两半。
+  生产者的证据是 `performSave()` 里那两行**连号**：
+  ```
+  231:            saving = true
+  232:            saveError = null
+  ```
+  收尾那两行也连号（`245: saveError = "保存失败，请重试；草稿已保留"` / `247: saving = false`）。
+  也就是说：这条链自己承认「开始一项写库操作 = 立旗标 + 收回上一句错」，两枚同生同灭。
+- **分头的那一处**：删除这条链**立了旗标却没收回句子**：
+  ```
+  613:                        scope.launch {
+  614:                            saving = true
+  615:                            if (onDelete(target)) {
+  616:                                onBack()
+  617:                            } else {
+  618:                                saveError = "删除失败，请重试"
+  619:                            }
+  620:                            saving = false
+  ```
+  `:614` 与 `:231` 是同一件事（开始一项写库操作），却少了 `:232` 那一行。**这就是 T100 的形状换了载体**：
+  不是 `copy()` 少点一枚实参，而是同一段仪式在两处操作里被复制成两半。
+- **读点没有闸门**（这是它区别于 §6.4 那些「结构不可能」的地方）：
+  ```
+  282:                    if (saveError != null) {
+  …
+  295:                                text = saveError ?: "",
+  ```
+  这一段长在底栏的 `Column` 里，**不**套在任何 `if (saving)` / `ModalTransition(payload = …)` 之内；
+  `saving` 只影响同一列下面那颗按钮的字（`:310` `Text(if (saving) "保存中..." else "保存")`）。
+  ⇒ 「清了 A，B 仍被读到」在结构上是开的。
+- **用户怎么走到那一步**（全程可点，无需任何异常时序）：
+  1. 首页长按/点击一门课 → 进编辑器（`ui/home/HomeScreen.kt` 的 `onCourseClick` → 编辑器路由）；
+  2. 改一下周次或时间，点底栏「保存」→ `performSave()` 里 `viewModel.saveCourse(...)` 走失败支
+     （`ui/ScheduleViewModel.kt:545` `_importMessage.value = AppMessage("更新课程失败：${e.message}", isError = true)`
+     那一族，编辑器这条是 `:245`）→ 底栏出现红条**「保存失败，请重试；草稿已保留」**；
+  3. 用户不重试保存，改点同一屏那颗「删除课程」（`:568` `onClick = { showDeleteDialog = true }`，
+     `:570` `enabled = !saving` —— 此刻 `saving` 已在 `:247` 落回 false，所以这颗按钮**可点**）→ 确认；
+  4. `:614 saving = true` **不清 `saveError`** → `onDelete(target)` 在跑的那一段里，红条仍写着
+     「保存失败，请重试；**草稿已保留**」；
+  5. 删除成功 → `:616 onBack()` → 退场动画期间这一帧仍在组合，那句「草稿已保留」已经是**假话**
+     （课连同排课与课前提醒都被 `:605` 那句确认文案点名删掉了）。
+- **错的样子**：编辑器底栏一句话同时说两件互相矛盾的事 —— 门面上的按钮说「保存中…」（`:310` 读的是被
+  删除链借用的 `saving`），红条说「保存失败，请重试；草稿已保留」（上一次保存的残值），而用户刚刚做的
+  是**删除**、且已经成功了。两半都念错，且没有一枚测试走过这条路（`app/src/test/` 里 `saveError` 只出现在
+  这一枚文件的读点与写点，复算：`grep -rln "saveError" app/src/test --include='*.kt'` ⇒ **0 行**）。
+- **这个数怎么数出来的**：`grep -n "saveError" app/src/main/java/com/buaa/schedule/ui/editor/CourseEditorScreen.kt`
+  ⇒ 6 行（`:130` 声明、`:232` 清、`:245` 写、`:282` 判、`:295` 读、`:618` 写）；
+  `grep -n "saving = " app/src/main/java/com/buaa/schedule/ui/editor/CourseEditorScreen.kt` ⇒ 4 行
+  （`:231`、`:247`、`:614`、`:620`），其中**只有** `:231` 旁边跟着那句 `saveError = null`。
+
+**判零依据（为什么全仓只有这一枚落进这一档）**：另外 6 枚「成对写 + 分头清」的候选，其**读侧全部落在闸门里**
+（§6.4 逐枚点了是哪一道闸）；而本仓真正**没有闸门**的读点只有两类载体 —— 编辑器/登录页这类「底栏常驻一行」，
+其中只有编辑器这一枚同时满足「两枚字段由同一仪式成对写」与「清点仪式被复制成两半」。
+`ui/importing/BuaaLoginScreen.kt` 那一族最接近（`:119`/`:131`/`:153` 三处只清 `fetchState`），
+但它那一行进度条的读点被 `:344` 的 `&& fetchStateText != null` 挡住了 —— 这正是本节要的差别，
+所以它判结构不可能而不是真漏清，不是"没找到"。
+
+### 6.4 「结构不可能」那几枚的机制（卡面要求：不许用"应该没事"）
+
+**A. #11 `(calendars, calendarsLoaded)`：闸门不在字段对上，而在被调方里。**
+`ui/ScheduleViewModel.kt:1516` 那一档确实写了 `calendarsLoaded = true,` 而没有 `calendars = …`，
+读点也确实看得见：`:1394` `current.calendars.isEmpty() -> _calendarSync.update {` 会据此落一句
+`NO_WRITABLE_CALENDAR_MESSAGE`（`:116` 定义，内容是「没有检索到可写的日历…」），而那一档的真相是「查询失败」。
+但那条链的第一环走不到：`:1513` `val loaded = suspendCatching { calendarSyncManager.queryCalendars() }`
+的被调方 `data/calendar/CalendarSyncManager.kt:69-91` 把整段 contentResolver 查询包进
+`runCatching { … }`，`:90` `.onFailure { Log.w(TAG, "读取日历列表失败", it) }` 只留日志，
+`:91` `return result` 交回的仍然是列表 ⇒ `queryCalendars()` 正常返回时**永不抛**，`getOrElse` 那一档在
+今天不产生任何用户可读的状态。**所以它判「结构不可能」靠的是别人的 `runCatching`，不是字段对自身的性质**——
+这句话必须记着：谁把 `CalendarSyncManager.kt:71` 那个 `runCatching` 拆掉（或换成 `Result` 往外抛），
+#11 立刻从「结构不可能」搬到「真漏清」，且错的是那句"没有检索到可写的日历"（它会把权限没给说成设备没日历，
+并且 `:1512` `if (_calendarSync.value.calendarsLoaded) return` 会让这一页**再也不同步重试**）。
+登记进 §6.8②。
+
+**B. #7 `(message, permissionPermanentlyDenied)`：两个方向各有一道闸。**
+- 清 `message` 而留旗标（`ui/ScheduleViewModel.kt:1389` 那一档 `it.copy(syncing = true, message = null, diff = null, skippedOccurrences = 0)`
+  确实没点 `permissionPermanentlyDenied`）⇒ **看不见**：那枚旗标全仓只有一个读者
+  `ui/settings/SettingsScreen.kt:1677` `if (calendarSync.permissionPermanentlyDenied) {`，
+  而它整块长在 `:1664` `item(key = "status", visible = calendarSync.message != null)` 与
+  `:1665` `calendarSync.message?.let {` 两层之内 —— 句子一撤，那颗「去系统设置开启日历权限」的按钮跟着没了。
+  这与 §2.2 里 `ModalTransition(payload = calendarSync.diff)` 那道闸同一形状，只是驱动它的是 `message`。
+- 清旗标而留句子（`:1508` `onCalendarPermissionGranted` 整颗函数就是 `it.copy(permissionPermanentlyDenied = false)`）⇒
+  **走不到**：`onCalendarPermissionGranted()` 全仓唯一调用点是 `ui/settings/SettingsScreen.kt:317`，
+  它在 `:316` `if (grants.isNotEmpty() && grants.values.all { it })` 里；要拿到"旗标为 true 时句子还没被清"，
+  需要先有一次 `onCalendarPermissionDenied(canAskAgain = false)`（`:325`），而勾了「不再询问」之后
+  `:330-338` 那个 `withCalendarPermission` 的入口 `:331` `if (viewModel.hasCalendarPermission())` 要么直接放行
+  （**根本不启动 launcher，也就到不了 `:317`**），要么 launcher 直接回全 false 再走 `:325`。
+  ⇒ 这一方向是被 `hasCalendarPermission()` 这道闸挡住的，同样**不是**字段对自身的性质；登记进 §6.8③。
+
+### 6.5 已被钉住那三枚的点名单
+
+| 候选 | 钉它的文件 | 钉它的 `@Test` |
+| --- | --- | --- |
+| #2 `diff` / `skippedOccurrences` | `app/src/test/java/com/buaa/schedule/ui/CalendarSyncDiffClearPairingGuardTest.kt` | `:45` `everyDiffClearInViewModelAlsoClearsSkippedOccurrences`、`:77` `thePairedProducerIsTheOnlyWriterAndTheOnlyReaderSitsInsideTheDiffModal` |
+| #3 `consecutiveFailures`+`suspensionCycles` / `giveUpReason` | `app/src/test/java/com/buaa/schedule/ui/signin/ScanGiveUpReasonDerivationGuardTest.kt` | `:61` / `:105` / `:140` / `:182` / `:204` 五枚全在管它 |
+| #4 `PendingImport` 那五枚 | `app/src/test/java/com/buaa/schedule/ui/PendingImportConflictGroupTest.kt`（组数）+ `app/src/test/java/com/buaa/schedule/ui/importing/ImportConflictCopyTest.kt`（三处读点计数） | 前者 `:207` 那条断言直接把「两处 copy 站点还在」数死 |
+
+复算这三枚测试文件存在且带"成对"字样：`grep -rl "成对" app/src/test --include='*.kt' | wc -l` ⇒ **14**
+（与卡面那句「本仓已有 14 枚测试文件的判据里带"成对"字样」一致；本节读的是其中与成对字段直接相关的
+`CalendarSyncDiffClearPairingGuardTest.kt` 一枚，其余 13 枚是配色/墨色/撤销那几族，没有可挪用的判据）。
+
+### 6.6 越界形状（本卡三档给不了它，如实挂在这里）
+
+**#13 `(cameraError, cameraProviderMissing)`**（`ui/signin/SpocScanScreen.kt:157-158`）。
+两枚字段互相约束（读侧是一条优先级梯，`ui/signin/ScanUiStatus.kt:87` 那支排在 `:93` 之前），
+但**生产者不是同一次**：`cameraProviderMissing` 由 `SpocScanScreen.kt:274-288` 那颗
+`LaunchedEffect(granted)` 写（`:279` 复位、`:283` 置真，两处都不点 `cameraError`），
+`cameraError` 由绑定失败（`:411`）、相册解码失败（`:534` `.onFailure { cameraError = "$GalleryUnreadablePrefix：${it.message}" }`）、
+绑定成功（`:398` `if (cameraError != null) cameraError = null`）三处写。
+于是有一条**跨生产者**的残值：相册先失败过一次（句子进 `cameraError`）→ 之后 provider 拿不到
+（`:283` 只置 `cameraProviderMissing = true`）→ 梯子上 `:87` 那支赢，界面永远说
+「这张图读不出来，换一张图，或重新对准二维码再扫。」而真原因是那句 `:93` 的
+「相机服务没把摄像头交给这一页」。**它不进 §6.2 的主账**，因为卡面的候选定义是"同一次生产 + 分头清点"，
+而这两枚自 09-26 起就被 `SpocScanScreen.kt:155` 那行注释按"两件事"处理；把它塞进三档里的任何一档都要替
+本卡扩一条判据。→ 按"一枚一卡"的规矩登记给编排者：见 §6.8④。
+
+### 6.7 上限声明（本节最重要的一格）
+
+**扫到了什么程度**：
+- **闭合一档**：自有 data class 的 copy 站点宇宙（18 枚类 / 72 处站点）—— 本节**逐枚**过了一遍
+  「参数表里有没有两枚字段出自同一次生产」与「有没有一处站点只写其中一枚」。
+  这一档进表的 8 枚（#2 #3 #4 #6 #7 #9 #10 #11）全部判档完毕，**这一档没有剩**；
+  另外 5 枚（#1 #5 #8 #12 #13）来自 remembered var 那一档，见下一条。
+  ⚠️ 但这一档的「过了一遍」是**按类**过的，不是按 177 枚 data class 过的：其余 **159 枚自有 data class
+  连一处 `copy` 都没有**，本节按 §0.4 那条既有事实（"档位最高只能到无害"）**直接引用了 T97 的账，
+  没有重新一枚枚读参数表**。如果那 159 枚里有一枚将来长出 copy 站点，本节不给它兜底。
+- **开档（本遍没判、规模数得出来）**：169 枚 remembered var / 28 枚文件。本节只做了「哪些 var 被单独
+  置空过」这一遍列表（14 枚文件有），并逐枚读原文判了 **5 枚文件**：
+  `ui/editor/CourseEditorScreen.kt`（判 1 枚候选 → #1）、`ui/importing/BuaaLoginScreen.kt`（判 2 枚 → #5 + §6.3 判零依据里那枚）、
+  `ui/home/WeekView.kt`（判 1 枚 → #8；其余 8 枚被清点的 var 只列了账，见下）、
+  `ui/signin/SpocScanScreen.kt`（判 1 枚 → #13 越界；`boundCamera`/`analysisUseCase` → #12）、
+  `ui/settings/SettingsScreen.kt`（只列账，**未判**）。
+  **还剩 9 枚文件没进去**，逐枚是：`MainActivity.kt`（2 枚被清点：`pendingEditorRoute = null` `:667`、
+  `pendingPulseCourseId = -1L` `:758`/`:762`）、`ui/course/CourseManagementScreen.kt`（`pendingDelete = null` `:213`）、
+  `ui/home/DayView.kt`（`dragActive = false` `:253`/`:271`）、`ui/home/HomeScreen.kt`
+  （`pulseCourseId = -1L` `:208`、`showJumpDialog = false` `:1102`/`:1124`/`:1135`）、
+  `ui/importing/ImportScreen.kt`（`hadPendingImport = false` `:144`）、`ui/onboarding/OnboardingScreen.kt`
+  （`checking = false` `:151`、`showEnvironmentDialog = false` `:283`/`:287`）、
+  `ui/settings/SettingsScreen.kt`（4 枚：`pendingCalendarAction = null` `:315`、`iclassSignedIn = false` `:1339`、
+  `privacyConsentAt = 0L` `:1848`、`showPrivacyDialog = false` `:1849`）、`ui/settings/WidgetPinRow.kt`
+  （`showGuidance = false` `:123`）、`ui/stats/StatsScreen.kt`（`expanded = false` `:611`），
+  外加 `ui/home/WeekView.kt` 里那 8 枚我没逐枚配对的（`drag`、`pendingMove`、`movePickerFor`、`resizeFor`、
+  `detailFor`、`pendingDelete`、`pendingSyncTarget`、`pressed`）。
+  这一批的规模这样数：`grep -rcE "\bvar [A-Za-z_][A-Za-z0-9_]* by (remember|rememberSaveable)" app/src/main/java --include='*.kt' | grep -v ':0$' | awk -F: '{s+=$2} END {print s}'`
+  给全仓 169，减去已进的 5 枚文件（25+13+17+13+26 = 94）⇒ **剩 75 枚 var 的账没判**。
+  按本节实际判中的比例（94 枚里出 1 枚真漏清 + 1 枚越界 + 3 枚结构），**不能排除这 75 枚里还有 1–2 枚真漏清**。
+- **一档完全没扫**：`app/src/debug/java`、`app/src/androidTest/java`、`app/src/test/java`、`benchmark/` 模块、
+  Room/`Mappers` 生成物 —— 同 §4.2，本节没有扩大范围。
+- **没跑门禁**：按卡面红线，本节**零 gradle、零 adb、零设备**，所有结论只来自读源码。
+  ⇒ 「#1 是真漏清」这一句的证据是**代码可达性**，不是装机截图；它在设备上具体会念多久（退场动画几帧还是整屏停留）
+  本节验不到，与 §4.1 同一档。
+
+### 6.8 明留（本节认为该改、按红线一枚没动）
+
+| 编号 | 位置 | 该改什么（不写方案细节，等排卡） |
+| --- | --- | --- |
+| ① | `ui/ScheduleViewModel.kt:1462` `it.copy(targetId = calendarId, targetName = displayName, showPicker = false)` 与 `:1528-1529` 那两行 `if (targetGone) -1L` / `if (targetGone) null` | `targetId`/`targetName` 三处写点今天全成对，但**没有任何守卫**钉住"成对"。唯一读者 `ui/settings/SettingsScreen.kt:1623` 不在闸门里 ⇒ 与 T100 改前的 `diff`/`skippedOccurrences` 只差一枚守卫。该补的是 `CalendarSyncDiffClearPairingGuardTest` 那一形状的第二份实例 |
+| ② | `data/calendar/CalendarSyncManager.kt:71` `runCatching {` + `:90` `.onFailure { Log.w(TAG, "读取日历列表失败", it) }` + `:91` `return result` | 它把"查询失败"洗成"这台设备没有日历"，是 §6.4-A 那道**外来**闸门的来源；同时它使 `ui/ScheduleViewModel.kt:1517` 那句「读取日历列表失败，请检查日历权限」几乎永不显示。另附同族一笔：`calendarsLoaded` 全仓**没有任何**复位站点（`grep -rn "calendarsLoaded = false" app/src/main/java --include='*.kt'` ⇒ 0 行），于是 `calendars` 是进程寿命的缓存，用户在系统日历里删掉一个日历后选择器会一直列着那个死 id |
+| ③ | `ui/ScheduleViewModel.kt:1508` `_calendarSync.update { it.copy(permissionPermanentlyDenied = false) }` | 清旗标不清句子；今天被 `ui/settings/SettingsScreen.kt:331` 那道 `hasCalendarPermission()` 短路挡着（§6.4-B）。这句注释该留在两处之一：要么把它做成成对清，要么把「靠哪道闸不念旧账」写进 KDoc |
+| ④ | `ui/signin/SpocScanScreen.kt:283` `cameraProviderMissing = true` 与 `ui/signin/ScanUiStatus.kt:87`/`:93` 那两支 | 跨生产者残值（§6.6）：`cameraError` 以「读不出那张图」开头时，梯子在说相册、而真病因是 provider。判据该按**来源**分支，不是按**写入先后**赌 |
+| ⑤ | `ui/editor/CourseEditorScreen.kt:614` `saving = true` | 本遍唯一的真漏清。修法与红线冲突（不许动 `app/src/main/**`），留一卡：删除这条链要不要复用 `saving` 这枚旗标本身也值得重判 —— 复用它是 `:310` 那句「保存中…」在删除时说假话的原因 |
+
+### 6.9 卡面对账：三句复现、两句要驳
+
+**复现（带命令）**：177 / 140 / copy 密度前八 / 「14 枚测试文件带"成对"字样」，逐格同上表，全部对得上。
+
+**驳回 ①（卡面「`grep ".copy("` 的盲区本仓是不是空的」）**：盲区**不空**。
+命令：`grep -rnE "(^\|[^.[:alnum:]_])copy\(" app/src/main/java --include='*.kt'` ⇒ 6 行命中，
+去掉 5 行注释/KDoc，**代码里 1 处**：`ui/home/WeekGridGeometry.kt:253` `return copy(`
+（`CourseDragState.advancedBy` 里的隐式接收者，与 T97 §0.1 记的是同一枚，自 09-26 没长新的）。
+⇒ 本节的 72 处自有类站点**把这 1 处算在内**；只按 `.copy(` 数会把它漏成 71 处。
+
+**驳回 ②（三档判据不完备）**：本遍有 2 枚成对字段落在三档之外，硬套会写假话：
+- #10 `targetId`/`targetName`、#12 `boundCamera`/`analysisUseCase`：**成对写点存在、分头清点站点为 0**。
+  它们既不是"真漏清"（没有那条路径）、也不是"结构不可能"（读者不在闸门里，见 §6.2 两行的锚点）、
+  也不是"已被钉住"（没有测试）。它们是本节 §6.0 定义的"候选"**之外**的东西，却被卡面的
+  「建议起手式」第二条（"看每一枚 data class 的字段表：哪些是成对语义"）直接点名要找。
+  ⇒ 建议给下一遍补第四档："成对但暂无分头站点（无守卫观察项）"。本节把这两枚登记在 §6.8①/§6.2 里，
+  档位那一格写的是"结构不可能（本遍判据下根本没进候选）"，那不是卡面第三档的原意，读者按 §6.8① 那条读。
+- #11 `calendars`/`calendarsLoaded` 与 #7 的第二个方向：判"结构不可能"用的闸**不在字段对上**
+  （一枚靠被调方的 `runCatching`、一枚靠 launcher 的短路），本节为它们各写了一句「这句话必须记着」，
+  见 §6.4-A/B。卡面那句「判这档要给机制」满足了，但**机制可被别处一行改动挪走**，
+  这与 §2.1 当年批评"正确性挂在一行运行期早返回上"是同一件事 ⇒ 这两枚实际强度低于 #5 #6 #8 #9。
