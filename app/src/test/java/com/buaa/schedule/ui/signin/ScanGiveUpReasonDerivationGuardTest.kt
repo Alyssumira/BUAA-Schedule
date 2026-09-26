@@ -2,6 +2,7 @@ package com.buaa.schedule.ui.signin
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -35,9 +36,10 @@ import org.junit.Test
  * （`:150` 那唯一一道保护、赋值只许一处、不重算的 copy 只许两条）。两处判据读的是不同的段，
  * 没有第二条真相。
  *
- * ⚠️ 三条判据**只数主源码那一份文件**：`app/src/test` 里另有 7 处手搓 `giveUpReason` 赋值
+ * ⚠️ 判据 ①~⑤ **只数主源码那一份文件**（⑥ 是故意扩到整棵 `src/main` 的站点普查）：
+ * `app/src/test` 里另有 7 处手搓 `giveUpReason` 赋值
  * （`ScanFrameFlowGuardTest.kt:93`、`ScanRecoveryPolicyTest.kt:154,158,176,178,210,212`）是测试
- * fixture，本文件一次都不把 `src/test` 读进计数（⑤ 那条把这条边界钉成判据）。
+ * fixture，本文件一次都不把 `src/test` 读进计数（⑤ 钉住输入面本身、⑥ 的普查只走 `src/main`）。
  *
  * ⚠️ 主源码一个字没改：`ScanRecoveryPolicy.kt` 被四枚逐字节反向钉（
  * `ScanBlankDecodingWiringGuardTest.kt:192`、`ScanFrameAidWordingWiringGuardTest.kt:201`、
@@ -219,10 +221,56 @@ class ScanGiveUpReasonDerivationGuardTest {
         )
     }
 
+    /**
+     * ⑥ 跨文件面：全仓 `src/main` 里改这本账的 copy 站点只许长在 ScanRecoveryPolicy.kt 这一份文件里。
+     *
+     * 判据 ①③ 只看那颗内核自己 —— 而卡面上那件真正会出事的事是"**谁将来加一处**
+     * `health.copy(consecutiveFailures = …)`"，它完全可能加在别的文件里（页面就握着这枚状态：
+     * `SpocScanScreen.kt:924` 的 `@Volatile private var health`）。这一条把 (b) 档的站点普查
+     * 从一份文件扩到整棵 main，并且顺手钉住另一件事：**生产侧没有任何一处**能造出
+     * 「回到前台额度用完」那一档的 giveUpReason（全仓 main 只有内核那一处赋值）。
+     */
+    @Test
+    fun noOtherMainSourceCopiesTheHealthOrWritesItsSources() {
+        val main = mainSourceCodes()
+        for ((needle, expected) in listOf(
+            "health.copy(" to 3, // :156 / :165 / :167 —— 与判据 ③ 的 3 同一把尺
+            "consecutiveFailures = consecutive" to 3,
+            "suspensionCycles = cycles" to 2, // :159 / :170
+        )) {
+            assertEquals("全仓 src/main 里 `$needle` 的出现次数不是 $expected 了：", expected, main.values.sumOf { occurrences(it, needle) })
+            assertEquals(
+                "全仓 src/main 里 `$needle` 不再只长在 ScanRecoveryPolicy.kt（换文件 = 第二本账）：",
+                listOf(KERNEL_NAME),
+                main.filter { occurrences(it.value, needle) > 0 }.keys.toList(),
+            )
+        }
+        // 生产侧 giveUpReason 的赋值（含具名实参那种"构造时直接写死"）只许有 1 处、只许在这一份文件里
+        val writers = main.filter { assignmentCount(it.value) > 0 }
+        assertEquals("全仓 src/main 里给 giveUpReason 写值的文件数不是 1：${writers.keys}", listOf(KERNEL_NAME), writers.keys.toList())
+        assertEquals("ScanRecoveryPolicy.kt 里多了一处 giveUpReason 赋值（第二把尺子）：", 1, assignmentCount(writers.getValue(KERNEL_NAME)))
+        // 靶子 1：普查真的扫到了那一页（页面只整枚新构造，不 copy）—— 空扫描会让上面五条一次全绿
+        assertEquals("靶子：SpocScanScreen.kt 里 ScanDecoderHealth( 的调用点不再是 1 处（:924 的初值）：", 1, occurrences(main.getValue("SpocScanScreen"), "ScanDecoderHealth("))
+        assertEquals("靶子：全仓 main 里 ScanDecoderHealth( 仍是 4 处（内核 3 + 页面初值 1）：", 4, main.values.sumOf { occurrences(it, "ScanDecoderHealth(") })
+        assertFalse("靶子：那一页自己 health.copy( 起了第二本账：", occurrences(main.getValue("SpocScanScreen"), "health.copy(") > 0)
+        // 靶子 2：扫的是整棵 main，不是一份文件
+        assertTrue("靶子：跨文件普查只扫到 ${main.size} 份 .kt（<150 = walk 没走对目录）：", main.size > 150)
+    }
+
     // ---- 源码核对工具（与 ScanFrameFlowGuardTest 同一套，找不着锚点就抛） ----
 
-    /** 抹过注释的主源码内核（本卡五条判据共用的那一份文本；注释里写多少遍都不进计数） */
+    /** 抹过注释的主源码内核（判据 ①②③④⑤ 共用的那一份文本；注释里写多少遍都不进计数） */
     private fun policyCode(): String = withoutComments(normalizeNewlines(File(findMainJavaDir(), POLICY_FILE).readText()))
+
+    /** 整棵 `src/main/java` 的 .kt，逐份抹过注释，键是去扩展名的文件名（判据 ⑥ 的跨文件普查面） */
+    private fun mainSourceCodes(): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        findMainJavaDir().walkTopDown().filter { it.isFile && it.extension == "kt" }.forEach { file ->
+            check(file.nameWithoutExtension !in out) { "src/main 里出现重名文件 ${file.name}：普查的键不唯一" }
+            out[file.nameWithoutExtension] = withoutComments(normalizeNewlines(file.readText()))
+        }
+        return out
+    }
 
     private fun kernelBody(code: String): String =
         balancedBlock(code, "internal fun healthAfterDecodeFailure(")
@@ -296,7 +344,10 @@ class ScanGiveUpReasonDerivationGuardTest {
     }
 
     private companion object {
-        /** 本卡只读这一份主源码；`src/test` 下那 7 处手搓 fixture 一律不进计数 */
+        /** 判据 ①~⑤ 只读这一份主源码；判据 ⑥ 铺到整棵 `src/main`，但 `src/test` 下那 7 处 fixture 永不进输入面 */
         const val POLICY_FILE = "com/buaa/schedule/ui/signin/ScanRecoveryPolicy.kt"
+
+        /** 同一份文件在跨文件普查里的键（`walkTopDown` 的文件名，去扩展名） */
+        const val KERNEL_NAME = "ScanRecoveryPolicy"
     }
 }
