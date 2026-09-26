@@ -1068,11 +1068,27 @@ grep -n "cameraProviderMissing" app/src/test/java/com/buaa/schedule/ui/signin/Sc
 `theRemoveChainClearsNeitherDiffNorSkippedBecauseTheTwoModalsHoldEachOtherOff`（该类枚数 2 ⇒ **3**）。
 归它不归 `CalendarSyncTargetPairingGuardTest`，理由要说清：那一枚文件的宇宙本来就是"这一对的清点点"，
 而 #2 缺的正是一格"这条链压根不在这对宇宙里、凭什么算它没漏"的账 —— 上面那句"第一枚判据数的是
-`diff = null` 那类站点、`:1481` 根本不写 `diff` ⇒ 不在宇宙里"如今换成了**按位置**的三格判据：
-① `removeSyncedEvents` 体内三枚写点**逐处**负判据（一枚都不许写 `diff` 也不许写 `skippedOccurrences`，
-`:1481` 的实参表还钉成逐字），② diff 弹窗那一段与移除确认框那一段**互不重叠**（两层各自到下一枚
-`ModalTransition(` 为界），③ 那唯一一枚入口 `onClick = { withCalendarPermission { viewModel.requestRemoveSyncedEvents() } }`
-落在**两扇窗之外**，外加 `dismissCalendarSyncDiff()` 两枚收场路都在 diff 窗内。
+`diff = null` 那类站点、`:1481` 根本不写 `diff` ⇒ 不在宇宙里"如今换成了**按位置**的判据（下面这几处
+裸 `:NNN` 一律指该测试第 ③ 枚 `theRemoveChainClearsNeitherDiffNorSkippedBecauseTheTwoModalsHoldEachOtherOff`
+的体内行号）：① `removeSyncedEvents` 体内三枚写点**逐处**负判据（一枚都不许写 `diff` 也不许写
+`skippedOccurrences`，`:1481` 的实参表还钉成逐字）；**位置那一头今天实际钉着三格** ——
+② 那唯一一枚入口 `onClick = { withCalendarPermission { viewModel.requestRemoveSyncedEvents() } }`
+落在**两扇窗之外**（两格：`:265` 那枚 `assertFalse` 吃 `at in diffAt until diffEnd`、`:273` 那枚吃
+`at in removeAt until removeEnd`，由 `:258` 那格 `opens.size` 恰好 1 托着），③ `dismissCalendarSyncDiff()`
+的两枚收场路落在 diff 窗**之内**（一格：`:288` 那枚 `assertTrue` 吃 `at in diffAt until diffEnd`，
+由 `:280` 那格 `dismisses.size` 恰好 2 托着）。
+⚠️ **T116 那一版在 ②③ 之间还挂着第四格，本档按本仓"改前读数一字不抹"的规矩把旧句子留在原处、只标它的下场**：
+它**曾写着**「diff 弹窗那一段与移除确认框那一段**互不重叠**（两层各自到下一枚 `ModalTransition(` 为界）」，
+**该格 T118 已判成恒真删掉**（改的都是本测试，main 一字未动）—— 它写的 `diffEnd <= removeAt || removeEnd <= diffAt`
+里，`diffEnd` / `removeEnd` 取的是各自头之后**最近**的一枚 `ModalTransition(`（体内 `:251`、`:253` 那两枚
+`indexOf(MODAL_SEP, …)`），而 `ModalTransition(payload = calendarSync.diff)` 与
+`ModalTransition(open = calendarSync.showRemoveConfirm)` 两枚头本身又以同一串开头 ⇒ 在两枚头的计数各恰好为 1
+（`:236` 那格 `diffModals.size`、`:244` 那格 `removeModals.size` 的 `assertEquals` 钉着）的前提下，
+"另一扇窗若真落进这一扇之内，它正好就是这一扇的右边界"，两条不等式至少一条取等 ⇒ 恒绿、结构上不可能红。
+机制账与六种摆法的复算写在上面那枚判据的 KDoc 第 2 条（`:133` 起那一段）。
+⚠️ 别把这枚被删的**静态**判据跟本节上面那句「两扇窗彼此挡住对方的入口」混为一谈：那一句讲的是**运行期**
+那道闸（Compose 对话框独占输入、弹窗开着时另一扇的入口点不到），它**仍然成立**，也正是这一格
+「结构不可能」的凭据本身；删格删掉的只是"拿两枚头的相邻位置去证明两扇窗分得开"那把套套逻辑的尺。
 两侧读数：`B`（朝紧——照 `:1389` 的仪式给 `:1481` 补收这一对）红在逐字那一格、同时把本节 §8.5 之外
 那枚"3 处成对清"的清点判据顶成 4；`G`（朝宽——把 `:1481` 拆回只立旗）红在逐字那一格、同时红在
 `CalendarSyncTargetPairingGuardTest` ③ 那一族；`E`（朝宽·落点——枚数仍是 1，但把移除入口与 diff 弹窗里
