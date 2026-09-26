@@ -2791,3 +2791,24 @@ lint 0 错 14 警、签名包 **7,247,271 B**（对 7,246,225 是 **+1,046 B**�
 ⚠️ 顺带把我这侧的一条"惰性"结论**实测化**了：`grep -rn "README.md|docs/TESTING" app/src/main app/src/test` 零命中 ⇒ 搬文档确实不进任何判据。
 
 **明留**：① 仪器测试那 66 枚仍是**静态计数**（无可跑设备），`docs/TESTING.md` 里已按这个口径写；② 新守卫钉的是"产地形状"，`giveUpReason` 若被改坏**用户念到哪一句、多久被下一帧盖掉**仍要装机才读得出（押到 #98/#143）；③ `docs/derived-field-audit.md` §2.1 那句「测试侧 4 处手搓」**仍是错的**（实测 7 处），已排进 T100 顺手订正 —— 文档不是构建输入，改它不必重跑门禁。
+
+
+## T100：收 T97 §2.2 那笔"形状相邻"的账 —— 一对字段就要一起清（4 枚 / 3 文件 +315 / −3）
+
+**第 0 步先判语义再动手**，因为两种读法给出两种修法。判成**「`skippedOccurrences` 就是这一份 diff 的附属说明」**，三条凭据（我回读原文逐条核过）：
+① 生产者唯一且成对 —— `data/calendar/CalendarSyncManager.kt:98` `computeDiff(...): Pair<CalendarSyncPlanner.Diff, Int>?`，那枚 `Int` 就是同一趟 `ScheduleOccurrences.build(...)` 的 `skipped`；写点全仓唯一（改后在 `ui/ScheduleViewModel.kt:1406`/`:1407`），`computed == null` 那一档两枚一起不写 ⇒ 它从来没有独立于 diff 的产生路径。
+② `confirmCalendarSync` 之后那条链不再产也不再读 —— apply 段那次 `copy` 只带 `syncing`/`message`，而 `ApplyResult`（`CalendarSyncManager.kt:40-47`）**没有** skipped 字段 ⇒「同步完还想知道刚才跳过几节」在代码里没有承载体。
+③ 唯一读点 `ui/settings/SettingsScreen.kt:1914`/`:1916` 锁在 `ModalTransition(payload = calendarSync.diff)` 的挂载闸门里（`core/designsystem/ModalTransition.kt:84-100`，外壳只看 `payload != null`）。
+⇒ "改渲染口径"那一读法**弃**（没有消费方可改，挪出弹窗等于凭空添一行常驻文案）；**T95 那一刀在这里落不下去** —— 它不是 `f(diff)`（`Diff` 里没有这个数），所以规矩只能钉在**写侧**。
+
+**改**：`startCalendarSync` 起手（`:1389`）与 `confirmCalendarSync`（`:1423`）各补 `skippedOccurrences = 0`，与 `dismissCalendarSyncDiff`（`:1445`）凑成"三处清空全成对"；另在参数表那枚字段上补 KDoc 写清寿命契约（第四处清空站点最可能从那里长出来）。
+**钉**：新类 `ui/CalendarSyncDiffClearPairingGuardTest`（**+2 枚 `@Test`**，纯 JVM）：一枚两头都数（抹注释后 `diff = null` 恰 3 处，**且逐处取包围它的 `copy(…)` 实参表按括号配平、必须含 `skippedOccurrences = 0`**，两个 3 互核）；一枚钉住"今天为什么看不出错"这个前提本身（写点各恰一枚、`computeDiff` 的 `Pair` 形状锚点、界面两处读点**必须落在弹窗窗口内**，窗口长度越界就 `check` 抛）⇒ **渲染口径一挪就红，红完必须重判一次该不该成对**。
+⚠️ 它驳掉了我卡面上的一处保守预设（这条我核过、它是对的）：按路径读 `ScheduleViewModel.kt` 的六枚守卫**没有一枚是整文件逐字节钉**（`gitShow` 那一族全仓只有 5 枚扫码守卫用：`ScanBlankDecoding`/`ScanCameraAid`/`ScanFrameAidWording`/`ScanFrameFlow`/`ScanFrameObservation`/`ScanSecondEngine`；这六枚用的是数出现次数 + 锚点 `contains` + 抹注释 `balancedBlock` + 取窗切片 + 调用点文件集合）⇒ **零枚重钉、零枚 `@Test` 变化**。T94 那次我恰恰是把这句写反过，这次两边都留了证据。
+
+**收单证据（我自己跑的，不是引它的日志）**：在集成态 `378dedd` 上做**冷全量** —— `--stop` 后 `java.exe` 归零 → `clean`（3 executed）→ `assembleRelease`（**86 executed**）→ `testDebugUnitTest --rerun-tasks`（43 executed）→ `lint --rerun` → 再跑一次测试 → benchmark 编译，**六步 exit 全 0、每步 `BUILD SUCCESSFUL`**；**1,683 tests / 198 suites / 0 失败 / 0 errors / 0 skipped**（= 1,681/197 + 本卡 2 枚/1 类，与它自报的 1,677/197 差的就是 T99 那 6 枚/1 类 —— 它基点在 `4b6376d`，两边都对）、lint **0 错 14 警**九 id 逐枚同形、签名包 **7,247,127 B**（对 7,247,140 是 **−13 B**，本卡确实改了主源码，但这个量级仍落在带内 ⇒ 不归因）。
+**独立红臂**（我自己在合的这颗对象上重做，只跑新守卫类）：把 `:1445` 的 `skippedOccurrences = 0` 拆掉 ⇒ `RED_EXIT=1` / `BUILD FAILED in 38s` / `everyDiffClearInViewModelAlsoClearsSkippedOccurrences FAILED`；还原后 `git status` 只剩我自己的日志目录、归一化 md5 `ffaba6eff6` **与 `git show HEAD:` 相同**。
+
+**⚠️ 本卡留下一笔新账（记 #151）**：它在 `:98` 之前插入一段 KDoc ⇒ 这枚文件**之后所有行号整体 +7**（`conflictGroupCount` 从 `:164` 变 `:171`，我实测两侧）。代码没红（守卫读的是 needle 不是行号），但 `docs/derived-field-audit.md` §2.2 现在**读起来是错的**：那句仍写「`:1378` 把 `diff` 清空却没清 `skippedOccurrences`」并引改前原文，而这件事刚被本卡修掉；它自己新加的判定段也带着改前口径的 `:1394`/`:1395`/`:1409`。⇒ 全仓 `docs/*.md` + README 里 `文件:行号` 这类锚点要做一次保鲜，并把写法定成**行号必须与符号名 + 原文片段同框、文档开头标"锚点对应 commit"**（本仓第三次踩同一族：#33 哈希锚点扫死链、#35 行号实测订正、这次）。
+**明留**：① 零设备 ⇒「淡出那几帧里这一行当场消失」没有读数（那正是 `:1445` 今天已有的行为，也是选读法 A 的代价）；② 它只订正了审计 §2.1 的枚数与指针（4→**7**，按 `giveUpReason\s*=(?!=)` 数赋值；只 grep `giveUpReason =` 给 12，其中 5 处是 `==`），没有重写那段论证；③ `docs/STATUS.md` 由我写 —— 它自己那一节 STATUS 在 rebase 时被我丢弃（`--ours`），内容与本节同源。
+
+**地板抬到 1,683 / 198 / 签名包 7,247,127 B。**
