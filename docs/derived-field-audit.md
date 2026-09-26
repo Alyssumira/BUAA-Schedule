@@ -133,5 +133,109 @@
 
 ### 2.2 顺带量到的一枚口径问题（不算本族，写进回执）
 
-`ui/ScheduleViewModel.kt:1378` `_calendarSync.update { it.copy(syncing = true, message = null, diff = null) }` 把 `diff` 清空却没清 `skippedOccurrences`，而两者是 `CalendarSyncManager.computeDiff` 一次返回的同一对（`:1389-1396` 就是成对写的，`dismissCalendarSyncDiff` 在 `:1430` 也成对清）。它**不满足 (a)**（`skippedOccurrences` 不是 `diff` 的函数，两枚都来自外部那趟计算），且现在读不到旧值：唯一渲染点在 `ui/settings/SettingsScreen.kt:1914`，而它整块长在 `ModalTransition(payload = calendarSync.diff)`（`:1903`）里，`diff == null` 时不组合。所以不列进主表，只在此留一行。
+`ui/ScheduleViewModel.kt:1378` `_calendarSync.update { it.copy(syncing = true, message = null, diff = null) }` 把 `diff` 清空却没清 `skippedOccurrences`，而两者是 `CalendarSyncManager.computeDiff` 一次返回的同一对（`ui/ScheduleViewModel.kt:1394,1395` 成对写、`dismissCalendarSyncDiff` 在 `:1430` 成对清）。它**不满足 (a)**（`skippedOccurrences` 不是 `diff` 的函数，两枚都来自外部那趟计算），且现在读不到旧值：唯一渲染点在 `ui/settings/SettingsScreen.kt:1914`，而它整块长在 `ModalTransition(payload = calendarSync.diff)`（`:1903`）里，`diff == null` 时不组合。所以不列进主表，只在此留一行。
+
+## 3. 我查过但排除的
+
+程序化两遍（第一遍：实参表达式里**字面出现同表另一枚参数名**，命中 19 处；第二遍：多枚实参**共享同一个取值根**，命中 48 处）之后逐条人工判。落进 a 的是 **25 枚类**（主表：1 潜在 + 24 无害）。剩下的按下面六类排除，每类给原文。
+
+### 3.1 `Course.colorIndex` —— 最有代表性的假阳性（"看着最像 a，其实不是"）
+
+命中理由：`data/import/IcsParser.kt:141-144`
+```
+141:                             dayOfWeek = dow.value,
+142:                             periods = periods,
+143:                             weeks = weeks.distinct().sorted(),
+144:                             colorIndex = (startSection + dow.value) % 8,
+```
+`:144` 的实参确实把 `:141` 那枚同表参数（`dow.value`）当输入，而 `Course` 有 13 处 copy、其中 `ui/home/HomeScreen.kt:416-419` 恰恰改的就是 `dayOfWeek`：
+```
+416:             val shifted = course.copy(
+417:                 dayOfWeek = newDayIndex + 1,
+418:                 periods = shiftedPeriods,
+419:             )
+```
+按字面走，这就是 a+b+c（卡片颜色由周/日视图按 `colorIndex` 取调色板）。**它不是 a**，理由是这条关系根本不是不变式，只是导入时的一次性播种：
+- 它是用户可以另起一手的独立量：`ui/editor/CourseEditorScreen.kt:500-508` 那排色板的 `onClick = { colorIndex = index; customColor = null }` 就是"自己挑一支"，`:121` 的初值 `initialCourse?.colorIndex ?: 0` 只把它当草稿起点、不是当约束；
+- 写侧也按"两枚无关"处理：`data/repository/ScheduleRepository.kt:253-259` 的 `updateCourseGroupAppearance` 在同组片段之间同步的正是 `colorIndex = course.colorIndex.coerceAtLeast(0)`，而各片段的 `dayOfWeek` **刻意不同步**（KDoc `:233` 「不含时间、教师、周次——同组片段本就可能有不同的时间安排」）；
+- 同一格的两枚值若真该相等，`:144` 就不会写成 `% 8` 这种"散列取色"而不是"换算"的形状。
+
+⇒ 把课拖到别的星期之后卡片颜色不变，是**用户挑过的颜色该留着**，不是旧值。这一枚如果按 a 收，就是给一条本来正确的行为开一张改错方向的卡。
+
+### 3.2 `Course` 的其余候选：派生全在类体，所以 13 处 copy 一处都不构成 b
+
+`domain/model/Course.kt` 把每一枚派生值都挂在类体上，这是"不可能过期"的那一半形状：
+```
+67:     val startPeriod: Int get() = periods.minOrNull() ?: 1
+69:     val endPeriod: Int get() = periods.maxOrNull() ?: 1
+78:     val firstPeriodOrNull: Int? get() = periods.minOrNull()
+81:     val lastPeriodOrNull: Int? get() = periods.maxOrNull()
+84:     val displayName: String
+85:         get() = alias?.trim()?.takeIf { it.isNotEmpty() } ?: name
+```
+其余 copy 站点逐处读过原文，每处改的都是源字段本身：`ui/course/CourseManagementScreen.kt:183`（`primary.copy(colorIndex = index, customColorArgb = null)`）、`domain/schedule/CourseConstraints.kt:73-80`（归一化，`:79` 连 `credit` 都自己算）、`domain/schedule/ImportPlanner.kt:50`（`course.copy(id = old.id, credit = course.credit ?: old.credit)`）、`:53-57`（并周次 + 学分取已知值）、`data/import/BuaaScheduleParser.kt:136-143`（同格并片段）、`data/repository/ScheduleRepository.kt:215,223`、`ui/home/HomeScreen.kt:428,442`、`ui/home/ConflictWizardDialog.kt:81`、`ui/ScheduleViewModel.kt:500`。
+
+### 3.3 `ScheduleUiState.conflicts` —— a 成立、b 不存在，而且结构上永远不可能存在
+
+`ui/ScheduleViewModel.kt:467-472`
+```
+467:         ScheduleUiState(
+468:             courses = visibleCourses,
+469:             semester = semester,
+470:             timeSlots = timeSlots,
+471:             conflicts = ConflictDetector.findConflicts(visibleCourses),
+```
+`:471` 就是 `:468` 那枚同表参数的函数（与 T94 同一把尺子的形状）。但全仓 **0 处 `ScheduleUiState.copy`**，而它唯一的生产者就是这个 `combine` 块（`:456-477`）——四个源里任何一个一动就整枚重建，`courses` 与 `conflicts` 因此在类型层面不可能各说各话。这一枚最像"下一个 T94"，值得记一句：**将来谁给它加 copy 站点（比如想只改 `currentWeek` 而不重算冲突），必须先回来读这一行。**
+
+### 3.4 `ClassWindow` —— 同源扇出 + 一处**有意**只覆盖一枚
+
+`reminder/ClassProgressScheduler.kt:217-229`（构造）：
+```
+224:             startMillis = window.begin.atZone(zone).toInstant().toEpochMilli(),
+225:             endMillis = window.end.atZone(zone).toInstant().toEpochMilli(),
+227:             week = window.week,
+228:             dayOfWeek = window.begin.dayOfWeek.value,
+```
+`:224` 与 `:228` 同取 `window.begin`；`reminder/ReminderScheduler.kt:399-400` 那处构造甚至故意把两枚捏成同一个值（注释在 `:392-393`：「所以 start/end 先都填上课时间，真正开跑时由接收器把 start 改成"此刻"」）。全仓唯一一处 `ClassWindow.copy` 就是执行那句注释：`reminder/ReminderReceiver.kt:48` `window = scheduled.copy(startMillis = now),`，它上面 `:47` 的注释写着「课前这一段进度条量的是"这段等待"，所以起点是此刻而不是上课时间」。
+排除理由：`dayOfWeek`/`week` 不是 `startMillis` 这枚**构造参数**的函数（三者各自取函数入参 `window`），且这次覆盖是设计意图。真要按 a 收，就得把 `dayOfWeek` 改成 `Instant.ofEpochMilli(startMillis)` 的函数——那恰好会把这条链改错（"这是哪一天哪一周"必须来自课次，不能来自被改过的进度条起点）。留一句风险：这一枚的口径只靠 `reminder/ReminderReceiver.kt:47` 那行注释维持、无守卫；三枚混排进同一个 Bundle（`reminder/ClassProgressScheduler.kt:88-98`）之后各消费方读哪一枚，是装机才看得出的账（见 §4）。
+
+### 3.5 copy 站点自己带了新值 / 计数器成组但互相独立（其余有 copy 的类）
+
+- `data/calendar/CalendarSyncManager.kt:171-174`：
+  ```
+  171:                 val upserts = chunk.map { (mapping, occurrence) ->
+  173:                     mapping.copy(contentHash = occurrence.contentHash, syncedAt = now)
+  ```
+  `contentHash` 是 `CalendarSyncEntity`（`data/local/CalendarSyncEntity.kt:22`）的参数，但它的值来自**另一枚类** `Occurrence.contentHash`，不是同表参数；而这处 copy 点的正是它本身 ⇒ 判据里明写的"copy 同时传了新值"，不算 b。同一枚字段在 `data/calendar/CalendarSyncPlanner.kt:33,42` 被读来做"要不要重写事件"的判据，读的就是这份新值。
+- `ui/signin/ScanSecondEnginePolicy.kt:197-202` `SecondEngineLedger(fires, misses, lastFireFrame, unusableSeen)`：两处 copy（`:246` `fires = ledger.fires + 1, lastFireFrame = frame`；`:260-265` `misses = …` + `unusableSeen = ledger.unusableSeen || !usable`）改的是四枚互相独立的计数器。它的 KDoc `:186-187` 恰好把这点写成了纪律：「整枚换引用、字段全不可变…必须整枚换 —— 半改的账本会让「第几次发火」和「连续第几次失手」各说各话」。
+- `ui/signin/ScanCameraAidPolicy.kt:460-468` `ScanAssistState` 七枚计数器 + `:541-549` 那处 copy **七枚全点齐** ⇒ 无 b。`candidateFrames` 与 `candidateRung` 的关系（同档才 +1、换档归 1）在 `:508-510` 的判据局部量里算，不是从参数表里读别人。
+- `widget/WidgetAppearance.kt:30-59` 九枚 + 12 处单字段 copy：派生量全在类体（`:63-64 gridRowTextSizeSp`、`:66-67 cornerDrawableRes`、`:69-70 alphaFraction`）⇒ 与 `Course` 同一半安全形状。`widget/WidgetConfigActivity.kt:346` 那处 `preset.appearance.copy(rowFields = appearance.rowFields)` 是"换预设但保留用户勾的字段"，也是显式点名。
+- `widget/WidgetBindingStore.kt:16-26` `WidgetBinding`（`:19-25` 的 `weekOffsetBase` 与 `weekOffset` 是"偏移 + 偏移基准"两枚独立事实，`widget/WidgetCommon.kt:893` 那处 copy 两枚一起点）、`ui/home/WeekGridGeometry.kt:262-266` `ResizeState`（`ui/home/WeekView.kt:1104` 只点 `deltaY`，而"新结束节"是 `:270-276` 的函数 `newEnd(metric)` 不是字段）、`ui/settings/SettingsScreen.kt:654,668` 的 `TimeSlot`、`data/repository/ScheduleRepository.kt:225,365` 的 `ReminderSetting`（换 `courseId` 是拆周次后把提醒搬去新行）、`data/repository/ScheduleRepository.kt:103` 的 `SemesterEntity`（`target.copy(id = 0L)` 让它落成新行）：参数表里都不存在"另一枚参数的函数"。
+- `core/designsystem/Theme.kt:167-176` `SemanticColors.copy` 把五个槽位逐一点齐；`warning` 与 `onWarning` 是"成对解出来的配色"而不是彼此的函数（KDoc `core/designsystem/GlassSurface.kt:255-258`「两个字段必须成对用」）。`LiquidGlassMaterial` 的三处 copy（`core/designsystem/DesignTokens.kt:282-296`、`core/designsystem/GlassSurface.kt:74`、`core/designsystem/GlassSegmentedControl.kt:77`）里 `blur/lensHeight/lensAmount` 都由工厂入参 `intensity` 算出（`LiquidGlass.kt` 的 `pill`/`dialog`），`copy(useVibrancy = false)` 更是单旗标。
+
+### 3.6 「同源扇出」一族：看着像 a，其实没有一枚参数是另一枚的函数
+
+这十三枚是第二遍扫描里最大的噪声源，也是**编排者复核我有没有筛错时最该看的一节**。共同形状：`X(a = obj.p, b = obj.q, c = f(obj.p))` —— 各枚实参共享一个**外部对象/函数入参**，而那枚外部对象不在参数表上。
+
+| 类 | 定义处 | 共享源 | 原文（赋值处） |
+| --- | --- | --- | --- |
+| `ScanRejectInfo` | `data/import/ScanReject.kt:80` | 函数入参 `shape` | `:187-197` `textLength = shape.length`、`scheme = shape.scheme`、`paramNames = shape.names`（十枚全取 `shape`） |
+| `BackupPreview` | `ui/ScheduleViewModel.kt:1211` | 局部 `data: BackupData` | `:1237` `courseCount = data.courses.size`、`:1238` `manualCourseCount = data.courses.count { it.isManualOverride }` |
+| `ImportHistory` | `domain/model/ImportHistory.kt:8` | 局部 `selection` | `ui/ScheduleViewModel.kt:767` `courseCount = selection.toWrite.size`（`toWrite` 不在 `ImportHistory` 参数表上） |
+| `GanttRow` | `core/designsystem/ScheduleCharts.kt:598` | 局部 `coverage` | `ui/stats/StatsScreen.kt:993,1000,1001,1002,1003` 五枚全取 `coverage.*` |
+| `HeatGridDay` | `core/designsystem/ScheduleCharts.kt:608` | 局部 `day`/`grid` | `ui/stats/StatsScreen.kt:1041,1044` `label = "周${weekdayChar(day.dayOfWeek)}"`、`isEmptiest = grid.freeDayOfWeek == day.dayOfWeek` |
+| `Row`（组件） | `widget/CourseListWidgetService.kt:73` | 局部 `course` | `:164` 起 `teacher = course.teacher`、`periodsText = widgetPeriodsText(course.periods, …)`、`color = courseColor(course).toArgb()`（参数表里只有 `courseId`，没有 `course`） |
+| `WidgetRowFields` | `widget/CourseListWidgetService.kt:320` | 局部 `row` | `:218` 起 `dayTag = row.dayTag`… 全取 `row.*` |
+| `GlassBakeKey` | `widget/WidgetBackgroundRenderer.kt:539` | 局部 `size`/`radii` | `:571` 起 `bakeWidthPx = size.widthPx`、`radiusX = radii.radiusX` |
+| `GlassSourceIdentity` | `widget/WidgetBackgroundRenderer.kt:514` | 局部 `bitmap` | `widget/WidgetWallpaperProbe.kt:295` `widthPx = bitmap.width`、`heightPx = bitmap.height` |
+| `ExportResult` | `data/export/IcsExporter.kt:22` | 构建过程中的计数器 | `:47` `ExportResult("", 0, build.skipped)`、`:76` 同形状 |
+| `Diff` | `data/calendar/CalendarSyncPlanner.kt:12` | `compute` 的两枚入参 | `:44` `Diff(toInsert, toUpdate, toDelete, unchanged)`，`unchanged` 在 `:40-43` 数出来。**对照：`:18,19` 把真正的兄弟函数放进了类体**——`totalChanged get() = toInsert.size + toUpdate.size + toDelete.size` |
+| `DefaultSlot` | `data/import/IcsParser.kt:29` | 局部 `slot: TimeSlot` | `:46` 起 `start = LocalTime.parse(slot.startTime)`、`number = slot.number` |
+| `TodayCourseSlot` | `domain/schedule/TodayPlanner.kt:17` | 局部 `window` | `:66-72` `start/end/segment/status` 四枚全取 `window.*`（`course` 是参数，但那四枚都不是它的函数） |
+
+`DecodingAdmission`（主表列作参照行）也在这一类：`blankness` 与 `payloadLength` 都由那颗 `payload` 算出（`ui/signin/ScanDecodingAdmission.kt:115-118`），彼此只有**值域约束**（`:91` 注释），不是函数关系。`LaunchRequests`/`ReminderSetting`/`BackupReminder` 那几处命中是纯噪声：实参是 `null`、`setting.first`、`setting.second` 这类成组值，参数名只是恰好撞名。
+
+### 3.7 一条从这张表里读出来的口径（供编排者定规矩用）
+
+本仓**已经**在按"兄弟参数的函数放类体、要多算一趟的才放参数表"这条线写：`CourseWeekSpans.kt:77,80`（`isEmpty`/`knownCount`）、`SemesterStats.kt:65,89,125`、`WeekFreeGrid.kt:40,41,49,50,51,81,82,86-89`、`WeekDaySchedule.kt:89,98,127,136`、`CalendarSyncPlanner.kt:18,19`、`WeeklyLoadTrend.kt:61`、`domain/model/Course.kt:67-85`、`widget/WidgetAppearance.kt:63-70`、`ui/signin/ScanDecodingAdmission.kt:95-96` 全是类体 `get()`；参数表里留下的 `unknownCount`/`freeSlotCount`/`occupiedCellCount` 这类，是因为**要多算一趟**（`rows.count {}`、`loads.sumOf {}`）才不回类体。T94 犯的错正是把一枚"要多算一趟的派生值"放进参数表、却没给它的两个 copy 站点配套重算 ⇒ 参数表上每多一枚这种字段，就是在要求"每个 copy 站点都别忘了算它"。全仓当前这种字段共 **25 枚类**（主表），其中只有 **1 枚**配了 copy 站点。
 
