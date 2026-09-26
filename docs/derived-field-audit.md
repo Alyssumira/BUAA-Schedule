@@ -203,7 +203,7 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
   `inserted/updated/deleted/failed`、**没有** skipped 字段 ⇒ "同步完成后仍想知道刚才跳过几节"这件事在代码里没有承载体
   （成功文案 `:1434` 念的也只有新增/更新/删除三个数）。
 - **③ 唯一读点锁在 diff 的挂载闸门里**：`ui/settings/SettingsScreen.kt:1914` + `:1916` 是全仓唯一消费点（另一枚同名的是
-  `data/export/IcsExporter.kt:26`，走 `ui/ScheduleViewModel.kt:1588`/`:1589` 那两行 `result.skippedOccurrences`，与本卡无关），它整块长在
+  `data/export/IcsExporter.kt:26`，走 `ui/ScheduleViewModel.kt:1598`/`:1599` 那两行 `result.skippedOccurrences`，与本卡无关），它整块长在
   `ModalTransition(payload = calendarSync.diff)`（`:1903`）内；那一层的 payload 版（`core/designsystem/ModalTransition.kt:84-100`）
   外壳开合只看 `payload != null`（`:95`），收场期间画锚住的**上一次** payload（`:91`/`:93`/`:100`）⇒ 块的可见窗口由那份 diff 关掉。
 
@@ -519,6 +519,15 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
 并且 `:1512` `if (_calendarSync.value.calendarsLoaded) return` 会让这一页**再也不同步重试**）。
 登记进 §6.8②。
 
+**A 的现状（T110 收了缓存那一半，吞异常那一半没动）**：`calendarsLoaded` 现在有一枚复位站点 ——
+`:1449` 开窗那一档连带写 `calendarsLoaded = false`（改前那格记的"0 行复位 ⇒ 进程寿命缓存"留着，
+它是那一遍的读数），于是上面那句"`:1512` 会让这一页**再也不同步重试**"在**开窗那一路**已不复成立：
+每次开窗都重查一遍，选择器不再列陈名单，`:1523` 的 `targetGone` 也随之每次跑一趟，并配上了撤偏好那档
+（`:1538`，两枚 key 成对撤 + `loaded.isNotEmpty()` 才动手）。而 `:71` / `:90` / `:91` 那颗
+`runCatching` 的本体一字未动 ⇒ `getOrElse` 那一档今天仍然几乎走不到、"查询失败"仍然被洗成
+"这台设备没有日历"，**#11 判「结构不可能」用的那道外来闸门仍在原地**，本节上面那句"这句话必须记着"
+继续有效。同步入口 `:1391` 也仍然吃缓存（取舍与代价见 §6.8② 那一格「现状」）。
+
 **B. #7 `(message, permissionPermanentlyDenied)`：改前判"两个方向各有一道闸"—— 那半边是错的，T106 已修。**
 
 **改前的形状（T103 那一遍的原文，行号按 `4b1c4a4`，照抄不抹）**：
@@ -569,7 +578,24 @@ T104（`saving`/`saveError`）。这是**同行改写**：`ScheduleViewModel.kt`
 `message = null` 1 处且必须带旗标）、`thoseTwoGatesAreNowTheSecondLayerBehindThePairedClearAtTheSyncEntry`
 （两道闸降级为第二层保险，仍两头钉）、`everyRouteIntoTheSyncEntryStandsInsideAPermissionGate`
 （上面那 5 枚入口逐条钉，含 `precedingFunHead` 认宿主）。
-⚠️ 仍**没有装机证据**：这颗按钮在真机上不再挂出来，本节只有代码级推断（见 §4.1、§6.7 那一格）。
+
+**T110 又收了第二条链（同形状、不同入口）**：「移除已同步的日程」那条链自己不进 `startCalendarSync`
+—— VM `:1478` `removeSyncedEvents()` 的起手（`:1481`）此前只立 `syncing = true`、收尾只写 `message`，
+上一次永久拒绝留下的旗标清不掉，而 `:1486` 那句「已移除 N 个日程」恰好把 `:1664` 那格重新点亮 ⇒
+完成句旁边继续挂着 `:1677` 那颗按钮。它**不经**上面那一刀盖住的入口，所以 T106 的覆盖面到不了它。
+改法取的仍是"起手成对清"（`:1481` 现在写 `it.copy(syncing = true, message = null, permissionPermanentlyDenied = false)`，
+同行改写、零行号漂移），**弃"再套一道权限闸"那一支**：这条链今天就已经在唯一那道闸里（那颗行
+`onClick` 就在 `withCalendarPermission { … }` 内，复算 `grep -rn "withCalendarPermission {" app/src/main/java` ⇒ 3 处），
+而 `:331` 那句短路的 true 分支直接 `action()`、根本不启动 launcher ⇒ "再套一道闸"既不撤旗标，
+又把**造成这枚病的**那件短路再犯一遍。清旗标在语义上等于"宣布此刻已授权"，这句由**入口在闸里**兜住
+（真·永久拒绝时那条路根本不落 `showRemoveConfirm = true`，进不到那次 copy）；剩下的残态只有
+"确认框开着的那几秒里回系统设置把权限关掉再点移除"那一格，方向安全：落的是 `:1487` 那句
+「移除失败：日历写入异常，请检查权限后重试」，文案自己就写着要检查权限，而下一次点同步会走闸重新立旗标。
+③ 那一族因此按新盘面重钉（旗标赋值 3→4、`message = null` 1→2，且"必须带旗标"改成**逐处**取），
+并添第四枚判据 `everyRouteIntoTheRemoveChainStandsInsideTheSameGateAndClearsTheFlagPaired`
+（起手形状 + 那条链的唯一入口枚举：`showRemoveConfirm = true` 写点 1 枚、界面调用点 1 枚且长在
+`:1941` 那一层窗口里、闸本体与 launcher 各 1 枚）。本文件 ③ 那一族因此是三枚 → 四枚。
+⚠️ 仍**没有装机证据**：这颗按钮在真机上不再挂出来（两条链都算），本节只有代码级推断（见 §4.1、§6.7 那一格）。
 
 ### 6.5 已被钉住那三枚的点名单
 
@@ -654,8 +680,8 @@ T104（`saving`/`saveError`）。这是**同行改写**：`ScheduleViewModel.kt`
 
 | 编号 | 位置 | 该改什么（不写方案细节，等排卡） |
 | --- | --- | --- |
-| ① | `ui/ScheduleViewModel.kt:1462` `it.copy(targetId = calendarId, targetName = displayName, showPicker = false)` 与 `:1528-1529` 那两行 `if (targetGone) -1L` / `if (targetGone) null` | `targetId`/`targetName` 三处写点今天全成对，但**没有任何守卫**钉住"成对"。唯一读者 `ui/settings/SettingsScreen.kt:1623` 不在闸门里 ⇒ 与 T100 改前的 `diff`/`skippedOccurrences` 只差一枚守卫。该补的是 `CalendarSyncDiffClearPairingGuardTest` 那一形状的第二份实例 |
-| ② | `data/calendar/CalendarSyncManager.kt:71` `runCatching {` + `:90` `.onFailure { Log.w(TAG, "读取日历列表失败", it) }` + `:91` `return result` | 它把"查询失败"洗成"这台设备没有日历"，是 §6.4-A 那道**外来**闸门的来源；同时它使 `ui/ScheduleViewModel.kt:1517` 那句「读取日历列表失败，请检查日历权限」几乎永不显示。另附同族一笔：`calendarsLoaded` 全仓**没有任何**复位站点（`grep -rn "calendarsLoaded = false" app/src/main/java --include='*.kt'` ⇒ 0 行），于是 `calendars` 是进程寿命的缓存，用户在系统日历里删掉一个日历后选择器会一直列着那个死 id |
+| ① | `ui/ScheduleViewModel.kt:1462` `it.copy(targetId = calendarId, targetName = displayName, showPicker = false)` 与 `:1528-1529` 那两行 `if (targetGone) -1L` / `if (targetGone) null` | `targetId`/`targetName` 三处写点今天全成对，但**没有任何守卫**钉住"成对"。唯一读者 `ui/settings/SettingsScreen.kt:1623` 不在闸门里 ⇒ 与 T100 改前的 `diff`/`skippedOccurrences` 只差一枚守卫。该补的是 `CalendarSyncDiffClearPairingGuardTest` 那一形状的第二份实例。**现状（守卫已由 T105 立、偏好那一半由 T110 收）**：守卫落在 `app/src/test/java/com/buaa/schedule/ui/CalendarSyncTargetPairingGuardTest.kt` ① 那一族（两枚各赋值 3 处、逐处成对、界面读者 1 枚且不在 `targetId` 驱动的块里）。T110 收的是**同一对字段在偏好里的那一头** —— 改前的形状是 `:1523` 那次 `targetGone` 检测只把内存里两枚打回 `-1L` / `null`、偏好一行不动 ⇒ 起手 `:1373-1374` 在下一次冷启动又把死 id 与死名字捞回来：`:1623` 那行裸读继续念一个已经不存在的日历名，真去同步时 `CALENDAR_ID` 打进死 id、异常被 `runCatching` 吞掉，用户读到的是 `:1432`「同步失败：日历写入异常」（真因被洗成"写入异常"）。现在 `:1538` 那一档把两枚 key **一起** `remove`（与内存那两枚同样成对），且 `loaded.isNotEmpty()` 才动手（查询失败交回来的也是空列表，那一刻分不清「日历被删了」与「provider 抖了一下」）。新判据 `theDeadTargetIsDroppedFromPreferencesAsAPairOfKeysAndNotOnlyFromMemory`：两枚各撤一次、同一次 `edit` **按位置**判（两条一模一样的 `edit { }` 并排放，块头文本相等而分头清是真病）、闸门同时含 `targetGone` 与 `loaded.isNotEmpty()`、落点在那颗函数体内、两枚 key 各自出现 3 次（读 1 + 写 1 + 撤 1） |
+| ② | `data/calendar/CalendarSyncManager.kt:71` `runCatching {` + `:90` `.onFailure { Log.w(TAG, "读取日历列表失败", it) }` + `:91` `return result` | 它把"查询失败"洗成"这台设备没有日历"，是 §6.4-A 那道**外来**闸门的来源；同时它使 `ui/ScheduleViewModel.kt:1517` 那句「读取日历列表失败，请检查日历权限」几乎永不显示。另附同族一笔：`calendarsLoaded` 全仓**没有任何**复位站点（`grep -rn "calendarsLoaded = false" app/src/main/java --include='*.kt'` ⇒ 0 行），于是 `calendars` 是进程寿命的缓存，用户在系统日历里删掉一个日历后选择器会一直列着那个死 id。**现状（T110 只收了后半笔）**：那颗 `runCatching` 吞异常的本体**一字未动**（本卡的范围是 VM 那一段区，:71 / :90 / :91 这三行仍挂在上面那一格里，等下一张卡）。后半笔收了 —— 上面那句「0 行复位」是**改前读数**，留着；T110 之后 `calendarsLoaded = false` 有 **1 枚复位站点**（`:1449` 开窗那一档连带写；复算 `grep -rn "calendarsLoaded = false" app/src/main/java` ⇒ 1 行），`calendars` 因此不再是"进程寿命"的缓存、`targetGone` 那次检测每次开窗都跑一趟。取的修法是"每次开窗强制刷新"而不是拆掉 `:1512` 那次早返回：**同步入口那一档今天不带复位**（有意 —— 每点一次同步多 1–2 趟 provider 查询，而同步链自己已经要跑 Room 读 + 逐课次内容摘要 + Events 查询），于是"同一进程里第二次点同步用的是上一份列表"这一格残态如实留着，它不影响死 id 被撤（每进程头一次开窗或头一次同步都必查）。守卫 `theCalendarListCacheHasExactlyOneResetSiteAndItIsThePickerOpening`：复位站点 1 处、宿主 `openCalendarPicker`、位置在那次查询之前、生命点 5、`:1512` 早返回仍在、`:1389` 那档**不带**它（正解若要改这一支，本判据故意先红） |
 | ③ | **已由 T106 收掉**：`ui/ScheduleViewModel.kt:1389` 起手那次 copy（改后原文 `it.copy(syncing = true, message = null, permissionPermanentlyDenied = false, diff = null, skippedOccurrences = 0)`）；`ui/ScheduleViewModel.kt:1508` `_calendarSync.update { it.copy(permissionPermanentlyDenied = false) }` 保持只清旗标 | **改前登记的原话**：「清旗标不清句子；今天被 `ui/settings/SettingsScreen.kt:331` 那道 `hasCalendarPermission()` 短路挡着（§6.4-B）。这句注释该留在两处之一：要么把它做成成对清，要么把『靠哪道闸不念旧账』写进 KDoc」。**现状**：那一格判错了 —— `:331` 不是挡住漏清的闸，而是**造成**漏清的那件事（已授权时它让 launcher 根本不启动 ⇒ `:1508` 的 `onCalendarPermissionGranted()` 永不被调），而 `:1664` 那格会被 `:1429-1439`「同步完成…」重新点亮 ⇒ 真漏清。修法取了第一个选项：**把起手做成成对清**，并把可达路径枚举钉成守卫（§6.4-B「现状」那一段有取舍与为什么不选改读侧）|
 | ④ | `ui/signin/SpocScanScreen.kt:283` `cameraProviderMissing = true` 与 `ui/signin/ScanUiStatus.kt:87`/`:93` 那两支 | 跨生产者残值（§6.6）：`cameraError` 以「读不出那张图」开头时，梯子在说相册、而真病因是 provider。判据该按**来源**分支，不是按**写入先后**赌 |
 | ⑤ | `ui/editor/CourseEditorScreen.kt:614` `saving = true` | 本遍唯一的真漏清。修法与红线冲突（不许动 `app/src/main/**`），留一卡：删除这条链要不要复用 `saving` 这枚旗标本身也值得重判 —— 复用它是 `:310` 那句「保存中…」在删除时说假话的原因 |
