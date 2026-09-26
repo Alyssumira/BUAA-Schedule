@@ -2,6 +2,7 @@ package com.buaa.schedule.ui
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -19,6 +20,23 @@ import org.junit.Test
  * `ui/settings/SettingsScreen.kt:1623` `summary = calendarSync.targetName ?: "未选择",`
  * —— 它不在任何由 `targetId` 驱动的块里（全仓 `calendarSync.targetId` 出现 0 次）。
  * 于是「只把 `targetId` 打回 -1L」的那一处新站点，会当场把「未选择」念成上一任日历的名字。
+ *
+ * **T110 给 ① 添的第二半（偏好那一侧）**：`:1523` 那次检测今天除了把内存里两枚打回 `-1L` / `null`，
+ * 还必须在 `:1538` 那一档把偏好里那两枚 key（`calendar_sync_target_id` / `calendar_sync_target_name`）
+ * **一起撤掉** —— 只清内存的话，下一次 VM 重建起手 `:1373-1374` 又把死 id 读回来，界面继续念那个已经不
+ * 存在的日历名，真去同步时 `CALENDAR_ID` 打进死 id、异常被 `CalendarSyncManager` 那颗 `runCatching` 吞掉，
+ * 用户读到的就成了 `:1432` 那句「同步失败：日历写入异常」—— 真因（那个日历没了）被洗成"写入异常"。
+ * 两枚 key **同样必须成对**（漏一枚 = 换个方向念旧账：留着名字就把"未选择"念成上任的名字，留着 id 就
+ * 还能往死 id 里写）。另外撤的那一档带 `loaded.isNotEmpty()`：查询失败交回来的也是空列表（§6.4-A），
+ * 那一刻分不清「日历被删了」与「provider 抖了一下」，宁可让偏好多留一次，也不要在抖动里抹掉用户选好的日历。
+ * 归 `theDeadTargetIsDroppedFromPreferencesAsAPairOfKeysAndNotOnlyFromMemory` 那枚判据钉。
+ *
+ * **T110 给 ① 添的第三半（那枚缓存旗标）**：`calendarsLoaded` 此前在全仓**一处复位都没有**
+ * （`grep -rn "calendarsLoaded = false" app/src/main/java` ⇒ 0 行），`:1512` 那次早返回因此把 `calendars`
+ * 变成"进程寿命"的缓存 —— 选择器列不出用户刚删/刚建的日历，`targetGone` 那次检测一个进程里也只跑头一趟，
+ * 而 `:1516` 那一档还把 `calendarsLoaded = true` 与一句失败文案一起落，查询失败也永久锁死。
+ * 现在有了唯一一枚复位站点：`:1449` 开窗那一档连带写 `calendarsLoaded = false`
+ * （归 `theCalendarListCacheHasExactlyOneResetSiteAndItIsThePickerOpening` 钉）。
  *
  * **③ `CalendarSyncUiState.message` / `.permissionPermanentlyDenied`**（§6.8③、§6.2 表 #7、§6.4-B）
  * 成对写一处：`ui/ScheduleViewModel.kt:1496-1503`（`permissionPermanentlyDenied = !canAskAgain,` 与
@@ -55,7 +73,7 @@ import org.junit.Test
  * （同族第二回，`saving` / `saveError`，T104 刚写完）。那两枚各自钉死的字段与本文件**不重叠**：
  * `diff = null` / `skippedOccurrences = 0` 的三处成对账归前者，`saveError` 一族归后者。
  *
- * 七枚 `@Test` 全是**纯 JVM 源码核对**：只 import `java.io.File` 与 JUnit，零 android import、
+ * 九枚 `@Test` 全是**纯 JVM 源码核对**：只 import `java.io.File` 与 JUnit，零 android import、
  * 零时钟读取（不碰 `System.currentTimeMillis()` / `LocalDate.now()` 之类）。
  * 行号按 `4b1c4a4` 盘面复算；T106 只把 `ScheduleViewModel.kt:1389` 那一枚 copy **同行改写**（没有增删行）
  * ⇒ 本文件点名的行号在 `688b191`＋T106 之上仍然成立，只有 ③ 那一族的**枚数**按新盘面重钉
@@ -222,6 +240,187 @@ class CalendarSyncTargetPairingGuardTest {
             "靶子：`item(key = \"targetCalendar\")` 在整颗文件里仍然只有一处：",
             1,
             occurrences(screen, TARGET_ITEM_HEAD),
+        )
+    }
+
+    /**
+     * ① 的第二半（**T110 新增**）：目标日历被用户删掉那一档，偏好里那两枚 key 也必须**成对**撤。
+     *
+     * 病当时的形状：`:1523` 的 `targetGone` 只把内存里两枚打回 `-1L` / `null`，偏好一行不动 ⇒
+     * 下一次 VM 重建（冷启动）起手 `:1373-1374` 又把死 id 与死名字读回来，`:1623` 那行 summary 继续念
+     * 一个已经不存在的日历名；真去同步时 `CalendarSyncManager` 把 `CALENDAR_ID` 打进死 id，异常又被它
+     * 自己的 `runCatching` 吞掉 ⇒ 用户读到的是 `:1432`「同步失败：日历写入异常」，真因被洗成"写入异常"。
+     *
+     * 判据四枚，各是这条链上的一环：
+     * - 两枚 key **各自恰好被 remove 一次**（漏一枚 = 换个方向念旧账：只留名字就把"未选择"念成上任的名字，
+     *   只留 id 就还能往死 id 里写）；
+     * - 两次 remove 的**块头链完全相同**（同一次 `settingsPrefs.edit { }`）—— 分头清（拆成两次 edit）
+     *   在这条链上就是 T99/T100 那一族「三处清空只有一处成对」的重演，本条先红；
+     * - 那次 edit 的块头必须同时含 `targetGone`（只在真检测出死目标时动手）与 `loaded.isNotEmpty()`
+     *   （空列表不动手：查询失败交回来的也是空列表，那一刻分不清"日历没了"与"provider 抖了一下"）；
+     * - 撤的那一档必须长在 `ensureCalendarsLoaded()` 体内（与 `targetGone` 同一颗函数，中间隔一颗别的函数
+     *   就等于换个时机动手）。
+     *
+     * 两头都钉：**朝宽**——把 `remove("calendar_sync_target_name")` 删掉（只撤 id）⇒ 该 key 的 remove 计数
+     * 1→0、两枚 key 的出现次数从 3/3 变 3/2、块头链那条断言也跟着红；**朝紧**——把两枚 remove 拆进两次
+     * `edit { }`、或给同一颗 key 补第二次 remove、或把 `loaded.isNotEmpty()` 从闸门里抹掉 ⇒ 三条里相应那条红。
+     */
+    @Test
+    fun theDeadTargetIsDroppedFromPreferencesAsAPairOfKeysAndNotOnlyFromMemory() {
+        val code = blankCommentsKeepingLiterals(readMainSource(SCHEDULE_VIEW_MODEL))
+        val idDrops = indexOfAll(code, TARGET_ID_DROPPED)
+        assertEquals(
+            "偏好里 `calendar_sync_target_id` 被 remove 的站点不是恰好 1 处（:1539 那次成对撤）。" +
+                "**0 处** = 死 id 又只被内存清掉，冷启动起手 :1373 把它捞回来，本卡那枚病原样复发；" +
+                "**2 处** = 多出一条别的路在撤它（撤的时机与前提都得重判）：" + lineHints(code, idDrops),
+            TARGET_PREF_DROP_SITES,
+            idDrops.size,
+        )
+        val nameDrops = indexOfAll(code, TARGET_NAME_DROPPED)
+        assertEquals(
+            "偏好里 `calendar_sync_target_name` 被 remove 的站点不是恰好 1 处 —— 它必须与上面那枚 id 同数：" +
+                "两枚是「选中的目标日历」这一件事的 id 与名字，只撤名字就把死 id 留下（还能往里写），" +
+                "只撤 id 就把死名字留下（:1623 那行裸读当场念给用户）：" + lineHints(code, nameDrops),
+            TARGET_PREF_DROP_SITES,
+            nameDrops.size,
+        )
+        val idHeads = enclosingBlockHeads(code, idDrops.first())
+        val nameHeads = enclosingBlockHeads(code, nameDrops.first())
+        assertEquals(
+            "两枚偏好 key 不再出自同一次 `settingsPrefs.edit { }`（左边按 id 切出的块头链 $idHeads、" +
+                "右边按 name 切出的 $nameHeads）—— 拆成两次 edit 就是分头清，中间那次失败或提前返回" +
+                "就会留下半对：" + lineHints(code, idDrops),
+            idHeads,
+            nameHeads,
+        )
+        val dropBlock = idHeads.last()
+        assertTrue(
+            "那次成对撤的落点不再是偏好编辑（最内层块头 `$dropBlock` 里没有 settingsPrefs.edit）—— " +
+                "换了载体（Editor 直接 apply？换 SharedPreferences 名？）就得回来重钉这一族：",
+            dropBlock.contains(PREFS_EDIT_HEAD),
+        )
+        assertTrue(
+            "撤偏好那一档不再由 `targetGone` 驱动（块头 `$dropBlock`）—— 那等于每次查询都撤一次目标，" +
+                "用户什么都没干也会丢掉了选好的日历：",
+            dropBlock.contains("targetGone"),
+        )
+        assertTrue(
+            "撤偏好那一档不再拒空列表（块头 `$dropBlock` 不含 loaded.isNotEmpty()）—— 查询失败交回来的" +
+                "也是一份空列表（见 docs/derived-field-audit.md §6.4-A 那一格：被调方把异常吞成空集），" +
+                "那一刻分不清「日历被删了」与「provider 抖了一下」，动一次手就把用户选好的日历永久抹掉：" +
+                "\n" + lineAt(code, idDrops.first()),
+            dropBlock.contains("loaded.isNotEmpty()"),
+        )
+        val fnHead = code.indexOf(ENSURE_LOADED_HEAD)
+        check(fnHead >= 0) { "靶子：找不到 `$ENSURE_LOADED_HEAD` —— 那次检测换了宿主，本守卫要跟着改" }
+        val fnEnd = code.indexOf(ENSURE_LOADED_TAIL, fnHead)
+        check(fnEnd > fnHead) { "靶子：ensureCalendarsLoaded 之后找不到下一处成员边界，窗口切不出来" }
+        assertTrue(
+            "撤偏好那一档跑出了 ensureCalendarsLoaded() 的体内（窗口 " +
+                "${code.substring(fnHead, fnEnd).lines().size} 行）—— 换时机就得重判「什么时候才敢说那个日历真没了」",
+            idDrops.first() in fnHead until fnEnd,
+        )
+        assertEquals(
+            "`calendar_sync_target_id` 在 VM 里的出现次数不再是 3（起手读 1 + 选完写 1 + 撤 1）。" +
+                "**多一处** = 又添一枚读者或第二处撤点，本判据的「撤的时机」要重算；**少一处** = 有半条链" +
+                "换了 key 或换了载体，字面判据跟不上了：",
+            TARGET_ID_PREF_LIFE_POINTS,
+            occurrences(code, TARGET_ID_PREF_KEY),
+        )
+        assertEquals(
+            "`calendar_sync_target_name` 的出现次数不再是 3（同上），而且它必须与上面那枚**同数** —— " +
+                "两枚的读/写/撤站点数一旦不等，就说明某一头少了那一半：" +
+                lineHints(code, indexOfAll(code, TARGET_NAME_PREF_KEY)),
+            TARGET_NAME_PREF_LIFE_POINTS,
+            occurrences(code, TARGET_NAME_PREF_KEY),
+        )
+        // 靶子：起手那两枚读点（死 id 就是从这儿被捞回来的）与撤的那三行原文
+        assertEquals("靶子：起手读 targetId 那行原文还在（:1373）：", 1, occurrences(code, TARGET_ID_READ_SHAPE))
+        assertEquals("靶子：起手读 targetName 那行原文还在（:1374）：", 1, occurrences(code, TARGET_NAME_READ_SHAPE))
+        assertEquals("靶子：成对撤那一档的闸门原文还在（:1538，两枚 key 由它驱动）：",
+            1, occurrences(code, TARGET_PREF_DROP_GATE))
+        assertEquals("靶子：撤 id 那一行原文还在（:1539）：", 1, occurrences(code, TARGET_ID_DROPPED))
+        assertEquals("靶子：撤 name 那一行原文还在（:1540）：", 1, occurrences(code, TARGET_NAME_DROPPED))
+    }
+
+    /**
+     * ①-b（**T110 新增**）：`calendarsLoaded` 这枚缓存旗标今天有了**唯一一枚复位站点**，就是开窗那一档。
+     *
+     * 为什么这一族归在本文件：`calendars` 与 `calendarsLoaded` 是 §6.2 表 #11 那一对，而 `calendars`
+     * 的读者就是选择器那张列表（`SettingsScreen.kt:1870` 的 isEmpty 判断 + 下面的逐行 clickable）。
+     * 此前 `calendarsLoaded = false` 在全仓**一处都没有** ⇒ `:1512` 那次早返回让列表变成"进程寿命"的缓存：
+     * 用户在系统日历里刚删/刚建的日历看不见，连带 `targetGone` 那次检测一个进程里只跑头一趟。
+     * 本卡取的修法是把复位**钉在开窗那一档**（不是拆掉早返回、也不是给同步入口加复位）—— 于是"每次开窗
+     * 强制刷新"这件事现在完全靠 `:1449` 那一行维持，本判据钉的就是这一行的形状、枚数与位置。
+     *
+     * 两头都钉：**朝宽**——把 `calendarsLoaded = false` 从那行删掉（复位没了 ⇒ 缓存回到进程寿命）⇒
+     * 复位站点 1→0 红、生命点 5→4 红、`openCalendarPicker` 的实参表不含 showPicker 那条一并红；
+     * **朝紧**——再给别处补一枚复位（例如顺手写进 `:1389` 同步起手，那是本卡量过代价之后**有意不加**的一档，
+     * 加了就得重判 provider 趟数）⇒ 复位站点 1→2 红、生命点 5→6 红、"同步入口那档不带它"那条红。
+     */
+    @Test
+    fun theCalendarListCacheHasExactlyOneResetSiteAndItIsThePickerOpening() {
+        val code = blankCommentsKeepingLiterals(readMainSource(SCHEDULE_VIEW_MODEL))
+        val resets = indexOfAll(code, CALENDARS_LOADED_RESET)
+        assertEquals(
+            "`calendarsLoaded = false` 的复位站点不再是 1 处（现在只有 :1449 openCalendarPicker 那一档）。" +
+                "**0 处** = 缓存回到「进程寿命」，选择器列的是上一次查询的结果、targetGone 一个进程只检测一次；" +
+                "**2 处以上** = 又有一条链在作废这份缓存，先问它是不是也给同步入口加了一次 ContentProvider 查询" +
+                "（本卡量过、有意没加）：" + lineHints(code, resets),
+            CALENDARS_LOADED_RESET_SITES,
+            resets.size,
+        )
+        assertEquals(
+            "唯一的复位站点不再长在 `fun openCalendarPicker()` 体内（现宿主：" +
+                precedingFunHead(code, resets.first()) + "）—— 宿主一换，「每次开窗都重查」这句话就得按新宿主重推",
+            OPEN_PICKER_HEAD,
+            precedingFunHead(code, resets.first()),
+        )
+        val launch = code.indexOf(PICKER_QUERY_LAUNCH)
+        check(launch > 0) { "靶子：找不到 `viewModelScope.launch { ensureCalendarsLoaded() }`（:1450）—— 开窗那次查询换了写法" }
+        assertTrue(
+            "复位跑到了那次查询**之后** —— 这一次开窗仍然撞上 :1512 的早返回，列表照旧是陈的：" +
+                lineAt(code, resets.first()),
+            resets.first() < launch,
+        )
+        val args = rebuildArguments(code, resets.first())
+        assertTrue(
+            "开窗与复位不再是同一次重建落地的两枚（那次 copy 的实参表：" + args.trim() + "）—— " +
+                "分成两次 update 就有一帧是「窗口开着、缓存旗标还没翻」，那一帧查询照样早返回",
+            args.contains(PICKER_OPENED),
+        )
+        assertEquals(
+            "`calendarsLoaded` 在 VM 里的生命点不再是 5（1 枚参数表声明 + 1 枚读点 :1512 + 3 枚写点 " +
+                "1516/1527 的 true 与 1449 的 false）。**多一处** = 添了读者或又一枚复位站点，" +
+                "「这份缓存什么时候算旧」要重判；**少一处** = 早返回那一句被拆了（那是另一套修法，" +
+                "本判据与 :1516/:1527 那两处写点都得跟着重钉）",
+            CALENDARS_LOADED_LIFE_POINTS,
+            occurrences(code, "calendarsLoaded"),
+        )
+        assertEquals(
+            "`calendarsLoaded = true` 的写点不再是 2 处（:1516 查询失败那一档 + :1527 成功那一档）—— " +
+                "少一处就是有人把某一档的落地顺序改了，本判据那枚 5 的生命点要跟着重算",
+            CALENDARS_LOADED_TRUE_SITES,
+            occurrences(code, "calendarsLoaded = true"),
+        )
+        assertEquals(
+            "靶子：:1512 那枚早返回还在 —— 本卡的修法是把**复位入口**钉在开窗，不是把闸门拆掉" +
+                "（拆闸门 = 每次调用都查，连同步入口也加一趟）：",
+            1,
+            occurrences(code, CALENDARS_LOADED_EARLY_RETURN),
+        )
+        assertEquals("靶子：参数表上的初值仍是 false（:96，第一次开窗必查的前提）：",
+            1, occurrences(code, CALENDARS_LOADED_DECL))
+        assertEquals("靶子：开窗那一档的整行原文还在（:1449）：", 1, occurrences(code, PICKER_RESET_SHAPE))
+        // 取舍的另一头：同步入口那档今天**不带**复位（给了它就得给 startCalendarSync 加一次 provider 查询）
+        val syncFlagWrite = code.indexOf(FLAG_ASSIGNED, code.indexOf(SYNC_ENTRY_PAIRED_COPY))
+        check(syncFlagWrite > 0) { "靶子：找不到 :1389 那次成对清 —— 同步起手的写法换过了，这一条要重钉" }
+        assertFalse(
+            "同步入口 :1389 那次重建开始带 `calendarsLoaded` 了 —— 这是本卡量过代价之后**有意没做**的那一支" +
+                "（每次点同步多一趟 ContentProvider 查询，而同步链自己会跑 computeDiff：Room 读 + 逐课次摘要）；" +
+                "要做这一支，先按 T110 回执那笔账重判 provider 趟数，再把本判据的 1 处复位改成 2 处：" +
+                lineAt(code, syncFlagWrite),
+            rebuildArguments(code, syncFlagWrite).contains("calendarsLoaded"),
         )
     }
 
@@ -466,10 +665,13 @@ class CalendarSyncTargetPairingGuardTest {
      *   而 `calendars` 只由 `ensureCalendarsLoaded()` 的成功分支填过 ⇒ 「有可点的行」= 上一次
      *   `queryCalendars` 成功 = 那一刻权限是真的。
      *
-     * ⚠️ 静态证不了的那半如实记（报告里归进「只能等真机」）：`calendarsLoaded`（VM `:1512`）是**进程寿命**
-     * 的缓存（`grep -rn "calendarsLoaded = false" app/src/main/java` ⇒ 0 行复位），若用户在弹窗开着的时候
-     * 去系统设置把权限**关掉**再回来点一行，起手那次清旗标就是在无权限时清。但旗标只活在内存里
-     * （参数表 `:112` 初值 false，全仓无偏好持久化），且下一次点「同步到系统日历」会走闸 → launcher →
+     * ⚠️ 静态证不了的那半如实记（报告里归进「只能等真机」）：T110 之后 `calendarsLoaded`（VM `:1512` 那枚早返回
+     * 读的就是它）有了**一枚复位站点** —— `:1449` 开窗那一档连带写 `calendarsLoaded = false`
+     * （`grep -rn "calendarsLoaded = false" app/src/main/java` ⇒ 1 行，此前是 0 行）⇒ 选择器列的不再是
+     * "进程寿命"的缓存。但**同步入口那一档仍然吃缓存**（本卡的取舍：不给 `startCalendarSync` 加 provider 趟数），
+     * 于是同一进程里第二次点「同步」用的是上一次开窗/第一次同步查回的那份列表。
+     * 另一件事今天仍只能等真机：用户在弹窗开着的时候去系统设置把权限**关掉**再回来点一行，起手那次清旗标就是
+     * 在无权限时清。但旗标只活在内存里（参数表 `:112` 初值 false，全仓无偏好持久化），且下一次点「同步到系统日历」会走闸 → launcher →
      * `onCalendarPermissionDenied` 重新立旗标 ⇒ 最坏是那一帧少一颗按钮，不是假话常驻。
      *
      * 两头都钉：闸被拆/被挪位 → `:331`、`:332`、`:335` 三条红；新增一枚绕过闸的同步入口
@@ -1058,6 +1260,33 @@ class CalendarSyncTargetPairingGuardTest {
         const val TARGET_SUMMARY_SHAPE = "summary = calendarSync.targetName ?: "
         const val TARGET_FALLBACK_TEXT = "未选择"
         const val TARGET_ITEM_HEAD = "item(key = \"targetCalendar\")"
+
+        // ---- ① 的第二半：偏好里那两枚 key（T110 新增）----
+        const val TARGET_ID_PREF_KEY = "\"calendar_sync_target_id\""
+        const val TARGET_NAME_PREF_KEY = "\"calendar_sync_target_name\""
+        const val TARGET_ID_DROPPED = "remove(\"calendar_sync_target_id\")"
+        const val TARGET_NAME_DROPPED = "remove(\"calendar_sync_target_name\")"
+        const val TARGET_PREF_DROP_SITES = 1
+        const val TARGET_ID_PREF_LIFE_POINTS = 3
+        const val TARGET_NAME_PREF_LIFE_POINTS = 3
+        const val TARGET_PREF_DROP_GATE = "if (targetGone && loaded.isNotEmpty()) settingsPrefs.edit {"
+        const val PREFS_EDIT_HEAD = "settingsPrefs.edit"
+        const val ENSURE_LOADED_HEAD = "private suspend fun ensureCalendarsLoaded() {"
+        const val ENSURE_LOADED_TAIL = "data class PendingBackup"
+        const val TARGET_ID_READ_SHAPE = "targetId = settingsPrefs.getLong(\"calendar_sync_target_id\", -1L),"
+        const val TARGET_NAME_READ_SHAPE = "targetName = settingsPrefs.getString(\"calendar_sync_target_name\", null),"
+
+        // ---- ①-b `calendars` / `calendarsLoaded` 那枚缓存旗标（T110 新增）----
+        const val CALENDARS_LOADED_RESET = "calendarsLoaded = false"
+        const val CALENDARS_LOADED_RESET_SITES = 1
+        const val CALENDARS_LOADED_TRUE_SITES = 2
+        const val CALENDARS_LOADED_LIFE_POINTS = 5
+        const val CALENDARS_LOADED_EARLY_RETURN = "if (_calendarSync.value.calendarsLoaded) return"
+        const val CALENDARS_LOADED_DECL = "val calendarsLoaded: Boolean = false,"
+        const val PICKER_RESET_SHAPE = "_calendarSync.update { it.copy(showPicker = true, calendarsLoaded = false) }"
+        const val PICKER_QUERY_LAUNCH = "viewModelScope.launch { ensureCalendarsLoaded() }"
+        const val SYNC_ENTRY_PAIRED_COPY =
+            "it.copy(syncing = true, message = null, permissionPermanentlyDenied = false, diff = null, skippedOccurrences = 0)"
 
         // ---- ③ message / permissionPermanentlyDenied（§6.8③、§6.4-B）----
         const val FLAG_ASSIGNED = "permissionPermanentlyDenied = "
