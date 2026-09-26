@@ -1382,11 +1382,11 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     /** 同步入口：读日历列表 → 没有目标日历就打开选择器 → 否则算差异等用户确认 */
     fun startCalendarSync() {
         viewModelScope.launch {
-            // T100①：`diff` 与 `skippedOccurrences` 是 `computeDiff` 一次返回的同一对（下面那条
-            // 非空分支成对写、`dismissCalendarSyncDiff` 成对清），起手清场也须成对 —— 少清一半就是
-            // "这一份 diff 的附属说明"活到了下一份之前（渲染点整块锁在 payload=diff 的弹窗里）。
+            // T100①＋T106：起手清场成对清**两对** —— `diff`/`skippedOccurrences`（computeDiff 一次返回，
+            // 非空分支成对写、dismissCalendarSyncDiff 成对清）与 `message`/permissionPermanentlyDenied
+            // （onCalendarPermissionDenied 一次写两枚）：漏一半 = 同步完成旁还挂着「去系统设置」那颗按钮。
             _calendarSync.update {
-                it.copy(syncing = true, message = null, diff = null, skippedOccurrences = 0)
+                it.copy(syncing = true, message = null, permissionPermanentlyDenied = false, diff = null, skippedOccurrences = 0)
             }
             ensureCalendarsLoaded()
             val current = _calendarSync.value
