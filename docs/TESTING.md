@@ -21,7 +21,7 @@ CI 里一律写 `:app:` 前缀（裸任务名会被 Gradle 匹配到所有子工
 
 | 类型 | 用例数 | 文件数 | 覆盖范围 |
 | --- | --- | --- | --- |
-| 单元测试 | 1675 | 190 | 按 `app/src/test/java/com/buaa/schedule/` 的七个包报方向：`domain`（周次与教学周、冲突检测与归并、导入规划、节次窗口与连堂、课次投影与逐周文本导出、今日与逐日排程、学期统计与负载趋势、课程元信息格式）/ `data`（教务抓取与真实返回、ICS 与文本解析与往返、签到码解析与拒绝分档、iClass 接口与提交 URL、备份 schema 与凭证排除名单、本地迁移链、分享编解码、撤销、日历查询与同步计划、导出）/ `reminder`（提醒排程与明日预告、课堂铃与续排、实况岛文案与倒计时、唤醒锁取证、前台服务降级）/ `ui`（首页几何与顶栏与页头条、日时间轴与滑动切日、导入冲突文案与逐条勾选、统计页接线、签到页帧流与兜底引擎与相机 3A、编辑器与空节次、节假日标注、环境自检）/ `widget`（外观与短名与显示字段与翻周、冷启动重建、快照脏 key 与刷新、圆角与玻璃图源与背景烘焙）/ `core`（设计系统与玻璃档位、底栏解墨、课程色板与主题槽位、图表、启动请求）/ `update`（Gitee 发布解析与安装包完整性）。跨包还有一族**接线守卫**：文件名带 `Guard` 的 35 枚全部吃"读 main 源码数出现次数"那把尺子（整个 test 树里这样读源码的文件是 70 枚）—— 逐条判据认类名，本页不抄清单 |
+| 单元测试 | 1683 | 192 | 按 `app/src/test/java/com/buaa/schedule/` 的七个包报方向：`domain`（周次与教学周、冲突检测与归并、导入规划、节次窗口与连堂、课次投影与逐周文本导出、今日与逐日排程、学期统计与负载趋势、课程元信息格式）/ `data`（教务抓取与真实返回、ICS 与文本解析与往返、签到码解析与拒绝分档、iClass 接口与提交 URL、备份 schema 与凭证排除名单、本地迁移链、分享编解码、撤销、日历查询与同步计划、导出）/ `reminder`（提醒排程与明日预告、课堂铃与续排、实况岛文案与倒计时、唤醒锁取证、前台服务降级）/ `ui`（首页几何与顶栏与页头条、日时间轴与滑动切日、导入冲突文案与逐条勾选、统计页接线、签到页帧流与兜底引擎与相机 3A、编辑器与空节次、节假日标注、环境自检）/ `widget`（外观与短名与显示字段与翻周、冷启动重建、快照脏 key 与刷新、圆角与玻璃图源与背景烘焙）/ `core`（设计系统与玻璃档位、底栏解墨、课程色板与主题槽位、图表、启动请求）/ `update`（Gitee 发布解析与安装包完整性）。跨包还有一族**接线守卫**：文件名带 `Guard` 的 37 枚全部吃"读 main 源码数出现次数"那把尺子（整个 test 树里这样读源码的文件是 71 枚）—— 上表这四个数与这一格里的两枚，复算命令全在下一节，逐条可直接粘贴（表格单元格里放不下带管道的命令：这一行只有 5 枚列分隔符，多一枚就断列）；逐条判据认类名，本页不抄清单 |
 | 仪器测试 | 66 | 14 | Room 迁移 / Repository 提醒写入与事务 / Widget 刷新新鲜度与渲染契约与外观存档与数据缓存 / WebView 会话保留与 evaluateJavascript 契约 / 教务 Cookie 与 iClass 签到 id 两份加密存储的落盘与两边隔离 / 课堂铃生命周期 / 壁纸解码 / 日历同步部分失败 |
 
 仪器测试跑在 API 29 + API 34 模拟器上（CI 同配置）：Room 迁移与 WebView 相关用例需要真实
@@ -41,21 +41,65 @@ Framework 环境，API 34 一档覆盖的是 Android 14 那批行为收紧里我
 
 **列名先说清**：第二列「用例数」是 `@Test` 方法的枚数，第三列「文件数」是 `.kt` **源文件**的
 枚数 —— 它**不等于** JUnit 报告里的 testsuite 数（一个文件里可以有不止一枚测试类）。
-当前单测这一族是 190 个文件跑出 196 枚 testsuite：190 + 6 = 196，那 6 枚差额逐枚对过 ——
-`ScheduleChartsT51Test.kt` 装着 `ChartGeometryTest` + `ChartDescriptionTest`（两枚，类名与文件名
-都不同）、`WeekCourseCountsTest.kt` 多一枚 `DayTimelineSegmentsTest`、`ImportPlannerTest.kt`
-多一枚 `CourseFilterTest`、`WeekGridSummaryTest.kt` 装着三枚（外加 `WeekGridDensityTest` 与
-`WidgetItemKeyTest`）、`WidgetAppearanceTest.kt` 多一枚 `WidgetTodayHighlightTest`。
-两列的口径必须同一把尺子，所以仪器测试那一行同样是**文件数**（14）。
+当前单测这一族是 192 枚文件跑出 198 枚 testsuite：192 + 6 = 198。差额**枚数没变、出资人也没换** ——
+这句本轮重新量过而不是接着抄：T99 与 T100 各添一枚守卫文件，`ScanGiveUpReasonDerivationGuardTest`
+名下 6 枚 `@Test`、`CalendarSyncDiffClearPairingGuardTest` 名下 2 枚，两枚**各自只有一枚顶层类**，
+所以这一轮加的是「2 枚文件 / 2 枚 suite / 8 枚用例」，那 6 枚差额还是下面这五枚文件出的。逐枚点名
+（括号里是该类名下的 `@Test` 枚数）：
 
-- 文件数（本机可用，秒级）：
-  `find app/src/test -name "*.kt" | wc -l` ⇒ **190**，
-  `find app/src/androidTest -name "*.kt" | wc -l` ⇒ **14**。
-  这 190 个文件**每一个**都至少含一枚 `@Test`（按"@Test 为空即列出"的办法数过，零命中），
-  所以"文件数"与"测试类所在文件数"在这一族是同一个数。
-- 用例数（离线可读，作为交叉核对）：`grep -rho "@Test" app/src/test --include=*.kt | wc -l`
-  ⇒ **1675**，与下面 XML 实测同值。
-- 用例数与 testsuite 数（以门禁为准）：跑完 `:app:testDebugUnitTest --rerun-tasks` 之后数
+- `ScheduleChartsT51Test.kt` 装着 `ChartGeometryTest`（13）+ `ChartDescriptionTest`（9）—— 两枚类名
+  与文件名都不相同，所以这枚文件**不给**出一枚叫 `ScheduleChartsT51Test` 的 suite；
+- `WeekCourseCountsTest.kt`（6）多一枚 `DayTimelineSegmentsTest`（8）；
+- `ImportPlannerTest.kt`（11）多一枚 `CourseFilterTest`（2）；
+- `WeekGridSummaryTest.kt` 装着三枚：`WeekGridSummaryTest`（5）+ `WeekGridDensityTest`（3）+
+  `WidgetItemKeyTest`（3）—— 只有它一枚出 2 枚差额；
+- `WidgetAppearanceTest.kt`（11）多一枚 `WidgetTodayHighlightTest`（4）。
+
+1 + 1 + 1 + 2 + 1 = 6。两列的口径必须同一把尺子，所以仪器测试那一行同样是**文件数**（14）。
+
+**差额只可能来自"一枚文件里多枚顶层类"，别的原因在本仓都不成立**：JVM 单测这一族没有一枚用
+`@Nested`、`@ParameterizedTest` 或 `@RunWith`（下面「testsuite 数」那条给命令），所以"内部类各自成 suite""参数化
+拆成多枚"这两条常见来路在这里枚数为 0，suite 与测试类一一对应。而"测试类"的判据还要再窄一格：
+**一枚顶层 `class` 声明，且自己名下挂着 ≥1 枚 `@Test`**。全仓顶层 `class` 声明共 199 枚，比 198 多的
+那一枚是 `core/designsystem/GlassJankDecisionTest.kt:186` 的 `private data class Quad`（表驱动用的
+四元组容器，名下一枚 `@Test` 都没有）⇒ 它不成 suite。这条边界值得写死：数「顶层类」与数「测试类」
+在这棵树差 1，抄错的人分不出自己抄的是哪一个。
+
+- 文件数（本机可用，秒级）与"每枚文件都有用例"这条前提：
+
+  ```bash
+  find app/src/test -name "*.kt" | wc -l                # 单测「文件数」⇒ 192
+  find app/src/androidTest -name "*.kt" | wc -l         # 仪器测试「文件数」⇒ 14
+  for f in $(find app/src/test -name "*.kt"); do [ "$(grep -c '@Test' "$f")" = "0" ] && echo "$f"; done
+  ```
+
+  第三条按"@Test 为空即列出"数：零命中 ⇒ 192 枚文件**每一枚**都至少含一枚 `@Test`，所以"文件数"与
+  "测试类所在文件数"在这一族是同一个数（仪器测试那 14 枚同一条判据，也是零命中）。
+
+- 用例数（离线可读）：
+
+  ```bash
+  grep -rho "@Test" app/src/test --include=*.kt | wc -l          # 单测用例数 ⇒ 1683
+  grep -rho "@Test" app/src/androidTest --include=*.kt | wc -l   # 仪器测试用例数 ⇒ 66
+  ```
+
+  1683 与下面 XML 的 `<testcase>` 合计同值（同一台机器上对过，见下一条末）。
+
+- testsuite 数与"为什么是 6 枚差额"（离线可数，本机两条路都给）：
+
+  ```bash
+  grep -rh "^class " app/src/test --include=*.kt | wc -l                          # 静态 ⇒ 198
+  grep -rhE "^(public |internal |private |abstract |open |sealed |data |value )*class " \
+       app/src/test --include=*.kt | wc -l                                        # 顶层 class 声明总数 ⇒ 199
+  grep -rho "@Nested\|@ParameterizedTest\|@RunWith" app/src/test --include=*.kt | wc -l   # ⇒ 0
+  ```
+
+  第一条吃的是本仓写法：测试类一律写成顶格的裸 `class X {`，而全仓唯一一枚带 modifier 的顶层类就是那枚
+  `private data class Quad`，于是 199 − 198 = 1 正好等于"名下零枚 `@Test` 的顶层类"。**写法一变这条就骗人**：
+  有人给测试类加 modifier ⇒ 少报；有人拿裸 `class` 声明一枚不含 `@Test` 的顶层辅助类 ⇒ 多报。所以它是
+  秒级自查，不是权威。第三条是那两条"常见来路"为零的证据。
+
+  权威仍是门禁的 XML：跑完 `:app:testDebugUnitTest --rerun-tasks` 之后数
   `app/build/test-results/testDebugUnitTest/*.xml` 的 `<testcase>` / `<testsuite>` 节点，
   **不要从控制台摘要抄**：
 
@@ -69,12 +113,41 @@ Framework 环境，API 34 一档覆盖的是 Android 14 那批行为收紧里我
         'skipped', sum(int(r.get('skipped',0)) for r in t))"
   ```
 
-  T98 这一档在 `ai/T98`（基点 `4b6376d`，本卡只改注释与文档）上实跑两次
-  `:app:testDebugUnitTest --rerun-tasks`，两回读数逐格相同：
-  **1675 tests / 196 suites / 0 failures / 0 errors / 0 skipped**，与编排者在 `d334917`
-  上取的那组地板读数也逐格相同 ⇒ 这一族本轮没有增删。
-- 仪器测试的用例数**只能静态数**（`grep -rho "@Test" app/src/androidTest --include=*.kt | wc -l`
-  ⇒ 66）：这台机器没有可用的模拟器，66 是静态计数而不是"跑过"。
+  上面那条静态尺子与这副 XML 在本机**对过一枚不差**：拿 `634c6d6`（09-25 那趟冷门禁的树，
+  `app/build/test-results/testDebugUnitTest/` 里那 194 份 XML 就是它留下的）作对照 —— 静态数出 194，
+  XML 也是 194，`<testsuite name>` 的集合逐枚相同，每枚 suite 名下的 `<testcase>` 数一处不差，合计 1658
+  等于该点 `@Test` 的 grep 值。对法：`git archive 634c6d6 app/src/test | tar -x -C /tmp/x`，再对
+  `/tmp/x/app/src/test` 跑上面第一条，与 XML 的 name 集合比 ⇒ 静态那条可以放心用，理由是**这次比过**，
+  不是"看起来该相等"。
+
+  T98 那一档在 `ai/T98`（基点 `4b6376d`，那张卡只改注释与文档）上实跑两次
+  `:app:testDebugUnitTest --rerun-tasks`，两回读数逐格相同：**1675 tests / 196 suites / 0 failures /
+  0 errors / 0 skipped**，与编排者在 `d334917` 上取的那组地板读数也逐格相同 ⇒ 那说的是 **T98 那一轮
+  这一族没有增删**，不是本页上表的现值。现值 1683 / 198 的门禁证据在 `docs/STATUS.md:2811`（那段起头
+  「收单证据（我自己跑的，不是引它的日志）」，集成态 `378dedd` 冷全量）与 `docs/STATUS.md:2830`（起头
+  「收单证据（我自己在 `87c2225` 上跑的）」）两处，各写着 **1,683 tests / 198 suites / 0 失败 / 0 errors /
+  0 skipped** ⇒ 表与门禁没有分叉，分叉的只是这一页旧版的那四个数。
+
+- Guard 那一族与"读源码"那一族（上表最后一格里那两个数）：
+
+  ```bash
+  find app/src/test -name "*Guard*.kt" | wc -l                   # ⇒ 37
+  grep -rl "src/main/java" app/src/test --include=*.kt | wc -l   # ⇒ 71
+  comm -23 <(find app/src/test -name "*Guard*.kt" | sort) \
+           <(grep -rl "src/main/java" app/src/test --include=*.kt | sort) | wc -l   # ⇒ 0
+  ```
+
+  第三条撑着"37 枚 Guard **全部**吃读源码那把尺子"那句（零命中 = 没有一枚 Guard 落在这 71 之外）；
+  71 的构成是 37 枚 Guard + 34 枚别的族。口径要挑明：第二条数的是**那串字面量在文件里出现过**，
+  本机另核过这 71 枚每一枚都带 `File(` ⇒ 今天它就是真读数；哪天有人在注释里提一句 `src/main/java`，
+  这条就开始虚报，那时改判据而不是改数。
+
+- 仪器测试的用例数**只能静态数**（上面那条 grep ⇒ 66），因为它在本机从未跑过：
+  `ls app/build/outputs/` 里没有 `androidTest-results` 这一目录，全仓唯一的 connected 产物长在
+  `benchmark/build/outputs/androidTest-results/` 底下。⚠️ 这一句旧版写的理由是"这台机器没有可用的
+  模拟器"，那句**已经不成立** —— `~/.android/avd/` 下确有 `buaa36.ini` 与 `buaa36.avd`，benchmark 那批
+  结果的目录名就叫 `buaa36(AVD) - 16`。结论不动（66 仍是静态计数而不是"跑过"），换掉的只是理由，
+  换成一条能复算的理由。
 
 ## 为什么这张表容易说谎
 
