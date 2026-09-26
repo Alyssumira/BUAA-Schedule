@@ -32,7 +32,9 @@ import org.junit.Test
  * 于是 `onCalendarPermissionGranted()`（清旗标唯一入口）永不被调，而 `:1664`
  * `visible = calendarSync.message != null` 那格会被下一句「同步完成…」重新点亮 ⇒
  * 「同步完成」旁边常驻一颗「去系统设置开启日历权限」。修法与可达路径枚举见
- * `CalendarSyncPermissionFlagClearGuardTest`；本文件这一族因此改钉「**成对写 1 处 + 成对清 1 处 + 单清 1 处**」
+ * 修法与可达路径枚举见本文件第三枚 `@Test`
+ * `everyRouteIntoTheSyncEntryStandsInsideAPermissionGate`（T106 新增：把「进到 `startCalendarSync()` 时
+ * 权限必然已到手」这条前提逐入口钉死）；本文件这一族因此改钉「**成对写 1 处 + 成对清 1 处 + 单清 1 处**」
  * 这三枚数，以及闸门本身（闸 B 如今只是第二层保险，不再是唯一的挡头）。
  *
  * **⑥ `SettingsScreen.showPrivacyDialog` / `privacyConsentAt`**（§6.8⑥、§6.2 表 #14）
@@ -53,7 +55,7 @@ import org.junit.Test
  * （同族第二回，`saving` / `saveError`，T104 刚写完）。那两枚各自钉死的字段与本文件**不重叠**：
  * `diff = null` / `skippedOccurrences = 0` 的三处成对账归前者，`saveError` 一族归后者。
  *
- * 六枚 `@Test` 全是**纯 JVM 源码核对**：只 import `java.io.File` 与 JUnit，零 android import、
+ * 七枚 `@Test` 全是**纯 JVM 源码核对**：只 import `java.io.File` 与 JUnit，零 android import、
  * 零时钟读取（不碰 `System.currentTimeMillis()` / `LocalDate.now()` 之类）。
  * 行号按 `4b1c4a4` 盘面复算；T106 只把 `ScheduleViewModel.kt:1389` 那一枚 copy **同行改写**（没有增删行）
  * ⇒ 本文件点名的行号在 `688b191`＋T106 之上仍然成立，只有 ③ 那一族的**枚数**按新盘面重钉
@@ -246,7 +248,7 @@ class CalendarSyncTargetPairingGuardTest {
         assertEquals(
             "给 `permissionPermanentlyDenied` 赋值的站点从 3 处变了（:1497 成对生产 + :1389 起手成对清 + " +
                 ":1508 单清）。**少一处** = 起手那次成对清被拆回去，T106 那枚真漏清（「同步完成」旁边挂着" +
-                "「去系统设置开启日历权限」）当场复发，同时 CalendarSyncPermissionFlagClearGuardTest 也会红；" +
+                "「去系统设置开启日历权限」）当场复发，本文件第三枚 `@Test`（可达路径枚举）也会跟着红；" +
                 "**多一处** = 又添一条只动旗标不动句子的路径，那道「句子还在才念得出按钮」的闸就多一个绕开" +
                 "它的入口，得先证新站点只在已授权时可达：" + lineHints(code, flagWrites),
             FLAG_WRITE_SITES,
@@ -291,7 +293,8 @@ class CalendarSyncTargetPairingGuardTest {
                 "在系统设置里手动授予权限后点同步，withCalendarPermission 的短路（SettingsScreen.kt:331）" +
                 "让 launcher 根本不启动，于是 :1508 那次单清永远走不到，旗标常驻；等 :1429-1439 那句" +
                 "「同步完成…」把 :1664 那格点亮，:1677 那颗「去系统设置开启日历权限」就挂在成功文案旁边。" +
-                "改回去之前先看 CalendarSyncPermissionFlagClearGuardTest 的可达路径枚举：\n" +
+                "改回去之前先看下面第三枚 `everyRouteIntoTheSyncEntryStandsInsideAPermissionGate` " +
+                "的可达路径枚举：\n" +
                 lineAt(code, messageClears.first()),
             rebuildArguments(code, messageClears.first()).contains(FLAG_ASSIGNED),
         )
@@ -433,6 +436,227 @@ class CalendarSyncTargetPairingGuardTest {
             "靶子：那颗按钮的文案「去系统设置开启日历权限」只有一处 —— 它是这一对漏清唯一会被念出来的地方",
             1,
             occurrences(screen, SETTINGS_BUTTON_TEXT),
+        )
+    }
+
+    /**
+     * 前提侧（**T106 新增**，修法 (a) 的承重墙）：**走到 `startCalendarSync()` 的每一条路都站在权限闸里面**。
+     *
+     * 为什么这一族判据归在本文件而不是别处：(a) 的全部理由就是那句「进到起手时权限必然已经到手」，
+     * 这句话一倒，`:1389` 那次成对清就从「顺手宣布永久拒绝不成立」降级成「在无权限时撒谎」。
+     * 上面两枚 ③ 判据钉的是**写侧的枚数**，本枚钉的是**谁能进到那个写侧** —— 两头合起来才是完整的一条账。
+     *
+     * 全仓 `grep -rn "startCalendarSync" app/src/main/java` 复算出的入口逐条（行号按 `688b191`＋T106
+     * 那次同行改写，两颗文件都没增删行 ⇒ 与 `688b191` 一致）：
+     * - **入口 1** `ui/settings/SettingsScreen.kt:1641` `onClick = { startCalendarSync() }`（那颗按钮）
+     *   → `:341` `fun startCalendarSync() = withCalendarPermission { viewModel.startCalendarSync() }`
+     *   → `:331` 的闸：已授权 ⇒ `:332` `action()` 直接执行；未授权 ⇒ `:335` launcher → `:316` 全授予
+     *   那一档 → `:319`。**两支都已持有权限**。
+     * - **入口 2** `:319` `(action ?: viewModel::startCalendarSync).invoke()` —— 长在
+     *   `:316` `if (grants.isNotEmpty() && grants.values.all { it }) {` 里面，权限是系统刚交回的；
+     *   且 `:317` 刚调过 `onCalendarPermissionGranted()`（`:1508` 那次单清）。
+     * - **入口 3** `ui/ScheduleViewModel.kt:1463` `selectCalendarTarget`（宿主 `:1457`）选完日历内部那次
+     *   `startCalendarSync()` —— **唯一一枚不过 withCalendarPermission 的调用点**，所以为它单独钉两道：
+     *   ① 它唯一的界面触发点 `SettingsScreen.kt:1888` 长在
+     *   `ModalTransition(open = calendarSync.showPicker)`（`:1859`）那一层窗口之内，而
+     *   `showPicker = true` 全仓只有两枚写点（VM `:1397` 长在 startCalendarSync 体内、
+     *   `:1449` 长在 openCalendarPicker 体内），后者的唯一界面入口是 `:1625`
+     *   `onClick = { withCalendarPermission { viewModel.openCalendarPicker() } }` ⇒ **开窗这件事本身在闸里**；
+     *   ② 那一行 clickable 只在 `:1870` `if (calendarSync.calendars.isEmpty()) {` 的 **else** 侧组合，
+     *   而 `calendars` 只由 `ensureCalendarsLoaded()` 的成功分支填过 ⇒ 「有可点的行」= 上一次
+     *   `queryCalendars` 成功 = 那一刻权限是真的。
+     *
+     * ⚠️ 静态证不了的那半如实记（报告里归进「只能等真机」）：`calendarsLoaded`（VM `:1512`）是**进程寿命**
+     * 的缓存（`grep -rn "calendarsLoaded = false" app/src/main/java` ⇒ 0 行复位），若用户在弹窗开着的时候
+     * 去系统设置把权限**关掉**再回来点一行，起手那次清旗标就是在无权限时清。但旗标只活在内存里
+     * （参数表 `:112` 初值 false，全仓无偏好持久化），且下一次点「同步到系统日历」会走闸 → launcher →
+     * `onCalendarPermissionDenied` 重新立旗标 ⇒ 最坏是那一帧少一颗按钮，不是假话常驻。
+     *
+     * 两头都钉：闸被拆/被挪位 → `:331`、`:332`、`:335` 三条红；新增一枚绕过闸的同步入口
+     * （例如直接 `onClick = { viewModel.startCalendarSync() }`）→ `BARE_SYNC_CALL_SITES` 1→2 红；
+     * 内部调用换宿主 → `precedingFunHead` 那条红；新增一枚开窗点 → `PICKER_OPEN_SITES` 2→3 红。
+     */
+    @Test
+    fun everyRouteIntoTheSyncEntryStandsInsideAPermissionGate() {
+        val screen = blankCommentsKeepingLiterals(readMainSource(SETTINGS_SCREEN))
+        val code = blankCommentsKeepingLiterals(readMainSource(SCHEDULE_VIEW_MODEL))
+        val manager = blankCommentsKeepingLiterals(readMainSource(CALENDAR_SYNC_MANAGER))
+        // ---- 闸本体（入口 1 的第一道）----
+        assertEquals(
+            "靶子：闸的宿主函数定义原文还在（`SettingsScreen.kt:330` " +
+                "`fun withCalendarPermission(action: () -> Unit) {`）：",
+            1,
+            occurrences(screen, WITH_PERMISSION_HEAD),
+        )
+        assertEquals(
+            "`if (viewModel.hasCalendarPermission()) {`（:331）不再是恰好 1 处。**多一处** = 又添一道能绕过 " +
+                "launcher 的短路，每加一枚都得问「它进的那条链有没有把旧旗标清掉」；**少一处** = 短路没了，" +
+                "`:1508` 那次单清重新变成唯一通道，本卡那枚病就换个方向复发：" +
+                lineHints(screen, indexOfAll(screen, PERMISSION_GATE)),
+            PERMISSION_GATE_SITES,
+            occurrences(screen, PERMISSION_GATE),
+        )
+        val gateHead = screen.indexOf(WITH_PERMISSION_HEAD)
+        val gate = screen.indexOf(PERMISSION_GATE)
+        check(gateHead >= 0 && gate >= 0) { "靶子：闸 A 的两行原文至少要都在，否则本守卫扫的不是这一页" }
+        assertTrue(
+            "闸不再是 withCalendarPermission 的第一句（中间隔着「" +
+                screen.substring(gateHead + WITH_PERMISSION_HEAD.length, gate).trim() + "」）—— " +
+                "「点同步之前先问一句真实权限」这条前提被削弱，起手那次清旗标就可能是假话",
+            screen.substring(gateHead + WITH_PERMISSION_HEAD.length, gate).all { it.isWhitespace() },
+        )
+        val launch = indexOfAll(screen, LAUNCH_CALL)
+        assertEquals(
+            "`calendarPermissionLauncher.launch(` 不再是恰好 1 处（:335，闸的 else 分支里）。这一枚是" +
+                "「已授权时根本不启动申请框 ⇒ 到不了 :317 那次单清」的凭据，也是本卡病根的成因；" +
+                "**多一处** = 有人绕过闸直接申请，起手清旗标的覆盖面要重算：" + lineHints(screen, launch),
+            1,
+            launch.size,
+        )
+        assertTrue(
+            "launcher.launch 跑到了闸之前 —— 那等于每次点同步都先弹申请框，本卡第 3 步那条" +
+                "「有权限就不启动 launcher ⇒ 到不了 :317」的推理作废，:1389 那次成对清也就从" +
+                "「唯一覆盖正常路径的清点」降级成多余的一刀",
+            gate < launch.first(),
+        )
+        val actionCalls = indexOfAll(screen, ACTION_CALL)
+        assertEquals(
+            "闸 true 分支里那句 `action()`（:332）不再是恰好 1 处 —— 它就是「已授权 ⇒ 直接执行、不启动 " +
+                "launcher」这一支的载体，本卡那条正常路径走的正是它：" + lineHints(screen, actionCalls),
+            1,
+            actionCalls.size,
+        )
+        assertTrue(
+            "`action()` 不在 `if (viewModel.hasCalendarPermission())` 之后 —— 「有权限就直接执行 action」" +
+                "这句话不再是闸的语义，入口 1 的权限状态要按新写法重推",
+            actionCalls.first() > gate,
+        )
+        // ---- 被闸包住的三块，与那颗按钮 ----
+        assertEquals(
+            "`withCalendarPermission { … }` 的调用块不再是 3 处（:341 同步 / :1625 选目标日历 / " +
+                ":1654 移除已同步日程）。**多一处** = 又添一条要走闸的通道；**少一处** = 有入口不再走闸，" +
+                "起手那次清旗标的覆盖面要重判",
+            GATED_CALL_SITES,
+            occurrences(screen, GATED_CALL_BLOCK),
+        )
+        assertEquals("靶子：入口 1 那条链的原文还在（:341，整句都在闸里）：", 1, occurrences(screen, GATED_SYNC))
+        assertEquals("靶子：选目标日历那行的原文还在（入口 3 的开窗侧）：", 1, occurrences(screen, GATED_PICKER))
+        assertEquals("靶子：移除已同步日程那行的原文还在（它也在闸里，但不走到 startCalendarSync）：",
+            1, occurrences(screen, GATED_REMOVE))
+        assertEquals("靶子：那颗「同步到系统日历」按钮的 onClick 原文还在（:1641，入口 1 的起点）：",
+            1, occurrences(screen, SYNC_BUTTON_SHAPE))
+        assertEquals(
+            "`viewModel.startCalendarSync()` 在界面上的调用点不再是 1 处（只有 :341 闸里那一枚）。" +
+                "**多一处** = 有人新增一枚不过闸的同步入口 ⇒ 起手那次成对清就不再必然发生，" +
+                "本卡那枚「旗标永不清」会换个载体回来：" +
+                lineHints(screen, indexOfAll(screen, BARE_SYNC_CALL)),
+            BARE_SYNC_CALL_SITES,
+            occurrences(screen, BARE_SYNC_CALL),
+        )
+        // ---- 入口 2：launcher 全授予那一档 ----
+        assertEquals("靶子：全授予那一档的判断原文还在（:316，:317 那次单清唯一的入口）：",
+            1, occurrences(screen, GRANTED_BRANCH_HEAD))
+        assertEquals(
+            "`viewModel::startCalendarSync` 那枚方法引用不再是 1 处（:319 的默认支）—— 它是入口 2 的载体：" +
+                lineHints(screen, indexOfAll(screen, SYNC_METHOD_REF)),
+            1,
+            occurrences(screen, SYNC_METHOD_REF),
+        )
+        val grantedBranch = screen.indexOf(GRANTED_BRANCH_HEAD)
+        val elseAt = screen.indexOf(ELSE_BRANCH_HEAD, grantedBranch + GRANTED_BRANCH_HEAD.length)
+        check(elseAt > grantedBranch) { "靶子：:316 之后找不到那档 if/else 的 else 边界，窗口切不出来" }
+        assertTrue(
+            "默认同步那次调用跑出了「全部授予」那一档 —— 它从此可以在拒绝路径上被 invoke，" +
+                "「进到 startCalendarSync 时权限必已到手」这条前提要重判",
+            screen.indexOf(SYNC_METHOD_REF) in grantedBranch until elseAt,
+        )
+        // ---- 入口 3：唯一一枚不过闸的内部调用（宿主必须点名）----
+        val entry = code.indexOf(SYNC_ENTRY_HEAD)
+        check(entry >= 0) {
+            "靶子：找不到 `fun startCalendarSync() {`（:1383）—— 起手的宿主换了，本守卫要跟着改"
+        }
+        val selfRef = entry until (entry + SYNC_ENTRY_HEAD.length)
+        val internalCalls = indexOfAll(code, SYNC_CALL_TEXT).filter { it !in selfRef }
+        assertEquals(
+            "ScheduleViewModel 内部对 `startCalendarSync()` 的调用不再是 1 处（现在只有 :1463 " +
+                "selectCalendarTarget 选完日历那一次）。**多一处** = 又添一枚不经闸的内部入口，" +
+                "必须先证它同样只在已授权时可达，否则起手那次清旗标就是假话：" + lineHints(code, internalCalls),
+            1,
+            internalCalls.size,
+        )
+        assertEquals(
+            "内部那次调用的宿主不再是 `fun selectCalendarTarget(calendarId: Long, displayName: String) {`" +
+                "（:1457）—— 现在它是「开窗在闸里 + 列表非空要有权限」这两道前提的载体，宿主一换就得按新宿主" +
+                "重做一遍（现宿主：" + precedingFunHead(code, internalCalls.first()).trim() + "）",
+            SELECT_TARGET_HEAD,
+            precedingFunHead(code, internalCalls.first()),
+        )
+        assertEquals("靶子：`fun selectCalendarTarget(…) {` 仍是唯一一枚定义（:1457）：",
+            1, occurrences(code, SELECT_TARGET_HEAD))
+        assertEquals(
+            "界面上 `viewModel.selectCalendarTarget(` 的调用点不再是 1 处（:1888 那一行日历名）—— 它经一次" +
+                "点击直达 VM 内部那次 startCalendarSync()，多一枚就是多一条不经 withCalendarPermission 的入口",
+            1,
+            occurrences(screen, SELECT_TARGET_CALL),
+        )
+        val modalAt = screen.indexOf(PICKER_MODAL_HEAD)
+        check(modalAt >= 0) {
+            "靶子：找不到 `ModalTransition(open = calendarSync.showPicker)`（:1859）—— " +
+                "选择器那层的驱动方式换过了，「开窗在闸里」要按新写法重推"
+        }
+        val nextModal = screen.indexOf("ModalTransition(", modalAt + PICKER_MODAL_HEAD.length)
+        check(nextModal > modalAt) { "靶子：选择器弹窗之后找不到下一层 ModalTransition 边界，窗口切不出来" }
+        val click = screen.indexOf(SELECT_TARGET_CALL)
+        assertTrue(
+            "选日历那一行的 clickable 跑出了 showPicker 驱动的那一层 —— 入口 3 从此可能在闸外被触发",
+            click in modalAt until nextModal,
+        )
+        val emptyGate = screen.indexOf(EMPTY_LIST_GATE)
+        assertTrue(
+            "「列表为空就整块换成一句提示」那道判断（:1870）不在那一行之前 —— 那就不能再把「有可点的行」" +
+                "当成「上一次 queryCalendars 成功＝那一刻真有权限」的证据",
+            emptyGate in modalAt until click,
+        )
+        val pickerOpens = indexOfAll(code, PICKER_OPENED)
+        assertEquals(
+            "`showPicker = true` 的写点不再是 2 处（VM :1397「没有目标日历」那一档 + :1449 openCalendarPicker）。" +
+                "**多一处** = 冒出一条不经任何闸就能打开选择器的路，入口 3 的「开窗在闸里」就此失证：" +
+                lineHints(code, pickerOpens),
+            PICKER_OPEN_SITES,
+            pickerOpens.size,
+        )
+        val pickerHosts = pickerOpens.map { precedingFunHead(code, it) }.sorted()
+        assertEquals(
+            "两枚开窗站点不再分别长在 `fun openCalendarPicker()`（界面唯一入口 :1625 在闸里）与 " +
+                "`fun startCalendarSync()`（入口 1/2/3 全在闸里）体内 —— 宿主一换就得重数一次它的界面入口" +
+                "过不过闸：\n  " + pickerHosts.joinToString("\n  "),
+            listOf(OPEN_PICKER_HEAD, SYNC_ENTRY_HEAD).sorted(),
+            pickerHosts,
+        )
+        assertEquals("靶子：界面上 openCalendarPicker 的调用点仍是闸里那一枚（:1625）：",
+            1, occurrences(screen, BARE_PICKER_CALL))
+        // ---- 尺子侧：闸读的是活的系统权限，不是那枚旗标 ----
+        assertEquals(
+            "靶子：`fun hasCalendarPermission(): Boolean = calendarSyncManager.hasPermission()` 还在 " +
+                "（VM :1380，闸问的就是它）：",
+            1,
+            occurrences(code, HAS_PERMISSION_DECL),
+        )
+        assertEquals(
+            "`ContextCompat.checkSelfPermission` 在 CalendarSyncManager 里不再是 2 处（:50 的 WRITE 与 :52 的 " +
+                "READ，两枚都 granted 才算过）—— 少一枚就是「闸放行 ≠ 能写日历」，起手清旗标这句话的强度要改口径",
+            PERMISSION_CHECKS,
+            occurrences(manager, PERMISSION_CHECK),
+        )
+        assertEquals("靶子：`fun hasPermission(): Boolean =` 仍是唯一一枚定义（data/calendar/" +
+            "CalendarSyncManager.kt:49）：", 1, occurrences(manager, MANAGER_HEAD))
+        assertEquals(
+            "VM 里对旗标的**读取**不再是 0 处（生命点 4 = 1 枚参数表声明 + 3 枚赋值，一枚读者都没有）。" +
+                "**负数** = 赋值站点比声明少，多半是 :1389 起手那次成对清被拆回去了 = T106 那枚真漏清复发；" +
+                "**正数** = 旗标开始当第二把尺子用：要么 hasCalendarPermission() 的短路被搬进了 VM" +
+                "（闸与旗标互兜，本卡的修法失去凭据），要么有分支开始按旧旗标决定行为 —— 两种都要回来重判这一档",
+            VM_FLAG_READERS,
+            occurrences(code, FLAG_NAME) - 1 - occurrences(code, FLAG_ASSIGNED),
         )
     }
 
@@ -706,6 +930,22 @@ class CalendarSyncTargetPairingGuardTest {
 
     private val whitespace = Regex("\\s+")
 
+    /**
+     * [hit] 之前**最近的那一枚成员函数头**整行（去掉首尾空白）。
+     *
+     * 用来判「这一处调用/赋值长在谁体内」—— 本仓的类体成员一律缩进 4 空格，所以
+     * `\n    fun ` 是一个足够硬的分隔符。与 [enclosingBlockHeads] 那把刀互补：前者认块头、
+     * 这一把认宿主。宿主一换（把调用抽进 helper、或搬去别的函数）它就当场给出**实际宿主**当证据。
+     */
+    private fun precedingFunHead(source: String, hit: Int): String {
+        check(hit in source.indices) { "命中位置越界：$hit / ${source.length}" }
+        val cut = source.lastIndexOf("\n    fun ", hit)
+        check(cut >= 0) { "那一处之前找不到 `\n    fun ` —— 它已经不在任何成员函数体内了，宿主判据要重写法" }
+        val from = cut + 1
+        val to = source.indexOf('\n', from).let { if (it < 0) source.length else it }
+        return source.substring(from, to).trim()
+    }
+
     private fun indexOfAll(haystack: String, needle: String): List<Int> {
         val hits = mutableListOf<Int>()
         var from = 0
@@ -839,6 +1079,40 @@ class CalendarSyncTargetPairingGuardTest {
         const val FLAG_READER = "calendarSync.permissionPermanentlyDenied"
         const val PERMISSION_GATE_SITES = 1
         const val MESSAGE_UI_READS = 3
+
+        /** 入口 3 是唯一一枚不过闸的调用点：宿主 `fun selectCalendarTarget(…)`（VM :1457），
+         *  唯一界面触发点 `viewModel.selectCalendarTarget(`（SS :1888）的 click 长在 `showPicker`
+         *  驱动的那层窗口里（SS :1859），而 `showPicker = true` 全仓只 2 枚写点（VM :1397/:1449）
+         *  —— 开窗本身在闸里。 */
+        const val SELECT_TARGET_HEAD =
+            "fun selectCalendarTarget(calendarId: Long, displayName: String) {"
+        const val SYNC_ENTRY_HEAD = "fun startCalendarSync() {"
+        const val SYNC_CALL_TEXT = "startCalendarSync()"
+        const val OPEN_PICKER_HEAD = "fun openCalendarPicker() {"
+        const val SELECT_TARGET_CALL = "viewModel.selectCalendarTarget("
+        const val PICKER_MODAL_HEAD = "ModalTransition(open = calendarSync.showPicker)"
+        const val EMPTY_LIST_GATE = "if (calendarSync.calendars.isEmpty()) {"
+        const val PICKER_OPENED = "showPicker = true"
+        const val PICKER_OPEN_SITES = 2
+        const val ACTION_CALL = "action()"
+        const val GATED_CALL_BLOCK = "withCalendarPermission {"
+        const val GATED_CALL_SITES = 3
+        const val GATED_SYNC = "withCalendarPermission { viewModel.startCalendarSync() }"
+        const val GATED_PICKER = "withCalendarPermission { viewModel.openCalendarPicker() }"
+        const val GATED_REMOVE =
+            "withCalendarPermission { viewModel.requestRemoveSyncedEvents() }"
+        const val BARE_SYNC_CALL = "viewModel.startCalendarSync()"
+        const val BARE_SYNC_CALL_SITES = 1
+        const val BARE_PICKER_CALL = "viewModel.openCalendarPicker()"
+        const val SYNC_BUTTON_SHAPE = "onClick = { startCalendarSync() }"
+        const val SYNC_METHOD_REF = "viewModel::startCalendarSync"
+        const val FLAG_NAME = "permissionPermanentlyDenied"
+        const val VM_FLAG_READERS = 0
+        const val CALENDAR_SYNC_MANAGER =
+            "com/buaa/schedule/data/calendar/CalendarSyncManager.kt"
+        const val MANAGER_HEAD = "fun hasPermission(): Boolean ="
+        const val PERMISSION_CHECK = "checkSelfPermission"
+        const val PERMISSION_CHECKS = 2
 
         /** 状态那一格现在实测 960 字符（:1664 到下一个 SettingsGroup）；带子留 3 倍余量，出带即重判 */
         const val STATUS_WINDOW_MIN = 300
