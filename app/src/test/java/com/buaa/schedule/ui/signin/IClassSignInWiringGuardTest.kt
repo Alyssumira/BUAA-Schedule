@@ -186,6 +186,15 @@ class IClassSignInWiringGuardTest {
             ladder.indexOf("saved ->") in 0 until ladder.indexOf("submitting ->"),
         )
         assertEquals("阶段梯子应当有四档（Idle / Submitting / Failed / Saved）：\n$ladder", 4, occurrences(ladder, "LoginPhase."))
+        // 四档逐字钉住：只数枚数的话「else 落到哪一档」被换错也抓不到（变异臂 T3 就是这么漏的）
+        for (rung in listOf(
+            "saved -> LoginPhase.Saved",
+            "submitting -> LoginPhase.Submitting",
+            "serverMessage != null -> LoginPhase.Failed",
+            "else -> LoginPhase.Idle",
+        )) {
+            assertTrue("阶段梯子少了这一档「$rung」（或这一档落到了别的阶段值）：\n$ladder", ladder.contains(rung))
+        }
 
         // —— 界面上那三处读者都投影自阶段值，谁都不许再自己判一次旗 ——
         assertTrue("状态句不再投影自阶段值（它自己又判了一次）：\n$screen", screen.contains("val statusText = when (phase)"))
