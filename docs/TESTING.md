@@ -62,11 +62,21 @@ Framework 环境，API 34 一档覆盖的是 Android 14 那批行为收紧里我
 与 T104/T105 不同款**：它没有新立文件，而是往同一枚 `CalendarSyncTargetPairingGuardTest.kt` 里添 3 枚
 `@Test`（① 那一族添偏好与缓存两半、③ 那一族添移除链那一档）⇒ 那枚文件 **7 枚 → 10 枚**
 （复算 `grep -cE '^[[:space:]]*@Test' app/src/test/java/com/buaa/schedule/ui/CalendarSyncTargetPairingGuardTest.kt`
-⇒ 10，上一版是 7 —— 这一枚数过去只能靠点名，今天它自己有了一条只读文件的复算命令）；文件列 **+0**。
+⇒ 10（**这是 `6d6d121` 那一档的读数**，本轮 T117 同一把尺已给 11，见下一段），上一版是 7 —— 这一枚数过去只能靠点名，今天它自己有了一条只读文件的复算命令）；文件列 **+0**。
+**第五、第六张是 T115 与 T116，贡献形状与 T110 同一款、与 T104/T105 不同款**（本句 T117 记，基点
+`f5192fb`）：零枚新文件，往既有文件里添 `@Test` —— T115② 给 `ui/signin/IClassSignInWiringGuardTest.kt`
+补第 ⑦ 枚（复算 `grep -cE '^[[:space:]]*@Test' app/src/test/java/com/buaa/schedule/ui/signin/IClassSignInWiringGuardTest.kt`
+⇒ 7，基点 `6d6d121` 上是 6；紧跟其后的 T115②′ 只往那枚用例里补"四档逐字"判据、**没添新 `@Test`**，
+所以它停在 7 而不是 8），T116① 给 `ui/CalendarSyncDiffClearPairingGuardTest.kt` 与
+`ui/CalendarSyncTargetPairingGuardTest.kt` **各**添 1 枚（同一条只读文件的尺，把末尾文件名换成它自己
+⇒ 前者 3、`6d6d121` 上是 2；后者 **11**、`6d6d121` 上是 10 —— 也就是上面那格「7 枚 → 10 枚」的后一档）。
+⇒ 三枚逐文件的尺各 +1、合计 +3，suite 与文件列各 +0（复算哪几枚文件动过：
+`git diff --name-status 6d6d121..f5192fb -- app/src/test` ⇒ 三行 `M`、零行 `A`）。
 **上一轮**三张卡添的都是"一枚文件装一枚顶层类"的形状 ⇒ 两列各 +2、用例 +9（2 + 6 + 1），**一枚都没进差额**；
 T110 添的是"一枚既有文件里多几枚 `@Test`"的形状 ⇒ suite +0、用例再 +3 ⇒ **四张卡累计：两列各 +2、
 用例 +12（2 + 6 + 1 + 3），仍是一枚都没进差额**，那 6 枚还是下面那五枚文件出的（第六枚点名的是
-减数）。判据是一条命令，零命中就等于"没有多类文件"：
+减数）**；T115 + T116 之后同一句续成六张卡累计：两列各 +2、用例 +15（2 + 6 + 1 + 3 + 1 + 2），差额仍
++0、那 6 枚的出资人仍没换**（这两枚"仍"本轮都是量出来的，不是推出来的：下面两条循环尺的读数一字未动）。判据是一条命令，零命中就等于"没有多类文件"：
 
 ```bash
 for f in $(find app/src/test -name "*.kt"); do
@@ -78,7 +88,8 @@ done                                                # ⇒ 6 枚文件：3 + 2 + 
 13 枚类塞在 6 枚文件里 ⇒ 多出来 13 − 6 = **7** 枚；这 7 枚里有一枚名下零 `@Test`（下面那枚 `Quad`），
 扣掉它才是 **6**。逐枚点名（括号里是该类名下的 `@Test` 枚数，**T108 那一遍**逐枚与当时那批门禁 XML 的
 `tests="…"` 对过；本轮 T111 换一条**不依赖 XML** 的静态命令把它逐枚重量了一遍 —— 判据是"一枚类声明到
-下一枚类声明之间"的那些行首 `@Test`，六枚文件 `6d6d121` 上的读数与下面六条一字未动）：
+下一枚类声明之间"的那些行首 `@Test`，六枚文件 `6d6d121` 上的读数与下面六条一字未动）；**本轮 T117 在
+`f5192fb` 上同一条命令再重量 ⇒ 六条仍一字未动**（T115/T116 动的那三枚守卫都不在这六枚多类文件里）：
 
 ```bash
 for f in $(find app/src/test -name "*.kt"); do
@@ -152,7 +163,7 @@ XML 还在**的那棵 worktree 里可复算，出处见上面「现值 1,692 / 2
   `6d6d121`（T110 已合进 master）之上，上面那条命令给 **1695**。增量不是新文件：T110 在同一枚
   `ui/CalendarSyncTargetPairingGuardTest.kt` 里净添 3 枚 `@Test`、**零枚文件**（复算
   `grep -cE '^[[:space:]]*@Test' app/src/test/java/com/buaa/schedule/ui/CalendarSyncTargetPairingGuardTest.kt`
-  ⇒ 10，上一版是 7）⇒ 「文件数」那一列与 194↔200 那枚差额都不动，只有用例 +3。
+  ⇒ 10（`6d6d121` 那一档，本轮 T117 已到 11），上一版是 7）⇒ 「文件数」那一列与 194↔200 那枚差额都不动，只有用例 +3。
   ⚠️ 这一格同时第一次拿到**增量层面的双尺交叉验证**：T110 的收单账记着同一棵树上门禁 XML 也是
   **1,695 tests / 200 suites**（`docs/STATUS.md:3076`，同节 `docs/STATUS.md:3093` 那句"行首锚 `@Test`
   全仓 1,695 == 门禁 XML 1,695"）⇒ 新尺与 XML 第二次在**同一棵 commit** 上同值（第一次是 T108 那趟的
