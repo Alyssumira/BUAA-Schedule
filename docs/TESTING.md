@@ -32,6 +32,11 @@ Framework 环境，API 34 一档覆盖的是 Android 14 那批行为收紧里我
 零权限只读得到壁纸的**颜色**（`getWallpaperColors`）—— 口径与取证过程见
 [`docs/KNOWN_ISSUES.md`](KNOWN_ISSUES.md) §1。
 
+那句"CI 同配置"的对应处在本仓 `.github/workflows/android.yml`：`instrumented` job 的矩阵写的是
+`api-level: [ 29, 34 ]`，跑的是 `script: ./gradlew :app:connectedDebugAndroidTest --stacktrace`；
+`build` job 那一步跑 `:app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug`。
+（T98 在 `4b6376d` 上逐条回读过这三行原文；本页刻意不写行号 —— 行号会漂，原文串不会。）
+
 ## 这几个数怎么复算
 
 **列名先说清**：第二列「用例数」是 `@Test` 方法的枚数，第三列「文件数」是 `.kt` **源文件**的
@@ -64,9 +69,10 @@ Framework 环境，API 34 一档覆盖的是 Android 14 那批行为收紧里我
         'skipped', sum(int(r.get('skipped',0)) for r in t))"
   ```
 
-  T98 这一档在 `ai/T98`（基点 `4b6376d`）上实跑的结果是
+  T98 这一档在 `ai/T98`（基点 `4b6376d`，本卡只改注释与文档）上实跑两次
+  `:app:testDebugUnitTest --rerun-tasks`，两回读数逐格相同：
   **1675 tests / 196 suites / 0 failures / 0 errors / 0 skipped**，与编排者在 `d334917`
-  上取的那组地板读数逐格相同。
+  上取的那组地板读数也逐格相同 ⇒ 这一族本轮没有增删。
 - 仪器测试的用例数**只能静态数**（`grep -rho "@Test" app/src/androidTest --include=*.kt | wc -l`
   ⇒ 66）：这台机器没有可用的模拟器，66 是静态计数而不是"跑过"。
 
