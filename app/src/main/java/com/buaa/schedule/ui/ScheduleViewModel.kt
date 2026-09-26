@@ -141,7 +141,7 @@ data class PendingImport(
      * 念的都是这一枚，与首页横幅 / 统计页冲突卡同一把尺子（那两页吃的也是 `groupConflicts`）。
      *
      * 归并只在这一枚字段上落一次：由 [showPendingImport] 在预览成型时算好（组合期一次都不算，
-     * 界面只是读一个数），因此这一族四处与那两条提示读到的一定是同一个数。
+     * 界面只是读一个数），因此这一族四处与那三条提示读到的一定是同一个数。
      * 逐条勾选走 `copy(excludedKeys = …)`，配对不变则组数也不变。
      */
     val conflictGroupCount: Int,
