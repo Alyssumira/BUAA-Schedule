@@ -16,6 +16,10 @@ import org.junit.Test
  * 2. 设置页那一行带了 `= {}` 默认值 —— 漏接线时编译不响、行照旧画得出、点下去没反应（T41/T59④ 那一族）；
  * 3. 把口令落盘"以便下次自动重登" —— 那对凭据能过学校统一身份认证，明文进 SharedPreferences
  *    就是交给任何拿到这台设备的人（老客户端正是这么干的，本仓刻意不照抄）。
+ * 4.（T115 补）**同一页的状态由两枚读者各判一次** —— 不是签不上，而是同一列两行话互相打架：
+ *    上面那行状态句按 `saved` → `submitting` → `serverMessage` 排（登完念「已登录…正在进入扫码页…」），
+ *    下面那颗按钮的字却写着 `if (submitting)`、不看 `saved`（照旧念「正在登录…」）。
+ *    账在 `docs/derived-field-audit.md` §8 #5 / §8.3-B，判据见下面第 ⑦ 枚。
  *
  * 刀法照抄 `ScanSignInEntryWiringGuardTest`：读源码文本、**读不到锚点就抛**
  * （跳过的守卫比没有守卫更糟）、匹配前先抹注释。
@@ -143,6 +147,84 @@ class IClassSignInWiringGuardTest {
         for (banned in listOf("usesCleartextTraffic", "networkSecurityConfig", "xml/network_security")) {
             assertFalse("清单里出现了「$banned」：iClass 那条链靠 https:8181 走通，不靠放开明文", manifest.contains(banned))
         }
+    }
+
+    /**
+     * ⑦ 登录成功后这一页**只有一处**说得出"登录到哪一步了"（T115 · 账在 `docs/derived-field-audit.md` §8 #5）。
+     *
+     * 病形状：同一列两行话互相打架。三枚 remembered 变量的读者有两枚各判一次 —— 状态句读那支按
+     * `saved` → `submitting` → `serverMessage` 排好的梯，那颗按钮的字却读 `if (submitting)`；
+     * `saved` 赢下梯子第一档、按钮**不吃这条梯** ⇒ 登录成功之后、这一页真正离场之前，
+     * 上面念「已登录北航 iClass，正在进入扫码页…」而按钮照旧念「正在登录…」。
+     * 导航侧 `MainActivity` 给这一页提供了 `LocalAnimatedVisibilityScope` ⇒ 确实存在一段
+     * 旧页仍在组合的退场窗口；⚠️ 本仓今天禁设备，那段窗口有多长**没量过**，
+     * 本条钉的是"两枚读者不许各判一次"这件事本身，不写帧数也不写毫秒。
+     *
+     * 落点选方向 2（单一真源，与 #114「顶栏与 body 两个日期源」同一族病同一刀）加方向 3 的那一半
+     * （`saved` 一到就把整页收口在「已登录」这一档）：界面话的判定点收成 `val phase = when { … }` 一枚，
+     * 状态句 / 那颗按钮的字 / 失败卡的语义色三处**都投影自它**。
+     * **不采纳方向 1**（成功档补一句 `submitting = false`）：那枚旗同时是本页唯一的重入闸
+     * `if (submitting) return` 与三处 `enabled = !submitting`、键盘 Done 那记短路的共同来源，
+     * 落旗等于在退场窗口里把表单放开、并允许第二趟登录 POST —— 而它一旦失败就写 `serverMessage`，
+     * 把「已登录」那句话染成失败卡，比原来那句错话贵。故两侧都要有格子：
+     * 朝宽扭（第二读者回来 / 换梯序 / 成功档落旗）必须红，
+     * 朝紧扭（少一档 / 失败档不落旗 / 锚点换名）也必须红。
+     */
+    @Test
+    fun loginPhaseIsJudgedOnceAndEveryOnScreenReaderProjectsFromIt() {
+        val screen = blankComments(source(ICLASS_LOGIN_SCREEN))
+
+        // —— 判一次：阶段梯是三枚裸旗唯一被读成"界面话"的地方（锚点没了就抛，不许静默绿）——
+        val ladder = balancedBlock(screen, "val phase = when {")
+        assertTrue(
+            "阶段梯子没有 saved 这一档（登录成功这件事界面上就再也读不到）：\n$ladder",
+            ladder.contains("saved -> LoginPhase.Saved"),
+        )
+        assertTrue(
+            "阶段梯子把 saved 排到 submitting 之后了 ⇒ 登录成功后上面那行又会念「正在登录…」，" +
+                "本卡钉的就是这个序：\n$ladder",
+            ladder.indexOf("saved ->") in 0 until ladder.indexOf("submitting ->"),
+        )
+        assertEquals("阶段梯子应当有四档（Idle / Submitting / Failed / Saved）：\n$ladder", 4, occurrences(ladder, "LoginPhase."))
+
+        // —— 界面上那三处读者都投影自阶段值，谁都不许再自己判一次旗 ——
+        assertTrue("状态句不再投影自阶段值（它自己又判了一次）：\n$screen", screen.contains("val statusText = when (phase)"))
+        assertTrue(
+            "那颗按钮的字不再投影自阶段值 —— 从前它写 Text(if (submitting) …)，" +
+                "是躲在状态句梯子旁边的第二枚读者，同一列两行互斥就是这么来的：\n$screen",
+            screen.contains("Text(phase.buttonLabel)"),
+        )
+        assertFalse("按钮的字又自己判 submitting 了（第二枚读者回来）：\n$screen", screen.contains("Text(if (submitting)"))
+        assertTrue("失败卡那层语义色也按阶段取：\n$screen", screen.contains("val isError = phase == LoginPhase.Failed"))
+        assertFalse("语义色又自己读 serverMessage（判法与阶段梯不一致 = 第三枚读者）：\n$screen", screen.contains("val isError = serverMessage != null"))
+
+        // —— Saved 那一档的措辞：说实话；既不跟着"在飞"那句，也不退回"闲置"那句 ——
+        val phaseEnum = balancedBlock(screen, "private enum class LoginPhase(val buttonLabel: String) {")
+        val savedLabel = Regex("""Saved\("([^"]*)"\)""").find(phaseEnum)
+        check(savedLabel != null) { "LoginPhase.Saved 没有 buttonLabel：措辞换载体了，本守卫要跟着改" }
+        val wording = savedLabel.groupValues[1]
+        assertTrue(
+            "登录成功后按钮上写的是「$wording」：与「正在登录…」同句就是本卡钉的那处互斥，" +
+                "与「登录」同句则把闸门还开着的一页说成闲下来了：\n$phaseEnum",
+            wording.isNotBlank() && wording != "正在登录…" && wording != "登录",
+        )
+        assertTrue("请求在飞那一档按钮应当说「正在登录…」：\n$phaseEnum", phaseEnum.contains("Submitting(\"正在登录…\")"))
+
+        // —— 闸门：成功档**故意**不落旗（方向 1 的代价），失败档必须落（否则表单永远按住）——
+        val onSuccess = balancedBlock(screen, ".onSuccess {")
+        assertTrue("登录成功没把 saved 立起来（阶段梯第一档就读不到）：\n$onSuccess", onSuccess.contains("saved = true"))
+        assertTrue("登录成功后没把口令从内存里清掉：\n$onSuccess", onSuccess.contains("password = \"\""))
+        assertFalse(
+            "成功档补了一句 submitting = false（方向 1）：那枚旗是本页唯一的重入闸与三处 enabled、" +
+                "键盘 Done 短路的共同来源，落旗等于在退场窗口里松开表单、允许第二趟登录 POST，" +
+                "而它一旦失败就写 serverMessage、把「已登录」那句话染成失败卡：\n$onSuccess",
+            onSuccess.contains("submitting = false"),
+        )
+        val onFailure = balancedBlock(screen, ".onFailure {")
+        assertTrue("失败档不落旗 ⇒ 表单永远按住、用户改完口令也再来不了：\n$onFailure", onFailure.contains("submitting = false"))
+        assertTrue("重入闸没了（同一次登录可以发两趟 POST）：\n$screen", screen.contains("if (submitting) return"))
+        assertEquals("读 !submitting 的 enabled 应当恰好三处（两枚字段 + 那颗按钮）：", 3, occurrences(screen, "enabled = !submitting"))
+        assertEquals("键盘 Done 那记短路应当恰好一处：", 1, occurrences(screen, "if (!submitting) submit()"))
     }
 
     // ---- 源码核对工具（与 ScanSignInEntryWiringGuardTest 同一套刀法）----
