@@ -652,9 +652,13 @@ class CalendarSyncTargetPairingGuardTest {
             "CalendarSyncManager.kt:49）：", 1, occurrences(manager, MANAGER_HEAD))
         assertEquals(
             "VM 里对旗标的**读取**不再是 0 处（生命点 4 = 1 枚参数表声明 + 3 枚赋值，一枚读者都没有）。" +
-                "**负数** = 赋值站点比声明少，多半是 :1389 起手那次成对清被拆回去了 = T106 那枚真漏清复发；" +
-                "**正数** = 旗标开始当第二把尺子用：要么 hasCalendarPermission() 的短路被搬进了 VM" +
-                "（闸与旗标互兜，本卡的修法失去凭据），要么有分支开始按旧旗标决定行为 —— 两种都要回来重判这一档",
+                "**正数** = 旗标开始当第二把尺子用：要么 `hasCalendarPermission()` 的短路被搬进了 VM" +
+                "（闸与旗标互兜，本卡的修法失去凭据），要么有分支开始按旧旗标决定行为。" +
+                "**负数**只可能来自「赋值字面比 `permissionPermanentlyDenied` 这个符号名还多」—— 即参数表 " +
+                "`:112` 那一枚声明的写法变了（改名 / 换 `val x: Boolean = false` 之外的形状），本条算式里那个 " +
+                "`- 1` 要跟着重钉。⚠️ 别把这条当 T106 复发的探测器：把 `:1389` 的旗标删回去时符号名与赋值" +
+                "各 -1、结果仍是 0（变异 M1 实测红了的是上面那枚 `FLAG_WRITE_SITES` 判据，不是这条）：" +
+                occurrences(code, FLAG_NAME) + " - 1 - " + occurrences(code, FLAG_ASSIGNED) + " = ",
             VM_FLAG_READERS,
             occurrences(code, FLAG_NAME) - 1 - occurrences(code, FLAG_ASSIGNED),
         )
