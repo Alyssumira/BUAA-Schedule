@@ -240,12 +240,33 @@ fun ImportScreen(
                         if (pending.conflicts.isEmpty()) {
                             Text("无时间冲突", style = MaterialTheme.typography.bodySmall)
                         } else {
+                            // 标题念的是**组**数：conflictGroupCount 由 showPendingImport 用
+                            // CourseConflictResolution.groupConflicts 归并一次算好（与首页横幅 T82、
+                            // 统计页冲突卡同一件内核、同一个数），所以组合期一次都不归并 ——
+                            // 这一页连 remember 都不必摆。改前这里念 conflicts.size，
+                            // 三门课互撞会念成「3 组」而按组只有一档（T94①）。
                             Text(
-                                "存在 ${pending.conflicts.size} 组时间冲突",
+                                text = importConflictBanner(pending.conflictGroupCount),
                                 color = MaterialTheme.colorScheme.error,
                                 style = MaterialTheme.typography.bodySmall,
                             )
-                            pending.conflicts.take(3).forEach { conflict ->
+                            // 底下仍按**两两配对**列，不改成按组：一组里的三门课未必两两都撞
+                            // （A-B 撞第 1-8 周、B-C 撞第 9-16 周 → 归并成一族，A 与 C 其实没占
+                            // 彼此的时间），"到底哪两门撞在一起"只有配对那一层说得出，
+                            // 而那是用户判断"要不要导入"的信息，删不得。
+                            // 代价：配对行数与标题的组数天生对不上号（3 条配对 / 1 组），
+                            // 所以补一行把两枚数都报出来的小标题。shownCount 吃这里真正 take 出来的
+                            // 行数而不是重新数一遍，标题与画出来的行因此不可能各说各的。
+                            val shownPairs = pending.conflicts.take(MAX_INLINE_CONFLICT_PAIRS)
+                            Text(
+                                text = importConflictPairNote(
+                                    pairCount = pending.conflicts.size,
+                                    shownCount = shownPairs.size,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            shownPairs.forEach { conflict ->
                                 Text(
                                     text = "${conflict.first.name} ↔ ${conflict.second.name}",
                                     style = MaterialTheme.typography.bodySmall,

@@ -30,10 +30,12 @@ import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.TimeSlotProfile
 import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.schedule.ConflictDetector
+import com.buaa.schedule.domain.schedule.CourseConflictResolution
 import com.buaa.schedule.domain.schedule.CourseFilter
 import com.buaa.schedule.domain.schedule.ImportPlanner
 import com.buaa.schedule.domain.schedule.WeekCalculator
 import com.buaa.schedule.ui.home.nextDayTickDelayMillis
+import com.buaa.schedule.ui.importing.importParseSummary
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -131,6 +133,18 @@ data class PendingImport(
     val addedCount: Int,
     val changedCount: Int,
     val conflicts: List<ConflictDetector.Conflict>,
+    /**
+     * 归并后的冲突**组**数（T94①）—— 与 [conflicts] 那两两配对的条数不是一枚数。
+     *
+     * 三门课挤在同一格：`findConflicts` 交回 3 条配对（A-B、A-C、B-C），
+     * `groupConflicts` 归并成 1 组。确认卡那句"存在 N 组时间冲突"与三条解析完成提示
+     * 念的都是这一枚，与首页横幅 / 统计页冲突卡同一把尺子（那两页吃的也是 `groupConflicts`）。
+     *
+     * 归并只在这一枚字段上落一次：由 [showPendingImport] 在预览成型时算好（组合期一次都不算，
+     * 界面只是读一个数），因此这一族四处与那两条提示读到的一定是同一个数。
+     * 逐条勾选走 `copy(excludedKeys = …)`，配对不变则组数也不变。
+     */
+    val conflictGroupCount: Int,
     /** 解析阶段的警告（缺教师/周次兜底等），在确认卡片中展示 */
     val warnings: List<String> = emptyList(),
     /** 逐条预览中被取消勾选的课程 key（[ImportPlanner.courseKey]） */
@@ -997,8 +1011,12 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             }
             val pending = showPendingImport(semester, courses, warnings)
             _importMessage.value = AppMessage(
-                "解析完成：新增 ${pending.addedCount}，更新 ${pending.changedCount}，" +
-                "冲突 ${pending.conflicts.size} 组，请确认导入。",
+                importParseSummary(
+                    prefix = "解析完成：",
+                    addedCount = pending.addedCount,
+                    changedCount = pending.changedCount,
+                    groupCount = pending.conflictGroupCount,
+                ),
             )
         }
     }
@@ -1024,6 +1042,9 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             addedCount = addedCount,
             changedCount = changedCount,
             conflicts = conflicts,
+            // 归并判据在 CourseConflictResolution.groupConflicts（首页横幅、统计页冲突卡同一件内核），
+            // 这里只负责把数据递进去；措辞由 ImportConflictCopy 出（零 android import）
+            conflictGroupCount = CourseConflictResolution.groupConflicts(conflicts).size,
             warnings = warnings,
             source = source,
         )
@@ -1055,8 +1076,12 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 }
                 val pending = showPendingImport(semester, courses, source = "ics")
                 _importMessage.value = AppMessage(
-                    "ICS 解析完成：新增 ${pending.addedCount}，更新 ${pending.changedCount}，" +
-                    "冲突 ${pending.conflicts.size} 组，请确认导入。",
+                    importParseSummary(
+                        prefix = "ICS 解析完成：",
+                        addedCount = pending.addedCount,
+                        changedCount = pending.changedCount,
+                        groupCount = pending.conflictGroupCount,
+                    ),
                 )
             }
         }
@@ -1082,8 +1107,12 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 }
                 val pending = showPendingImport(semester, courses, source = "text")
                 _importMessage.value = AppMessage(
-                    "文本解析完成：新增 ${pending.addedCount}，更新 ${pending.changedCount}，" +
-                    "冲突 ${pending.conflicts.size} 组，请确认导入。",
+                    importParseSummary(
+                        prefix = "文本解析完成：",
+                        addedCount = pending.addedCount,
+                        changedCount = pending.changedCount,
+                        groupCount = pending.conflictGroupCount,
+                    ),
                 )
             }
         }
