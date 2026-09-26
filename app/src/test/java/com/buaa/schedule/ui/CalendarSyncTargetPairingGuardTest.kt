@@ -1230,8 +1230,8 @@ class CalendarSyncTargetPairingGuardTest {
         )
         assertTrue(
             "那颗「同步」跑出了 diff 弹窗那一层（onClick" + lineAt(screen, calls.first()) + " 不在 " +
-                "L" + screen.substring(0, modalAt).count { it == '\n' } + 1 + " 到 L" +
-                screen.substring(0, nextModal).count { it == '\n' } + 1 + " 之间）—— 弹窗不再独占输入，" +
+                "L${screen.substring(0, modalAt).count { it == '\n' } + 1} 到 " +
+                "L${screen.substring(0, nextModal).count { it == '\n' } + 1} 之间）—— 弹窗不再独占输入，" +
                 "于是能有一句旧 `message` 或一枚旧旗标在 diff 挂着时被写进来、而 confirm 起手不收：" +
                 "§8.4-A 那句「靠 Compose 对话框的输入独占」当场作废，这一格搬进「真漏清」：",
             calls.first() in modalAt until nextModal,
