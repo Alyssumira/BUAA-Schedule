@@ -387,7 +387,7 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
 | 把 `.copy(` 与「置空」并起来的站点 | `grep -rnE "\.copy\(" app/src/main/java --include='*.kt' \| grep -cE "= *(null\|0\b\|false\|\"\")"` | **40 行** —— ⚠️ 这一把**噪声占大头**：40 行里 `Color.copy(alpha = 0.xx)` 一档就占 27 行（`ui/home/WeekView.kt` 5、`core/designsystem/ScheduleCharts.kt` 9、`core/designsystem/liquid/*` 6、`core/designsystem/SettingsStack.kt` 3、`widget/WidgetConfigActivity.kt:648`、`ui/home/DayView.kt` 2、`ui/importing/ImportScreen.kt` 2）。同一条筛法换 `grep -o \| wc -l` 也给 **40**（这次两把尺重合，因为命中行里没有一行两处） | 先按行、再按次数 |
 | **自有 data class 的 copy 站点宇宙** | 一次性脚本：解析 `data class` 参数表 → 取每处 `copy(` 的**括号配平实参表**（不是同一行）→ 留下实参名命中参数表的站点 → 按手写类型归属表分类（归属表逐枚读原文定，脚本只负责切实参表） | **18 枚类 / 72 处站点**（= T97 §0.4 那张表，逐格核对**没有变化**：T100 只往既有站点里加了实参，没添新站点） | 站点数按 `(文件, 行)` 去重 |
 | remembered var（Compose 局部状态槽） | `grep -rcE "\bvar [A-Za-z_][A-Za-z0-9_]* by (remember\|rememberSaveable)" app/src/main/java --include='*.kt' \| grep -v ':0$' \| awk -F: '{s+=\$2} END {print s" 行 / "NR" 文件"}'` | **169 枚 / 28 枚文件** | 命中行数 |
-| 其中**至少有一枚被单独置空过**的文件 | 同上一段脚本 + 「按文件列 `NAME = null/0/false/""` 赋值点」那一遍 | **14 枚文件**（`MainActivity.kt`、`ui/editor/CourseEditorScreen.kt` 25 枚、`ui/home/WeekView.kt` 17 枚、`ui/importing/BuaaLoginScreen.kt` 13 枚、`ui/signin/SpocScanScreen.kt` 13 枚、`ui/settings/SettingsScreen.kt` 26 枚、其余 9 枚见 §6.7） | 文件数 |
+| 其中**至少有一枚被单独置空过**的文件 | 同上一段脚本 + 「按文件列 `NAME = null/0/false/""` 赋值点」那一遍 | **14 枚文件**（`MainActivity.kt`、`ui/editor/CourseEditorScreen.kt` 25 枚、`ui/home/WeekView.kt` 17 枚、`ui/importing/BuaaLoginScreen.kt` 13 枚、`ui/signin/SpocScanScreen.kt` 13 枚、`ui/settings/SettingsScreen.kt` 26 枚、其余 8 枚见 §6.7，**14 枚本遍已全判**） | 文件数 |
 
 **这两遍筛法各漏了什么（不许读者替我补）**：
 
