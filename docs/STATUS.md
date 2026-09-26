@@ -2712,3 +2712,28 @@ lint 0 错 14 警、签名包 **7,247,271 B**（对 7,246,225 是 **+1,046 B**�
 ⇒ **地板抬到 1,671 / 195 / 7,247,231**（+11 tests / +1 suite 正是新增的 `ImportConflictCopyTest`；包体对 7,247,110 是 **+121 B ⇒ 带内，不归因给代码**）。
 
 **明留**：① 组数与明细都按**全量预览课程**算，用户逐条取消勾选后不重算（改前也一样）⇒ 记进 **#146**，先判成事实再决定改不改；② 确认卡多一行小标题带来的卡面高度未装机量（本卡零设备）；③ 空闲档同场 %CPU 那一次测量仍缺（#140 收的是"别再拿它跨档"，不是"补上它"）；④ "真机按 30 fps 送帧"仍是未量的上限口径。
+
+## T95：修 T94 留下的一枚真回归（我自己收单漏掉的）——组数收成派生属性，想漏都漏不了（`45e7fc1` / `49025ed`，2 枚 / 4 文件 +282 / −22）
+
+⚠️ **先记我的失职**：T94 收单时门禁全绿（1,671 枚），但那 11 枚新单测钉的是**措辞**与"不在组合期归并"，**没有一枚覆盖"用户切换勾选"这条路径**，于是一枚真回归就这么进了 master。
+
+**病灶（我读码定位，代理复核）**：T94 把组数做成 `PendingImport` 的**构造参数**并"故意不给默认值"去逼唯一构造点赋值 —— 这个设计**只保护构造器**，而 `data class` 的 `copy()` 会把没点名的参数原样带走。真正会改源字段的恰是另两站 `copy(conflicts = findConflicts(selection.toWrite))`（`togglePendingImportCourse` 逐条勾选、`setAllPendingImportSelected` 全选/全不选）⇒ **配对明细变小、标题的组数冻在上一屏**。
+我在 `32cf52f` 上复核过，**"改前也一样"那句是错的**：改前那两站同样重算 `conflicts`，而那时标题读的就是 `conflicts.size` ⇒ **标题本来跟着勾选走**；T94 换对了枚数、丢了新鲜度。发火档：`ImportScreen:240` 判的是新鲜的 `conflicts.isEmpty()`，所以"排空"那一档看不见旧数 ⇒ 真能露出来的是"**还剩冲突但组数变小**"。同一颗函数上方那句既有 KDoc（「冲突与计数按"勾选后的子集"重算，保证卡片数字与实际落库一致」）从 T94 起变成假话。
+
+**修法比"在两处 copy 各补一行"更硬**：`conflictGroupCount` 从参数表**移进类体**当派生属性（`ScheduleViewModel.kt:164`）⇒ 它不在参数表上、**任何 `copy()` 都点不到它**，每次重新构造按当下 `conflicts` 归并一次；那两站代码一字未动，修的是"它们带不走旧值"这件事。代价写进了 KDoc：不进 `equals`/`hashCode`/`toString`、`component7()` 由组数变成 `warnings`（全仓复核：`PendingImport(` 只有 1 处构造、`pending.copy(` 只有 2 处、无任何解构/`componentN` 调用）。
+它同时驳掉了我给的第二个选项（"读源码枚举 `copy` 站点"那种形状守卫）：**把实参写成中间变量、换行、改名就能绕**，所以只留作第二道网。原先那枚 `groupCountIsMergedOnceInTheViewModelAndNotRecomputedInComposition` **一个字没动**（归并仍恰好一次、只是位置挪进类体），它唯一变不准的是失败消息里"在 showPendingImport 里算好"那句指路话 ⇒ 记进明留。
+
+**两臂实验我自己复现了一遍（这张卡的成败判据）**：
+- **绿臂**（`49025ed`，我自己的六步门禁）：`--stop`→`clean`→`assembleRelease`→`testDebugUnitTest --rerun-tasks`→`lint`→再跑一次测试→`:benchmark:compileNonMinifiedReleaseKotlin`，**exit 全 0**；**1,675 tests / 196 suites / 0 失败 / 0 skipped**、lint 0 错 14 警（9 个 id 与基线逐枚一致）、签名包 **7,247,140 B**（对 T94 的 7,247,231 是 **−91 B ⇒ 带内**）。`PendingImportConflictGroupTest` 4/0/0/0，两枚扫码守卫 7 与 6 未变。
+- **红臂**（我自己做的，不是引用代理的日志）：`git checkout f0bb122 -- ScheduleViewModel.kt` 把修复撤掉、换上代理留在 `.tmp/T95/…redarm.kt` 的那一份（**四枚断言体、fixture、打印逐字相同**，只差一颗构造 helper 多传一个参数——改前那版它是构造参数，不传编译不过），同一枚 `--tests … --rerun-tasks` ⇒ **`RED_EXIT=1` / `BUILD FAILED in 1m4s` / 4 tests completed, 2 failed**：
+  - `excludingOneCollidingCourseShrinksTheGroupCountTheTitleReads` **FAILED**（行为层：取消一门后明细已是 1 对、标题冻在「2 组」）
+  - `groupCountIsDerivedAndCannotBeSetAtAnyCopySite` **FAILED**（形状层：改前那枚字段仍可被赋值）
+  - 另两枚对照组 **pass**（`droppingOnePairInsideASingleGroupKeepsTheGroupCountAtOne`、`mergedGroupCountFollowsTheExcludedSubsetThroughTheSelectionFunction`）⇒ 红不是"整份测试本来就红"，这两枚同时充当"别把组数误改成跟配对条数逐条同号"的护栏。
+  还原之后：`git status` 空、`git show HEAD:` 与工作树**去行尾后 md5 相同**（`8762633b23`）。⚠️ 顺手记一条：`git checkout` 之后的**原始字节 md5 会变**（autocrlf 改写），但归一化后内容一致 ⇒ 认内容不认字节，和"APK sha256 不能当版本判据"同一类。
+**读数（仅 JVM 证据，本卡零设备）**：取消勾选链 `2 → 1 → 0`（标题「存在 2/1/0 组时间冲突」），配对明细同步。代理给的口径我认可：**组数永远跟着子集走，但不保证等于行数**（三门同格 = 3 配对 1 组；四门同格 = 6 配对只画前 3 行 1 组；链式 A-B/B-C = 2 配对 1 组），"几组 vs 几对"由 `importConflictPairNote` 那行小标题分开报。
+
+**③ 收了 #145，还多收一格**：`ScanFrameFlowPolicy.kt:21` 的「六个读数 / 3.1–3.3 倍」→「七枚读数 / 2.89–3.30 倍」（算式只用段里那七枚：8.10→2.89 … 9.23→3.30），另外 `:24` 同一笔枚数账的第二次错它自己找出来了（我卡面只点了 `:21`）。守卫纪律复核（我自己按同一套切法算）：锚点唯一、六靶子全在、禁句不在、段长 **2,204 ∈ [100,4000]**、**段外逐字节 == `6a27324` 与 `d7af6f8` 两枚基线** ⇒ 两枚守卫未重钉、`@Test` 数 7/6 未变、门禁全绿即证。
+
+**地板抬到 1,675 / 196 / 7,247,140 B**。
+
+**明留**：① `ImportConflictCopyTest.kt:26` 与 `:292` 两处**注释文字**仍写「组数只在 `showPendingImport` 归并一次」—— 归并仍恰好一次，但位置在 `PendingImport` 类体（同一份文件）；断言不受影响，将来它红的时候消息会指错地方。② 屏幕上那行字的实际变化、逐条勾选的手感 —— **没量过**（零设备），押到 #98/#143 那批有机器的时候。③ T93 那条统计页 CUJ（`ai/T93`，`openStatsAndDrill`）**至今从没跑绿过一次**，而本卡给它的对照组证明"组数会跟着子集走"这条链在 JVM 侧是通的 —— 两边不互相替代。
