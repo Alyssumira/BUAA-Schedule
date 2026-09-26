@@ -958,8 +958,8 @@ grep -n "cameraProviderMissing" app/src/test/java/com/buaa/schedule/ui/signin/Sc
 
 | # | 旗标 × 对岸 | 起手块（宿主） | 生产者／把两枚绑在一起的证据 | 分头站点 | 读者在不在闸门里 | 判定 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `syncing` × （`message`，`permissionPermanentlyDenied`） | VM 的 `confirmCalendarSync`：体外 `:1425` 起协程、体内 `:1426` 只写 `it.copy(syncing = true)` | `:1416` 那颗函数与 `:1383` 那颗同属"一次会写日历的操作"；`:1428-1439` 收尾把 `message` 写非空 | **起手清对岸 0 枚**（同族另两处 `:1389` 清 4 枚、`:1481` 清 2 枚） | `message` 的读者 `:1664` `item(key = "status", visible = calendarSync.message != null)` **不含 `syncing`**；旗标的读者 `:1643` `enabled = !calendarSync.syncing` 只管那两颗按钮 | **结构不可能**（机制见 §8.4-A，可挪走那一类） |
-| 2 | `syncing` × （`diff`，`skippedOccurrences`） | VM 的 `removeSyncedEvents`：`:1480` 起协程、`:1481` 起手 | 同一枚 `computeDiff` 的产物（§6.2 #2）＋ `:1486`「已移除 N 个日程」把 `:1664` 那格重新点亮 | 起手清了 `message` 与旗标（T110），**没清 `diff`/`skipped`** | `skippedOccurrences` 的唯一读者长在 `ModalTransition(payload = calendarSync.diff)` 那块里（SettingsScreen `:1903` 起） | **结构不可能**（机制见 §8.4-B，可挪走那一类）；⚠️ 现有那枚 diff 守卫**管不到它**，理由见 §8.4-B 末 |
+| 1 | `syncing` × （`message`，`permissionPermanentlyDenied`） | VM 的 `confirmCalendarSync`：体外 `:1425` 起协程、体内 `:1426` 只写 `it.copy(syncing = true)` | `:1416` 那颗函数与 `:1383` 那颗同属"一次会写日历的操作"；`:1428-1439` 收尾把 `message` 写非空 | **起手清对岸 0 枚**（同族另两处 `:1389` 清 4 枚、`:1481` 清 2 枚） | `message` 的读者 `:1664` `item(key = "status", visible = calendarSync.message != null)` **不含 `syncing`**；旗标的读者 `:1643` `enabled = !calendarSync.syncing` 只管那两颗按钮 | **结构不可能**（机制见 §8.4-A，可挪走那一类）。**现状（T116 已把这一格钉进守卫、零 main 改动；上面那五格读数与这一句档位原文都留着，它们量的是 `22d1a55` 的改前盘面）**：守卫＝`CalendarSyncTargetPairingGuardTest` 第 ⑪ 枚（该类枚数 10 ⇒ **11**），判"不动 main"，三枚承重行各占一格（成对清与 `diff = computed.first` 的**同宿主 + 先后**、那颗「同步」在 diff 弹窗窗口之内、全仓 main 树扫 `confirmCalendarSync` 只有那两枚文件），两侧七臂里 `C`/`C2` 两臂**只红这一枚判据**（枚数全对、落点错），机制与"补收那一支为什么驳回"见 §8.4-A 末 |
+| 2 | `syncing` × （`diff`，`skippedOccurrences`） | VM 的 `removeSyncedEvents`：`:1480` 起协程、`:1481` 起手 | 同一枚 `computeDiff` 的产物（§6.2 #2）＋ `:1486`「已移除 N 个日程」把 `:1664` 那格重新点亮 | 起手清了 `message` 与旗标（T110），**没清 `diff`/`skipped`** | `skippedOccurrences` 的唯一读者长在 `ModalTransition(payload = calendarSync.diff)` 那块里（SettingsScreen `:1903` 起） | **结构不可能**（机制见 §8.4-B，可挪走那一类）；⚠️ 现有那枚 diff 守卫**管不到它**，理由见 §8.4-B 末。**现状（T116 已把这一格钉进守卫、零 main 改动；上面那五格读数与这一句档位原文都留着）**：守卫＝`CalendarSyncDiffClearPairingGuardTest` 第 ③ 枚（该类枚数 2 ⇒ **3**，归它不归第三枚文件：那一枚判据的宇宙本来就是这一对），判"不动 main"，形状＝三枚写点逐处负判据（一枚都不许碰这一对）＋ `:1481` 实参表逐字 ＋ 两扇弹窗窗口互不重叠 ＋ 那枚入口调用点在两扇窗之外 ＋ `dismissCalendarSyncDiff` 两枚收场路都在 diff 窗内；"照 `:1389` 的仪式补收"那一支**驳回**（那是拿「移除」去作废一份用户还没确认的 diff，不是清场），机制与代价见 §8.4-B 末 |
 | 3 | `_buaaRefreshing` × `_importMessage` | VM 的 `refreshFromBuaa`：`:927` 立旗、`:928` 起协程 | `:941` 那句进度（「正在刷新课表：第 x/y 周…」）与 `:988` 那次落旗出自同一趟刷新 | **三枚入口只有一枚补了句子**：ImportScreen `:378` 调完立刻 `:379` `showMessage("正在刷新课表...")`；HomeScreen `:643`（`onTermSelected`）与 `:853`（菜单「刷新课表」）**都不写** | 首页读者 `:468-471` 是**读完即清**（`showSnackbar` 紧跟 `clearImportMessage()`）；ImportScreen `:392` 与 SettingsScreen `:705` 两枚读者是常驻横幅，**不自清** | **真漏清**（形状齐全，当下无可达残值 ⇒ 全靠首页那一行 `clearImportMessage()`） |
 | 4 | `_buaaRefreshing` × `buaaRefreshJob` | 同一枚链的**收尾**：`:988` 在 `finally` 里落旗 | `:928` 把新 Job 交给那枚可变量、`:1002` 在取消时把它交回 null ⇒ 旗标与句柄是"同一件事在忙"的两半 | 收尾 `:988` 只落旗、**不清句柄**（改后仍留着一枚已完成的 Job） | 唯一读者 `:1003` `if (job.isActive)` —— 已完成的 Job 永远不 active ⇒ 读不出假话 | **结构不可能**（机制见 §8.4-C，可挪走那一类：两道闸都在别人身上） |
 | 5 | `submitting` × （`saved`，`serverMessage`） | IClassLoginScreen 的 `submit()`：`:82` 立旗、`:83` 收句子、`:84` 起协程 | 三枚是同一次登录的三种产物：在忙 / 成功了 / 服务器给了原因 | 起手**成对**（`:82`+`:83`，与 §6.3 改前的编辑器同一形状）；**成功那一档分头**：`:87` `saved = true` 与 `:89` `password = ""` 连写，`:90` 走人，**没有 `submitting = false`**（只有失败那一档的 `:95` 落旗） | `statusText` 那一支 `when`（`:101-103`）按 `saved` → `submitting` → `serverMessage` 排；但**同一列**那颗按钮的字 `:160` `Text(if (submitting) "正在登录…" else "登录")` **不吃那条梯** | **真漏清（本遍唯一一枚当下就发作的）**，展开见 §8.3-B。**现状（T115①/②/②′ 在基点 `34fadd8` 之后已修；上面那四格读数与这一句档位原文都留着，它量的是改前盘面）**：修的不是"成功档少落一枚旗"，而是**两枚读者各判一次**这件事本身 —— 三枚裸旗从此只在一枚 `val phase = when { saved → submitting → serverMessage → else }` 里被读成界面话，状态句、那颗按钮的字（新起 `private enum class LoginPhase(val buttonLabel: String)`，Saved 那一档说「已登录」）、失败卡那层语义色三处一律投影自阶段值。**没有**采纳"成功档补 `submitting = false` 与失败档对称"：那枚旗同时是本页唯一的重入闸 `if (submitting) return` 与三处 `enabled = !submitting`、键盘 Done 短路的共同来源，落旗等于在这一页交出去之前（存在这段窗口 —— 路由那一侧给这一页提供了 `LocalAnimatedVisibilityScope`；⚠️ 它有多长今天禁设备、没量过）把表单放开并允许第二趟登录 POST，而第二趟一旦失败就写 `serverMessage`、把「已登录」那句染成失败卡。**成功档故意不落旗、失败档照旧落**这一对不对称本身钉进守卫（`IClassSignInWiringGuardTest` 第 ⑦ 枚，枚数 6 ⇒ **7**） |
@@ -1031,6 +1031,29 @@ grep -n "cameraProviderMissing" app/src/test/java/com/buaa/schedule/ui/signin/Sc
 或者给那扇窗添一颗能触发权限申请的第二按钮，#1 立刻搬到"真漏清"，且错的方向与 §6.4-B 那枚一模一样
 （「同步完成」旁边挂着「去系统设置开启日历权限」）。⇒ 登记 §8.7②。
 
+**现状（T116 收 §8.7② 的 #1 那一半：判"不动 main"，把上面这三行闸钉成守卫）**。
+零 main 改动、零测试文件新增，落点＝`CalendarSyncTargetPairingGuardTest` 第 ⑪ 枚
+`theConfirmChainClearsNoPairItselfAndThreeOtherLinesHoldItShut`（该类枚数 10 ⇒ **11**；上面那六格改前读数
+一字未抹）。判"不动"的机制与后果（这一格是本节 §8.0 第 3 问的正身：**裸读者**今天不在，但挡着它的是别人）：
+
+- **现在不红靠谁挡着**（三行，逐枚钉成判据）：① `diff` 全仓唯一生产者 `diff = computed.first` 长在
+  `fun startCalendarSync()` 体内、且**在同一枚函数体内排在 `:1389` 那次五枚成对清之后** ⇒ "手里有一份 diff"
+  今天蕴含"起手刚把句子与旗标收过一遍"；② 界面唯一出口 `onClick = { viewModel.confirmCalendarSync() }`
+  落在 `ModalTransition(payload = calendarSync.diff)` 那一段之内（输入独占）；③ 全仓 `app/src/main/java`
+  树扫 `confirmCalendarSync` 只有那两枚文件（定义 + 那一句 onClick）⇒ 没有第二条路。
+  把旗标立成 true 的那一枚站点（`:1497` `permissionPermanentlyDenied = !canAskAgain,`）也不在 confirm 体内。
+- **哪一行被谁改掉就会红**：把 ① 那次成对清抽进 helper、或搬到 `computeDiff` 之后（**枚数一处不变**，
+  只有落点错 ⇒ 这两臂实测各自只红第 ⑪ 枚那一枚判据，正是 T115②′ 那一课的靶子）；把 ② 那颗按钮搬出弹窗
+  改成常驻卡（本节上面警告的那一支）⇒ 窗口包含判据红；在第三枚文件里调它 ⇒ 树扫判据红。
+- **为什么"补收"那一支不采纳**（不是一句"没必要"）：起手清旗标在语义上等于**宣布此刻已授权**（T110 那笔账），
+  `:1389` 与 `:1481` 都拿"入口在 `:331` 那道闸里"当凭据；confirm 的凭据只是**传递性**的（那扇窗由
+  startCalendarSync 开），中间还隔着一次 `calendarSyncManager.apply()` —— 权限在弹窗开着的那几秒里被
+  系统收回时，收尾落的正是 `:1432`/`:1437` 那句「…请重试或检查日历权限」，**那一刻把旗标清掉就等于在失败
+  文案旁边撤掉唯一那颗出路按钮**（`:1677`）。另一枚字段 `message` 更不用收：收尾 `:1428-1440` 是整枚重建、
+  每一档都无条件写新句子（这一条也钉进了判据）。⇒ 这一族正确的落点是"生产 diff 之前"那一枚，不是"应用 diff 之前"。
+- ⚠️ 本节 §8.6 第 4 条那句"没有跑过任何一条真机点击序列"在这一格同样成立：守卫是静态源码核对，
+  "弹窗独占输入"这件事今天仍然只有代码分支级证据，没有装机级证据。
+
 **B. #2 `removeSyncedEvents` 起手不清 `diff`/`skipped`。** 闸＝**两扇弹窗互斥**。移除那条链的入口
 只有 `:1941` 那扇 `ModalTransition(open = calendarSync.showRemoveConfirm)` 里的「移除」那颗，
 而它要开着就得先点列表里那一行（`showRemoveConfirm = true` 全仓唯一写点，见 §8.5 第 14 条）；
@@ -1039,6 +1062,27 @@ grep -n "cameraProviderMissing" app/src/test/java/com/buaa/schedule/ui/signin/Sc
 **`diff = null` 那类清点点**（钉"3 处、每处都带 `skippedOccurrences = 0`"），而 `:1481` 根本不写 `diff` ⇒
 它不在这枚判据的宇宙里；`:1426` 同理。⇒ **这一格零守卫**，登记 §8.7②。
 **属于哪一类**：可被别处一行挪走（同 A，且挪走的是同一道闸）。
+
+**现状（T116 收 §8.7② 的 #2 那一半：上面那句"这一格零守卫"已经不成立，main 照旧一字未动）**。
+落点＝`CalendarSyncDiffClearPairingGuardTest` 第 ③ 枚
+`theRemoveChainClearsNeitherDiffNorSkippedBecauseTheTwoModalsHoldEachOtherOff`（该类枚数 2 ⇒ **3**）。
+归它不归 `CalendarSyncTargetPairingGuardTest`，理由要说清：那一枚文件的宇宙本来就是"这一对的清点点"，
+而 #2 缺的正是一格"这条链压根不在这对宇宙里、凭什么算它没漏"的账 —— 上面那句"第一枚判据数的是
+`diff = null` 那类站点、`:1481` 根本不写 `diff` ⇒ 不在宇宙里"如今换成了**按位置**的三格判据：
+① `removeSyncedEvents` 体内三枚写点**逐处**负判据（一枚都不许写 `diff` 也不许写 `skippedOccurrences`，
+`:1481` 的实参表还钉成逐字），② diff 弹窗那一段与移除确认框那一段**互不重叠**（两层各自到下一枚
+`ModalTransition(` 为界），③ 那唯一一枚入口 `onClick = { withCalendarPermission { viewModel.requestRemoveSyncedEvents() } }`
+落在**两扇窗之外**，外加 `dismissCalendarSyncDiff()` 两枚收场路都在 diff 窗内。
+两侧读数：`B`（朝紧——照 `:1389` 的仪式给 `:1481` 补收这一对）红在逐字那一格、同时把本节 §8.5 之外
+那枚"3 处成对清"的清点判据顶成 4；`G`（朝宽——把 `:1481` 拆回只立旗）红在逐字那一格、同时红在
+`CalendarSyncTargetPairingGuardTest` ③ 那一族；`E`（朝宽·落点——枚数仍是 1，但把移除入口与 diff 弹窗里
+那颗「取消」整枚对调）红在位置那一格。
+**"补收"那一支为什么驳回**（这一格与 #1 不同，驳回理由不是"没有症状"而是"补了会更糟"）：这条链既不生产也
+不读那一对，今天补上是纯 no-op；而一旦上面 ②③ 那两道位置闸被人改掉（给确认卡顺手补一颗「先移除再同步」，
+本仓另一种常见写法），补收就从"无害"变成**点一颗写着移除的按钮，把用户正要确认的那份差异吞掉**——
+比它假装修的残值更糟。真正该问的是"移除完成之后那份 diff 要不要作废"，那是产品判断、不是这一族的清场仪式。
+⚠️ 另一笔成本：往 `:1481` 补 `diff = null` 会把本文件第一枚判据的 3 处清点顶成 4 处，而那个"3"是按 §6.3
+那笔改前账钉的 ⇒ 两处都得重钉。**这一格与 A 同样没有装机证据**（§8.6 第 4 条），守卫是静态源码核对。
 
 **C. #4 刷新链收尾。** 两道闸，**都不是这枚字段对的性质**：
 ① `:1003` `if (job.isActive)` —— 已完成的 Job 永远不 active，所以"旗已落、句柄还留着"读不出假话；
@@ -1137,7 +1181,7 @@ grep -rnE "state\.value\.copy\(|SignInState\.[A-Za-z]+\([^)]*\)\.copy\(" app/src
 | 编号 | 位置（锚点） | 该改什么（不写方案细节，等排卡） |
 | --- | --- | --- |
 | ① ~~本遍唯一一枚当下发作的~~ ⇒ **已收（T115① 修 main、T115②/②′ 立守卫；文档这一格只划掉、不删字）** | IClassLoginScreen 那枚文件：`:82` 立旗、`:87` 与 `:89` 与 `:90`（成功档那三行）、`:160` 那颗按钮的字、`:101-103` 那支 `when` | ~~**本遍唯一一枚当下发作的**：登录成功那一档不落 `submitting` ⇒ 同一列两行话互相打架（「已登录…正在进入扫码页…」 vs 「正在登录…」）。形状与 §6.3 那枚编辑器改前**同一族**（一次生产的两半被写到两处、其中一处漏了），差别只在窗口是退场那几帧。零守卫（§8.5 第 12 条 ⇒ 0 行）~~ **现状（在基点 `34fadd8` 之后，改前那三格读数与档位原文全留着）**：收的是**判定点**而不是那枚旗 —— 三枚裸旗从此只在一枚 `val phase = when { … }` 阶段梯里被读成界面话，状态句、那颗按钮的字、失败卡的语义色三处都投影自它（新起一枚 `private enum class LoginPhase`，成功那一档按钮说「已登录」）。"成功档补一句 `submitting = false`"那一支**驳回**：`submitting` 同时是本页唯一的重入闸与三处 `enabled` 加键盘短路的共同来源，落旗等于在这一页交出去之前（`LocalAnimatedVisibilityScope` ⇒ 存在这段窗口；⚠️ 有多长今天禁设备、没量过）松开表单、允许第二趟登录 POST，而它一旦失败就写 `serverMessage`、把「已登录」那句染成失败卡。守卫：`IClassSignInWiringGuardTest` 第 ⑦ 枚（该类枚数 6 ⇒ **7**；四组格子 —— 阶段梯的序与四档逐字、三处投影都不许再读裸旗、Saved 那一档的措辞两边都不许撞、那对不对称的闸门），六臂变异全红（朝宽三臂 W1 把 `Text(if (submitting) …)` 放回来 / W2 换梯序 / W3 成功档落旗，朝紧三臂 T1 失败档不落旗 / T2 Saved 措辞撞成在飞那句 / T3 兜底那一档落错阶段值）。**这一臂 T3 逼出一格新账**：`occurrences(梯子里的阶段值) == 4` 那把尺只数枚数、不数落点，四档改成逐字钉才抓得到（本节 §8.5 那几把"数枚数"的尺在下一遍都要按这个教训重看一遍） |
-| ② | VM 的 `confirmCalendarSync`（`:1425` 起协程、`:1426` 只写 `syncing = true`）与 `removeSyncedEvents`（`:1481` 起手清了两枚、没清 `diff`/`skipped`） | **同一枚 data class 的第三、四条链的起手形状**。`:1389` 与 `:1481` 已经证明"起手成对清"这刀在这两枚文件里做得出来；剩下的问题不是"今天漏不漏"（都不漏，机制见 §8.4-A/B 那道模态窗），而是**这两格今天一行守卫都没有**：`CalendarSyncDiffClearPairingGuardTest` 那枚判据数的是 `diff = null` 清点点、`CalendarSyncTargetPairingGuardTest` 那族数的是 `message = null` 与旗标 —— `:1426` 一枚都不在它们宇宙里（§8.5 第 13、14 条给出入口唯一性）。建议按 §6.8①/⑥ 那两格的形状补第三份守卫实例 |
+| ② ~~这一格今天一行守卫都没有~~ ⇒ **已收（T116 两枚判据；main 一字未动、零新建文件，文档这一格只划掉、不删字）** | VM 的 `confirmCalendarSync`（`:1425` 起协程、`:1426` 只写 `syncing = true`）与 `removeSyncedEvents`（`:1481` 起手清了两枚、没清 `diff`/`skipped`） | ~~**同一枚 data class 的第三、四条链的起手形状**。`:1389` 与 `:1481` 已经证明"起手成对清"这刀在这两枚文件里做得出来；剩下的问题不是"今天漏不漏"（都不漏，机制见 §8.4-A/B 那道模态窗），而是**这两格今天一行守卫都没有**：`CalendarSyncDiffClearPairingGuardTest` 那枚判据数的是 `diff = null` 清点点、`CalendarSyncTargetPairingGuardTest` 那族数的是 `message = null` 与旗标 —— `:1426` 一枚都不在它们宇宙里（§8.5 第 13、14 条给出入口唯一性）。建议按 §6.8①/⑥ 那两格的形状补第三份守卫实例~~ **现状（T116，在基点 `22d1a55` 上量；上面那段建议与四格读数全留着）**：两枚判据**分头落进既有那两枚文件**，没有新建第三份守卫实例（"补第三份文件"那一支按卡面红线驳回）——#1 归 `CalendarSyncTargetPairingGuardTest` 第 ⑪ 枚（枚数 10 ⇒ **11**，③那一族的第三条链起手形状），#2 归 `CalendarSyncDiffClearPairingGuardTest` 第 ③ 枚（枚数 2 ⇒ **3**，那一对的清点宇宙本来就是它的）。判据形状一律**逐处 / 按位置 / 逐字**，不吃 count：三枚写点按宿主函数体切块取实参表、`:1426` 与 `:1481` 各钉一枚逐字实参表、成对清与 `diff = computed.first` 钉**同宿主＋先后**、两扇弹窗窗口钉**互不重叠**、界面入口钉**在窗口之内／之外**、`confirmCalendarSync` 的引用面钉**全仓 main 树扫**。两侧七臂实测（`A`/`B`/`C`/`C2`/`D`/`E`/`G`）全部红，其中 `C`（成对清抽进 helper）与 `C2`（搬到 `computeDiff` 之后）**只红第 ⑪ 枚那一枚判据**——那正是 T115②′ 那一格警告的"枚数对、落点错"形状，也是本节 §8.5 那批"数枚数"的尺子在下一遍要照这个教训重看的东西。**main 侧两格都判"不动"**：理由、代价与"哪一行被谁改掉就会红"写在 §8.4-A/B 那两段「现状」里（一句摘要：清旗标=宣布已授权，confirm 的凭据只是传递性的，而 `:1481` 补收那一对是拿「移除」去作废一份没确认的 diff）。本节 §8.6 第 4 条那句"没有装机证据"对这一格同样不变 |
 | ③ | UpdateCheck 的 `install()` 三条失败支（`:340`、`:357`、`:366`）与 `pendingInstall` 的唯一读者 `retryInstall`（`:189`）、UpdateDialog 的 `:83` 那一档 | `pendingInstall` 与 `_state` 的成对关系今天由**弹窗分支**兜着（§8.4-D）。谁往 `Failed` 那张卡上补一颗「重试安装」，这一格当场变真漏清（拿陈旧 `(info, file)` 去装一个可能已经不存在的包）。要么起手清，要么把"靠哪一档不念旧账"写进 KDoc（这正是 §6.8③ 当年那句原话的第二份实例） |
 | ④ | HomeScreen 的 `:420` / `:442` / `:452`、CourseManagementScreen 的 `:181` / `:214`、ConflictWizardDialog 的 `:79`、ImportScreen 的 `:151` / `:172` / `:485` | 这 9 处起手块**一枚旗标都不立** ⇒ 操作飞着的时候那颗按钮仍可点、可重复触发（与 §8.6 第二条合起来读）。**本节没给它们判档**，因为本节的判据是"对岸清没清"，不是"该不该有旗"。要收这一族得先立判据（哪些操作值得按灭、哪些按"重复提交比吃掉更糟"的口径走 SignInViewModel 那套闸门） —— 这是**下一轮排卡的唯一来源里最大的一块**，本节按"一枚没动"如实挂着 |
 | ⑤ | OnboardingScreen 的 `:144`（起手只立 `checking`）与 `:476` / `:482` / `:489` 三处读者 | 判 **deferred**（先例 #117）：旧结论文字在重跑期间仍然读得出来，但同一屏那颗按钮自己写着「正在检测…」、每张卡的 Fix 入口被 `enabled` 按住 ⇒ 代价=措辞，本遍不值。谁哪天把 `enabled = !checking` 那一族去掉，这一格自动升级 |
