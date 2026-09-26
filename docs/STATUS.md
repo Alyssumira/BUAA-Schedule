@@ -2831,3 +2831,74 @@ lint 0 错 14 警、签名包 **7,247,271 B**（对 7,246,225 是 **+1,046 B**�
 
 **⚠️ 顺手把 `docs/STATUS.md` 里 6 处失效锚点结掉（它列、我复核，历史正文不改，只在此登记现值）**：`:1059-1060` 说 `uiState` 的 `WhileSubscribed(5_000)` 在 `:463-467` ⇒ 真值 **`combine(` 在 463、`WhileSubscribed` 在 495**，同段 dayTicker 的块现在起于 **448**；`:1675-1676` 的 `:674 refreshBuaaTerms()` ⇒ **704**；`:1728`/`:1762`「`reminders` 是 `Eagerly`（`:273`）」⇒ **300 注释 / 303 started**；`:2723`「`conflictGroupCount` 移进类体（`:164`）」⇒ **171**（就是 T100 那 +7）；`:2766`「`:471` 就是 `:468`」⇒ **483 / 479**；`:2682` 三句同源提示「`:1001`/`:1059`/`:1086`」⇒ **1038 / 1102 / 1133**（`:1001` 今天是 `val job = buaaRefreshJob ?: return`）。这六处里有五处**不是 T100 造成的**，是 T94/T95/T98/T100 一路插行累积的 ⇒ 印证了那条规矩：**行号必须与符号名/原文片段同框**，否则台账每合一张卡就烂几处。
 **明留**：① 292 条 (A) 类锚点未做内容级复核（按规矩不改；要判"当时抄得对不对"，得另起一轮专门对着当日 commit 的活）；② 它用了一枚 **empty commit**（`f122152`）给"分类完毕、零改动"记账 —— 结论我认（我复核了它的抽查），但**本仓收单口径是不造空 commit**，这类记账写进回执与 STATUS 就够，下次卡面要写明；③ README:210 那一行的措辞是按"现状描述型"写的，若这份审计将来被后续卡引用，它的 commit 标号要跟着更新（规矩已写在保鲜声明里）。
+
+## T102：`docs/TESTING.md` 那五格数跟着 T99/T100 走，并第一次把复算命令一格一条贴在数旁边（5 枚 / 1 文件 +199 / −31，**零代码改动**）
+
+起因是我合完 T99/T100 没回头问"这次改动让哪些文档的句子失效了"。那两枚新守卫文件把地板推到
+**1,683 / 198**，而这一页还写着 1675 / 190 / 196 / 35 / 70 —— 它恰恰是 T98 为了"让这几个数有人负责"
+才从 README 搬出来的那一页。
+
+**① 六格全部现读**：1683（`@Test`）/ 192（`.kt` 文件）/ 198（suite）/ 37（文件名带 `Guard`）/
+71（test 树里含 `src/main/java` 字面量）/ 仪器测试 66 与 14 **没过期**（本轮唯一没动的两格）。
+它逐格与我卡面给的数相同，但我给的方法里有一把是错的：卡面写 `-o | wc -l`，我自己实际用 `grep -c`
+量过一次同一格 —— 同一份文件 **109 行 vs 217 枚**，两把尺子。这条已经写进 `docs/derived-field-audit.md`
+那节（`74247bf`）。
+
+**② 192↔198 那 6 枚差额：出资人没换**（驳回我卡面"可能换了人"）。仍是那五枚"一文件多枚顶层类"的
+文件，逐枚 `1+1+1+2+1`；新加的两枚守卫**各自只有一枚顶层类**，所以加的是「2 文件 / 2 suite / 8 用例」。
+我卡里猜的三条来路（内部类 / `@Nested` / 参数化）在全仓读数为 **0**。边界写死在页上：顶层 `class`
+声明共 199 枚，比 198 多的那一枚是 `core/designsystem/GlassJankDecisionTest.kt:186` 的
+`private data class Quad`（名下零枚 `@Test` ⇒ 不成 suite）；数"顶层类"与数"测试类"在这棵树差 1。
+
+**③ 静态尺子与真 XML 对过、一枚不差**：拿 `634c6d6` 留下的 194 份 XML 对照，静态 194 = XML 194，
+`<testsuite name>` 集合逐枚相同、每枚名下 `<testcase>` 数 0 处不差、合计 1658 = 该点 grep 值。
+⚠️ 这半条对照只在 `app/build/test-results` 还留着那趟读数时可复现 —— 本轮收单那趟冷门禁已经把它整份换掉。
+
+**④ 判"不把本页的数钉成一枚守卫"＝不做**，两侧的时刻都说清了：加测试而忘了改页 ⇒ 它会红（可靠）；
+只改页上那个数 ⇒ `docs/` 不在 `guardReadWorkingTreeFiles` 的输入面里，Gradle 判 UP-TO-DATE、端一次
+缓存绿灯，正是 #86 / #92① 记过的同一个形状。补那一侧要把 `../docs/TESTING.md` 塞进输入面 = 构建脚本
+改动，且把 T92① 关掉的账重新付一次（文档改一个标点 ⇒ 重跑全量 1,683 枚）。另有一条比缓存更根本：
+它的尺子与本页的命令是同一只手写的规则，不提供独立信息；而它红的时候最省事的动作**正是这一页的病**
+（把数字誊一遍）。⇒ 治疗是"尺子放到数旁边"，本轮已经一格一条地放了。
+
+**明留**：① 仪器测试那一族没有 suite 尺子（它 14 枚文件全用 `AndroidJUnit4` 的 `@RunWith`，单测那族
+一个都没有），所以静态那条尺子不能套过去，页上仍不给它的 suite 数；② `docs/TESTING.md:24` 的「覆盖
+范围」格现在是 689+ 字符的单行长句，拆成按包小列是更好的形状，属重排版、超出本卡。
+
+**收单证据（我自己在 `8605707` 上跑的）**：全新 worktree 冷构建 `:app:assembleRelease`
+**91 actionable / 91 executed** ⇒ `app-release.apk` **7,247,127 B**（与地板逐字节相同 ⇒ 第四次证实
+`docs/` 对构建惰性）；`:app:testDebugUnitTest --rerun-tasks` 两跑都是
+**1,683 tests / 198 suites / 0 failures / 0 errors / 0 skipped**；lint **0 error / 14 warning**、九档
+per-id 与地板逐一相同；`:benchmark:compileNonMinifiedReleaseKotlin` 绿。
+⚠️ **我这版门禁脚本的 lint 那步当场没读到数**：脚本里那句 `2>/dev/null` 把"路径写错"的
+FileNotFoundError 一起吞了，只剩 `BUILD SUCCESSFUL` 看着像过了。lint 报告实际在
+`app/build/reports/lint-results-debug.xml`，不是我写的 `app/build/reports/android-results/lintDebug.xml`
+⇒ 上面那枚指纹是**补量**出来的。**"某一步 BUILD SUCCESSFUL"不等于"那一步读到了数"**，
+门禁脚本里凡是取数的步骤都不许带 `2>/dev/null`。
+
+## 清盘与 `ai/T93` 预置（编排侧自己做的，无子代理，2026-09-26 下午）
+
+**先排文档里的雷，再删目录。** 清 worktree 前排了一遍"完成态句子"（盘外路径 + 已归档/已提交/已生成
+这一型，62 枚含盘外路径的行里只有 6 枚在声称"已经放好了"），五条里四条实核成立
+（`buaa.gitee.token` 这个键在、`ghost-final.patch` 在、`.tmp/T83/` 11 件、`.tmp/T93/` 13 件、
+`.tmp/T95/*redarm*.kt` 在），**唯一不成立的那条差点造成损失**：`docs/STATUS.md:2246` 写"49 份
+uiautomator dump 归档在 `D:/schedule/.tmp/T80c/`，不在 worktree 里，清目录不丢"，实查那目录是**空的**，
+49 件只活在 `.worktrees/T80c/` 里，而"49 份 dump"本身也数错了（dump 20 份 + 截图 11 张 + 采集脚本与
+读数 18 份）。⇒ 先 `cp` 过去、49/49 逐只 md5 比过，再把句子改成成立的版本（`c55ddc5`）。
+**教训：凡是"已归档在 X"，删之前必须 `ls X` 数一遍 —— 那是上一轮的计划被当成了上一轮的成绩。**
+
+- **worktree 31 → 1**：30 枚 `ai/*` 先过 `git branch --merged master` 分档、确认已合才删，只留
+  `.worktrees/T93`（`ai/T93` 是唯一未合的资产，其代码改动只有 benchmark 生成器那一颗文件）。
+  ⚠️ `git worktree remove` 在 T102 上因 Windows 长路径报 `Invalid argument` 失败，而**注册表已经注销**
+  （只剩目录）⇒ 顺序是 `--stop` 杀 daemon、`git worktree prune`、再 `rm -rf` 兜目录、最后才 `git branch -d`
+  （反过来会被"branch used by worktree"挡下）。
+- **`ai/T93` rebase 到顶端并证编译**：7 枚重放零冲突（`git merge-base master HEAD` == `c55ddc5`），
+  留了备份 ref `ai/T93-pre-rebase`（`8c9834a`）。`:app:assembleRelease` 冷编 **79 executed** ⇒ apk
+  **7,247,127 B 与 master 同字节**（该分支零 main 改动，符合预期）；
+  `:benchmark:compileNonMinifiedReleaseKotlin --rerun :benchmark:...` **1 executed** 真跑绿，不吃
+  UP-TO-DATE。生成器现 768 行、6 枚 CUJ，`openStatsAndDrill` 在 `:326`。
+  ⇒ **#143 的前置只剩设备本身**（release 签名的包要先装在机上），分支侧已经就绪；**仍未合**，
+  因为那枚 CUJ 只有编译证据、没有一次跑绿的设备证据。
+  ⚠️ 我第一次预置脚本里两步是假的：`:benchmark:assembleDebug` 这个任务**根本不存在**（macrobenchmark
+  只有 nonMinified/minified release 两档，1 秒即失败），而 `compileNonMinifiedReleaseKotlin` 第一趟
+  拿的是 `UP-TO-DATE` —— 两个都不算证过，改成 `--rerun` 指名重跑才算。
