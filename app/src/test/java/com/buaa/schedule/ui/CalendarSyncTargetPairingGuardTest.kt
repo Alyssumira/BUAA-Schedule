@@ -265,8 +265,10 @@ class CalendarSyncTargetPairingGuardTest {
      * 判据四枚，各是这条链上的一环：
      * - 两枚 key **各自恰好被 remove 一次**（漏一枚 = 换个方向念旧账：只留名字就把"未选择"念成上任的名字，
      *   只留 id 就还能往死 id 里写）；
-     * - 两次 remove 的**块头链完全相同**（同一次 `settingsPrefs.edit { }`）—— 分头清（拆成两次 edit）
-     *   在这条链上就是 T99/T100 那一族「三处清空只有一处成对」的重演，本条先红；
+     * - 两次 remove 的**块头链完全相同**，而且**两者之间不再出现第二枚 `settingsPrefs.edit`**
+     *   （同一次落地只能按位置证：两条一模一样的 `if (…) settingsPrefs.edit { … }` 并排放，
+     *   切出来的块头文本是相等的）—— 分头清（拆成两次 edit）在这条链上就是 T99/T100 那一族
+     *   「三处清空只有一处成对」的重演，本条先红；
      * - 那次 edit 的块头必须同时含 `targetGone`（只在真检测出死目标时动手）与 `loaded.isNotEmpty()`
      *   （空列表不动手：查询失败交回来的也是空列表，那一刻分不清"日历没了"与"provider 抖了一下"）；
      * - 撤的那一档必须长在 `ensureCalendarsLoaded()` 体内（与 `targetGone` 同一颗函数，中间隔一颗别的函数
@@ -298,11 +300,23 @@ class CalendarSyncTargetPairingGuardTest {
         val idHeads = enclosingBlockHeads(code, idDrops.first())
         val nameHeads = enclosingBlockHeads(code, nameDrops.first())
         assertEquals(
-            "两枚偏好 key 不再出自同一次 `settingsPrefs.edit { }`（左边按 id 切出的块头链 $idHeads、" +
-                "右边按 name 切出的 $nameHeads）—— 拆成两次 edit 就是分头清，中间那次失败或提前返回" +
-                "就会留下半对：" + lineHints(code, idDrops),
+            "两枚 key 的remove 落在**不同形状的块**里（左边按 id 切出的块头链 $idHeads、" +
+                "右边按 name 切出的 $nameHeads）—— 一枚在闸门里、另一枚在闸门外，就是分头清的另一种写法",
             idHeads,
             nameHeads,
+        )
+        // 同一块要按**位置**判，不能只比块头字符串：两枚一模一样的 `if (...) settingsPrefs.edit { }`
+        // 拆成两条并排，切出来的块头文本是相等的，只有"两者之间没有第二次 edit"才证得了同一次落地
+        val earlier = minOf(idDrops.first(), nameDrops.first())
+        val later = maxOf(idDrops.first(), nameDrops.first())
+        val nextEdit = code.indexOf(PREFS_EDIT_HEAD, earlier + 1)
+        assertTrue(
+            "两枚偏好 key 不再出自**同一次** `settingsPrefs.edit { }`（前一处之后又出现了 L" +
+                (if (nextEdit < 0) 0 else code.substring(0, nextEdit).count { it == '\n' } + 1) +
+                " 那一枚 edit，而后一处在 L" + (code.substring(0, later).count { it == '\n' } + 1) +
+                "）—— 拆成两次 edit 就是分头清，中间那次失败或提前返回就会留下半对：" +
+                lineHints(code, idDrops),
+            nextEdit < 0 || nextEdit > later,
         )
         val dropBlock = idHeads.last()
         assertTrue(
