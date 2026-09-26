@@ -2902,3 +2902,137 @@ uiautomator dump 归档在 `D:/schedule/.tmp/T80c/`，不在 worktree 里，清�
   ⚠️ 我第一次预置脚本里两步是假的：`:benchmark:assembleDebug` 这个任务**根本不存在**（macrobenchmark
   只有 nonMinified/minified release 两档，1 秒即失败），而 `compileNonMinifiedReleaseKotlin` 第一趟
   拿的是 `UP-TO-DATE` —— 两个都不算证过，改成 `--rerun` 指名重跑才算。
+
+## T103：全仓第二遍扫「成对字段漏清」这一族（`b15d34e` `2ccbfc9` `7080287` `4b1c4a4`，4 枚 / 1 文件 +306 / −0，**零代码改动**）
+
+问的不是 §0–§5 那枚「派生构造参数」，换成**清点对岸**：一对语义上同生同灭的字段，是不是每一处只清了
+一半（§6.0）。进表 14 枚候选，档位 **真漏清 1 · 已被钉住 3 · 结构不可能 9 · 越界 1**；§6.7 那格是这一节
+最重要的一格（上限声明），§6.8 把"该改但按红线一枚没动"的六格列成表 —— **后面 T104/T105/T106 三张卡
+全部是从那张表里派的**（⑤→T104、①与⑥→T105、③→T106）。
+
+**卡面被带证据驳回的两句**（§6.9）：① 我卡面问「`grep ".copy("` 的盲区本仓是不是空的」—— 不空，代码里有
+1 处隐式接收者 `ui/home/WeekGridGeometry.kt:253`，所以自有类站点是 **72** 处而不是 71 处；② 我给的三档
+判据**不完备** —— #10 `targetId`/`targetName` 与 #12 `boundCamera`/`analysisUseCase` 是"成对写点存在、
+分头清点站点为 0"，既非真漏清也非结构不可能也非已钉住，档位那一格对它们是硬套的，本节如实写了"结构不可能
+（本遍判据下根本没进候选）"并建议下一遍补第四档。
+
+⚠️ **本节自己判错的那一枚，代价最大**：#7 `(message, permissionPermanentlyDenied)` 判「结构不可能」用的
+那道闸（`ui/settings/SettingsScreen.kt:331` 的 `hasCalendarPermission()` 短路）**不是护栏，是漏清的成因**
+——已授权时它让 launcher 根本不启动，于是 `:1508` 的 `onCalendarPermissionGranted()` 永不被调。
+这笔账由 T106 实测翻案（改判「真漏清」并当场收掉），§6.2 的分布按现状读作 **真漏清 2 · 已被钉住 3 ·
+结构不可能 8 · 越界 1**，旧分布不抹因为它就是 T103 那一遍的读数。留下的规矩在 §6.9 驳回② 末段：
+**拿"别处一道闸"判"结构不可能"，那道闸可被一行改动挪走，甚至判反**。
+
+**收单**：纯文档、零 main 改动，按 `docs/` 对构建惰性没重跑门禁。锚点普查当时钉 261 / 571 / 140，
+现值 **268 / 578 / 146**（被 T104–T108 推动，T106⑤ 与 T108⑤ 各重钉过一次，命令在 §6.10 与 §0.4）。
+
+## T104：删除链立了旗标、没收回上一句错 —— `CourseEditorScreen` +4 行、新守卫 371 行 / 2 枚 `@Test`（`2ec821b` `e0fa3b2`，2 枚 / 2 文件 +375 / −0）
+
+形状与 T100 那对 `diff`/`skippedOccurrences` 一模一样，只是这一族长在两枚 `remembered var` 上：
+`performSave()` 起手那两行是**一次仪式**（`saving = true` + `saveError = null`），删除协程只抄了第一行
+⇒ 而底栏那条红条**常驻**、读者不在删除弹窗里 ⇒ 删课途中继续念上一次保存的失败（「保存失败，请重试（数据已保存）」
+这种当场自相矛盾的句子）。改后 `ui/editor/CourseEditorScreen.kt:614` 立旗标、`:615-617` 三行注释点名守卫、
+`:618` 收回句子。
+
+守卫两枚 `@Test`（新类 `ui/editor/CourseEditorSaveErrorClearPairingGuardTest.kt`）：
+`everySavingTrueSiteAlsoClearsSaveErrorInItsLaunchBlock` —— 每一枚 `saving = true` 在**同一次 `scope.launch`
+块内**必须配一枚 `saveError = null`，且清空要先于第一次写文案，两个方向的枚数相等；
+`theSaveErrorMessageReaderSitsUngatedInThePersistentBottomBar` —— 两枚读点 `:282`/`:295` 必须留在 `bottomBar`
+里、**不许**被塞进任何 `saving` / `canSave` / `ModalTransition(` 闸门（一旦塞进去，漏清就再也查不出来 ——
+这是给"判据可被挪走"那笔账上的锁）。字段生命点 7 枚逐一点名。
+
+**收单证据（我自己在 `e0fa3b2` 冷跑的）**：`--stop`→drain→`clean`→`assembleRelease` 先 ⇒ apk
+**7,247,261 B**（基线 7,247,127，+134 B）；`testDebugUnitTest --rerun-tasks` **1,685 tests / 199 suites /
+0 fail / 0 err / 0 skipped**（用例 +2、suite +1）；lint **0 error / 14 warning**、九档 per-id 与地板相同；
+benchmark 编译档绿。
+⚠️ **我第一版红臂打错了站点**：脚本从"最后一枚 `saving = true`"往下找配套清空，而新加那处后面跟着三行注释
+⇒ 它删的是 `:232`（保存链），**红了，但红的不是要点名的那半**。改成扫"最后一枚 `saveError = null`"
+（`.tmp/T104-arm2.sh`）⇒ 命中 `:618`、变异后 md5 `c08b38d096b3…` 与代理自报那枚**逐字符相同**，两枚 `@Test`
+全红；还原 md5 `a4c321c5ee8d…`、工作树 0 行。**红臂必须核对命中的行号，不能只看它红了。**
+**明留**：这一臂只扭了朝紧一侧（把配对拆开）；"未来的正解会不会让它红"那一侧，是 T105 第一次做到的。
+
+## T105：给三对「今天成对、零守卫」的字段补静态守卫 —— `CalendarSyncTargetPairingGuardTest`（新类 842 行 / 6 枚 `@Test`，`9118074` `688b191`，2 枚 / 1 文件 +842 / −0，**零 main 改动**）
+
+三对都来自 T103 §6.8 那张表，形状是 T100 那枚守卫的第二、第三份实例：
+① `targetId`/`targetName` —— 成对写点 3 处（含初值）、**分头清点 0 处**，唯一读者
+`ui/settings/SettingsScreen.kt:1623` `summary = calendarSync.targetName ?: "未选择"` **裸读、不在任何
+`targetId` 驱动的块里** ⇒ 今天不漏，将来添一处"只把 `targetId` 打回 `-1L`"就漏，且没人钉。
+③ `message`/`permissionPermanentlyDenied` —— 钉的是**改前**形状（成对写 1 处 + 分头清 2 处），T106 才改语义。
+⑥ `showPrivacyDialog`/`privacyConsentAt` —— `:1814` 那行 `ModalTransition(payload = …)` 的写法逐字符钉住，
+并判 `ModalTransition(open = showPrivacyDialog` 出现次数必须为 **0**（同文件 `:1859` 就是那种常用写法，
+换过去收场那几帧会当场翻成「未同意」）。
+`688b191` 补的两处是它自己踩的雷：`previousCodeLine` 加 `from > 1` 硬防护、把带嵌套引号的报错消息改成先算
+gating 再拼串。
+
+**收单证据（我自己在 `688b191` 冷跑的）**：apk **7,247,261 B 与 T104 档逐字节同**（零 main 改动 ⇒ 再一次
+证实包体只随 main 动）；tests **1,691 / 200 suites / 0 / 0 / 0**；lint 0e/14w 九档同。
+⚠️ `clean` 那一步**失败过一次**：Windows 锁住 `compile_app_classes_jar/debug/bundleDebugClassesToCompileJar/classes.jar`，
+而后面 91 executed 说明重跑到位 ⇒ 记瑕疵不记红。
+**两枚红臂都红，而且这是本仓第一次"两侧都有格子"**：朝紧删掉 `:1389` 那次 `message` 清空 ⇒ 红；
+朝宽把 `:1508` 那处单清**改成成对清** ⇒ 也红。第二枚的含义要说清：**那正是未来的正解**，所以这张守卫
+是**故意在正解上红**的 —— 谁去改 main 就得连守卫一起改，这是设计不是缺陷。
+
+## T106：修「永久拒绝旗标在手动授权之后永不清」（`76b75fc` `db235e4` `78f5484` `605f910` `bb7924a`，5 枚 / 3 文件 +442 / −74）
+
+**用户看得出来的错**：在系统设置里把日历权限授予之后，进同步 ⇒ 「同步完成：新增 …」那一句旁边**继续挂着**
+「去系统设置开启日历权限」那颗按钮。机制两半：`:331` 的 `hasCalendarPermission()` 短路让已授权那条路**根本
+不进 launcher**，于是唯一清旗标的 `:1508 onCalendarPermissionGranted()` 永不被调；而 `:1664`
+`item(key = "status", visible = calendarSync.message != null)` 那道闸只在 `message == null` 那一段挡得住，
+`:1429-1439` 那句「同步完成」恰好又把它填非空。
+**修法**取"做成成对清"那一支（不改读侧）：`ui/ScheduleViewModel.kt:1389` 起手那行改成
+`it.copy(syncing = true, message = null, permissionPermanentlyDenied = false, diff = null, skippedOccurrences = 0)`
+—— 同一行改写、**零行号漂移**（这是 T101 那笔"插一行 ⇒ 全仓锚点整体平移"的账逼出来的形状选择）。
+`FLAG_WRITE_SITES` 2→3；③ 那族按新语义改名
+`thePermissionFlagAndTheMessageAreWrittenTogetherOnceAndClearedPairedAtTheSyncEntry`，两道闸改判成
+「成对清之后的第二层」；新添 `everyRouteIntoTheSyncEntryStandsInsideAPermissionGate`（5 枚入口 × 36 条断言）。
+守卫那枚文件 842 行 / 6 枚 ⇒ **1,150 行 / 7 枚**，`assertEquals` 54→77、`check` 14→21。
+代理侧自己做了 8 枚变异复验（朝宽/朝紧各 4）全红（`605f910`）。
+
+**收单证据（我自己在 `bb7924a` 冷跑的）**：VM md5 `64dfda79b2aa…`、1,683 行；红臂拆掉新加那半枚清空 ⇒
+`thePermissionFlagAnd…ClearedPairedAtTheSyncEntry FAILED`、7 tests 1 failed，还原 md5 逐字符回中、工作树 0 行。
+全量：apk **7,247,258 B**（比 T105 档 −3 B ⇒ 同行改写落在 ±3 B，**属 R8/编码噪声，不许归因给这半枚清空**）；
+tests **1,692 / 200 suites / 0 / 0 / 0**；lint **0 error / 14 warning** 九档逐一相同；
+`:benchmark:compileNonMinifiedReleaseKotlin` 绿。
+⚠️⚠️ **我这侧第一次跑出"假没红"**：朝宽那臂用整行相等去匹配变异点，没命中 ⇒ python `assert` 当场中止 ⇒
+脚本仍然回 `RED_EXIT_B=0`，日志里看着"跑了、没红"，其实**一条测试都没跑**。重写 `T106-armW.sh` 指定 `:1445`
+那一行 ⇒ 真红。**规矩：红臂脚本必须先打印"变异后的 md5"并断言它 ≠ 基线 md5**；md5 没变 ⇒ 这一臂不存在，
+`exit 0` 什么也不证明。
+**文档随之改判**（`78f5484`）：#7 从「结构不可能」搬进「真漏清（已修）」，§6.8③ 那格改成「改前登记的原文 +
+现状」两段并陈，§6.10 普查重钉 268 / 578 / 146。
+**红线事件（同一枚卡起来两支代理，已登记过的老雷）**：`76b75fc` 里混进一枚白名单外的新测试类
+`CalendarSyncPermissionFlagClearGuardTest`，`db235e4` 按红线删掉它、把可达路径枚举**折回 T105 那枚文件**
+⇒ 文件数净 0、用例净 +1（1,691→1,692 那一枚就是它）。
+
+## T108：`docs/TESTING.md` 的「用例数」换尺 + 194↔200 逐枚点名（`62698d5` `6a57c14` `949688d` `5d4b205` `9d5d0d0` `f4c9308`，6 枚 / 1 文件 +211 / −80，**零代码改动**）
+
+起因是我自己数错：`grep -rho '@Test'` 给 **1,696**，门禁 XML 给 **1,692** —— KDoc 和字符串里把 `@Test`
+当词写的那几处被算进去了。尺子换成**行首（含缩进）第一个 token 就是 `@Test`**，并把"为什么换尺"与残余风险
+写在页上。**本轮（补账这趟）在 `f4c9308` 上重量一次**：文件数 194、用例 1,692 ⇒ 与页上现值一致。
+194↔200 那 6 枚差额**重新逐枚点名**（没有照抄上一轮的 `1+1+1+2+1`，因为 T104/T105/T106 三张卡各自动过这一族、
+贡献形状不同：前两张各添一枚"一文件一顶层类"的守卫文件，T106 净添 0 枚文件），并补了一条**与静态尺完全无关**
+的对法：拿门禁那批 XML 做两次 `comm` ⇒ "有 suite、无同名文件"恰好 7 枚、"有文件、无同名 suite"恰好 1 枚
+⇒ 193 + 7 = 200。两把尺各走各路落在同一个 6 上，这才排除了"多出来的类名恰好重名"这种巧合。
+⚠️ **撤掉「数以 STATUS 为准」那句指向** —— 两头都自称权威，等于没有权威。而它当时立不住，真原因是
+**STATUS.md 缺 T103–T108 五节的账**（本轮下面这几节就是补的）。
+**明留**：仪器测试那一族仍不给 suite 数（14 枚文件全用 `AndroidJUnit4` 的 `@RunWith`，单测那族一枚都没有，
+静态尺套不过去）；`docs/TESTING.md` 里「现值 1,692 / 200」那批 XML 只在 `bb7924a` 那棵 worktree 里可复算，
+页上写明了出处。
+
+## 本轮编排侧补账：STATUS 欠的那五节（无子代理，2026-09-26 深夜）
+
+T103 / T104 / T105 / T106 / T108 五节补在上面。**规矩：每合并一张卡，STATUS 那一节要和合并同一轮写** ——
+本轮欠了 5 张卡、跨约 3.5 小时，直接后果是 T108 想立的文档职权划分落不了地。
+
+**排队中的三笔残账**（都来自 T103 §6.8，按红线当时没动）：
+- **T107**（§6.8②）：`calendarsLoaded` 全仓**零复位站点**（`grep -rn "calendarsLoaded = false" app/src/main/java --include='*.kt'` ⇒ 0 行）
+  ⇒ `calendars` 是进程寿命的缓存；`ui/ScheduleViewModel.kt:1523-1529` 那个 `if (targetGone)` 只重置内存里的
+  `targetName`/`targetId`，**不清偏好** ⇒ 下次冷启动把死日历 id 又捞回来。
+- **T109**：`removeSyncedEvents()` 那条链同样不清 `permissionPermanentlyDenied` ⇒ T106 那处起手成对清盖不住它
+  （它是另一条入口，不走 `startCalendarSync`）。
+- §6.8④：`cameraError` / `cameraProviderMissing` 是**跨生产者残值**，`ui/signin/ScanUiStatus.kt:87`/`:93` 那条
+  梯子按"写入先后"赌，判据该按**来源**分支。
+- 另有三处**注释里的过期数字**：`app/build.gradle.kts:424`/`:428`/`:439`（"约 60 枚"→现 73 枚、"1,660 枚"→实测 1,692）。
+  ⚠️ 这枚文件是**构建输入**，不像 `docs/` 惰性 ⇒ 动它就欠一次全量门禁 + 包体对照，别和纯文档卡混。
+
+T107 与 T109 同文件、同函数区（`ScheduleViewModel` 日历同步那一段）、同一枚守卫文件 ⇒ **合成一张卡串行派**，
+不并行。
