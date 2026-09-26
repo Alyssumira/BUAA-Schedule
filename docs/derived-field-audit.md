@@ -1,7 +1,36 @@
 # 派生构造参数审计（T97 · 只报不动手）
 
-分支 `ai/T97`，基点 `788acf5`。本文件是**唯一**被本卡新增的文件，不改任何代码。
+分支 `ai/T97`，基点 `788acf5`。本文件是**唯一**被 T97 新增的文件，不改任何代码。
 所有 `file:line` 都是本次 `Read`/`grep` 出来的原文（路径相对仓库根，行号按本工作树）。
+**⚠️ 这一句只对 T97 当时成立**：本档行号现在按下面那节保鲜声明重核过。
+
+## 锚点保鲜声明（T101 追加 · 本档头一节，先读这段再读行号）
+
+**本档行号对应的 commit：`e47a18e`**（T101 逐条回读重核过；T97 初版按 `788acf5`）。
+T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用最密的一处（T97 正文对它写了 18 条显式锚点、
+展开 45 个行号，另加 §2.2/§3.3 里那些不带文件名的裸 `:NNN`）：`2cf8405` 在
+`ui/ScheduleViewModel.kt:101` 之前插进一段 KDoc ⇒ 该文件 101 行以后全体后移
+（101–1377 段 **+7**、`1378` 那处展开成 6 行 ⇒ 其后 **+12**、`1409` 那处展开成 4 行 ⇒ 其后 **+15**：
+起手 `_calendarSync.update` 1378→**1389**、成对写点 1394/1395→**1406/1407**、
+`confirmCalendarSync` 1409→**1423**、`dismissCalendarSyncDiff` 1430→**1445**）。
+代码侧一处不红（全仓守卫读的是 needle 文本不是行号），文档里的"按行号指路"却集体走偏 ——
+**行号是易碎品**。以下四条是本仓写文档锚点的规矩，本档与 `docs/` 其余各档同守：
+
+1. **行号只是辅助，不许单独承重**：每条引用必须同时给出**符号名**（`dismissCalendarSyncDiff`）
+   或**原文片段**（`` `it.copy(diff = null, skippedOccurrences = 0)` ``）。行号漂了，读者还能凭后两样找回位置。
+2. **文档头部标注锚点对应的 commit**（就是本节这一行）。改了被引文件、或 rebase 之后，顺手更新这一行的哈希。
+3. **改主源码时若插入/删除了行**：顺手 `grep -rn "该文件名.kt" docs README.md` 把引用核一遍。
+   分两档处置 —— **(A) 历史叙述**（"当时/改前/本卡把 X 改成 Y"，行号是当时的坐标）**保留原貌不订正**
+   （本仓规矩，先例是 T96 对 `docs/STATUS.md:705`/`:728` 的处置）；**(B) 现状描述**（"现在长在 `:NNN`"）
+   逐条回读，错了就改行号或改成符号名+原文片段。`docs/STATUS.md` 整本是逐卡台账 ⇒ 永远按 (A) 办。
+4. **怎么复算**（别信本节，信命令）：
+   `grep -rhoE '[A-Za-z0-9_]+\.kt:[0-9]+' docs/derived-field-audit.md | wc -l` 给本档的显式锚点条数
+   （**T101 重核后现值 217**，T97 初版 215；一串 `:1389,1395,…` 只算一条），逐条回读的思路是
+   把 `X.kt:NNN` 拆成「文件 + 行号」→ `awk 'NR==NNN' app/src/main/java/com/buaa/schedule/<X>.kt` 读出那一行
+   → 与同框的符号名/原文片段比对，不相符即改行号（**改行号，不改结论**）。
+   裸 `:NNN` 的归属文件取同一句里最近的那枚显式文件名；`docs/` 里另一条普查命令是
+   `grep -rhoE '[A-Za-z0-9_]+\.kt:[0-9]+' docs README.md | wc -l`（全仓普查：T101 订正前 **514**、订正后 516 ——
+   差的这两条是本次给两处裸 `:NNN` 补上的文件名，**多写文件名正是规矩 ① 想要的结果**）。
 
 ## 0. 口径、规模、判据怎么执行的
 
@@ -31,13 +60,13 @@
 
 | 类 | 处数 | 站点 |
 | --- | --- | --- |
-| `CalendarSyncUiState` | 22 | `ui/ScheduleViewModel.kt:1378,1383,1385,1389,1392,1409,1411,1414,1430,1434,1439,1447,1452,1456,1460,1464,1466,1469,1481,1493,1500,1510` |
-| `Course` | 13 | `data/import/BuaaScheduleParser.kt:136`、`data/repository/ScheduleRepository.kt:215,223,253`、`domain/schedule/CourseConstraints.kt:73`、`domain/schedule/ImportPlanner.kt:50,53`、`ui/course/CourseManagementScreen.kt:183`、`ui/home/ConflictWizardDialog.kt:81`、`ui/home/HomeScreen.kt:416,428,442`、`ui/ScheduleViewModel.kt:500` |
+| `CalendarSyncUiState` | 22 | `ui/ScheduleViewModel.kt:1389,1395,1397,1401,1404,1423,1426,1429,1445,1449,1454,1462,1467,1471,1475,1479,1481,1484,1496,1508,1515,1525`（22 处全是 `_calendarSync.update { it.copy(…)` 的形状，分散在 `startCalendarSync` / `confirmCalendarSync` / `dismissCalendarSyncDiff` / `openCalendarPicker` / `dismissCalendarPicker` / `selectCalendarTarget` / `setCalendarReminderMinutes` / `requestRemoveSyncedEvents` / `dismissRemoveSyncedEvents` / `removeSyncedEvents` / `onCalendarPermissionDenied` / `onCalendarPermissionGranted` / `ensureCalendarsLoaded`） |
+| `Course` | 13 | `data/import/BuaaScheduleParser.kt:136`、`data/repository/ScheduleRepository.kt:215,223,253`、`domain/schedule/CourseConstraints.kt:73`、`domain/schedule/ImportPlanner.kt:50,53`、`ui/course/CourseManagementScreen.kt:183`、`ui/home/ConflictWizardDialog.kt:81`、`ui/home/HomeScreen.kt:416,428,442`、`ui/ScheduleViewModel.kt:507`（`UndoManager.pushCreate(course.copy(id = savedId))`） |
 | `WidgetAppearance` | 12 | `widget/WidgetConfigActivity.kt:346,380,404,417,427,441,449,477,498,515,532,580` |
 | `ScanDecoderHealth` | 3 | `ui/signin/ScanRecoveryPolicy.kt:156,165,167` |
 | `LiquidGlassMaterial` | 3 | `core/designsystem/DesignTokens.kt:282`、`core/designsystem/GlassSurface.kt:74`、`core/designsystem/GlassSegmentedControl.kt:77` |
 | `WidgetBinding` | 3 | `widget/WidgetCommon.kt:893`、`widget/WidgetConfigActivity.kt:363,369` |
-| `PendingImport` | 2 | `ui/ScheduleViewModel.kt:802,823` |
+| `PendingImport` | 2 | `ui/ScheduleViewModel.kt:809,830`（两处 `_pendingImport.value = pending.copy(`） |
 | `ReminderSetting` | 2 | `data/repository/ScheduleRepository.kt:225,365` |
 | `TimeSlot` | 2 | `ui/settings/SettingsScreen.kt:654,668` |
 | `SecondEngineLedger` | 2 | `ui/signin/ScanSecondEnginePolicy.kt:246,260` |
@@ -58,7 +87,7 @@
 
 | 类名 | 字段 | 档位 | 定义处 | copy 站点 | 读取点 | 一句话依据 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `PendingImport` | `conflictGroupCount` | 参照（T94 真回归 → T95 已修） | `ui/ScheduleViewModel.kt:164`（**类体**属性，不在参数表） | `ui/ScheduleViewModel.kt:802,823` 两处 `copy(conflicts = …)` | `ui/importing/ImportScreen.kt:249`、`ui/ScheduleViewModel.kt:1031,1095,1126` | 组数 = `groupConflicts(conflicts).size`，挂在类体后任何 `copy` 都点不到它 ⇒ 不可能过期；本表其余各行的判据都从这一枚推出来 |
+| `PendingImport` | `conflictGroupCount` | 参照（T94 真回归 → T95 已修） | `ui/ScheduleViewModel.kt:171`（**类体**属性 `val conflictGroupCount: Int = CourseConflictResolution.groupConflicts(conflicts).size`，不在参数表） | `ui/ScheduleViewModel.kt:809,830` 两处 `copy(conflicts = …)` | `ui/importing/ImportScreen.kt:249`、`ui/ScheduleViewModel.kt:1038,1102,1133`（三处 `groupCount = pending.conflictGroupCount`） | 组数 = `groupConflicts(conflicts).size`，挂在类体后任何 `copy` 都点不到它 ⇒ 不可能过期；本表其余各行的判据都从这一枚推出来 |
 | `ScanDecoderHealth` | `giveUpReason` | **潜在** | `ui/signin/ScanRecoveryPolicy.kt:65`（参数），唯一赋值 `:160` = `"连续 $consecutive 帧解码失败、自动试回 $cycles 轮仍不成"` | `:165`、`:167` 改 `consecutiveFailures`/`suspensionCycles` 两枚源字段而**不重算** `giveUpReason` | `ui/signin/ScanRecoveryPolicy.kt:116,128,137`、`ui/signin/ScanFrameFlowPolicy.kt:142`、`ui/signin/SpocScanScreen.kt:1072,1223` | 三格字面全齐，不发火**只靠 `:150` 那行运行期早返回**（`if (health.giveUpReason != null) return health`），没有任何静态守卫钉住这个前提 ⇒ 详见 §2 |
 | `Board` | `unknownCount`、`finishedCount` | 无害 | `domain/schedule/CourseWeekSpans.kt:73,74` | 无 | `ui/stats/StatsScreen.kt:1021,1023`、`ui/stats/StatsScreen.kt:267` | `:140` `unknownCount = rows.count { it.weeksUnknown }`、`:141` 同理，`rows` 就是同表参数；全仓无 `Board.copy` |
 | `Coverage` | `finished`（源＝同表 `lastWeek`）、`label`（源＝同表 `course`） | 无害 | `domain/schedule/CourseWeekSpans.kt:57,51` | 无 | `ui/stats/StatsScreen.kt:993,1002,1003`、`domain/schedule/CourseWeekSpans.kt:90,129` | `:126` `finished = currentWeek != null && lastWeek != null && lastWeek < currentWeek`，`lastWeek` 就是同表参数（`:123`）；`:120` `label = fragments.first().displayName` 与 `:119` `course = fragments.first()` 同值同源 ⇒ label = course.displayName。其余 `weeksUnknown`/`firstWeek`/`spans`/`fragmentCount` 全取函数内的局部 `inRangeWeeks`/`fragments`，**不是同表参数的函数**，故不计入 (a)。无 `Coverage.copy` |
@@ -83,7 +112,7 @@
 | `BlankDecodingTrace` | `occurrence` | 无害 | `ui/signin/ScanDecodingAdmission.kt:162` | 无 | `ui/signin/SpocScanScreen.kt:1387,1389` | `:176` `occurrence = count`，而同一行的 `ledger = BlankDecodingLedger(count, …)` ⇒ `occurrence == ledger.count` 是两枚参数间的真不变式。无 copy |
 | `DecodingAdmission` | `payloadLength`（与 `blankness` 的口径约束） | 参照：**严格不算 a**，见 §3.6 | `ui/signin/ScanDecodingAdmission.kt:92` | 无 | `ui/signin/ScanDecodingAdmission.kt:197`（取证行「长度=」） | `:115-118` 两枚各自独立地由那颗 `payload` 算出，`payloadLength` 不是 `blankness` 的函数，只有值域约束（注释 `:91`「NoText 与 EmptyText 都是 0」）。`admitted` 长在类体 `get()`（`:95-96`）= 安全形状 |
 | `WidgetData` | `courses` | 无害 | `widget/WidgetDataCache.kt:22` | 无 | `widget/WidgetCommon.kt:288,446,656`、`widget/WidgetDataSynchronizer.kt:273` | `:84` `courses = repository.getDisplayCourses(semester)`，`semester` 就是同表参数（`:83`）。无 copy，且整枚换引用（`widget/WidgetDataCache.kt:88`） |
-| `Semester` | `termName` | 无害 | `domain/model/Semester.kt:8` | 有 1 处：`data/repository/ScheduleRepository.kt:597` | `data/export/IcsExporter.kt:61`、`ui/ScheduleViewModel.kt:1234` | `ui/ScheduleViewModel.kt:228`（`termName = termCode`）、`data/repository/ScheduleRepository.kt:534`、`data/import/BuaaScheduleParser.kt:225` 三处同表回退；`:597` 那处 copy 只改 `startDate`/`totalWeeks`，**不碰 `termCode`** ⇒ 改源不成立 |
+| `Semester` | `termName` | 无害 | `domain/model/Semester.kt:8` | 有 1 处：`data/repository/ScheduleRepository.kt:597` | `data/export/IcsExporter.kt:61`、`ui/ScheduleViewModel.kt:1241`（`semesterName = data.semester?.termName`） | `ui/ScheduleViewModel.kt:235`（`termName = termCode`）、`data/repository/ScheduleRepository.kt:534`、`data/import/BuaaScheduleParser.kt:225` 三处同表回退；`:597` 那处 copy 只改 `startDate`/`totalWeeks`，**不碰 `termCode`** ⇒ 改源不成立 |
 | `Course` | `isManualOverride` | 无害 | `domain/model/Course.kt:38` | 13 处（§0.4），**无一改 `sourceGroupKey`** | `domain/schedule/ImportPlanner.kt:39,61` | `ui/editor/CourseEditorScreen.kt:227` `isManualOverride = … || initialCourse?.sourceGroupKey != null` 与同表参数 `sourceGroupKey`（`:225`）构成「有来源键 ⇒ 必标手动」的不变式；13 处 copy 没有一处写 `sourceGroupKey` ⇒ 改源不成立 |
 
 ## 2. 逐枚详解
@@ -131,33 +160,51 @@
 
 **我倾向 ②**。理由就一句：这一枚派生值**不是同表参数的纯函数**（它还要"判到哪一档"这个上下文），把它做成类体属性要么复制判据、要么丢档位；而它的不发火前提是一行显式代码，一行显式代码是可以被守卫钉住的，`copy()` 的语义盲区才是钉不住的。对照 ①/② 的分工：**能写成 `f(同表参数)` 的走 ①（`PendingImport` 那枚就是），写不出的走 ② 把运行期前提钉成静态前提。**
 
-### 2.2 顺带量到的一枚口径问题（不算本族，写进回执）
+### 2.2 顺带量到的一枚口径问题（不算本族，写进回执 · **这笔账已由 T100 收掉**）
 
-`ui/ScheduleViewModel.kt:1378` `_calendarSync.update { it.copy(syncing = true, message = null, diff = null) }` 把 `diff` 清空却没清 `skippedOccurrences`，而两者是 `CalendarSyncManager.computeDiff` 一次返回的同一对（`ui/ScheduleViewModel.kt:1394,1395` 成对写、`dismissCalendarSyncDiff` 在 `:1430` 成对清）。它**不满足 (a)**（`skippedOccurrences` 不是 `diff` 的函数，两枚都来自外部那趟计算），且现在读不到旧值：唯一渲染点在 `ui/settings/SettingsScreen.kt:1914`，而它整块长在 `ModalTransition(payload = calendarSync.diff)`（`:1903`）里，`diff == null` 时不组合。所以不列进主表，只在此留一行。
+**改前的形状**（T97 当时读到、也是本节原标题"顺带量到的一枚口径问题"说的那件事）：
+`ui/ScheduleViewModel.kt:1389` 起手那档当时写在 `:1378`，原文
+`_calendarSync.update { it.copy(syncing = true, message = null, diff = null) }` —— 把 `diff` 清空却没清
+`skippedOccurrences`，而两者是 `CalendarSyncManager.computeDiff` 一次返回的同一对（成对写点现在长在
+`:1406` `diff = computed.first` + `:1407` `skippedOccurrences = computed.second`；`dismissCalendarSyncDiff`
+当时在 `:1430`、现在在 `:1445`，那一档从一开始就是成对清的）。
+**现状（T100 收的）**：`2cf8405` 给起手与 `confirmCalendarSync` 各补了一枚 `skippedOccurrences = 0`，
+今天三处清空 `:1389` / `:1423` / `:1445` 全部成对（复算：`grep -rn "diff = null" app/src/main/java --include=*.kt`
+恰好这三条，且同一枚 `copy(…)` 实参表里都带 `skippedOccurrences = 0`），规矩钉在**写侧**的
+`app/src/test/java/com/buaa/schedule/ui/CalendarSyncDiffClearPairingGuardTest.kt`：`:45`
+`everyDiffClearInViewModelAlsoClearsSkippedOccurrences`（数 3 处、逐处要求成对）+ `:77`
+`thePairedProducerIsTheOnlyWriterAndTheOnlyReaderSitsInsideTheDiffModal`（钉生产者唯一）。
+它**不满足 (a)**（`skippedOccurrences` 不是 `diff` 的函数，两枚都来自外部那趟计算），所以不列进主表；
+而且改前也读不出旧值：唯一渲染点在 `ui/settings/SettingsScreen.kt:1914`，整块长在
+`ModalTransition(payload = calendarSync.diff)`（`:1903`）里，`diff == null` 时不组合 —— 漏清的那一半只是
+"上一份的附属说明活到下一份之前"，不念错数。
 
-**【T100⓪ 判定：两处漏清都是缺陷，收法＝三处清空成对】** 上面"不算本族"成立（它确实不是 `f(diff)`），但"该不该一起清"问的是**寿命归谁**，三条读数都朝"这一份 diff 的附属说明"：
+**【T100⓪ 判定：两处漏清都是缺陷，收法＝三处清空成对】** 上面"不算本族"成立（它确实不是 `f(diff)`），但"该不该一起清"问的是**寿命归谁**，三条读数都朝"这一份 diff 的附属说明"（下面这段是 T100⓪ 的判定原文，行号已由 T101 按 `e47a18e` 重核；判定当时看到的是改前形状）：
 
 - **① 生产者只有一枚，且成对**：`data/calendar/CalendarSyncManager.kt:98`
   `suspend fun computeDiff(calendarId: Long): Pair<CalendarSyncPlanner.Diff, Int>?`，那枚 `Int` 就是同一趟
   `ScheduleOccurrences.build(semester, courses, timeSlots)`（`:108`）的 `build.skipped`，`:111` 与 `Diff` 装进同一个 `Pair` 返回。
-  `ui/ScheduleViewModel.kt:1394` + `:1395` 是**全仓唯一**的写点；`computed == null` 那一档（`:1389-1392`）两枚一起不写 ⇒
+  `ui/ScheduleViewModel.kt:1406` + `:1407` 是**全仓唯一**的写点；`computed == null` 那一档（`:1401-1404`）两枚一起不写 ⇒
   这枚数从来没有独立于 diff 的产生路径。
-- **② `:1409` 之后那条链不再产它、也不再读它**：`confirmCalendarSync` 的应用段（`:1411-1425`）那次 `copy` 只带
-  `syncing` 与 `message`，而 `ApplyResult`（`data/calendar/CalendarSyncManager.kt:40-47`）只有
+- **② `confirmCalendarSync` 起手那档（`:1423`）之后那条链不再产它、也不再读它**：它的应用段（`:1426-1440`，`it.copy(` 起在 `:1429`）那次
+  `copy` 只带 `syncing` 与 `message`，而 `ApplyResult`（`data/calendar/CalendarSyncManager.kt:40-47`）只有
   `inserted/updated/deleted/failed`、**没有** skipped 字段 ⇒ "同步完成后仍想知道刚才跳过几节"这件事在代码里没有承载体
-  （成功文案 `:1419` 念的也只有新增/更新/删除三个数）。
+  （成功文案 `:1434` 念的也只有新增/更新/删除三个数）。
 - **③ 唯一读点锁在 diff 的挂载闸门里**：`ui/settings/SettingsScreen.kt:1914` + `:1916` 是全仓唯一消费点（另一枚同名的是
-  `data/export/IcsExporter.kt:26`，走 `:1573/1574`，与本卡无关），它整块长在
+  `data/export/IcsExporter.kt:26`，走 `ui/ScheduleViewModel.kt:1588`/`:1589` 那两行 `result.skippedOccurrences`，与本卡无关），它整块长在
   `ModalTransition(payload = calendarSync.diff)`（`:1903`）内；那一层的 payload 版（`core/designsystem/ModalTransition.kt:84-100`）
   外壳开合只看 `payload != null`（`:95`），收场期间画锚住的**上一次** payload（`:91`/`:93`/`:100`）⇒ 块的可见窗口由那份 diff 关掉。
 
 ⇒ 采"附属说明"这一读法：`diff` 清空而它留着 = 一对里漏一半，`grep -rn "diff = null" app/src/main/java --include=*.kt` 恰好 3 条
-（`:1378`/`:1409`/`:1430`），其中只有 `:1430` 成对 ⇒ `:1378`、`:1409` 各补一枚 `skippedOccurrences = 0`。
+（判定当时的三条坐标是 `ui/ScheduleViewModel.kt:1378`/`:1409`/`:1430` —— 那是 `788acf5` 的行号，别再照着读，
+现在同一批站点写在 `:1389`/`:1423`/`:1445`），当时只有 `dismissCalendarSyncDiff`（现 `:1445`）成对
+⇒ 起手与 `confirmCalendarSync` 各补一枚 `skippedOccurrences = 0`。
 另一种读法（"独立事实"⇒ 改渲染口径把它挪出 `ModalTransition(payload = diff)`）**弃**：②已证它没有"留着以后还要用"的消费方，
 把它挪出弹窗等于凭空给界面添一行常驻文案。
-读法 A 的代价如实记一条：清 0 之后，收场那几帧里锚住的旧 `diff` 三个数还在淡出、这一行当场消失 —— 这正是 `:1430`
-**现在已有**的行为，本卡只是把它对齐到另外两处。改完 `startCalendarSync` 整条链（含 `:1389-1392` 那档）不存在
-"diff 为空而 `skippedOccurrences` 非零"的可读窗口，因为起手 `:1378` 已经清过。
+读法 A 的代价如实记一条：清 0 之后，收场那几帧里锚住的旧 `diff` 三个数还在淡出、这一行当场消失 —— 这正是 `:1445`
+（`dismissCalendarSyncDiff`）在 T100 **之前就已经有**的行为，T100 只是把它对齐到另外两处。改完 `startCalendarSync` 整条链
+（含 `computed == null` 那一档 `:1401-1404`）不存在"diff 为空而 `skippedOccurrences` 非零"的可读窗口，
+因为起手 `:1389` 已经清过。
 
 ## 3. 我查过但排除的
 
@@ -197,19 +244,20 @@
 84:     val displayName: String
 85:         get() = alias?.trim()?.takeIf { it.isNotEmpty() } ?: name
 ```
-其余 copy 站点逐处读过原文，每处改的都是源字段本身：`ui/course/CourseManagementScreen.kt:183`（`primary.copy(colorIndex = index, customColorArgb = null)`）、`domain/schedule/CourseConstraints.kt:73-80`（归一化，`:79` 连 `credit` 都自己算）、`domain/schedule/ImportPlanner.kt:50`（`course.copy(id = old.id, credit = course.credit ?: old.credit)`）、`:53-57`（并周次 + 学分取已知值）、`data/import/BuaaScheduleParser.kt:136-143`（同格并片段）、`data/repository/ScheduleRepository.kt:215,223`、`ui/home/HomeScreen.kt:428,442`、`ui/home/ConflictWizardDialog.kt:81`、`ui/ScheduleViewModel.kt:500`。
+其余 copy 站点逐处读过原文，每处改的都是源字段本身：`ui/course/CourseManagementScreen.kt:183`（`primary.copy(colorIndex = index, customColorArgb = null)`）、`domain/schedule/CourseConstraints.kt:73-80`（归一化，`:79` 连 `credit` 都自己算）、`domain/schedule/ImportPlanner.kt:50`（`course.copy(id = old.id, credit = course.credit ?: old.credit)`）、`:53-57`（并周次 + 学分取已知值）、`data/import/BuaaScheduleParser.kt:136-143`（同格并片段）、`data/repository/ScheduleRepository.kt:215,223`、`ui/home/HomeScreen.kt:428,442`、`ui/home/ConflictWizardDialog.kt:81`、`ui/ScheduleViewModel.kt:507`（`UndoManager.pushCreate(course.copy(id = savedId))`）。
 
 ### 3.3 `ScheduleUiState.conflicts` —— a 成立、b 不存在，而且结构上永远不可能存在
 
-`ui/ScheduleViewModel.kt:467-472`
+`ui/ScheduleViewModel.kt:478-483`（`val uiState = combine(` 起在 `:463`）
 ```
-467:         ScheduleUiState(
-468:             courses = visibleCourses,
-469:             semester = semester,
-470:             timeSlots = timeSlots,
-471:             conflicts = ConflictDetector.findConflicts(visibleCourses),
+478:         ScheduleUiState(
+479:             courses = visibleCourses,
+480:             semester = semester,
+481:             timeSlots = timeSlots,
+482:             currentWeek = currentWeek,
+483:             conflicts = ConflictDetector.findConflicts(visibleCourses),
 ```
-`:471` 就是 `:468` 那枚同表参数的函数（与 T94 同一把尺子的形状）。但全仓 **0 处 `ScheduleUiState.copy`**，而它唯一的生产者就是这个 `combine` 块（`:456-477`）——四个源里任何一个一动就整枚重建，`courses` 与 `conflicts` 因此在类型层面不可能各说各话。这一枚最像"下一个 T94"，值得记一句：**将来谁给它加 copy 站点（比如想只改 `currentWeek` 而不重算冲突），必须先回来读这一行。**
+`:483` 的 `conflicts = ConflictDetector.findConflicts(visibleCourses)` 就是 `:479` 那枚 `courses = visibleCourses` 的函数（与 T94 同一把尺子的形状）。但全仓 **0 处 `ScheduleUiState.copy`**，而它唯一的生产者就是这个 `combine` 块（`:463-487`）——四个源里任何一个一动就整枚重建，`courses` 与 `conflicts` 因此在类型层面不可能各说各话。这一枚最像"下一个 T94"，值得记一句：**将来谁给它加 copy 站点（比如想只改 `currentWeek` 而不重算冲突），必须先回来读这一行。**
 
 ### 3.4 `ClassWindow` —— 同源扇出 + 一处**有意**只覆盖一枚
 
@@ -225,9 +273,9 @@
 
 ### 3.5 copy 站点自己带了新值 / 计数器成组但互相独立（其余有 copy 的类）
 
-- `data/calendar/CalendarSyncManager.kt:171-174`：
+- `data/calendar/CalendarSyncManager.kt:172-174`（`if (applyBatch(ops)) {` 在 `:171`）：
   ```
-  171:                 val upserts = chunk.map { (mapping, occurrence) ->
+  172:                 val upserts = chunk.map { (mapping, occurrence) ->
   173:                     mapping.copy(contentHash = occurrence.contentHash, syncedAt = now)
   ```
   `contentHash` 是 `CalendarSyncEntity`（`data/local/CalendarSyncEntity.kt:22`）的参数，但它的值来自**另一枚类** `Occurrence.contentHash`，不是同表参数；而这处 copy 点的正是它本身 ⇒ 判据里明写的"copy 同时传了新值"，不算 b。同一枚字段在 `data/calendar/CalendarSyncPlanner.kt:33,42` 被读来做"要不要重写事件"的判据，读的就是这份新值。
@@ -244,8 +292,8 @@
 | 类 | 定义处 | 共享源 | 原文（赋值处） |
 | --- | --- | --- | --- |
 | `ScanRejectInfo` | `data/import/ScanReject.kt:80` | 函数入参 `shape` | `:187-197` `textLength = shape.length`、`scheme = shape.scheme`、`paramNames = shape.names`（十枚全取 `shape`） |
-| `BackupPreview` | `ui/ScheduleViewModel.kt:1211` | 局部 `data: BackupData` | `:1237` `courseCount = data.courses.size`、`:1238` `manualCourseCount = data.courses.count { it.isManualOverride }` |
-| `ImportHistory` | `domain/model/ImportHistory.kt:8` | 局部 `selection` | `ui/ScheduleViewModel.kt:767` `courseCount = selection.toWrite.size`（`toWrite` 不在 `ImportHistory` 参数表上） |
+| `BackupPreview` | `ui/ScheduleViewModel.kt:1218`（`data class BackupPreview(`） | 局部 `data: BackupData` | `:1244` `courseCount = data.courses.size`、`:1245` `manualCourseCount = data.courses.count { it.isManualOverride }` |
+| `ImportHistory` | `domain/model/ImportHistory.kt:8` | 局部 `selection` | `ui/ScheduleViewModel.kt:774` `courseCount = selection.toWrite.size`（`toWrite` 不在 `ImportHistory` 参数表上） |
 | `GanttRow` | `core/designsystem/ScheduleCharts.kt:598` | 局部 `coverage` | `ui/stats/StatsScreen.kt:993,1000,1001,1002,1003` 五枚全取 `coverage.*` |
 | `HeatGridDay` | `core/designsystem/ScheduleCharts.kt:608` | 局部 `day`/`grid` | `ui/stats/StatsScreen.kt:1041,1044` `label = "周${weekdayChar(day.dayOfWeek)}"`、`isEmptiest = grid.freeDayOfWeek == day.dayOfWeek` |
 | `Row`（组件） | `widget/CourseListWidgetService.kt:73` | 局部 `course` | `:164` 起 `teacher = course.teacher`、`periodsText = widgetPeriodsText(course.periods, …)`、`color = courseColor(course).toArgb()`（参数表里只有 `courseId`，没有 `course`） |
@@ -273,7 +321,7 @@
 1. **§2.1 那枚 `giveUpReason`**：若将来 `ui/signin/ScanRecoveryPolicy.kt:150` 那行早返回被改动，界面上会念错的是哪一句、念错多久被下一帧盖掉 —— 要装机看扫码页那一档文案的位置才读得出来。本卡只证明了"现在念不出错"与"没有静态守卫"。
 2. **§3.4 的 `ClassWindow`**：`reminder/ReminderReceiver.kt:48` 把 `startMillis` 覆盖成"此刻"之后，实况卡/超级岛与「下一节课」组件同屏读 `week`/`dayOfWeek`（它们来自课次）与进度条（来自被改过的 `startMillis`）。跨零点、跨教学周边界那一档会不会念出"第 N 周 周一 08:00 起 · 已过 90%"这种自相矛盾的话，未验；`reminder/ClassProgressScheduler.kt:88-98` 那枚 Bundle 把两者并排发给四个进程边界，任一条链自己重新推导日期都可能与另一条对不上。
 3. **主表 24 枚"无害"的显示面本身对不对**：本卡判的是"不存在改源的 copy 站点"，不是"这些数字现在显示得对"。统计页/组件上那些 `courseCount`/`freeSlotCount`/`unknownCount` 的实际读数没有装机核对过。
-4. **T95 那次修复的装机兑现**：不属于本卡范围，但要点明 —— 本卡对 `PendingImport` 的"已修"判定同样只是读码（`ui/ScheduleViewModel.kt:164` + 形状守卫 `app/src/test/java/com/buaa/schedule/ui/PendingImportConflictGroupTest.kt:185-211`），没有重装重测。
+4. **T95 那次修复的装机兑现**：不属于本卡范围，但要点明 —— 本卡对 `PendingImport` 的"已修"判定同样只是读码（`ui/ScheduleViewModel.kt:171` + 形状守卫 `app/src/test/java/com/buaa/schedule/ui/PendingImportConflictGroupTest.kt:185-211`），没有重装重测。
 
 ### 4.2 扫描范围边界（没验到的代码，不假装全仓扫完）
 
@@ -288,10 +336,10 @@
 | 含 `data class` 的文件 | 85 | 85（一致）；声明本身 177 行、去重后 174 个类名 |
 | `.copy(` 出现次数 | 126 | **140**（139 行，`ui/home/WeekView.kt:2132` 那类一行两处），另有 1 处隐式 `copy(` 在 `ui/home/WeekGridGeometry.kt:253` |
 | T94 引入 `conflictGroupCount` 的哈希 | `189fd0a` | `git log -S conflictGroupCount -- app/src/main/java` 只指到 **`030f8d8`**（"T94①: 导入那四处「N 组」改吃归并后的组数"）。`189fd0a` 是"T94②′"，diff 只碰 `ui/signin/ScanFrameFlowPolicy.kt` 4 行、不含本族字段 |
-| T95 修复哈希 | `45e7fc1` | 一致（`45e7fc1 T95①②`），参数表里那枚 `val conflictGroupCount: Int,` 已不在，改为 `ui/ScheduleViewModel.kt:164` 的类体属性 |
+| T95 修复哈希 | `45e7fc1` | 一致（`45e7fc1 T95①②`），参数表里那枚 `val conflictGroupCount: Int,` 已不在，改为 `ui/ScheduleViewModel.kt:171` 的类体属性 |
 
 ## 5. 收单时可用的三条规矩（本卡不动手，只把形状摆出来）
 
 1. **一句话判据**：新加一枚 data class 构造参数时，若它的值 = f(同表另一枚参数)，只有两条正当落点 —— ① 类体 `val x = f(…)`（永远不过期，代价是不进 `equals`/`componentN`），② 留在参数表但给它**每一个** copy 站点配一条"数出现次数"守卫。**没有第三条**：留在参数表而不点名，就是 T94。
 2. **① 与 ② 的分工线**（本卡新量到的）：只有当派生值是**同表参数的纯函数**时 ① 才成立。`ui/signin/ScanRecoveryPolicy.kt:160` 那枚是"判到哪一档"这件事的格式化产物，判据本体（`:155` 的 `cycles >= MaxDecodeSuspensionCycles`）搬进类体会造成第二处判据，所以那一枚只能走 ②。
-3. **守卫钉得住已知、钉不住未知**：形状守卫能钉"`conflictGroupCount` 不再出现在参数表上"（`app/src/test/java/com/buaa/schedule/ui/PendingImportConflictGroupTest.kt:196` 读形状 + `:200` 逐字节 + `app/src/test/java/com/buaa/schedule/ui/importing/ImportConflictCopyTest.kt:298` 数出现次数 = 3 处读点），但**下一枚新加的派生字段它一个字都不会说**。所以真正该配的还是"改源之后立刻读派生"那条表驱动用例（`app/src/test/java/com/buaa/schedule/ui/PendingImportConflictGroupTest.kt:175` 的 2 → 1 → 0 三档读数 + `:210` 那处"两处 copy 站点还在"的计数）。给本族的收单问题保持两条：这枚字段的每个拷贝站点被钉了吗？有没有一枚用例真的"改了源再去读它"？
+3. **守卫钉得住已知、钉不住未知**：形状守卫能钉"`conflictGroupCount` 不再出现在参数表上"（`app/src/test/java/com/buaa/schedule/ui/PendingImportConflictGroupTest.kt:196` 读形状 + `:200` 逐字节 + `app/src/test/java/com/buaa/schedule/ui/importing/ImportConflictCopyTest.kt:301` 数出现次数 = 3 处读点（`3, occurrences(viewModel, "groupCount = pending.conflictGroupCount")`）），但**下一枚新加的派生字段它一个字都不会说**。所以真正该配的还是"改源之后立刻读派生"那条表驱动用例（`app/src/test/java/com/buaa/schedule/ui/PendingImportConflictGroupTest.kt:175` 的 2 → 1 → 0 三档读数 + `:210` 那处"两处 copy 站点还在"的计数）。给本族的收单问题保持两条：这枚字段的每个拷贝站点被钉了吗？有没有一枚用例真的"改了源再去读它"？
