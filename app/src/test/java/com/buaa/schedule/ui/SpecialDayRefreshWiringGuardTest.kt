@@ -24,7 +24,7 @@ import org.junit.Test
  * 5. 首页两条线都在：回首页一次、屏上月份变了再一次；
  * 6. TTL 判据只剩内核一份，读文件那侧只报月龄。
  *
- * 手法照抄 `ScanSilentBranchGuardTest` / `SpocSignInEntryWiringGuardTest`：读源码文本、
+ * 手法照抄 `ScanSilentBranchGuardTest` / `ScanSignInEntryWiringGuardTest`：读源码文本、
  * **找不到文件锚点就抛**（静默跳过的守卫比没有守卫更糟）、匹配前先抹注释
  * （内核文件的 KDoc 里就写着「零 java.time import」这类禁令本身）。
  */

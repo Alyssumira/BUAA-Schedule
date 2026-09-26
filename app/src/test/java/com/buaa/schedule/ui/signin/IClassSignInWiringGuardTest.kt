@@ -17,7 +17,7 @@ import org.junit.Test
  * 3. 把口令落盘"以便下次自动重登" —— 那对凭据能过学校统一身份认证，明文进 SharedPreferences
  *    就是交给任何拿到这台设备的人（老客户端正是这么干的，本仓刻意不照抄）。
  *
- * 刀法照抄 `SpocSignInEntryWiringGuardTest`：读源码文本、**读不到锚点就抛**
+ * 刀法照抄 `ScanSignInEntryWiringGuardTest`：读源码文本、**读不到锚点就抛**
  * （跳过的守卫比没有守卫更糟）、匹配前先抹注释。
  */
 class IClassSignInWiringGuardTest {
@@ -145,7 +145,7 @@ class IClassSignInWiringGuardTest {
         }
     }
 
-    // ---- 源码核对工具（与 SpocSignInEntryWiringGuardTest 同一套刀法）----
+    // ---- 源码核对工具（与 ScanSignInEntryWiringGuardTest 同一套刀法）----
 
     private fun source(relative: String): String {
         val file = File(findMainJavaDir(), relative)

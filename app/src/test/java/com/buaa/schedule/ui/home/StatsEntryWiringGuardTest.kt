@@ -10,7 +10,7 @@ import org.junit.Test
  * 顶栏「学期统计」入口的**接线**守卫（T69）。
  *
  * 本模块没有 Compose 运行时（无 Robolectric、无 ui-test），`HomeScreen` 里那颗胶囊
- * 点下去到底走不走得出去只能扫源码，刀法照抄 `SpocSignInEntryWiringGuardTest` 与
+ * 点下去到底走不走得出去只能扫源码，刀法照抄 `ScanSignInEntryWiringGuardTest` 与
  * [DayViewOnScreenWiringGuardTest]：读源文件文本、匹配前先 `blankComments` 抹注释
  * （HomeScreen 的 KDoc 里就写着「不许给默认值 `= {}`」这句禁令本身，连注释一起扫会红在
  * 自己人手上）、实参表按括号配平取（懒正则会被 `onClick = { ... }` 里的 `) }` 提前截断）、

@@ -27,7 +27,7 @@ import org.junit.Test
  * 5. 通知按钮那条深链的路由名与注册的路由同名（改了名字深链会静默落回首页）；
  * 6. 已删除的第三条入口「手输签到码」不许以任何形态回来（禁现扫描 + 禁现输入控件）。
  */
-class SpocSignInEntryWiringGuardTest {
+class ScanSignInEntryWiringGuardTest {
 
     /** ① 路由注册：`composable("spoc_scan")` 一处，且它渲染的就是扫码页 */
     @Test
