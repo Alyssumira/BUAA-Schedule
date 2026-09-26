@@ -127,8 +127,24 @@ class CalendarSyncDiffClearPairingGuardTest {
      * 1. 这条链既不生产也不读那一对：`diff` 的唯一生产者是 `diff = computed.first`（上一枚判据钉着），
      *    `skippedOccurrences` 的唯一读者在 diff 弹窗之内（同一枚判据钉着）—— 移除链跟它们没有一次交集。
      * 2. 两扇窗彼此挡住：移除链的入口 `viewModel.requestRemoveSyncedEvents()` 与 diff 弹窗
-     *    `ModalTransition(payload = calendarSync.diff)` 是彼此独立的两层，谁开着另一扇的入口都点不到
-     *    ⇒ 起手那一刻 `diff` 必为 null（本判据按**位置**钉这两层的边界与那枚入口的落点）。
+     *    `ModalTransition(payload = calendarSync.diff)` 谁开着另一扇的入口都点不到 ⇒ 起手那一刻
+     *    `diff` 必为 null。本判据按**落点**钉这一句：那枚入口在两扇窗**之外**（两格）、
+     *    `dismissCalendarSyncDiff()` 的两枚收场路在 diff 窗**之内**（一格）。
+     *    ⚠️ **T116 那一版里这里还有第三格「diff 那一段与移除框那一段互不重叠」，T118 判成恒真后删掉**
+     *    （机制账写全，别让下一个人再把它当承重件）：它写的是
+     *    `diffEnd <= removeAt || removeEnd <= diffAt`，而 `diffEnd` / `removeEnd` 取的是各自头之后
+     *    **最近**的一枚 `ModalTransition(`，`DIFF_MODAL_HEAD` 与 `REMOVE_MODAL_HEAD` 本身又都以
+     *    `ModalTransition(` 开头 ⇒ 在两枚头的计数各恰好为 1（就是上面那两格 `assertEquals` 钉的）的前提下，
+     *    "另一扇窗若真落进这一扇之内，它就正好是这一扇的右边界"，两条不等式至少一条取等 ⇒ **恒真**。
+     *    读数（改的都是本测试，main 一字未动）：① 未改动的盘面上这一格就是**取等**绿的 ——
+     *    `diffEnd` 与 `removeAt` 同落 `SettingsScreen.kt:1941`（diff 窗的右边界正好就是移除框那一行），
+     *    所以它今天绿得不讲道理，而不是"两扇窗真的分得开"；② 把 `diffAt` 推到 0（"diff 窗把两扇窗之外
+     *    的输入也吞了"那一形状）⇒ 只有「入口落点」那一格红、这一格仍绿。
+     *    「把移除入口真搬进 diff 窗内」那一臂红的是「入口落点」、也不是这一格 —— 那是编排者改 main 量的，
+     *    本卡按红线没复跑。⇒ 它涨格子数、不涨覆盖面。
+     *    要判"真嵌套"得改成按花括号配平取两扇窗各自的**块范围**再比包含关系，而"真嵌套"那一臂
+     *    **只有改 `SettingsScreen.kt` 才造得出来** —— 本卡红线是 main 一字不许动 ⇒ 按卡面判档走 (B)：
+     *    删格子、把账写在这里，那一格的位置由「入口落点 ×2 + 收场路落点」三格接住。
      * 3. **"照 `:1389` 的仪式把这一对一起收"那一支不采纳**：那不是清场，那是拿「移除」去**作废一份用户
      *    还没确认的 diff**。今天两扇窗互斥 ⇒ 那种 diff 不存在，补收是纯 no-op；而一旦上面第 2 条那两道
      *    位置判据被人改掉（给确认卡顺手补一颗「先移除再同步」，这是本仓另一种常见写法），补收就从
@@ -138,7 +154,8 @@ class CalendarSyncDiffClearPairingGuardTest {
      *    那一格的"3"是按 §6.3 那笔改前账钉的，两处都得重钉。
      *
      * 两头都钉：
-     * - **朝宽**（把闸挪走）：那枚入口被搬进 diff 弹窗之内 / 两层弹窗被改成嵌套 → 位置判据红；
+     * - **朝宽**（把闸挪走）：那枚入口被搬进任一扇窗之内 → 两格落点判据红；`dismissCalendarSyncDiff()`
+     *   的两枚收场路长出 diff 窗（或界面长出第三处）→ 最后一格红；
      *   `:1481` 被拆回 `it.copy(syncing = true)`（连 T110 那两枚都不收了）→ 逐字判据红；
      * - **朝紧**（把它改成收）：这条链三枚写点里任何一枚开始动 `diff` 或 `skippedOccurrences` →
      *   逐处负判据红，且起手那枚的实参表不再是逐字原文 → 同一枚判据再红一次。
@@ -214,7 +231,7 @@ class CalendarSyncDiffClearPairingGuardTest {
                 "§8.2 表 #2 那句「起手不收对岸、可完成句会把读者重新点亮」吃的正是它：",
             args[2].contains(REMOVE_TAIL_MESSAGE_SHAPE),
         )
-        // ---- 前提：两扇弹窗彼此独立、且移除链的入口在两扇窗之外 ----
+        // ---- 前提：移除链的入口在两扇窗之外（「两扇窗互不重叠」那一格 T118 已删，理由见本判据 KDoc 第 2 条）----
         val diffModals = indexOfAll(screen, DIFF_MODAL_HEAD)
         assertEquals(
             "靶子：`$DIFF_MODAL_HEAD` 不再是恰好 1 处 —— diff 的渲染方式换了载体（改成常驻卡就是 §8.4-B 说的" +
@@ -235,15 +252,8 @@ class CalendarSyncDiffClearPairingGuardTest {
         val removeAt = removeModals.first()
         val removeEnd = screen.indexOf(MODAL_SEP, removeAt + REMOVE_MODAL_HEAD.length)
         check(diffEnd > diffAt && removeEnd > removeAt) { "靶子：两扇弹窗的窗口边界切不出来（少一层 ModalTransition？）" }
-        assertTrue(
-            "diff 弹窗与移除确认框不再是彼此独立的两层：diff 那一段（" +
-                "L${screen.substring(0, diffAt).count { it == '\n' } + 1}–" +
-                "L${screen.substring(0, diffEnd).count { it == '\n' } + 1}）越进了移除框那一段（" +
-                "L${screen.substring(0, removeAt).count { it == '\n' } + 1}–" +
-                "L${screen.substring(0, removeEnd).count { it == '\n' } + 1}）之内 —— 「两扇窗彼此挡住」" +
-                "就是 #2 今天不收对岸的全部凭据，一出现嵌套这一格当场失效（本判据第二段的第 2 条）",
-            diffEnd <= removeAt || removeEnd <= diffAt,
-        )
+        // 这两枚窗口只拿来判下面那三格的**落点**，不拿来判"两扇窗彼此重不重叠"：那一格在 T116 那一版里
+        // 存在过、T118 判成恒真删掉了（机制账写在本判据 KDoc 第 2 条，别照着旧样子再造一枚）。
         val opens = indexOfAll(screen, REMOVE_REQUEST_CALL)
         assertEquals(
             "界面上 `$REMOVE_REQUEST_CALL` 的调用点不再是 1 处（现在只有 :1654 那颗「移除」行，而它在 " +
