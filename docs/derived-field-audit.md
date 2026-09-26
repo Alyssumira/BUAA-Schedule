@@ -402,10 +402,10 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
   只列了每枚 var 的写点与清点，配对是逐枚读出来的 ⇒ 剩下 8 枚文件里可能还藏着同族，见 §6.7。
 - **按位置构造的实参↔参数对应关系仍未程序化解析**（§0.3 那条限制对本节同样成立）。
 
-### 6.2 候选账（本遍判了 13 枚）
+### 6.2 候选账（本遍判了 14 枚）
 
-档位分布：**真漏清 1 枚 · 已被钉住 3 枚 · 结构不可能 8 枚 · 越界形状 1 枚**（共 13 枚进表）。
-⚠️ 那 8 枚"结构不可能"里有 2 枚（#10 #12）**按 §6.0 的定义根本不该进候选账** —— 它们成对写、
+档位分布：**真漏清 1 枚 · 已被钉住 3 枚 · 结构不可能 9 枚 · 越界形状 1 枚**（共 14 枚进表）。
+⚠️ 那 9 枚"结构不可能"里有 2 枚（#10 #12）**按 §6.0 的定义根本不该进候选账** —— 它们成对写、
 却一处"只清一半"都没有；我把它们留在表上是因为卡面的起手式第二条直接要求读每一枚 data class 的
 成对字段表，但**档位那一格对它们是硬套的**，口径问题见 §6.9 驳回②。
 
@@ -424,6 +424,14 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
 | 11 | `calendars` ， `calendarsLoaded` | `CalendarSyncUiState` | 同一次 `ensureCalendarsLoaded()`：成功那一档 `:1526-1527` `calendars = loaded,` + `calendarsLoaded = true,` 成对写 | 成对写点 1 处；**分头写点 1 处** `ui/ScheduleViewModel.kt:1516` 那一档只落 `calendarsLoaded = true,` | **结构不可能**（但那道闸**不在本族的位置**，见 §6.4-A） | 那一档长在 `:1513-1515` `val loaded = suspendCatching { calendarSyncManager.queryCalendars() }.getOrElse { _calendarSync.update { it.copy(` 里；`queryCalendars()` 自己把异常吞成空列表（`data/calendar/CalendarSyncManager.kt:71` `runCatching {` + `:90` `.onFailure { Log.w(TAG, "读取日历列表失败", it) }` + `:91` `return result`）⇒ `getOrElse` 走不到 |
 | 12 | `boundCamera` ， `analysisUseCase` | `ui/signin/SpocScanScreen.kt` 两枚 remembered var | 绑定成功那档 `:381-382` `boundCamera = camera` + `analysisUseCase = analysis` 成对写 | 写点 2 组 / 清点 3 组，**三组全是连号两行**（`:330-331`、`:409-410`、`:448-449`） | **结构不可能**（同 10：无分头站点，不进候选） | 复算 `grep -n "boundCamera = null\|analysisUseCase = null" app/src/main/java/com/buaa/schedule/ui/signin/SpocScanScreen.kt` ⇒ 3 行 + 3 行，行号相邻 |
 | 13 | `cameraError` ， `cameraProviderMissing` | `ui/signin/SpocScanScreen.kt` 两枚 remembered var | **不是同一次生产** —— `:155` 的注释就写着「它和 cameraError 是两件事」，两枚各有独立生产者（provider 效果 vs 绑定/相册失败） | 各自 2/6 处写点，**互不点名** | **越界形状**：本卡三档给不了它（见 §6.6） | 读侧是一条**优先级梯**而不是闸门：`ui/signin/ScanUiStatus.kt:87` `cameraError != null ->` 排在 `:93` `cameraProviderMissing ->` 之前，而 `:81-84` 那段注释正是拿「两枚会不会同时成立」在解释这个排序 |
+| 14 | `showPrivacyDialog` ， `privacyConsentAt` | `ui/settings/SettingsScreen.kt` 两枚 remembered var（声明 `:209`/`:210`） | 撤回同意那一档两枚**连号一起写**：`:1848 privacyConsentAt = 0L` + `:1849 showPrivacyDialog = false` | 成对写点 1 处；**分头清点 2 处** `:1817` `onDismissRequest = { showPrivacyDialog = false }` 与 `:1853` `TextButton(onClick = { showPrivacyDialog = false })` 都只关窗、不归零同意时间 | **结构不可能** | `privacyConsentAt` 在界面侧**只有一个读者**，而那个读者本身就是闸门：`:1814` `ModalTransition(payload = if (showPrivacyDialog) privacyConsentAt else null) { consentAt, modal ->`。复算唯一读者：`grep -rn "privacyConsentAt" app/src/main/java --include='*.kt' \| grep -v SettingsScreen` ⇒ 只有 `core/FirstRun.kt:29` `fun privacyConsentAt(context: Context): Long =`（读偏好，不是读这枚 var） |
+
+**#14 值得单记一句**：它是本仓**已经知道自己有这个病**的一枚 —— `:1812-1813` 那两行注释写的就是
+「payload 用同意时间而不是布尔：点『撤回同意』在关窗的同一刻把 privacyConsentAt 归零，
+光靠 open = showPrivacyDialog 会让正在淡出的正文当场翻成『未同意』」。它选 `payload =` 版而不是
+`open =` 版，正是为了不让收场那几帧读到**已经翻面**的那一枚。本节按 T100 那枚守卫的形状数一遍：
+这一对**没有**守卫文件（`grep -rl "成对" app/src/test --include='*.kt'` 那 14 枚里没有它），
+钉住它的只有那段注释 + `:1814` 那一行的写法。→ 登记 §6.8⑥。
 
 ### 6.3 真漏清那一档（本遍 1 枚，展开）
 
@@ -480,7 +488,9 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
   （`:231`、`:247`、`:614`、`:620`），其中**只有** `:231` 旁边跟着那句 `saveError = null`。
 
 **判零依据（为什么全仓只有这一枚落进这一档）**：另外 6 枚「成对写 + 分头清」的候选，其**读侧全部落在闸门里**
-（§6.4 逐枚点了是哪一道闸）；而本仓真正**没有闸门**的读点只有两类载体 —— 编辑器/登录页这类「底栏常驻一行」，
+（#5 #6 #7 #8 #11 #14 六枚：#5 #6 #8 #11 #14 的闸门原文点在 §6.2 各行最后一格，#7 两向各一道、在 §6.4-B 展开）；
+再加 #9 那一枚属**载体级别**的免疫（`AppMessage` 全仓 45 处构造、0 处 `copy`，一半都漏不掉），
+#10 #12 两枚压根没有分头清点的站点；而本仓真正**没有闸门**的读点只有两类载体 —— 编辑器/登录页这类「底栏常驻一行」，
 其中只有编辑器这一枚同时满足「两枚字段由同一仪式成对写」与「清点仪式被复制成两半」。
 `ui/importing/BuaaLoginScreen.kt` 那一族最接近（`:119`/`:131`/`:153` 三处只清 `fetchState`），
 但它那一行进度条的读点被 `:344` 的 `&& fetchStateText != null` 挡住了 —— 这正是本节要的差别，
@@ -550,30 +560,46 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
 - **闭合一档**：自有 data class 的 copy 站点宇宙（18 枚类 / 72 处站点）—— 本节**逐枚**过了一遍
   「参数表里有没有两枚字段出自同一次生产」与「有没有一处站点只写其中一枚」。
   这一档进表的 8 枚（#2 #3 #4 #6 #7 #9 #10 #11）全部判档完毕，**这一档没有剩**；
-  另外 5 枚（#1 #5 #8 #12 #13）来自 remembered var 那一档，见下一条。
+  另外 6 枚（#1 #5 #8 #12 #13 #14）来自 remembered var 那一档，见下一条。
   ⚠️ 但这一档的「过了一遍」是**按类**过的，不是按 177 枚 data class 过的：其余 **159 枚自有 data class
   连一处 `copy` 都没有**，本节按 §0.4 那条既有事实（"档位最高只能到无害"）**直接引用了 T97 的账，
   没有重新一枚枚读参数表**。如果那 159 枚里有一枚将来长出 copy 站点，本节不给它兜底。
-- **开档（本遍没判、规模数得出来）**：169 枚 remembered var / 28 枚文件。本节只做了「哪些 var 被单独
-  置空过」这一遍列表（14 枚文件有），并逐枚读原文判了 **5 枚文件**：
-  `ui/editor/CourseEditorScreen.kt`（判 1 枚候选 → #1）、`ui/importing/BuaaLoginScreen.kt`（判 2 枚 → #5 + §6.3 判零依据里那枚）、
-  `ui/home/WeekView.kt`（判 1 枚 → #8；其余 8 枚被清点的 var 只列了账，见下）、
-  `ui/signin/SpocScanScreen.kt`（判 1 枚 → #13 越界；`boundCamera`/`analysisUseCase` → #12）、
-  `ui/settings/SettingsScreen.kt`（只列账，**未判**）。
-  **还剩 9 枚文件没进去**，逐枚是：`MainActivity.kt`（2 枚被清点：`pendingEditorRoute = null` `:667`、
-  `pendingPulseCourseId = -1L` `:758`/`:762`）、`ui/course/CourseManagementScreen.kt`（`pendingDelete = null` `:213`）、
-  `ui/home/DayView.kt`（`dragActive = false` `:253`/`:271`）、`ui/home/HomeScreen.kt`
-  （`pulseCourseId = -1L` `:208`、`showJumpDialog = false` `:1102`/`:1124`/`:1135`）、
-  `ui/importing/ImportScreen.kt`（`hadPendingImport = false` `:144`）、`ui/onboarding/OnboardingScreen.kt`
-  （`checking = false` `:151`、`showEnvironmentDialog = false` `:283`/`:287`）、
-  `ui/settings/SettingsScreen.kt`（4 枚：`pendingCalendarAction = null` `:315`、`iclassSignedIn = false` `:1339`、
-  `privacyConsentAt = 0L` `:1848`、`showPrivacyDialog = false` `:1849`）、`ui/settings/WidgetPinRow.kt`
-  （`showGuidance = false` `:123`）、`ui/stats/StatsScreen.kt`（`expanded = false` `:611`），
-  外加 `ui/home/WeekView.kt` 里那 8 枚我没逐枚配对的（`drag`、`pendingMove`、`movePickerFor`、`resizeFor`、
-  `detailFor`、`pendingDelete`、`pendingSyncTarget`、`pressed`）。
-  这一批的规模这样数：`grep -rcE "\bvar [A-Za-z_][A-Za-z0-9_]* by (remember|rememberSaveable)" app/src/main/java --include='*.kt' | grep -v ':0$' | awk -F: '{s+=$2} END {print s}'`
-  给全仓 169，减去已进的 5 枚文件（25+13+17+13+26 = 94）⇒ **剩 75 枚 var 的账没判**。
-  按本节实际判中的比例（94 枚里出 1 枚真漏清 + 1 枚越界 + 3 枚结构），**不能排除这 75 枚里还有 1–2 枚真漏清**。
+- **第二档（本遍判完，但判据比上一档软）**：remembered var 这一族。用「同一文件里 ≥2 枚 remembered var
+  且至少一枚被单独置空过」筛出 **14 枚文件**，本节把这 14 枚**逐枚读原文判完了**：
+  `ui/editor/CourseEditorScreen.kt`（25 枚 var → #1 真漏清）、
+  `ui/importing/BuaaLoginScreen.kt`（13 枚 → #5 + `(fetchState, fetchCancelled)` 一枚**无分头站点**，`:407-408`
+  两枚一起写、`:429` 关的那枚此刻另一枚必为 null）、
+  `ui/home/WeekView.kt`（17 枚 → #8 `menuFor`/`lastMenu`；其余 8 枚被清点的都是**单枚对象槽**
+  `drag`、`pendingMove`、`movePickerFor`、`resizeFor`、`detailFor`、`pendingDelete`、`pendingSyncTarget`、`pressed`，
+  唯一的跨槽配对是 `movePickerFor`→`pendingMove` 那一趟交棒：`:1245` `movePickerFor = null` 与
+  `:1248` `pendingMove = CourseMoveRequest(` 长在同一个 `onConfirm = { dayIndex, startPeriod ->` 里 ⇒ 0 处分头清）、
+  `ui/signin/SpocScanScreen.kt`（13 枚 → #13 越界；`boundCamera`/`analysisUseCase` → #12）、
+  `ui/settings/SettingsScreen.kt`（26 枚 → #14；另 3 枚 `pendingCalendarAction` `:315`、`iclassSignedIn` `:1339`
+  是单枚旗标，无配对对象）、
+  `MainActivity.kt`（6 枚 → `(pendingPulseCourseId, pulseCourseId)` 判**不成立**：`:756` `pulseCourseId = pendingPulseCourseId`
+  是一次性交棒，`:758` 归零的是**队列**、留给 `:843` 那份是**已交出去的一枚**，其消费点是 `:844`
+  `onHighlightConsumed = { pulseCourseId = -1L }`，形状与 §6.6 那枚"跨生产者梯"不同、与漏清也不同）；
+  以及 `ui/course/CourseManagementScreen.kt`、`ui/home/DayView.kt`、`ui/home/HomeScreen.kt`、
+  `ui/importing/ImportScreen.kt`、`ui/onboarding/OnboardingScreen.kt`、`ui/settings/WidgetPinRow.kt`、
+  `ui/stats/StatsScreen.kt`、`ui/signin/iclass/IClassLoginScreen.kt` 八枚文件 —— 这八枚里被单独置空的全是
+  **单枚对话框/忙旗标**（`pendingDelete = null` `:213`、`dragActive = false` `:253`/`:271`、
+  `pulseCourseId = -1L` `:208`、`showJumpDialog = false` 三处、`hadPendingImport = false` `:144`、
+  `checking = false` `:151`、`showEnvironmentDialog = false` 两处、`showGuidance = false` `:123`、
+  `expanded = false` `:611`、`submitting`/`serverMessage`/`password` 三枚），**本节没有在任何一枚上面找到
+  "同一仪式成对写"的第二枚**，所以它们不进表（"没找到配对对象"与"配对了但没守卫"是两件事，后者才记账）。
+  ⚠️ **这一档的软处要如实写**：判"单枚旗标 ⇒ 无配对"用的是**读原文时没看见第二枚**，不是程序化证明。
+  `ui/signin/SpocScanScreen.kt` 那 13 枚里本节只配对了 3 对，其余没配对的 10 枚是按"读者只有同一颗 effect"
+  放过的，本节不给它们逐个点名 ⇒ 这一档**允许有漏**。
+- **本档剩下的（数得出来，且按定义进不了候选）**：全仓 `grep -rcE "\bvar [A-Za-z_][A-Za-z0-9_]* by (remember|rememberSaveable)" app/src/main/java --include='*.kt' | grep -v ':0$' | awk -F: '$2>=2 {n++; s+=$2} END {print n" 枚文件 / "s" 枚 var 行"}'`
+  ⇒ **20 枚文件 / 161 枚 var 行**；扣掉上面判完的 14 枚文件 ⇒ 残 **6 枚文件 / 19 枚 var 行**，逐枚是
+  `core/designsystem/ScheduleCharts.kt`(6)、`widget/WidgetConfigActivity.kt`(4)、
+  `core/designsystem/GlassSegmentedControl.kt`(3)、`core/designsystem/SceneBackground.kt`(2)、
+  `ui/home/ConflictWizardDialog.kt`(2)、`core/designsystem/liquid/TermAndCampusBar.kt`(2)。
+  这 6 枚**一枚都没有被置空过**（脚本 CLR 那一遍给 0 行 ⇒ 它们压根没进 14 枚那张表），
+  按 §6.0 的候选定义"存在一处只写其中一枚"它们不可能成为候选 —— 除非把"重新赋一个非空新值"也算清点，
+  那是另一件事，本节没做。⚠️ 169/161 两枚数**不是同一把尺**：前者是 `grep -c`  summed 的 var 行、
+  后者只累加"文件里 ≥2 枚"的那些行；本节的 14 枚文件那张表吃的是脚本按 var **名**去重的数（142 枚），
+  三把尺各说各的，别互相减。
 - **一档完全没扫**：`app/src/debug/java`、`app/src/androidTest/java`、`app/src/test/java`、`benchmark/` 模块、
   Room/`Mappers` 生成物 —— 同 §4.2，本节没有扩大范围。
 - **没跑门禁**：按卡面红线，本节**零 gradle、零 adb、零设备**，所有结论只来自读源码。
@@ -589,6 +615,7 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
 | ③ | `ui/ScheduleViewModel.kt:1508` `_calendarSync.update { it.copy(permissionPermanentlyDenied = false) }` | 清旗标不清句子；今天被 `ui/settings/SettingsScreen.kt:331` 那道 `hasCalendarPermission()` 短路挡着（§6.4-B）。这句注释该留在两处之一：要么把它做成成对清，要么把「靠哪道闸不念旧账」写进 KDoc |
 | ④ | `ui/signin/SpocScanScreen.kt:283` `cameraProviderMissing = true` 与 `ui/signin/ScanUiStatus.kt:87`/`:93` 那两支 | 跨生产者残值（§6.6）：`cameraError` 以「读不出那张图」开头时，梯子在说相册、而真病因是 provider。判据该按**来源**分支，不是按**写入先后**赌 |
 | ⑤ | `ui/editor/CourseEditorScreen.kt:614` `saving = true` | 本遍唯一的真漏清。修法与红线冲突（不许动 `app/src/main/**`），留一卡：删除这条链要不要复用 `saving` 这枚旗标本身也值得重判 —— 复用它是 `:310` 那句「保存中…」在删除时说假话的原因 |
+| ⑥ | `ui/settings/SettingsScreen.kt:1814` `ModalTransition(payload = if (showPrivacyDialog) privacyConsentAt else null) { consentAt, modal ->` 与它上面 `:1812-1813` 那两行注释 | 这一对的"不漏"完全靠**那一行的写法** + 一段注释维持：`:1817`/`:1853` 两处 `showPrivacyDialog = false` 都不归零 `privacyConsentAt`，谁把它改回 `ModalTransition(open = showPrivacyDialog)`（本仓另一种常用写法，见同文件 `:1859` 那一层）或把 `privacyConsentAt` 添第二个读者，收场那几帧就当场翻成「未同意」。**这正是 T100 那枚守卫该钉的第二份实例**，形状一模一样、只欠写它 —— 本卡不许新增/修改测试，故只登记 |
 
 ### 6.9 卡面对账：三句复现、两句要驳
 
@@ -610,21 +637,27 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
 - #11 `calendars`/`calendarsLoaded` 与 #7 的第二个方向：判"结构不可能"用的闸**不在字段对上**
   （一枚靠被调方的 `runCatching`、一枚靠 launcher 的短路），本节为它们各写了一句「这句话必须记着」，
   见 §6.4-A/B。卡面那句「判这档要给机制」满足了，但**机制可被别处一行改动挪走**，
-  这与 §2.1 当年批评"正确性挂在一行运行期早返回上"是同一件事 ⇒ 这两枚实际强度低于 #5 #6 #8 #9。
+  这与 §2.1 当年批评"正确性挂在一行运行期早返回上"是同一件事 ⇒ 这两枚实际强度低于 #5 #6 #8 #14。
 
 ### 6.10 本节的锚点普查（在 §6 最后一次编辑之后量的，按 §0.4 第 4 条那一格的口径）
 
-⚠️ 本节往文档里点了名 ⇒ 它自己挪动了 §0.4 那两格普查数。**这两格是在 §6 定稿之后重量的**，
-不是在 `1c6b7bd` 上量的（那两格的现值 217 / 526 已由本节改为下面这两个数）：
+⚠️ 本节往文档里点了名 ⇒ 它自己挪动了 §0.4 那两格普查数。**下面这几格是在 §6 定稿之后重量的**，
+不是在 `1c6b7bd` 上量的（那两格在 `1c6b7bd` 上的现值 217 / 526 已被本节改成下面这两个数）：
 
-- 本档显式锚点条数：`grep -rhoE '[A-Za-z0-9_]+\.kt:[0-9]+' docs/derived-field-audit.md | wc -l` ⇒ **261**
-  （`1c6b7bd` 上是 217，本节 +44）
-- 全仓普查：`grep -rhoE '[A-Za-z0-9_]+\.kt:[0-9]+' docs README.md | wc -l` ⇒ **571**（`1c6b7bd` 上是 526，本节 +45）
+- 本档显式锚点条数：`grep -rhoE '[A-Za-z0-9_]+\.kt:[0-9]+' docs/derived-field-audit.md | wc -l` ⇒ **263**
+  （`1c6b7bd` 上是 217，本节 +46）
+- 全仓普查：`grep -rhoE '[A-Za-z0-9_]+\.kt:[0-9]+' docs README.md | wc -l` ⇒ **573**（`1c6b7bd` 上是 526，本节 +47）
 - ⚠️ **两把尺子在本节同样不许混**：上面两条吃 `grep -o`（一行两枚锚点算**两条**）。
-  同一份文件换那一把数**命中行**的：`grep -cE '[A-Za-z0-9_]+\.kt:[0-9]+' docs/derived-field-audit.md` ⇒ **140**。
-  261 与 140 的差就是"一行里点两枚锚点"的行数 —— §6.2 那张表一格里塞两枚是常态，所以本档这一格
-  两把尺的差距（261 vs 140）比 §0.4 当年那组（217 vs 109）还要拉开一点，抄错就等于报错数。
-- 本节 37 枚 `文件.kt:行号` 形式的锚点已**逐枚回读**（一次性脚本：把锚点拆成「文件 + 行号」→ 读那一行 →
-  与同框的符号名/原文片段比对）。要点名一件事：`docs/` 的锚点保鲜声明那一节说的是**本档 §1–§5** 的行号
-  对应 `e47a18e`；本节 §6 的行号对应 **`1c6b7bd`**，下一轮若动了被引文件，两批行号要分开重核。
+  同一份文件换那一把数**命中行**的：`grep -cE '[A-Za-z0-9_]+\.kt:[0-9]+' docs/derived-field-audit.md` ⇒ **142**。
+  263 与 142 的差就是"一行里点两枚锚点"多出来的那部分 —— §6.2 那张表一格里塞两枚是常态，所以本档这一格
+  两把尺的差距（263 vs 142）比 §0.4 当年那组（217 vs 109）还要再拉开一点，抄错就等于报错数。
+- ⚠️ **本档这一格被本节自己改过两遍，这是实况不是事故**：`b15d34e`（§6.1–§6.9 初稿落档）之后量到的是
+  261 / 526→571 / 140；本节随后补了 #14 那一行与 §6.7 的收口改写，两格各自 +2（+2 枚锚点来自 #14 那一格，
+  其中 SettingsScreen 一枚、FirstRun 一枚），成了现在的 263 / 573 / 142。
+  §0.4 第 4 条那句"这一族的现值必须连着在哪枚 commit 上量的一起写"在本节同样成立 ——
+  **上面三个数对应的是本节最后一枚 commit，不是 `b15d34e`**。
+- 本节 39 枚 `文件.kt:行号` 形式的锚点已**逐枚回读**（一次性脚本：把锚点拆成「文件 + 行号」→ 读那一行 →
+  与同框的符号名/原文片段比对，39/39 命中、无越界、无缺失文件）。要点名一件事：
+  `docs/` 的锚点保鲜声明那一节说的是**本档 §1–§5** 的行号对应 `e47a18e`；
+  本节 §6 的行号对应 **`1c6b7bd`**，下一轮若动了被引文件，两批行号要**分开**重核。
 
