@@ -2812,3 +2812,19 @@ lint 0 错 14 警、签名包 **7,247,271 B**（对 7,246,225 是 **+1,046 B**�
 **明留**：① 零设备 ⇒「淡出那几帧里这一行当场消失」没有读数（那正是 `:1445` 今天已有的行为，也是选读法 A 的代价）；② 它只订正了审计 §2.1 的枚数与指针（4→**7**，按 `giveUpReason\s*=(?!=)` 数赋值；只 grep `giveUpReason =` 给 12，其中 5 处是 `==`），没有重写那段论证；③ `docs/STATUS.md` 由我写 —— 它自己那一节 STATUS 在 rebase 时被我丢弃（`--ours`），内容与本节同源。
 
 **地板抬到 1,683 / 198 / 签名包 7,247,127 B。**
+
+
+## T101：把「文档行号锚点」这件事从"扫过一次"变成"有一条规矩"（3 枚 / 3 文件 +101 / −35，**零代码改动**）
+
+起因是 T100 在 `ui/ScheduleViewModel.kt:101` 之前插了一段 KDoc ⇒ 该文件之后行号整体后移，而全仓 `docs` + README 里有 **514 处** `文件:kt:行号` 式锚点。本卡做的不是"再扫一遍"，是把**写法定下来**。
+**① 那份审计做透**：现档 217 条显式锚点 + 163 处裸 `:NNN` 逐条回读，改了 **46 个行号**——其中 **44 个**属 `ScheduleViewModel.kt` 的漂移，**另 2 个与漂移无关，是 T97 当场抄错**（`ImportConflictCopyTest.kt:298→301`、`CalendarSyncManager.kt:171→172`，我自己在 master 上核过这两处现值）；§3.3 那段引文连内行号 467-471→478-483，并**补回 T97 漏抄的一行 `currentWeek = currentWeek,`**。
+§2.2 那条"顺带量到"的账按事实重写成 **改前的形状 / 现状（T100 收的）** 两段：起手那档当时写在 `:1378`、现在在 `:1389`，三处清空 `:1389`/`:1423`/`:1445` 全部成对，规矩钉在写侧的 `CalendarSyncDiffClearPairingGuardTest`。**三档判据、真回归 0 / 潜在 1 / 无害 24、§3 排除清单与 `Course.colorIndex` 那段论证一字未动**——只核锚点与那句已经过期的事实，这条边界它守住了。
+**② 全仓分类**（它复算我那把 514 的尺子，对得上）：按文件级判 **(A) 历史叙述 308 / (B) 现状描述 206**；同一把尺子按句判是 151/365（日期快照型文档正文多用现在时，两种口径它都报了数、没挑对自己有利的那个）。处置按 (A) 不改：`docs/STATUS.md` 整本保留原貌。除本档之外的 (B) 只有 **7 条**，逐条回读：5 条指向隔壁参考工程 `/d/schedule/SleepDown-Schedule/...`（按外部坐标核对，原文一字不差）、1 条 `WidgetConfigActivity.kt:219-220` ✓、**唯一读不到的是 `docs/VENDOR_NOTES.md:207` 的 `postSelfTest`**（全仓 0 处、`git log --all -S postSelfTest -- app/src/main` 也空）——但它长在 `## 真机观察记录` 的 `2026-09-16` 那一档下 ⇒ 判 (A) 不改。**未核 292 条 (A)**，它按规矩没顺手改，只跑了存活/越界检查（240 条现在时引用 0 越界，3 条指向 T85 拆掉的 `SpocLoginScreen.kt`/`SpocSession.kt`）。
+**③ 规矩落在两处会被人读到的地方**：全文一份在审计档新增的**「锚点保鲜声明」**一节（首句「本档行号对应的 commit：`e47a18e`」+ 四条规矩 + 两条复算命令，并写明"T97 那句『行号按本工作树』只对当时成立"）；另在 `docs/TESTING.md`「为什么这张表容易说谎」下面加一节「行号锚点犯的是同一族错」——选那里对，因为那一节本来就在讲"文档里的现值会说谎、每一格要自带复算命令"，行号和 `1675/196/66` 是同一种易碎品。README 的文档索引表原本**根本没挂这份审计**（T97 就没挂号），补了一行并写明含锚点规矩；普查数随之 **514→517**，两处引用它的地方都跟着改了。
+
+⚠️ **它交回来的 `skipped=3` 是真信号，不是缺陷**：那三枚（`ReleaseForensicLogSurvivalTest` 两枚 + `ScanSecondEngineWiringGuardTest` 一枚）在**没有 release 产物**时按设计 `assumeTrue` 跳过，而它按我卡面的要求跳过了 `assembleRelease` ⇒ 只跑 `--rerun-tasks` 就会看到 3 枚跳过。我自己带 `assembleRelease` 重跑才是有效读数（见下）。⇒ 记一条门禁事实：**"0 skipped" 是跑法的性质，不是代码的性质**——`assembleRelease` 必须先于 `testDebugUnitTest`（我脚本里一直是这个顺序，所以从没遇到过）。
+
+**收单证据（我自己在 `87c2225` 上跑的）**：全新 worktree 冷构建 `assembleRelease` ⇒ `BUILD SUCCESSFUL in 2m50s`、**91 actionable tasks: 91 executed**（无 UP-TO-DATE）、包 **7,247,127 B 与地板逐字节相同** ⇒ "文档不进 dex"这句话现在有冷产物级证据；`testDebugUnitTest --rerun-tasks` ×2（43 executed）⇒ **1,683 tests / 198 suites / 0 失败 / 0 errors / 0 skipped**；lint **0 错 14 警**、九 id 逐枚计数与基线完全相同。锚点抽样回读（我的脚本自动比）：`ScheduleViewModel.kt:171` 含 `conflictGroupCount`、`:704` 含 `fun refreshBuaaTerms`、`:1038` 含 `groupCount = pending.conflictGroupCount`、`:1445` 含 `skippedOccurrences = 0` **四格全 True**；档内 `ScheduleViewModel.kt:164` 残留 **0** 处；§2.2 那句"裸改前陈述"已经不存在。
+
+**⚠️ 顺手把 `docs/STATUS.md` 里 6 处失效锚点结掉（它列、我复核，历史正文不改，只在此登记现值）**：`:1059-1060` 说 `uiState` 的 `WhileSubscribed(5_000)` 在 `:463-467` ⇒ 真值 **`combine(` 在 463、`WhileSubscribed` 在 495**，同段 dayTicker 的块现在起于 **448**；`:1675-1676` 的 `:674 refreshBuaaTerms()` ⇒ **704**；`:1728`/`:1762`「`reminders` 是 `Eagerly`（`:273`）」⇒ **300 注释 / 303 started**；`:2723`「`conflictGroupCount` 移进类体（`:164`）」⇒ **171**（就是 T100 那 +7）；`:2766`「`:471` 就是 `:468`」⇒ **483 / 479**；`:2682` 三句同源提示「`:1001`/`:1059`/`:1086`」⇒ **1038 / 1102 / 1133**（`:1001` 今天是 `val job = buaaRefreshJob ?: return`）。这六处里有五处**不是 T100 造成的**，是 T94/T95/T98/T100 一路插行累积的 ⇒ 印证了那条规矩：**行号必须与符号名/原文片段同框**，否则台账每合一张卡就烂几处。
+**明留**：① 292 条 (A) 类锚点未做内容级复核（按规矩不改；要判"当时抄得对不对"，得另起一轮专门对着当日 commit 的活）；② 它用了一枚 **empty commit**（`f122152`）给"分类完毕、零改动"记账 —— 结论我认（我复核了它的抽查），但**本仓收单口径是不造空 commit**，这类记账写进回执与 STATUS 就够，下次卡面要写明；③ README:210 那一行的措辞是按"现状描述型"写的，若这份审计将来被后续卡引用，它的 commit 标号要跟着更新（规矩已写在保鲜声明里）。
