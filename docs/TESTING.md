@@ -54,12 +54,18 @@ Framework 环境，API 34 一档覆盖的是 Android 14 那批行为收紧里我
 `@Test`** 那把尺（不是"这串字符出现几次"，理由见下一节那条换尺记录），第三列「文件数」是 `.kt`
 **源文件**的枚数 —— 它**不等于** JUnit 报告里的 testsuite 数（一个文件里可以有不止一枚测试类）。
 当前单测这一族是 194 枚文件跑出 200 枚 testsuite：194 + 6 = 200。**差额枚数没变、出资人也没换** ——
-但这句本轮是**重量过**而不是接着抄的，因为 T104 / T105 / T106 三张卡各自动过这一族，而它们贡献的形状
-各不相同：T104 与 T105 各添一枚守卫文件（`CourseEditorSaveErrorClearPairingGuardTest` 名下 2 枚
+但这句每一轮都是**重量过**而不是接着抄的，因为 T104 / T105 / T106 / T110 四张卡各自动过这一族，而它们
+贡献的形状各不相同：T104 与 T105 各添一枚守卫文件（`CourseEditorSaveErrorClearPairingGuardTest` 名下 2 枚
 `@Test`、`CalendarSyncTargetPairingGuardTest` 名下 6 枚），T106 净添 **0 枚文件** —— 它先在 `76b75fc`
 立了一枚 `CalendarSyncPermissionFlagClearGuardTest`，又在 `db235e4` 按红线把它删掉、将可达路径枚举
-**折回 T105 那枚文件**（于是那枚文件 6 枚 → 7 枚）。三张卡添的都是"一枚文件装一枚顶层类"的形状 ⇒
-两列各 +2、用例 +9（2 + 6 + 1），**一枚都没进差额**，那 6 枚还是下面那五枚文件出的（第六枚点名的是
+**折回 T105 那枚文件**（于是那枚文件 6 枚 → 7 枚）。**T110 是第四张动这一族的卡，贡献形状与 T106 同一款、
+与 T104/T105 不同款**：它没有新立文件，而是往同一枚 `CalendarSyncTargetPairingGuardTest.kt` 里添 3 枚
+`@Test`（① 那一族添偏好与缓存两半、③ 那一族添移除链那一档）⇒ 那枚文件 **7 枚 → 10 枚**
+（复算 `grep -cE '^[[:space:]]*@Test' app/src/test/java/com/buaa/schedule/ui/CalendarSyncTargetPairingGuardTest.kt`
+⇒ 10，上一版是 7 —— 这一枚数过去只能靠点名，今天它自己有了一条只读文件的复算命令）；文件列 **+0**。
+**上一轮**三张卡添的都是"一枚文件装一枚顶层类"的形状 ⇒ 两列各 +2、用例 +9（2 + 6 + 1），**一枚都没进差额**；
+T110 添的是"一枚既有文件里多几枚 `@Test`"的形状 ⇒ suite +0、用例再 +3 ⇒ **四张卡累计：两列各 +2、
+用例 +12（2 + 6 + 1 + 3），仍是一枚都没进差额**，那 6 枚还是下面那五枚文件出的（第六枚点名的是
 减数）。判据是一条命令，零命中就等于"没有多类文件"：
 
 ```bash
@@ -70,7 +76,19 @@ done                                                # ⇒ 6 枚文件：3 + 2 + 
 ```
 
 13 枚类塞在 6 枚文件里 ⇒ 多出来 13 − 6 = **7** 枚；这 7 枚里有一枚名下零 `@Test`（下面那枚 `Quad`），
-扣掉它才是 **6**。逐枚点名（括号里是该类名下的 `@Test` 枚数，逐枚与门禁 XML 的 `tests="…"` 对过）：
+扣掉它才是 **6**。逐枚点名（括号里是该类名下的 `@Test` 枚数，**T108 那一遍**逐枚与当时那批门禁 XML 的
+`tests="…"` 对过；本轮 T111 换一条**不依赖 XML** 的静态命令把它逐枚重量了一遍 —— 判据是"一枚类声明到
+下一枚类声明之间"的那些行首 `@Test`，六枚文件 `6d6d121` 上的读数与下面六条一字未动）：
+
+```bash
+for f in $(find app/src/test -name "*.kt"); do
+  [ "$(grep -cE '^(public |internal |private |abstract |open |sealed |data |value )*class ' "$f")" -gt 1 ] || continue
+  echo "== $f"
+  awk '/^(public |internal |private |abstract |open |sealed |data |value )*class /{ln=NR; sub(/^.*class /,""); split($0,a,/[^A-Za-z0-9_]/); c=a[1]; t[c]=0; L[c]=ln}
+       /^[[:space:]]*@Test/{t[c]++}
+       END{for(k in t) printf "   %d  %s  @Test=%d\n", L[k], k, t[k]}' "$f" | sort -n
+done   # ⇒ 13/9 · 6/8 · 11/2 · 5/3/3 · 11/4 · 7/0（最后一枚是 Quad，名下 0 枚 —— 它就是那枚减数）
+```
 
 - `ScheduleChartsT51Test.kt` 装着 `ChartGeometryTest`（13）+ `ChartDescriptionTest`（9）—— 两枚类名
   与文件名都不相同，所以这枚文件**不给**出一枚叫 `ScheduleChartsT51Test` 的 suite；
@@ -82,7 +100,13 @@ done                                                # ⇒ 6 枚文件：3 + 2 + 
 - `GlassJankDecisionTest.kt`（7）多一枚 `private data class Quad`（**0**）—— 它**不出**差额，
   它是那 7 减到 6 的减数。
 
-1 + 1 + 1 + 2 + 1 + 0 = 6。两列的口径必须同一把尺子，所以仪器测试那一行同样是**文件数**（14）。
+1 + 1 + 1 + 2 + 1 + 0 = 6。**这一串本轮（T111，基点 `6d6d121`）又自己走了一遍，没有照抄上一轮的加法**：
+每枚文件的差额 = 它名下"≥1 枚 `@Test` 的顶层类"数 − 1 ⇒ `ScheduleChartsT51Test.kt` 2 − 1 = **1**、
+`WeekCourseCountsTest.kt` 2 − 1 = **1**、`ImportPlannerTest.kt` 2 − 1 = **1**、`WeekGridSummaryTest.kt`
+3 − 1 = **2**、`WidgetAppearanceTest.kt` 2 − 1 = **1**、`GlassJankDecisionTest.kt` 名下只剩 1 枚挂得住
+`@Test` 的类（`Quad` 零枚、不成 suite）1 − 1 = **0** ⇒ 1 + 1 + 1 + 2 + 1 + 0 = **6**，与
+194 + 6 = 200 对得上（两枚各自复算：`grep -rh "^class " app/src/test --include=*.kt | wc -l` ⇒ **200**、
+`find app/src/test -name "*.kt" | wc -l` ⇒ **194**）。两列的口径必须同一把尺子，所以仪器测试那一行同样是**文件数**（14）。
 
 这 6 枚还有一条与静态尺**完全无关**的对法，本轮在那批门禁 XML 上跑过：把 200 枚 `<testsuite>` 的类名
 简名与 194 枚 `.kt` 的文件名 basename 做两次 `comm` ⇒ "有 suite、无同名文件"恰好 **7** 枚
