@@ -418,7 +418,7 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
 | 5 | `fetchState` ， `fetchWeek`/`fetchTotal` | `ui/importing/BuaaLoginScreen.kt` 三枚 remembered var | `onProgress = { week, total -> fetchWeek = week; fetchTotal = total; fetchState = "正在获取课表：第 $week/$total 周..." }` 一处写三枚 | 写点 3 组 / 清点 6 处（`fetchState = null` 就有 4 处，`fetchWeek = 0`/`fetchTotal = 0` 各 1 处） | **结构不可能** | 读点 `BuaaLoginScreen.kt:344` `val fetchFraction = if (fetchTotal > 0 && fetchStateText != null) {` ⇒ 两枚计数器唯一的读者恒在 `fetchState != null` 驱动的括号里 |
 | 6 | `colorMode` ， `backgroundColor` | `WidgetAppearance`（`widget/WidgetAppearance.kt:30`） | 换预设那一档整枚搬过来：`widget/WidgetConfigActivity.kt:346` `preset.appearance.copy(rowFields = appearance.rowFields)` ⇒ 配色来源与那支自定义色出自同一枚预设、一起落 | 12 处 `appearance.copy(`，其中 `:380` `appearance.copy(colorMode = it)` 与 `:404`/`:417` `appearance.copy(backgroundColor = argb)` **各改一枚** | **结构不可能** | 两枚读点都自带闸门：`widget/WidgetConfigActivity.kt:393` `if (appearance.colorMode == WidgetAppearance.COLOR_MODE_CUSTOM) {`（自定义色那一行只在这个分支里组合）与 `:624` `val baseColor = if (appearance.colorMode == WidgetAppearance.COLOR_MODE_SYSTEM) {`（SYSTEM 那一支也只把 `backgroundColor` 当 `:626` `?: appearance.backgroundColor` 的**回退**读，自定义色那一行整块不在 else 之外组合） |
 | 7 | `message` ， `permissionPermanentlyDenied` | `CalendarSyncUiState` | `ui/ScheduleViewModel.kt:1496` 那次 copy 同时写 `permissionPermanentlyDenied = !canAskAgain` 与 `message = AppMessage(... "日历权限已被永久拒绝，请到系统设置手动开启")` | 成对写点 1 处；**两处分头清**：`:1389` 只清 `message`、`:1508` `it.copy(permissionPermanentlyDenied = false)` 只清旗标 | **结构不可能**（两个方向各有一道闸，机制见 §6.4-B） | 读点 `ui/settings/SettingsScreen.kt:1677` `if (calendarSync.permissionPermanentlyDenied) {`，它整块长在 `:1664` `item(key = "status", visible = calendarSync.message != null) {` + `:1665` `calendarSync.message?.let {` 里面 |
-| 8 | `menuFor` ， `lastMenu` | `ui/home/WeekView.kt` 两枚 remembered var | `:558` `if (menuFor != null) lastMenu = menuFor` —— 一次写两枚（**故意**留一份给退场动画） | 成对写点 1 处；`menuFor = null` 3 处（`:876`、`:1001`、`:1175`+`:1218`）不跟着清 `lastMenu` | **结构不可能** | `lastMenu` 全仓唯一读者 `WeekView.kt:1173` `lastMenu?.let { menu ->`，它挂的浮层 `visible` 由 `menuFor` 关掉：`:1217` `visible = menuFor != null,` ⇒ 清一半正是设计意图（收场期间画锚住的那一份），不是残值 |
+| 8 | `menuFor` ， `lastMenu` | `ui/home/WeekView.kt` 两枚 remembered var | `:558` `if (menuFor != null) lastMenu = menuFor` —— 一次写两枚（**故意**留一份给退场动画） | 成对写点 1 处；`menuFor = null` **4 处**（`:876`、`:1001`、`:1175`、`:1218`）一处都不跟着清 `lastMenu` | **结构不可能** | `lastMenu` 全仓唯一读者 `WeekView.kt:1173` `lastMenu?.let { menu ->`，它挂的浮层 `visible` 由 `menuFor` 关掉：`:1217` `visible = menuFor != null,` ⇒ 清一半正是设计意图（收场期间画锚住的那一份），不是残值 |
 | 9 | `text` ， `isError`/`isSuccess` | `AppMessage`（`ui/ScheduleViewModel.kt:130`） | 每一句提示的「文案」与「染色」出自同一个构造 | 全仓 `AppMessage(` **45 处**构造、`.copy(` **0 处** | **结构不可能** | 复算：`grep -rn "AppMessage(" app/src/main/java --include='*.kt' \| wc -l` ⇒ 45；`grep -rnE "AppMessage\([^)]*\)\.copy\(\|message\.copy\(" app/src/main/java --include='*.kt' \| wc -l` ⇒ **0**。三枚字段被同一枚对象包着 ⇒ `copy` 站点根本不存在，一半都漏不掉 |
 | 10 | `targetId` ， `targetName` | `CalendarSyncUiState` | `:1462` `it.copy(targetId = calendarId, targetName = displayName, showPicker = false)` 与 `:1528-1529` 那个 `if (targetGone)` 双写 | 成对写点 3 处（含初值 `:1373-1374`）/ **分头清点 0 处** | **结构不可能**（本遍判据下**根本没进候选**：见 §6.9 的档位口径驳回） | 唯一读者 `ui/settings/SettingsScreen.kt:1623` `summary = calendarSync.targetName ?: "未选择",` —— 它**不在**任何 `targetId` 驱动的块里 ⇒ 今天不漏，将来加一处「只把 `targetId` 打回 -1L」的站点就会漏，且**无守卫**（登记进 §6.8①） |
 | 11 | `calendars` ， `calendarsLoaded` | `CalendarSyncUiState` | 同一次 `ensureCalendarsLoaded()`：成功那一档 `:1526-1527` `calendars = loaded,` + `calendarsLoaded = true,` 成对写 | 成对写点 1 处；**分头写点 1 处** `ui/ScheduleViewModel.kt:1516` 那一档只落 `calendarsLoaded = true,` | **结构不可能**（但那道闸**不在本族的位置**，见 §6.4-A） | 那一档长在 `:1513-1515` `val loaded = suspendCatching { calendarSyncManager.queryCalendars() }.getOrElse { _calendarSync.update { it.copy(` 里；`queryCalendars()` 自己把异常吞成空列表（`data/calendar/CalendarSyncManager.kt:71` `runCatching {` + `:90` `.onFailure { Log.w(TAG, "读取日历列表失败", it) }` + `:91` `return result`）⇒ `getOrElse` 走不到 |
@@ -611,3 +611,20 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
   （一枚靠被调方的 `runCatching`、一枚靠 launcher 的短路），本节为它们各写了一句「这句话必须记着」，
   见 §6.4-A/B。卡面那句「判这档要给机制」满足了，但**机制可被别处一行改动挪走**，
   这与 §2.1 当年批评"正确性挂在一行运行期早返回上"是同一件事 ⇒ 这两枚实际强度低于 #5 #6 #8 #9。
+
+### 6.10 本节的锚点普查（在 §6 最后一次编辑之后量的，按 §0.4 第 4 条那一格的口径）
+
+⚠️ 本节往文档里点了名 ⇒ 它自己挪动了 §0.4 那两格普查数。**这两格是在 §6 定稿之后重量的**，
+不是在 `1c6b7bd` 上量的（那两格的现值 217 / 526 已由本节改为下面这两个数）：
+
+- 本档显式锚点条数：`grep -rhoE '[A-Za-z0-9_]+\.kt:[0-9]+' docs/derived-field-audit.md | wc -l` ⇒ **261**
+  （`1c6b7bd` 上是 217，本节 +44）
+- 全仓普查：`grep -rhoE '[A-Za-z0-9_]+\.kt:[0-9]+' docs README.md | wc -l` ⇒ **571**（`1c6b7bd` 上是 526，本节 +45）
+- ⚠️ **两把尺子在本节同样不许混**：上面两条吃 `grep -o`（一行两枚锚点算**两条**）。
+  同一份文件换那一把数**命中行**的：`grep -cE '[A-Za-z0-9_]+\.kt:[0-9]+' docs/derived-field-audit.md` ⇒ **140**。
+  261 与 140 的差就是"一行里点两枚锚点"的行数 —— §6.2 那张表一格里塞两枚是常态，所以本档这一格
+  两把尺的差距（261 vs 140）比 §0.4 当年那组（217 vs 109）还要拉开一点，抄错就等于报错数。
+- 本节 37 枚 `文件.kt:行号` 形式的锚点已**逐枚回读**（一次性脚本：把锚点拆成「文件 + 行号」→ 读那一行 →
+  与同框的符号名/原文片段比对）。要点名一件事：`docs/` 的锚点保鲜声明那一节说的是**本档 §1–§5** 的行号
+  对应 `e47a18e`；本节 §6 的行号对应 **`1c6b7bd`**，下一轮若动了被引文件，两批行号要分开重核。
+
