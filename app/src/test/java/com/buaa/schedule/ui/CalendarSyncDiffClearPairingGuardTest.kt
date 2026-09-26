@@ -236,11 +236,11 @@ class CalendarSyncDiffClearPairingGuardTest {
         val removeEnd = screen.indexOf(MODAL_SEP, removeAt + REMOVE_MODAL_HEAD.length)
         check(diffEnd > diffAt && removeEnd > removeAt) { "靶子：两扇弹窗的窗口边界切不出来（少一层 ModalTransition？）" }
         assertTrue(
-            "diff 弹窗与移除确认框不再是彼此独立的两层：diff 那一段（L" +
-                screen.substring(0, diffAt).count { it == '\n' } + 1 + "–L" +
-                screen.substring(0, diffEnd).count { it == '\n' } + 1 + "）越进了移除框那一段（L" +
-                screen.substring(0, removeAt).count { it == '\n' } + 1 + "–L" +
-                screen.substring(0, removeEnd).count { it == '\n' } + 1 + "）之内 —— 「两扇窗彼此挡住」" +
+            "diff 弹窗与移除确认框不再是彼此独立的两层：diff 那一段（" +
+                "L${screen.substring(0, diffAt).count { it == '\n' } + 1}–" +
+                "L${screen.substring(0, diffEnd).count { it == '\n' } + 1}）越进了移除框那一段（" +
+                "L${screen.substring(0, removeAt).count { it == '\n' } + 1}–" +
+                "L${screen.substring(0, removeEnd).count { it == '\n' } + 1}）之内 —— 「两扇窗彼此挡住」" +
                 "就是 #2 今天不收对岸的全部凭据，一出现嵌套这一格当场失效（本判据第二段的第 2 条）",
             diffEnd <= removeAt || removeEnd <= diffAt,
         )
@@ -253,9 +253,9 @@ class CalendarSyncDiffClearPairingGuardTest {
         )
         for (at in opens) {
             assertFalse(
-                "**朝宽那一格**：移除那一行的入口跑进了 diff 弹窗**之内**（" + lineAt(screen, at) + " 落在 L" +
-                    screen.substring(0, diffAt).count { it == '\n' } + 1 + " 到 L" +
-                    screen.substring(0, diffEnd).count { it == '\n' } + 1 + " 之间）—— 那就是「确认卡上顺手补" +
+                "**朝宽那一格**：移除那一行的入口跑进了 diff 弹窗**之内**（" + lineAt(screen, at) +
+                    " 落在 L${screen.substring(0, diffAt).count { it == '\n' } + 1} 到 " +
+                    "L${screen.substring(0, diffEnd).count { it == '\n' } + 1} 之间）—— 那就是「确认卡上顺手补" +
                     "一颗先移除再同步」的形状：两扇窗不再互斥、起手不收这一对当场从「结构不可能」搬进「真漏清」，" +
                     "而那时要重判的不是本判据、是 KDoc 第三段那句「这一对到底该谁收」",
                 at in diffAt until diffEnd,
