@@ -240,10 +240,10 @@ fun ImportScreen(
                         if (pending.conflicts.isEmpty()) {
                             Text("无时间冲突", style = MaterialTheme.typography.bodySmall)
                         } else {
-                            // 标题念的是**组**数：conflictGroupCount 由 showPendingImport 用
-                            // CourseConflictResolution.groupConflicts 归并一次算好（与首页横幅 T82、
-                            // 统计页冲突卡同一件内核、同一个数），所以组合期一次都不归并 ——
-                            // 这一页连 remember 都不必摆。改前这里念 conflicts.size，
+                            // 标题念的是**组**数：conflictGroupCount 由 PendingImport 从 conflicts
+                            // 派生（CourseConflictResolution.groupConflicts 归并，与首页横幅 T82、
+                            // 统计页冲突卡同一件内核、同一个数），每一次 copy 归并一次、组合期一次都
+                            // 不归并 —— 这一页连 remember 都不必摆。改前这里念 conflicts.size，
                             // 三门课互撞会念成「3 组」而按组只有一档（T94①）。
                             Text(
                                 text = importConflictBanner(pending.conflictGroupCount),

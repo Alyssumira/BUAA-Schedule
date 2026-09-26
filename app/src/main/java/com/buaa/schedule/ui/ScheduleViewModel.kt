@@ -133,18 +133,6 @@ data class PendingImport(
     val addedCount: Int,
     val changedCount: Int,
     val conflicts: List<ConflictDetector.Conflict>,
-    /**
-     * 归并后的冲突**组**数（T94①）—— 与 [conflicts] 那两两配对的条数不是一枚数。
-     *
-     * 三门课挤在同一格：`findConflicts` 交回 3 条配对（A-B、A-C、B-C），
-     * `groupConflicts` 归并成 1 组。确认卡那句"存在 N 组时间冲突"与三条解析完成提示
-     * 念的都是这一枚，与首页横幅 / 统计页冲突卡同一把尺子（那两页吃的也是 `groupConflicts`）。
-     *
-     * 归并只在这一枚字段上落一次：由 [showPendingImport] 在预览成型时算好（组合期一次都不算，
-     * 界面只是读一个数），因此这一族四处与那三条提示读到的一定是同一个数。
-     * 逐条勾选走 `copy(excludedKeys = …)`，配对不变则组数也不变。
-     */
-    val conflictGroupCount: Int,
     /** 解析阶段的警告（缺教师/周次兜底等），在确认卡片中展示 */
     val warnings: List<String> = emptyList(),
     /** 逐条预览中被取消勾选的课程 key（[ImportPlanner.courseKey]） */
@@ -153,7 +141,28 @@ data class PendingImport(
     val keptCount: Int = 0,
     /** 导入来源（buaa/ics/text），随确认落库写进导入历史；此前历史页所有条目都硬编码成 buaa */
     val source: String = "buaa",
-)
+) {
+    /**
+     * 归并后的冲突**组**数（T94① 引入这一枚数，T95① 把它收成派生属性）——
+     * 与 [conflicts] 那两两配对的条数不是一枚数。
+     *
+     * 三门课挤在同一格：`findConflicts` 交回 3 条配对（A-B、A-C、B-C），
+     * `groupConflicts` 归并成 1 组。确认卡那句"存在 N 组时间冲突"与三条解析完成提示
+     * 念的都是这一枚，与首页横幅 / 统计页冲突卡同一把尺子（那两页吃的也是 `groupConflicts`）。
+     *
+     * 为什么它是**类体里的派生属性**而不是构造参数：`data class` 的 `copy()` 会把没点名的
+     * 参数原样带走，而逐条勾选那两站（`togglePendingImportCourse` /
+     * `setAllPendingImportSelected`）正是靠 `copy(conflicts = findConflicts(selection.toWrite))`
+     * 换掉配对的。T94 把组数挂在参数表上，这两站点了 `conflicts` 却没点它 ⇒
+     * 配对变小、组数冻结在上一屏（用户取消勾选一门撞车课，标题仍念旧的那几组）。
+     * 挂在类体里它就**不在**参数表上、任何 `copy()` 都点不到它：每次重新构造（含每一次
+     * `copy`）按当下的 [conflicts] 归并一次，之后界面读的是那枚存好的 `Int` ——
+     * 归并仍然一次都不发生在组合期（这一族四处与那三条提示读的仍是同一个数）。
+     * 代价：它不进 `equals`/`hashCode`/`toString`。派生值由 [conflicts] 唯一决定，
+     * 参数相等它必相等，所以少了它判不出"两枚不同状态相等"。
+     */
+    val conflictGroupCount: Int = CourseConflictResolution.groupConflicts(conflicts).size
+}
 
 /**
  * 逐条勾选的结果：实际要写入库的课程列表与计数。
@@ -774,6 +783,10 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     /**
      * 逐条预览里勾选/取消某门课。
      * 冲突与计数按"勾选后的子集"重算，保证卡片数字与实际落库一致。
+     *
+     * 「计数」含归并后的冲突**组**数：copy() 只递新 `conflicts`，那枚组数是它的派生属性
+     * （见 [PendingImport.conflictGroupCount]），因此取消勾选一门撞车课时标题与明细一起变小。
+     * T94 把组数当构造参数递，这两处 copy 没点它 ⇒ 明细变了标题不动，T95① 修的就是这笔。
      */
     fun togglePendingImportCourse(course: Course) {
         val pending = _pendingImport.value ?: return
@@ -1042,9 +1055,8 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             addedCount = addedCount,
             changedCount = changedCount,
             conflicts = conflicts,
-            // 归并判据在 CourseConflictResolution.groupConflicts（首页横幅、统计页冲突卡同一件内核），
-            // 这里只负责把数据递进去；措辞由 ImportConflictCopy 出（零 android import）
-            conflictGroupCount = CourseConflictResolution.groupConflicts(conflicts).size,
+            // 组数不在这里递：由 PendingImport 类体里那枚派生属性从 conflicts 归并出来，
+            // 两处逐条勾选的 copy 因此跟着子集一起变（T95①）。措辞仍由 ImportConflictCopy 出
             warnings = warnings,
             source = source,
         )
