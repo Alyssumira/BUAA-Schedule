@@ -127,7 +127,10 @@ Framework 环境，API 34 一档覆盖的是 Android 14 那批行为收紧里我
   这一族没有增删**，不是本页上表的现值。现值 1683 / 198 的门禁证据在 `docs/STATUS.md:2811`（那段起头
   「收单证据（我自己跑的，不是引它的日志）」，集成态 `378dedd` 冷全量）与 `docs/STATUS.md:2830`（起头
   「收单证据（我自己在 `87c2225` 上跑的）」）两处，各写着 **1,683 tests / 198 suites / 0 失败 / 0 errors /
-  0 skipped** ⇒ 表与门禁没有分叉，分叉的只是这一页旧版的那四个数。
+  0 skipped** ⇒ 表与门禁没有分叉，分叉的只是这一页旧版的那四个数。中间那一档也在册：
+  `docs/STATUS.md:2793`（T99 自己在集成对象 `cdfd9ab` 上跑的冷全量）**1,681 tests / 197 suites**，它自己
+  写着"对 1,675/196 恰是 +6 tests / +1 suite，全出自 T99 那枚新守卫"⇒ 上面那句"每枚新守卫文件各加
+  1 枚 suite、差额出资人没换"有门禁 XML 层的证据，不只靠本页那条静态尺子。
 
 - Guard 那一族与"读源码"那一族（上表最后一格里那两个数）：
 
@@ -187,9 +190,9 @@ Framework 环境，API 34 一档覆盖的是 Android 14 那批行为收紧里我
   制造这次漂移的恰好是本页基点那枚
   commit：`c55ddc5` 在 `docs/STATUS.md:2243` 处 +4 / −1 ⇒ 其后整体后移 3 行
   （`git show --stat c55ddc5 -- docs/STATUS.md`）。它漂得无声无息，是因为下面第一条普查命令的尺子
-  **只认 `\.kt:[0-9]+`** —— 而 `X.md:NNN` 这一族全仓有 15 枚（本页 7 枚，其余 8 枚长在
+  **只认 `\.kt:[0-9]+`** —— 而 `X.md:NNN` 这一族全仓有 16 枚（本页 8 枚，其余 8 枚长在
   `docs/STATUS.md` 与 `docs/derived-field-audit.md` 里），普查命令一条都量不到；本轮之前本页那唯一一枚
-  就是它。这一格本身就是"每格带命令"的活样本：本轮开始时它是 9，本页三处订正各添了指针之后现在 15 ——
+  就是它。这一格本身就是"每格带命令"的活样本：本轮开始时它是 9，本页几处订正各添了指针之后现在 16 ——
   数得出来才不会把它抄旧。这正好解释了规矩 ① 为什么要求"行号与符号名/原文片段同框"：行号错了，还能凭那句起头找回去。
 
 规矩全文写在 [`docs/derived-field-audit.md`](derived-field-audit.md) 头部那节「锚点保鲜声明」
@@ -199,7 +202,7 @@ Framework 环境，API 34 一档覆盖的是 Android 14 那批行为收紧里我
 
 ```bash
 grep -rhoE '[A-Za-z0-9_]+\.kt:[0-9]+' docs README.md | wc -l       # 全仓 .kt 锚点枚数 ⇒ 527
-grep -rhoE '[A-Za-z0-9_.-]+\.md:[0-9]+' docs README.md | wc -l     # 全仓 .md:NNN 指针枚数 ⇒ 15（上一条看不见这一族）
+grep -rhoE '[A-Za-z0-9_.-]+\.md:[0-9]+' docs README.md | wc -l     # 全仓 .md:NNN 指针枚数 ⇒ 16（上一条看不见这一族）
 grep -rhoE '[A-Za-z0-9_]+\.kt:[0-9]+' docs/derived-field-audit.md | wc -l   # 单档 ⇒ 218
 grep -coE '[A-Za-z0-9_]+\.kt:[0-9]+' docs/TESTING.md               # 本页贡献几枚 ⇒ 4
 ```
