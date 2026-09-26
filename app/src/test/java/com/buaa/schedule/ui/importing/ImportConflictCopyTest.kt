@@ -23,8 +23,9 @@ import org.junit.Test
  * 1. 导入这一族的三句**文案确实按组数出**，且吃的是真内核
  *    （`findConflicts` → `groupConflicts`）跑出来的组数，不是手填的一个数；
  * 2. 标题念的数与明细画的行数**各档分别是多少**（钉住"两枚数分开报"这件事），
- *    外加一处接线：组数只在 `PendingImport` 类体那枚派生属性 `conflictGroupCount` 里归并一次，
- *    界面与三条提示读同一枚字段。
+ *    外加一处接线：归并只长在 `PendingImport` 类体那枚派生属性 `conflictGroupCount` 里
+ *    （main 源码里唯一一处调用；每次构造与每次 `copy()` 都按当下的 `conflicts` 重算一遍，
+ *    所以任何 `copy()` 都带不走旧值），界面与三条提示读同一枚字段。
  */
 class ImportConflictCopyTest {
 
@@ -290,7 +291,8 @@ class ImportConflictCopyTest {
     fun groupCountIsMergedOnceInTheViewModelAndNotRecomputedInComposition() {
         val viewModel = readMainSource("com/buaa/schedule/ui/ScheduleViewModel.kt")
         assertEquals(
-            "归并应当恰好一处（在 PendingImport 类体的那枚派生属性里算好）：组合期每帧重算就是把 T82 " +
+            "归并应当恰好一处（长在 PendingImport 类体的那枚派生属性里：每次构造与每次 copy() " +
+                "都按当下的 conflicts 重算，任何 copy() 都带不走旧值）：组合期每帧重算就是把 T82 " +
                 "在首页修掉的账再欠一遍，两处各算也会各说各的数",
             1, occurrences(viewModel, "CourseConflictResolution.groupConflicts("),
         )
