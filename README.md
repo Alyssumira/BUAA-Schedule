@@ -178,23 +178,9 @@ Baseline Profile 生成，已接入 `:app`；采集要连一台 API 28+ 的设�
 
 ### 测试
 
-```bash
-./gradlew testDebugUnitTest          # 单元测试（JVM，不需要设备）
-./gradlew connectedDebugAndroidTest  # 仪器测试（模拟器或真机）
-```
-
-| 类型 | 用例数 | 文件数 | 覆盖范围 |
-| --- | --- | --- | --- |
-| 单元测试 | 1585 | 186 | 周次解析 / 教学周计算 / 冲突检测 / 导入规划 / 备份 schema / ICS 与文本解析与往返 / 节次分段与连堂判定 / 教务抓取脚本契约 / 日历投影选择 / 提醒排程与明日预告推送集合 / 分享编解码 / Widget 外观与短名与显示字段与翻周 / 课程管理页归并与别名口径 / 课程色板色差与主题槽位全覆盖 / Gitee 发布解析与安装包完整性与附件选择 / 实况卡片文案与倒计时口径 / 学期学分与逐周课负载统计 / 迁移链与导出 schema 对齐 / 逐周密度与日时间轴分段口径 / 学分在教务解析、备份与分享口令三条链路上的往返 / 签到码四道门槛与拒绝分档 / 提交 URL 拼接与端口升级 / 签到响应的字段大小写与解壳形态 / 凭证存储的备份排除名单 / 学分与体育项目的显示口径与三处接线 |
-| 仪器测试 | 66 | 14 | Room 迁移 / Repository 提醒写入与事务 / Widget 刷新新鲜度与渲染契约与外观存档与数据缓存 / WebView 会话保留与 evaluateJavascript 契约 / 教务 Cookie 与 iClass 签到 id 两份加密存储的落盘与两边隔离 / 课堂铃生命周期 / 壁纸解码 / 日历同步部分失败 |
-
-仪器测试跑在 API 29 + API 34 模拟器上（CI 同配置）：Room 迁移与 WebView 相关用例需要真实
-Framework 环境，API 34 一档覆盖的是 Android 14 那批行为收紧里我们自己写得动断言的那些
-（精确闹钟默认拒绝等）。上表"壁纸解码"那一格钉的是**自选图片**的解码路径，不是系统桌面壁纸
-的读取 —— 后者在仪器测试里没有断言。而"读不到桌面壁纸"这件事的真因也在仪器测试之外查清的：
-不是"Android 14 起平台禁了"，是本应用从未声明 `READ_EXTERNAL_STORAGE`（其后还有一道 app-op），
-零权限只读得到壁纸的**颜色**（`getWallpaperColors`）—— 口径与取证过程见
-[`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) §1。
+两族测试（`./gradlew testDebugUnitTest` 跑 JVM 单测、`./gradlew connectedDebugAndroidTest`
+跑仪器测试，后者要连一台设备或模拟器）当前各有多少用例、覆盖哪些族、CI 跑在哪些 API 档上，
+是一张逐卡会变的账，写在 [`docs/TESTING.md`](docs/TESTING.md)，连复算命令一起。
 
 ### 发布
 
@@ -221,6 +207,7 @@ powershell -ExecutionPolicy Bypass -File release.ps1 0.2.0
 | [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) | 已知问题与平台限制（报 bug 前先看） |
 | [`docs/VENDOR_NOTES.md`](docs/VENDOR_NOTES.md) | 厂商 / ROM 适配笔记（按证据分级） |
 | [`docs/RELEASE.md`](docs/RELEASE.md) | 发版与自更新 |
+| [`docs/TESTING.md`](docs/TESTING.md) | 两族测试怎么跑、当前用例与文件数、覆盖族与 CI 的 API 档 |
 | [`docs/STATUS.md`](docs/STATUS.md) | 功能状态清单：已落地 / 不做 / 待实现 |
 | [`docs/BUAA_API.md`](docs/BUAA_API.md) | 北航教务接口参考（改导入链时看）。里面**智学北航那一节是已拆除链路的历史记录**，别照着它改签到代码 |
 | [`docs/BUAA_SPOC_SIGNIN_PLAN.md`](docs/BUAA_SPOC_SIGNIN_PLAN.md) | **历史记录**：智学北航扫码签到的取证与落地偏差。那条链已于 T85 整族拆除，只有包体 / ABI 那部分是活账 |
