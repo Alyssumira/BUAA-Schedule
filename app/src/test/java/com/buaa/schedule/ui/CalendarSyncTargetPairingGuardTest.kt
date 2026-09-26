@@ -45,6 +45,13 @@ import org.junit.Test
  * `:1389` 起手那档现在 `it.copy(syncing = true, message = null, permissionPermanentlyDenied = false,
  * diff = null, skippedOccurrences = 0)` —— 撤句子顺手撤旗标；剩下 `:1508` 仍是单清（只清旗标不撤句子，
  * 它长在 launcher「全部授予」那一档里，那条档上句子本来就该留）。
+ * **T110 又添一枚成对清：`:1481` `removeSyncedEvents()` 起手**（「移除已同步的日程」那条链有自己的入口，
+ * 不经 `startCalendarSync`，所以 T106 那一刀盖不住它）—— 现在写
+ * `it.copy(syncing = true, message = null, permissionPermanentlyDenied = false)`。它落下的句子
+ * `:1486` 那句「已移除 N 个日程」恰好把 `:1664` 那格重新点亮，旧旗标因此在完成句旁边挂出那颗按钮。
+ * 这一枚的**前提**（清旗标不是"声称已授权"）由 `everyRouteIntoTheRemoveChainStandsInsideTheSameGateAndClearsTheFlagPaired` 钉：
+ * 它唯一的界面触发点长在 `showRemoveConfirm` 驱动的那层弹窗里，而开窗只有 `requestRemoveSyncedEvents()`
+ * 一枚写点、其唯一入口 `SettingsScreen.kt:1654` 已经在闸里。
  * 病为什么当时会被误判成无害：§6.4-B 把 `:331` 那句 `if (viewModel.hasCalendarPermission())` 短路当成
  * 「到不了 :317 所以旗标不会被读到」的闸，方向搞反了 —— 正是那道短路让**已授权的用户根本不启动 launcher**，
  * 于是 `onCalendarPermissionGranted()`（清旗标唯一入口）永不被调，而 `:1664`
@@ -52,7 +59,7 @@ import org.junit.Test
  * 「同步完成」旁边常驻一颗「去系统设置开启日历权限」。修法与可达路径枚举见
  * 修法与可达路径枚举见本文件第三枚 `@Test`
  * `everyRouteIntoTheSyncEntryStandsInsideAPermissionGate`（T106 新增：把「进到 `startCalendarSync()` 时
- * 权限必然已到手」这条前提逐入口钉死）；本文件这一族因此改钉「**成对写 1 处 + 成对清 1 处 + 单清 1 处**」
+ * 权限必然已到手」这条前提逐入口钉死）；T110 之后本文件这一族钉「**成对写 1 处 + 成对清 2 处 + 单清 1 处**」
  * 这三枚数，以及闸门本身（闸 B 如今只是第二层保险，不再是唯一的挡头）。
  *
  * **⑥ `SettingsScreen.showPrivacyDialog` / `privacyConsentAt`**（§6.8⑥、§6.2 表 #14）
@@ -73,12 +80,16 @@ import org.junit.Test
  * （同族第二回，`saving` / `saveError`，T104 刚写完）。那两枚各自钉死的字段与本文件**不重叠**：
  * `diff = null` / `skippedOccurrences = 0` 的三处成对账归前者，`saveError` 一族归后者。
  *
- * 九枚 `@Test` 全是**纯 JVM 源码核对**：只 import `java.io.File` 与 JUnit，零 android import、
+ * 十枚 `@Test` 全是**纯 JVM 源码核对**：只 import `java.io.File` 与 JUnit，零 android import、
  * 零时钟读取（不碰 `System.currentTimeMillis()` / `LocalDate.now()` 之类）。
  * 行号按 `4b1c4a4` 盘面复算；T106 只把 `ScheduleViewModel.kt:1389` 那一枚 copy **同行改写**（没有增删行）
  * ⇒ 本文件点名的行号在 `688b191`＋T106 之上仍然成立，只有 ③ 那一族的**枚数**按新盘面重钉
  * （旗标赋值 2→3、成对写 1 / 成对清 1 / 单清 1）；按 T101 的规矩，每条判据都跟**符号名 + 原文片段**同框，
  * 行号只是辅助。
+ * **T110 之后本文件的行号账**：`ScheduleViewModel.kt:1449`（开窗复位旗标）与 `:1481`（移除链起手成对清）
+ * 两枚都是**同行改写**、零漂移，唯一的插行是 `ensureCalendarsLoaded` 末尾那档撤偏好（`:1532-1541`，净 +10）
+ * ⇒ 本文件点名的 `:1531` 之前的行号一处不漂，那颗文件从 1,683 行变 1,693 行；③ 那一族的枚数按新盘面
+ * 再重钉一次（旗标赋值 3→4、成对清 1→2、句子清点 1→2），① 添偏好那一半与缓存旗标那一半。
  */
 class CalendarSyncTargetPairingGuardTest {
 
@@ -427,17 +438,21 @@ class CalendarSyncTargetPairingGuardTest {
     // ---------------- ③ message / permissionPermanentlyDenied ----------------
 
     /**
-     * 写/清侧（**T106 之后重钉**）：**成对写 1 处 + 成对清 1 处 + 旗标单清 1 处**。
+     * 写/清侧（**T106 之后重钉、T110 再重钉**）：**成对写 1 处 + 成对清 2 处 + 旗标单清 1 处**。
      *
-     * `permissionPermanentlyDenied = ` 出现 3 次（:1497 的成对生产 + :1389 起手那次**成对**清 +
-     * :1508 的单清）、`message = null` 出现 1 次（就是 :1389 那一处，它现在必带旗标）。
+     * `permissionPermanentlyDenied = ` 出现 4 次（:1497 的成对生产 + :1389 同步起手那次**成对**清 +
+     * :1481 移除链起手那次**成对**清 + :1508 的单清）、`message = null` 出现 2 次（:1389 与 :1481，
+     * 两枚都必须连旗标一起清 —— 本判据是**逐处**取的，不是只取第一处）。
      * 两头都钉：
-     * - **少一处旗标赋值**（= 有人把 :1389 的成对清又拆回「只撤句子」）→ 本卡那枚真漏清复发：
+     * - **少一处旗标赋值**（= 有人把 :1389 或 :1481 的成对清又拆回「只撤句子」）→ 本卡那枚真漏清复发：
      *   在系统设置里手动授予权限之后点同步，`withCalendarPermission` 的短路让 launcher 根本不启动、
      *   `onCalendarPermissionGranted()` 永不被调，旗标常驻到下一句提示把 :1664 那格重新点亮为止；
+     *   :1481 少一处就是 T109 那枚（「已移除 N 个日程」旁边挂着那颗按钮）复发；
      * - **多一处旗标赋值 / 多一处 `message = null`** → 冒出了第三条只动一枚的通道，
-     *   「撤句子必顺手撤旗标」这条反命题不再由那唯一一枚站点守着，得回来按新站点重数一遍；
-     * - **:1508 那处开始连句子一起清** → 句子清点从 1 变 2，`:1664` 那格 visible 的账要重判（不是病，
+     *   「撤句子必顺手撤旗标」这条反命题的覆盖面要按新站点重数一遍（新站点也得逐处带旗标，
+     *   且得先证它只在已授权时可达，见 `everyRouteIntoTheSyncEntryStandsInsideAPermissionGate` 与
+     *   `everyRouteIntoTheRemoveChainStandsInsideTheSameGateAndClearsTheFlagPaired`）；
+     * - **:1508 那处开始连句子一起清** → 句子清点从 2 变 3，`:1664` 那格 visible 的账要重判（不是病，
      *   但这一族「谁在撤句子」的清单变了，§6.2 #7 那一格要跟着改）。
      */
     @Test
@@ -445,9 +460,10 @@ class CalendarSyncTargetPairingGuardTest {
         val code = blankCommentsKeepingLiterals(readMainSource(SCHEDULE_VIEW_MODEL))
         val flagWrites = indexOfAll(code, FLAG_ASSIGNED)
         assertEquals(
-            "给 `permissionPermanentlyDenied` 赋值的站点从 3 处变了（:1497 成对生产 + :1389 起手成对清 + " +
-                ":1508 单清）。**少一处** = 起手那次成对清被拆回去，T106 那枚真漏清（「同步完成」旁边挂着" +
-                "「去系统设置开启日历权限」）当场复发，本文件第三枚 `@Test`（可达路径枚举）也会跟着红；" +
+            "给 `permissionPermanentlyDenied` 赋值的站点从 4 处变了（:1497 成对生产 + :1389 同步起手成对清 + " +
+                ":1481 移除链起手成对清 + :1508 单清）。**少一处** = 两枚成对清里被拆回去一枚，" +
+                "T106（「同步完成」旁）或 T109（「已移除 N 个日程」旁）那枚真漏清当场复发，" +
+                "本文件第三枚 `@Test`（可达路径枚举）与移除链那枚也会跟着红；" +
                 "**多一处** = 又添一条只动旗标不动句子的路径，那道「句子还在才念得出按钮」的闸就多一个绕开" +
                 "它的入口，得先证新站点只在已授权时可达：" + lineHints(code, flagWrites),
             FLAG_WRITE_SITES,
@@ -455,9 +471,9 @@ class CalendarSyncTargetPairingGuardTest {
         )
         val messageClears = indexOfAll(code, MESSAGE_CLEARED)
         assertEquals(
-            "`message = null` 的清空站点不再是 1 处（现在只有 :1389 startCalendarSync 起手那一档，" +
-                "而它现在必须连旗标一起清）。**多一处** = 又添一条撤句子的站点，它同样得把旗标带上，" +
-                "否则那条站点就是 T106 那枚病的新载体；**少一处** = 起手不再撤句子，" +
+            "`message = null` 的清空站点不再是 2 处（:1389 startCalendarSync 起手 + :1481 removeSyncedEvents " +
+                "起手，两枚都必须连旗标一起清）。**多一处** = 又添一条撤句子的站点，它同样得把旗标带上，" +
+                "否则那条站点就是 T106/T109 那枚病的新载体；**少一处** = 起手不再撤句子，" +
                 "那 :1664 那枚 `visible = calendarSync.message != null` 的挡法就换了位置：" +
                 lineHints(code, messageClears),
             MESSAGE_CLEAR_SITES,
@@ -487,21 +503,34 @@ class CalendarSyncTargetPairingGuardTest {
                 lineAt(code, clearedAt),
             !rebuildArguments(code, clearedAt).contains(MESSAGE_ASSIGNED),
         )
+        val clearsMissingFlag = messageClears.filter { !rebuildArguments(code, it).contains(FLAG_ASSIGNED) }
         assertTrue(
-            ":1389 startCalendarSync 起手那一处不再连旗标一起清了 —— **这就是 T106 修掉的那枚真漏清在复发**：" +
-                "在系统设置里手动授予权限后点同步，withCalendarPermission 的短路（SettingsScreen.kt:331）" +
-                "让 launcher 根本不启动，于是 :1508 那次单清永远走不到，旗标常驻；等 :1429-1439 那句" +
-                "「同步完成…」把 :1664 那格点亮，:1677 那颗「去系统设置开启日历权限」就挂在成功文案旁边。" +
-                "改回去之前先看下面第三枚 `everyRouteIntoTheSyncEntryStandsInsideAPermissionGate` " +
-                "的可达路径枚举：\n" +
-                lineAt(code, messageClears.first()),
-            rebuildArguments(code, messageClears.first()).contains(FLAG_ASSIGNED),
+            "这些撤句子（`message = null`）的站点没有把旗标一起清 —— **这就是 T106 / T109 修掉的那两枚真漏清" +
+                "在复发**：在系统设置里手动授予权限后点同步（:1389）或点「移除已同步的日程」（:1481），" +
+                "withCalendarPermission 的短路（SettingsScreen.kt:331）让 launcher 根本不启动，于是 :1508 " +
+                "那次单清永远走不到，旗标常驻；等 :1429-1439 那句「同步完成…」或 :1486 那句「已移除 N 个日程」" +
+                "把 :1664 那格点亮，:1677 那颗「去系统设置开启日历权限」就挂在完成文案旁边。" +
+                "改回去之前先看下面两枚可达路径判据 `everyRouteIntoTheSyncEntryStandsInsideAPermissionGate` " +
+                "与 `everyRouteIntoTheRemoveChainStandsInsideTheSameGateAndClearsTheFlagPaired`：\n" +
+                lineHints(code, clearsMissingFlag),
+            clearsMissingFlag.isEmpty(),
         )
-        // 靶子：被这三条断言点名的三行原文
+        // 靶子：被这四条断言点名的四行原文
         assertEquals(
             "靶子：:1389 那一行的原文还在（syncing + message + 旗标 + diff + skippedOccurrences 五枚一起落地）：",
             1,
-            occurrences(code, "it.copy(syncing = true, message = null, permissionPermanentlyDenied = false, diff = null, skippedOccurrences = 0)"),
+            occurrences(code, SYNC_ENTRY_PAIRED_COPY),
+        )
+        assertEquals(
+            "靶子：:1481 那一行的原文还在（T110 给移除链起手补的那档成对清，三枚一起落地）—— " +
+                "它不在就是 T109 那枚漏清复发（「已移除 N 个日程」旁边挂着那颗按钮）：",
+            1,
+            occurrences(code, REMOVE_ENTRY_CLEAR_SHAPE),
+        )
+        assertEquals(
+            "靶子：:1481 那次成对清之后落下的句子原文还在（它就是重新点亮 :1664 那格的那一句）：",
+            1,
+            occurrences(code, REMOVE_DONE_MESSAGE_SHAPE),
         )
         assertEquals(
             "靶子：:1508 那一行的原文还在（整颗 onCalendarPermissionGranted 就这一句 copy）：",
@@ -625,10 +654,9 @@ class CalendarSyncTargetPairingGuardTest {
         }
         val flagReader = screen.indexOf(FLAG_READER)
         assertTrue(
-            "那颗「去系统设置开启日历权限」的按钮跑出了 message 驱动的那一格 —— T106 之后 :1389 已经是" +
-                "成对清（撤句子顺手撤旗标），这层闸只是第二层保险；但它一挪走，任何「旗标旧、句子新」的残态" +
-                "都会常驻（本卡报告明留那一格：removeSyncedEvents 那条链在手动授权之后仍会带着旧旗标落一句" +
-                "「已移除 N 个日程」），届时③要从「已修 + 双层」重判成「真漏清」",
+            "那颗「去系统设置开启日历权限」的按钮跑出了 message 驱动的那一格 —— T106（:1389）与 T110（:1481）" +
+                "之后两枚起手都是成对清（撤句子顺手撤旗标），这层闸只是第二层保险；但它一挪走，任何「旗标旧、" +
+                "句子新」的残态都会常驻，届时③要从「已修 + 双层」重判成「真漏清」",
             flagReader in windowStart until windowEnd,
         )
         assertEquals(
@@ -863,6 +891,137 @@ class CalendarSyncTargetPairingGuardTest {
                 occurrences(code, FLAG_NAME) + " - 1 - " + occurrences(code, FLAG_ASSIGNED) + " = ",
             VM_FLAG_READERS,
             occurrences(code, FLAG_NAME) - 1 - occurrences(code, FLAG_ASSIGNED),
+        )
+    }
+
+    /**
+     * ③ 的第二条链（**T110 新增**）：「移除已同步的日程」这条链自己不进 `startCalendarSync`，
+     * 所以 T106 那一刀盖不住它 —— 它现在有自己的成对清（VM `:1481`），本判据钉这一枚的**形状**与**前提**。
+     *
+     * 病与 T106 同族：`:1486` 那句「已移除 N 个日程」把 `SettingsScreen.kt:1664`
+     * `item(key = "status", visible = calendarSync.message != null)` 那格重新点亮，而上一次永久拒绝留下的
+     * 旗标没人撤 ⇒ 完成句旁边继续挂着 `:1677` 那颗「去系统设置开启日历权限」。
+     *
+     * **取舍**（为什么是"起手成对清"而不是"再套一道权限闸"）：这条链**今天就已经在闸里** ——
+     * 它唯一的界面触发点是 `:1654` `withCalendarPermission { viewModel.requestRemoveSyncedEvents() }`，
+     * 而 `:331` 那句 `if (viewModel.hasCalendarPermission()) {` 的 true 分支直接 `action()`、**根本不启动
+     * launcher**，所以 `:317` 那次 `onCalendarPermissionGranted()`（清旗标的现成入口）在已授权时永远走不到。
+     * ⇒ "再套一道闸"这个方向在这枚病上是个空操作：它既不撤旗标，又把 :331 的短路（就是造成漏清的那件事）
+     * 再犯一遍。清旗标因此只能落在链自己身上，落在 `removeSyncedEvents()` 起手。
+     * 代价与诚实性：这条链自己不调权限申请 ⇒ 清旗标在语义上是"宣布此刻已授权"，这句由**入口在闸里**兜住
+     * （开窗只有一枚写点 `requestRemoveSyncedEvents`，其唯一触发点过闸；已授权 ⇒ 系统实测的
+     * `hasPermission()`（两枚 checkSelfPermission）为真，刚授权 ⇒ launcher 交回全授予）。
+     * 剩下的那一格残态只能等真机、且方向是安全的：在确认框开着的那几秒里回系统设置把权限**关掉**再点「移除」，
+     * 那一档旗标被清、句子落的是 `:1487` 那句「移除失败：日历写入异常，请检查权限后重试」——
+     * 按钮少一颗，但话本身没念假（失败文案里就写着要检查权限），而下一次点同步会走闸重新立旗标。
+     * 真·永久拒绝时这条链根本进不到那次 copy（`:1654` 那一档在拒绝时不落 `showRemoveConfirm = true`），
+     * 所以"撤了不该撤的旗标"在可达路径上不成立。
+     *
+     * 两头都钉：**朝宽**——把 `:1481` 拆回 `it.copy(syncing = true)` ⇒ 本判据的原文靶子 1→0 红，
+     * 同时 ③ 那两枚枚数判据（旗标赋值 4→3、句子清点 2→1）一起红；**朝紧**——给这颗按钮之外再添一枚
+     * `viewModel.removeSyncedEvents()` 调用点（尤其是不在确认框里、不过 `:1654` 那道闸的一枚）⇒
+     * 调用点 1→2 红、"落在 showRemoveConfirm 那层窗口里"那条红，届时要按新入口重推一遍权限前提。
+     */
+    @Test
+    fun everyRouteIntoTheRemoveChainStandsInsideTheSameGateAndClearsTheFlagPaired() {
+        val code = blankCommentsKeepingLiterals(readMainSource(SCHEDULE_VIEW_MODEL))
+        val screen = blankCommentsKeepingLiterals(readMainSource(SETTINGS_SCREEN))
+        // ---- 写侧：那条链起手那档必须成对清两枚 ----
+        val entryShapes = indexOfAll(code, REMOVE_ENTRY_CLEAR_SHAPE)
+        assertEquals(
+            "`removeSyncedEvents` 起手那档的成对清原文（:1481）不再是恰好 1 处 —— **0 处**就是 T109 那枚" +
+                "漏清在复发（「已移除 N 个日程」旁边挂着那颗按钮：句子由 :1486 重新点亮、旗标没人撤）；" +
+                "**2 处**就是又有一条链用了同一枚形状，它的入口过不过闸得另外证：" + lineHints(code, entryShapes),
+            1,
+            entryShapes.size,
+        )
+        assertEquals(
+            "那次成对清的宿主不再是 `fun removeSyncedEvents()`（现宿主：" +
+                precedingFunHead(code, entryShapes.first()) + "）—— 抽进 helper 或搬去别的函数，" +
+                "「这条链只在已授权时可达」这句话就要按新宿主重推",
+            REMOVE_HEAD,
+            precedingFunHead(code, entryShapes.first()),
+        )
+        val flagInEntry = code.indexOf(FLAG_ASSIGNED, entryShapes.first())
+        val entryArgs = rebuildArguments(code, flagInEntry)
+        assertTrue(
+            ":1481 那次重建不再撤句子（实参表：" + entryArgs.trim() + "）—— 撤旗标不撤句子是 :1508 那一档的" +
+                "形状（长在 launcher 全部授予那一档里，那条档上句子本来就该留），这条链落的是完成句，" +
+                "两枚必须一起落地：",
+            entryArgs.contains(MESSAGE_CLEARED),
+        )
+        assertTrue(
+            ":1481 那次重建不再撤旗标（实参表：" + entryArgs.trim() + "）—— 本卡那枚病的正身：" +
+                "上一次永久拒绝留下的旗标清不掉，等 :1486 那句完成句把 :1664 那格点亮，" +
+                ":1677 那颗「去系统设置开启日历权限」就挂在完成文案旁边：",
+            entryArgs.contains(FLAG_ASSIGNED),
+        )
+        assertEquals("靶子：那次成对清之后落下的完成句原文还在（:1486，它就是重新点亮那格的那一句）：",
+            1, occurrences(code, REMOVE_DONE_MESSAGE_SHAPE))
+        assertEquals(
+            "这条链的失败文案原文不再是一枚 —— 「移除失败：日历写入异常，请检查权限后重试」（:1487）是" +
+                "真·没权限时用户唯一看得见的提示（那颗按钮今天在这条链上本来就不该出现）：",
+            1,
+            occurrences(code, REMOVE_FAILED_MESSAGE_SHAPE),
+        )
+        // ---- 前提侧：进到那次 copy 的唯一一条路（开窗 1 枚写点 + 界面 1 枚调用点 + 那枚调用点在弹窗里）----
+        val opens = indexOfAll(code, REMOVE_CONFIRM_OPENED)
+        assertEquals(
+            "`showRemoveConfirm = true` 的写点不再是 1 处（只有 :1471 requestRemoveSyncedEvents）—— " +
+                "**多一处** = 又有一条路能打开那颗确认框，必须先证它同样过 :1654 那道闸：" + lineHints(code, opens),
+            1,
+            opens.size,
+        )
+        assertEquals(
+            "那唯一一枚开窗站点的宿主不再是 `fun requestRemoveSyncedEvents()`（现宿主：" +
+                precedingFunHead(code, opens.first()) + "）",
+            REMOVE_REQUEST_HEAD,
+            precedingFunHead(code, opens.first()),
+        )
+        val calls = indexOfAll(screen, REMOVE_CALL)
+        assertEquals(
+            "界面上 `viewModel.removeSyncedEvents()` 的调用点不再是 1 处（:1481 那次成对清唯一的进入路径）—— " +
+                "**多一处** = 多一条不经确认框、因而也不经 :1654 那道闸的入口，清旗标那句话就此变成无凭据的" +
+                "宣布：" + lineHints(screen, calls),
+            1,
+            calls.size,
+        )
+        val modal = screen.indexOf(REMOVE_MODAL_HEAD)
+        check(modal >= 0) { "靶子：找不到 `$REMOVE_MODAL_HEAD`（:1941）—— 确认框那层的驱动方式换过了" }
+        val nextModal = screen.indexOf("ModalTransition(", modal + REMOVE_MODAL_HEAD.length)
+        check(nextModal > modal) { "靶子：移除确认框之后找不到下一层 ModalTransition 边界，窗口切不出来" }
+        assertTrue(
+            "那颗「移除」按钮跑出了 showRemoveConfirm 驱动的那一层 —— 于是它能在这条链的闸之外被点到，" +
+                "起手那次清旗标就不再必然发生在已授权的那一刻",
+            calls.first() in modal until nextModal,
+        )
+        assertEquals("靶子：确认框那一层的原文还在（它由 VM :1471 那枚唯一的写点驱动）：",
+            1, occurrences(screen, REMOVE_MODAL_HEAD))
+        assertEquals(
+            "触发开窗那枚调用的界面入口不再是 1 处（:1654）—— 它就是这条链的权限前提：" +
+                lineHints(screen, indexOfAll(screen, REMOVE_REQUEST_CALL)),
+            1,
+            occurrences(screen, REMOVE_REQUEST_CALL),
+        )
+        // ---- 那道闸本身：它已在 ④ 里被逐条钉过，这里只复述两枚承重事实 ----
+        assertEquals("靶子：:1654 那一整句（withCalendarPermission 包着 requestRemoveSyncedEvents）还在：",
+            1, occurrences(screen, GATED_REMOVE))
+        assertEquals(
+            "`if (viewModel.hasCalendarPermission()) {`（:331）不再是 1 处 —— 本判据那句「再套一道闸是空操作」" +
+                "吃的就是「这条链已经在唯一那道闸里、而闸的 true 分支直接 action() 不启动 launcher」：",
+            PERMISSION_GATE_SITES,
+            occurrences(screen, PERMISSION_GATE),
+        )
+        assertEquals(
+            "`calendarPermissionLauncher.launch(` 不再是 1 处（:335，闸的 else 分支）—— 多一处就有人绕过闸" +
+                "申请权限，那 :317 那次单清重新变成可达，起手成对清的覆盖面要重算",
+            1,
+            occurrences(screen, LAUNCH_CALL),
+        )
+        assertTrue(
+            "移除那一行跑到了闸定义之前 —— 「进到这条链时权限必然已到手」这句前提的载体换了位置，" +
+                "起手那次清旗标就可能是假话",
+            screen.indexOf(GATED_REMOVE) > screen.indexOf(WITH_PERMISSION_HEAD),
         )
     }
 
@@ -1299,8 +1458,8 @@ class CalendarSyncTargetPairingGuardTest {
         const val MESSAGE_DECL = "val message: AppMessage? = null,"
         const val DENIED_MESSAGE_TEXT = "日历权限已被永久拒绝，请到系统设置手动开启"
         const val SETTINGS_BUTTON_TEXT = "去系统设置开启日历权限"
-        const val FLAG_WRITE_SITES = 3
-        const val MESSAGE_CLEAR_SITES = 1
+        const val FLAG_WRITE_SITES = 4
+        const val MESSAGE_CLEAR_SITES = 2
         const val PERMISSION_GATE = "if (viewModel.hasCalendarPermission()) {"
         const val WITH_PERMISSION_HEAD = "fun withCalendarPermission(action: () -> Unit) {"
         const val LAUNCH_CALL = "calendarPermissionLauncher.launch("
@@ -1312,6 +1471,18 @@ class CalendarSyncTargetPairingGuardTest {
         const val FLAG_READER = "calendarSync.permissionPermanentlyDenied"
         const val PERMISSION_GATE_SITES = 1
         const val MESSAGE_UI_READS = 3
+
+        // ---- ③ 的第二条链：「移除已同步的日程」（T110 新增）----
+        const val REMOVE_ENTRY_CLEAR_SHAPE =
+            "it.copy(syncing = true, message = null, permissionPermanentlyDenied = false) }"
+        const val REMOVE_DONE_MESSAGE_SHAPE = "AppMessage(\"已移除 \$n 个日程\")"
+        const val REMOVE_FAILED_MESSAGE_SHAPE = "AppMessage(\"移除失败：日历写入异常，请检查权限后重试\", isError = true)"
+        const val REMOVE_HEAD = "fun removeSyncedEvents() {"
+        const val REMOVE_CALL = "viewModel.removeSyncedEvents()"
+        const val REMOVE_MODAL_HEAD = "ModalTransition(open = calendarSync.showRemoveConfirm)"
+        const val REMOVE_CONFIRM_OPENED = "showRemoveConfirm = true"
+        const val REMOVE_REQUEST_HEAD = "fun requestRemoveSyncedEvents() {"
+        const val REMOVE_REQUEST_CALL = "viewModel.requestRemoveSyncedEvents()"
 
         /** 入口 3 是唯一一枚不过闸的调用点：宿主 `fun selectCalendarTarget(…)`（VM :1457），
          *  唯一界面触发点 `viewModel.selectCalendarTarget(`（SS :1888）的 click 长在 `showPicker`
