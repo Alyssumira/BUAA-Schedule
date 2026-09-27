@@ -33,13 +33,17 @@ import com.buaa.schedule.domain.model.Course
  * 所以"同值 + 另三把维度全空"这一格的净效果本来就是零，压它只是白占一枚栈位、
  * 并让用户点掉一次唯一的「撤销」。
  *
- * ## 残余的那一半（本卡没修，如实登记）
+ * ## 残余的那一半（T128 登记 → T137 收掉；上面那段"本卡没修"一字未抹，它量的是 34a265a 的盘面）
  *
  * 第 4 维命中而第 3 维不命中时（管理页给整组换色、主行本来就是这个色），条目**照压**（不许丢），
- * 但 `UndoAction.Update` 今天只带得回主行，撤销回去的是"主行原样"，兄弟片段留着新色 ⇒
+ * 但 T128 那时的 `UndoAction.Update` 只带得回主行，撤销回去的是"主行原样"，兄弟片段留着新色 ⇒
  * 用户看得见的一次改色撤不干净。那是撤销条目的**容量**问题，与这一判（要不要有条目）是两件事，
- * 已由本卡的 [GroupAppearanceEdit.beforeRows] 把内容交回调用点，补它在下一张卡
- * （条目带得下组写改掉的行 + `undoUpdate` 按 id 复原）。
+ * 当时已由本卡的 [GroupAppearanceEdit.beforeRows] 把内容交回调用点，补它的那张卡是 T137：
+ * 条目新增 `groupBeforeRows` 带得下那一族行，`undoUpdate` 再逐行**按 id** 复原它们
+ * （判据本体 `data/repository/GroupRowUndoPolicy.kt`，两档"读不到 / 已是别的课"都是明确的不动）。
+ *
+ * **本文件那一判一字未改**：四个参数、四把维度都不动 —— 条目装不装得下与"该不该有条目"是两件事，
+ * T137 收的是前一件。
  */
 internal fun updateUndoWorthRecording(
     original: Course,

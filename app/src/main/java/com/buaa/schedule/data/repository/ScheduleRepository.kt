@@ -335,6 +335,20 @@ class ScheduleRepository(
         }
     }
 
+    /**
+     * 撤销一条「编辑课程」条目：四步，全在 [applyUndo] 那一趟事务里。
+     *
+     * 1. 拆行另发的那一行（`afterId != before.id`）按 `courseKey` 校验后删掉；
+     * 2. **T137 新增**：组那一支改掉的兄弟行（[UndoManager.UndoAction.Update.groupBeforeRows]）
+     *    逐行**按 id** 回写它们的改前版 —— 读不到那一行 / 那一 id 上已是别的课就**明确不动**；
+     * 3. 主行按 id 复原，读不到就 `insertWithReminders` 重插并重挂它的提醒（与第 2 步相反，
+     *    两族代价不对称，账逐条写在 `GroupRowUndoPolicy.kt` 段首）；
+     * 4. 补回这次编辑顺手清掉的片段（R5 F-35）。
+     *
+     * 第 2 步排在第 3 步**之前**是**语义**不是风格：组写跑在主行写之后 ⇒ 它交回的表里那一版主行
+     * 是"改完之后"的，只有拿 `before` 收尾的那一趟才回得到真正的改前值。次序由
+     * `UndoUpdateEntryGuardTest` 第 ⑧ 层钉；把两趟换成"主行在前"会让撤销对主行等于没撤销。
+     */
     private suspend fun undoUpdate(action: UndoManager.UndoAction.Update) {
         // 部分周次拆行时，先删掉新建/改写的那一行，再恢复原课程。两道守卫：
         // - afterId 对应的行可能在此期间被导入流程替换成了**别的课**，
@@ -344,6 +358,21 @@ class ScheduleRepository(
             courseDao.getById(action.afterId)?.toDomain()
                 ?.takeIf { ImportPlanner.courseKey(it) == ImportPlanner.courseKey(action.after) }
                 ?.let { deleteCourseRow(it) }
+        }
+        // 组那一支改掉的兄弟行（T137）：**按 id** 逐行回写它们改之前那一版。
+        // 这一趟必须在下面复原主行**之前**：组写跑在主行写之后，它交回的表里若含主行那一 id，
+        // 那一版其实是「改完之后」的，只有主行那一趟（拿 action.before 收尾）才回得到真正的改前值。
+        // 读不到那一行、或那个 id 上已经是别的课 ⇒ 明确不动（不重插），代价账与两档取舍的理由
+        // 逐条写在 GroupRowUndoPolicy.kt 段首；复原主行用的是另一手（读不到就重插 + 重挂提醒）。
+        action.groupBeforeRows.forEach { snapshot ->
+            val held = courseDao.getById(snapshot.id)?.toDomain()
+            val sameCourseAtId =
+                held != null && ImportPlanner.courseKey(held) == ImportPlanner.courseKey(snapshot)
+            if (groupRowUndoDisposition(held, sameCourseAtId) == GroupRowUndoDisposition.Restore) {
+                // 快照是从我们自己那张表里读回来的那一版 ⇒ 原样写回，不再过 normalize
+                // （normalize 是给进来的用户数据把门的，它会重排周次/节次、trim 名称、把脏学分冲成 null）
+                courseDao.update(snapshot.toEntity())
+            }
         }
         val current = courseDao.getById(action.before.id)?.toDomain()
         if (current == null) {
