@@ -1328,3 +1328,43 @@ AppMessage("已有导入正在进行，请稍候"); return null }`）：它是 `
 `ConflictWizardDialog` 一枚、`ImportScreen` 三枚，**九枚全部一字不差**（T115 之后这五枚文件没动过 main）。
 ⇒ 本节沿用 §8.7④ 的行号不写"按 T120 盘面复算的新值"，四把尺因此没有挪动的理由。
 
+### 9.2 九处逐处（Q1 有没有闸 · Q2 后果落点 · Q4 档位）
+
+先给一句本节最重要的读数：**「这 9 处一枚旗标都不立 ⇒ 那颗按钮仍可点、可重复触发」这一句在 9 处里只覆盖 5 处**，
+其中**完全无挡的只剩 2 处**。剩下 3 处各剩一枚 300 ms 退场窗，另外 4 处（含被点名的那枚向导）**今天结构上就点不动**。
+
+| # | 处（符号 + 起手块锚点） | Q1 今天有没有闸（点名哪一种） | Q2 第二枚真落下来，用户看见什么（指得到才写） | Q4 档位 |
+| --- | --- | --- | --- | --- |
+| 1 | `handleCourseMove` 拖拽改日 —— `scope.launch` 起在 HomeScreen `:420`（`:405` 声明） | **无 UI 旗**；**两道间接闸**：① **自关载体**——拖完不直接落库，先收进 `pendingMove` 确认弹窗（WeekView `:903` 写、`:1260` 挂载），两颗按钮都在 invoke **之前**置 `null`（`:1274` 所有周 / `:1291` 仅本周 → `:1276` / `:1292` invoke），"移动到其他时间"那枚步进框同一条出口（`:1248`）；② 体外 `:413-414` 那记越界 `return@move` 静默取消；**不过仓库锁** | **指得到**：两枚触发是同值重复写 ⇒ 幂等，但 `updateCourse` 里 `if (original != null)` 那支**无条件** pushUpdate（VM `:528-537`，不看 before/after 是否相等）⇒ 栈顶压一枚 **no-op 撤销条目** | **不收**（第 1 问：载体自关；同值重写正是"用户改主意"想要的语义。那一枚 no-op 条目的修法是"同值不压栈"，不是按灭 ⇒ 转 §9.5②） |
+| 2 | `handleCourseResize` 松手改节次段 —— `scope.launch` 起在 HomeScreen `:442`（`:440` 声明） | **无 UI 旗**；**两道间接闸，且是全仓唯一一枚起手块体外自己就带两道**：① `onResizeEnd` 第一句就 `resizeFor = null`（WeekView `:1109`）→ 才 `:1114` invoke，改节次那枚把手**当场不再渲染**（`resizeHandleVisible` 的判据就是它，`:1101-1102`）；② `if (merged != r.course.periods)` 同值早退（`:1113`）；**不过仓库锁** | **没找到后果的落点**：第二次触发要求**整枚新手势**（按住把手→拖→松），不是"再点一下"；且同值直接被 `:1113` 吃掉，连 #1 那枚 no-op 条目都造不出来 | **不收**（三问全"否"：有闸 + 无落点 + 按灭多余） |
+| 3 | `handleCourseDelete` 长按菜单删除 —— `scope.launch` 起在 HomeScreen `:452`（`:450` 声明） | **无 UI 旗、无锁**（`deleteCourse` 一枚 `withImportLock` 都不过，见 §9.1 第 3 条）；只有**两层连着的自关载体**：详情浮层 `onDelete` 先 `detailFor = null` 再开确认框（WeekView `:1345-1347`）、确认框 `pendingDelete = null` 再 invoke（`:1317` → `:1318`） | **指得到，而且是九处里最硬的一条**：`repository.deleteCourse` 对**已经不存在的行**照删照返回（`:281-290` → `deleteCourseRow` `:371-374` 不看受影响行数）⇒ VM `.fold({ true }, …)` 把"这次什么都没删"报成 `true`（`:549-558`）⇒ `UndoManager.pushDelete` 压进一条 **phantom Delete**、snackbar 照样念「已删除「X」」+「撤销」。而那颗「撤销」调的是**无参全局** `undo()`（`:459`）→ `UndoManager.pop()` 捞**栈顶**（VM `:589-598`），回给用户的「已撤销：删除课程」念的是**栈顶那条的 label**，与这条 snackbar 是不是同一次操作**毫无关系** | **收**（唯一一枚三问走到底的：今天无旗无锁、后果当场生效、**phantom 那一半只有按灭挡得住**）。范本：`ConflictWizardDialog` 的 `pendingCourses` 那一族（`enabled` + 文案 + 起讫配对三处读者同源），不是卡面给的两枚 |
+| 4 | `onPickColor` 给整组挑颜色 —— `scope.launch` 起在 CourseManagementScreen `:181`（`:179` 声明），`CourseSaveOptions(applyToGroup = true)` 在 `:184` | **真·无闸**（九处里两处之一）：色板选完**不收**——`onPickColor` 不写 `colorTargetKey = null`（对照 `onToggleColor` `:177` 会收），那层 `if (colorExpanded)` 一直开着（`:332`），枚枚色板 `onClick = { onPickColor(index) }`（`:348`）**没有 `enabled`**；**不过仓库锁** | **"同组碎片各走各的颜色 / 混色"这条断言本节判为不成立，指不到落点**：`updateCourseGroupAppearance` 是**一枚事务 + 一把 writeMutex** 里逐行盖**同一个色**（`:245-266`），两趟交错下来谁后跑完整谁赢 ⇒ **最后写赢、且整组一致**。真正能混色的是**另一件事**：VM 把一次"整组换色"拆成 `repository.updateCourse`（`:522`）**与** `updateCourseGroupAppearance`（`:540`）**两次独立取锁**、跨两个事务，中间被取消（这两处协程都长在 `rememberCoroutineScope()` 上，CourseManagementScreen `:100`）⇒ 只有主行变色、兄弟片段留旧色 | **不收**（第 3 问：混色的因是 (b) scope 被取消，**按灭挡不住**）。这一行另立明留 §9.5① |
+| 5 | 确认框里删整组 `deleteCourseGroup` —— `scope.launch` 起在 CourseManagementScreen `:214` | **无 UI 旗**；**两道间接闸**：① 自关载体，`pendingDelete = null`（`:213`）写在 launch **之前**；② **仓储层空快照早退**——`courses.mapNotNull { getById }` 空了就 `return@withTransaction` 交回空快照（`:299-312`），VM 再 `if (snapshot.courses.isEmpty()) return@suspendCatching false`（`:571`）⇒ 第二枚**不压撤销、不谎报**；**不过仓库锁** | 后果只剩一枚：**UI 把返回的 Boolean 丢了**（`:215` 那行没有接收者、不看返回值）⇒ 第二枚仍然无条件念「已删除「X」」（`:216-220`）。但课表当场已经没有这门课了，用户无从分辨真假 ⇒ **本遍判"真的但不值钱"**（先例 #117） | **不收**（第 2 问过不了。对照 #3：**同一个仓里两枚删除，`deleteCourseGroup` 有空快照守卫、`deleteCourse` 没有**——这一族不对称才是 #3 的根因） |
+| 6 | 向导里落库 `applyConflictShift` —— `viewModel.viewModelScope.launch` 起在 ConflictWizardDialog `:79` | ⚠️ **本节判 §8.7④ 这一格不实**：这里今天立着**全仓最完整的一枚旗**——`var pendingCourses by remember { mutableStateOf(setOf()) }` 记在**弹窗那一层**、按 `wizardKey` 索引（`:119`，注释 `:117-118` 明写为什么不能记在行内），起点 `onShiftStart`（`:139`）、终点 `onShiftEnd`（`:140-144`，失败把按钮还给用户重试），读者三处同源：`enabled = !pending`（`:213`）、文案 `if (pending) "写入中…" else "只改这些周"`（`:220`）、`val pending = courseKey in pendingCourses`（`:173`）。载体还是 `viewModelScope` + `job.join()`（`:79`/`:85`），KDoc `:63-66` 点名"不能用 `rememberCoroutineScope()`，否则界面说已应用、库里其实没写（P1）" | **点不动**（`enabled` 已按灭）。退场窗口内能做的只有"划走弹窗"，而这一族**恰好是九处里唯一一枚划走也不丢写**的：作用域绑 VM、`join` 不传播取消 | **不收 ⇒ 且断言判为不实**：它不是"缺旗"，它是**第三枚范本**，本卡两枚范本的清单因为它而漏了一枚（§9.4 驳回②）。建议连它一起照抄 |
+| 7 | `icsLauncher` 回调（SAF `.ics`）—— `scope.launch` 起在 ImportScreen `:151`（`:147` 声明） | **无 UI 旗**；**三道间接闸**：① **SAF 外部节流**——契约是 `ActivityResultContracts.OpenDocument()`（`:148`），一次会话只回**一枚** `uri`（`:149` 的 `uri ->` + `if (uri != null)`），选择器是独立窗口、期间本页那颗按不到；② **仓库层 `withImportLock`**，`importIcs` 整条链包在里面（VM `:1079`）；③ 这把锁是 `tryLock` ⇒ 第二枚**不排队、当场回绝**并念一句「已有导入正在进行，请稍候」（`:665-667`） | **没有"并发写"这一说**：第二枚在 `tryLock` 就死了，用户看见的是那句提示，不是第二份课表。重复导入同一份文件也过不去同一把锁 ⇒ **本遍没找到比这句提示更糟的落点** | **不收**（第 1 问三重闸；第 2 问有回声、不静默） |
+| 8 | `textLauncher` 回调（SAF 文本）—— `scope.launch` 起在 ImportScreen `:172`（`:168` 声明） | 同 #7（同契约 `:169`、同 `uri ->` `:170`、落库口 `importText` 在 VM `:1114` 同一把锁里）；两颗入口按钮（`:429` / `:447` 的 `launcher.launch(…)`）**都没有 `enabled`** | 同 #7 | **不收**（同 #7） |
+| 9 | §8.7④ 锚点 ImportScreen `:485` 那枚 `scope.launch` | **真·无闸**（九处里两处之一）：那颗按钮既没有 `enabled` 也没有旗，`buildShareCode` 是**只读**、**不过 `withImportLock`**（VM `:1255-1265`） | 落点指得到调用点：`context.startActivity(Intent.createChooser(sendIntent, "分享课表口令"))` 被调两次（`:496-498`）⇒ **两份分享面板**。**指不到的那一半本节说清楚**：面板是"叠两层"、"后一次顶掉前一次"还是"被系统去重"属 Activity 任务栈行为 ⇒ 禁设备、本遍没量 | **待真机**（九处里唯一一枚够这一档）。值不高：口令是只读快照现拼的，两枚面板里是同一份内容 |
+
+**卡面单独点名的那颗「口令导入」不在这九处里**（它写着 `enabled = shareCode.isNotBlank()`，`:481`，属**内容闸**）：
+它是 `Button` 不是 `OutlinedButton`（`:473-482`），onClick 里 `clearImportMessage()` + `importShareCode(shareCode)`（`:475-476`）
+**UI 侧压根不起协程**（launch 长在 VM `:1271`），并且**过 `withImportLock`** ⇒ 第二枚同样被 `tryLock` 回绝。
+**本节判它"不收"，并判 §8.7④ 那一格的名与实不符**：`④` 的锚点是 `:485`（导出/分享那颗），卡面把它读成了"口令导入"。
+
+### 9.3 档位分布与后续卡建议表
+
+**档位分布：收 1 枚（#3）· 不收 7 枚（#1 #2 #4 #5 #6 #7 #8）· 待真机 1 枚（#9）。**
+"不收"占七枚不是本节和稀泥，是三问的算法决定的：**九处里有 4 处今天结构上就点不动**（#2 #6 #7 #8），
+**2 处的后果本节指不到落点**（#4 的"混色"被事务边界否掉、#5 的空删除被仓储层守卫否掉），
+**1 处的后果不值**（#5 那句谎话用户无从分辨，先例 #117）。
+⇒ **§8.7④ 那句"这是下一轮排卡的唯一来源里最大的一块"要按实测收窄：九处收成一枚半**，
+"最大的一块"这一格在 T120 之后**不再成立**（旧句子留着不抹，订正句加在 §9.5④ 那一格）。
+
+| 建议卡 | 收哪几处 | 照哪个范本 | 要不要守卫 | 要不要装机 | 一句话理由 |
+| --- | --- | --- | --- | --- | --- |
+| **T121**（建议先开） | #3 的 phantom 那一半 | `ConflictWizardDialog` 的 `pendingCourses` 那一族（页面层 `remember` + `enabled` + 文案 + 起讫配对，**四处读者同源**），**不是**卡面给的两枚 | **要**：钉"invoke 之前必须已立旗"、钉那颗「撤销」的 `enabled` 吃同一枚旗 | 不要（判据全是源码可达性） | 九处里唯一一枚"今天无旗无锁 + 后果当场生效 + 只有按灭挡得住"的。⚠️ 同一批要顺手量另一笔：`repository.deleteCourse` 缺 `deleteCourseGroup` 那道空快照早退，**根因在那儿**，补它是动 main、比按灭更收口 |
+| **T122** | #1 与 #4 共用的那一枚 no-op 撤销条目 | WeekView `:1113` 那记 `if (merged != r.course.periods)`——同仓既有的"同值不写"形状，搬到 `updateCourse` 的 pushUpdate 之前 | **要**：同值早退是纯判据，表驱动单测钉得住 | 不要 | 这一枚**不需要任何旗**就能把 #1 #4 的可见后果收掉，比给色板加 `enabled` 便宜，且不误伤"用户真的想再点一次" |
+| **T123** | #3 跨对象那一半 + #5 被丢掉的那个 Boolean | **本节给不出范本**——这一族全仓零先例；正因如此**不许**把它塞进 T121"顺手一起做" | 要（`undo()` 的签名一改，两侧守卫都要重钉） | **要**：两次删除的两条 snackbar 各自可不可达，取决于 `SnackbarHostState` 的队列语义，禁设备量不出来 | `undo()` 是无参全局 pop、回话念的是栈顶 label ⇒ 这是**撤销的身份问题**，按灭挡不住（判据第 3 问 (a)） |
+| **T124**（建议排 T121 之后） | #1 #2 #3 #4 #5 #9 六处共用的**作用域**这一族 | `applyConflictShift` 那一枚（`viewModel.viewModelScope.launch` + `job.join()`），它的 KDoc 已经把理由写成 P1 | 要（接线守卫，钉"这条链的协程接收者不许是 composition scope"） | 半：可达性不装机；"划走那一瞬到底写没写进去"要装机 | 六处挂在 `rememberCoroutineScope()`（HomeScreen `:177`、CourseManagementScreen `:100`、ImportScreen `:133`），而库里已经有明文说这么用会造出"界面说已应用、库里其实没写" |
+| **T125**（低优先，可并档） | #9 那枚分享面板 | 卡面范本②那一族（UI 本地旗 + `enabled`）就够 | 要 | **要**（先装机判它到底叠不叠层，再决定值不值得开） | 只读链、两枚面板里是同一份口令，本节判它"后果未定档"而不是"后果轻" |
+| **T126**（纯文档） | §8.7④ ④ 格 + §8.6 第二条 | —— | 不要 | 不要 | 那两格现在都把 #6 算进"一枚旗标都不立 / 按钮仍可点"，实测它立着全仓最完整的一枚；订正时旧句子留着、只加现状句 |
+
