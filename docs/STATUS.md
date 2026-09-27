@@ -3493,3 +3493,110 @@ InlinedApi 1 / ObsoleteSdkInt 1 / OldTargetApi 1 / UseKtx 1 / WebViewApiAvailabi
 逐枚守卫那一族），另 `app/build.gradle.kts` `:424`/`:428` 那两处「1,695」仍是老数（**构建输入**，要与下一次真改构建脚本的卡并走）。
 
 **新地板 = 1,713 tests · 202 suites · 0 失败 · 0 skipped / lint 0e·14w / 干净全量签名包 7,250,013 B。**
+
+## T122：同值不压栈 —— 第 0 步判成 deferred，main 一字未改（`7965270`）
+
+**交付物只有一枚守卫**：`app/src/test/java/com/buaa/schedule/ui/UndoUpdateEntryGuardTest.kt`（**608 行 / 6 枚 `@Test`**，
+形状照 T121 那枚 `CourseDeletionWiringGuardTest`：抹注释保字面量 + 花括号配平切体 + 逐处/按位置/逐字 + 失败消息带行号与复算命令）。
+`git diff --name-only efd6fb7..HEAD -- app/src/main` ⇒ **0 行**（先例：#117、#105「真的但不值钱」⇒ 零代码改动）。
+
+**它驳回我卡面的一处**：我说 `updateCourse` 的调用点是 **6 枚**，实测 **7 枚** —— 我漏了 `MainActivity` 里那枚 `:886`（编辑器保存那条链）。
+复算：`grep -rn "viewModel.updateCourse(\|\.updateCourse(" app/src/main --include='*.kt' | grep -v "repository\.\|fun updateCourse"` ⇒ **7**。
+⚠️ 我在卡面上写"我数到的是 6 枚"并附了命令，它照命令跑就把我改了 ⇒ **卡面附复算方法这条规矩第二次救场**。
+我给的另三条读数（栈是 `ArrayDeque` + `CAPACITY = 10` + `removeLastOrNull()`；`undo()` 无参捞栈顶；
+全仓只有 `HomeScreen:459` 与 `CourseManagementScreen:222` 两枚撤销消费方）**逐条复核为真**。
+
+**为什么 §9.5② 那句按字面走不通**（我原来当它是后果）：两枚「撤销」按钮都长在**删除之后**的提示条上，
+而删除路径永远先把 Delete 压在顶上 ⇒ 「编辑」那一档的条目**没有属于它自己的 pop 时机**。
+**但它不是完全不可达 —— 它给的是比档案更准的读数**：两枚提示条都是 `SnackbarDuration.Long`（约 2.75 秒），
+那扇窗里同一页还能继续写库 ⇒ 排得出「管理页删一组（`DeleteGroup` 入栈）→ 窗内点一下**当前已选中**那块色板
+（`CourseManagementScreen:182`，主行逐字段同值 ⇒ 压一枚 no-op Update）→ 点「撤销」→ 捞到那枚 no-op（`undoUpdate` 净效果为零）、
+刚删的那组回不来、屏幕念「已撤销：编辑课程」」。⇒ **那条链的病灶是 pop 捞栈顶（T123 的靶子），不是"多压了一枚同值条目"**
+—— 把同值条目换成真编辑条目，症状一字不差。
+
+**deferred 的真实理由不是"不值钱"，是"这一判今天在压栈点算不出来"**（这是本卡最要紧的一格）：
+全仓**唯一一枚保证同值**的写库路径就是上面那枚色板重点（`primary` 直接来自 DB 行的 `copy`），
+而它走的正是 `options.applyToGroup` 那一支 ⇒ 判"没动过"要读兄弟行，可
+① `repository.updateCourseGroupAppearance`（在 `ScheduleRepository` 那枚文件 `:245`）**返回 `Unit`**、写完一组什么都不回报，
+② 它 `courseDao.getByGroupKey(groupKey).forEach` 逐行改写**含主行自己**且**无条件**写 `isManualOverride = true,`（`:260`）⇒ "外观全等"也不等于没动，
+③ 压栈发生在组写**之前**（VM `:531` 早于 `:540`）⇒ 压栈那一刻调用点手上根本没有它的任何读数，
+④ VM 手里那份课程表是 `CourseFilter.visibleIn(courses, semester)` 过滤过的（`:471`/`:479`），不能当组视图用 ⇒
+误判方向恰好是"以为什么都没动"⇒ **真编辑丢撤销记录，比现状更贵**。
+两个可选口径都不能接受：「跑过组写就算动过」⇒ 同值条目照旧留在栈里，改了等于没改；「主行同值就不压」⇒ 踩掉卡面自己列的三条真凭据。
+⇒ **前置条件是"组写先交出它自己的结论"（T121 那一族形状），那是仓储层的一张卡**（已排 **T128**）。
+
+**卡面要我自判的三条交互，逐条给了档**：① `partialWeeks` 清兄弟 ⇒ 必压（`removed = edit.removed` 已钉）；
+② `savedId != course.id` ⇒ 必压（`undoUpdate` 里 `afterId != before.id` 那记闸就是书面凭据）；
+③ 组那一支 ⇒ **判"算动过、压栈"**，理由写进守卫 KDoc 与失败消息。
+另把 (B) 档那两条我自己列的理由**都量了，都不成立**：栈位/`CAPACITY` 驱逐要在一枚 Long 提示条的窗里塞进 10 枚以上，排不出来；
+"为 T123 铺路"不值一枚 dex 类 —— 而且**真按主行同值早退会给下一个读审计档的人"这一族已经收了"的假印象**（色板重点那枚还活着）⇒ **反收益**。
+
+**守卫防的是什么**（这决定它的价值）：防下一个人拿 §9.5② 那句话当尺子，直接在 `if (original != null)` 上补一枚 `&& original != course` 就把卡收了。
+第 ① 层有**反向钉**（`assertFalse(body.contains("original != course") || …)`），第 ③ 层钉着"前置条件还没落地"这件事本身
+（组写签名仍是 `Unit`、`isManualOverride = true,` 无条件、按组读数的旁路 0 枚、`uiState.courses` 仍是过滤表）⇒
+**T128 落地那一刻第 ③ 层第一枚断言会当场红，那是设计好的扳机**，届时必须连同 `removed`/`savedId`/组三条一起重判。
+
+**我的两臂（它六臂 W1/N1/G1/D1/P1/O1 之外，两支都落在全量 1,719 枚面上、各红一枚）**：
+- **M-A** 把管理页那颗无条件「撤销」改成有条件（`actionLabel = "撤销",` → `if (true) "撤销" else null,`，= 把 T127 的活提前做一半）
+  ⇒ 红 `UndoUpdateEntryGuardTest.管理页那枚无条件撤销按钮今天只登记不修 归T127`。
+- **M-B** 把组写里 `isManualOverride = true,` → `domain.isManualOverride,`（= 前置条件**假**落地）
+  ⇒ 红 `UndoUpdateEntryGuardTest.组那一支今天不回报结论 所以同值判据在压栈点算不出来`。
+- 两支：变异后 md5 ≠ 基线（`5cdd66ff…` / `04ffc641…`）、`rc=1` **且本轮 XML `<testcase>` = 1,719 > 0**、还原回基线 md5、porcelain 0。
+  ⚠️ M-B 第一版我写成 `row.isManualOverride` ⇒ 那一支的域内变量名是 `domain` 不是 `row`，会**编译死**（rc=1 而 XML 0 枚不算臂），落盘前 `awk NR==243..266` 读了原文才改掉。
+
+**冷门禁（我自己在 `7965270` 上跑的六步）**：`--stop` + java 残留 0 → `clean` rc=0 →
+`:app:assembleRelease` **S1=0**（`86 executed / 5 up-to-date`）→ **RUN1 1,719 / 203 / 0 / 0 / 0 skipped**（`05:28:57Z→:04Z`）→
+lint **S3=0，0 错 14 警**，九档逐档同基线 → **RUN2 同数 / 0 skipped**（`05:32:10Z→:17Z`，`TEST-…UndoUpdateEntryGuardTest.xml` 在场）→
+benchmark **S5=0**（10/10 executed）。**签名包 7,250,013 B 与基线逐字节同数** ⇒ 这是"**真零 dex 改动**"的正证，不是带内噪声。
+**静态尺**：单测文件 **197**、行首锚 `@Test` 全仓 **1,719** == 门禁 XML、`*Guard*.kt` **41**、读主源码的 test 文件 **75**
+（它自报 41 / 75，与我合并态复算**一字不差**）。
+
+**它顺手新捞到一枚未判的候选（我只登记，没派卡前不许当结论）**：`ConflictWizardDialog.applyConflictShift`（`:80-83`）
+传 `CourseSaveOptions(partialWeeks = true)`，但 `target.copy(periods = newPeriods)` **不动 `weeks`** ⇒
+VM `:519` 那记 `original.weeks != course.weeks` 恒为假、走的是 `repository.updateCourse` **整行覆盖**，
+与 `:69` 那句 KDoc「只改冲突周次，其余周不动」**相反**。⇒ 这是一枚**新的用户可见候选**（部分周次那条链可能根本没生效），
+下一轮优先判它。另两条明留：组那一支的快照本来就不忠实（`after = course` 没算上组写随后把主行 `isManualOverride` 翻 true ⇒
+撤销一条"整组换色"撤不回它、也完全不动兄弟行，与 T123 有交叠）；§9.3 表里 T122 那一行"这一枚不需要任何旗就能把 #1 #4 的可见后果收掉"
+按本卡实测**要订正**。
+
+## T126：§8.6 第二条与 §8.7④ 按 §9.2 收窄（纯文档 · `58a04c4` `51139bd`）
+
+只碰 `docs/derived-field-audit.md`：**+23/−1**，1,431 ⇒ **1,453** 行；`docs/STATUS.md`、`docs/TESTING.md`、`README.md`、`app/` 一字未动；
+零 gradle、零设备。**旧句子全留着**（`按钮仍可点、可重复触发` 仍在 5 处、`一枚旗标都不立` 4 处、`最大的一块` 4 处），
+现状句分别加在 `:1178`（§8.6 那枚 bullet 的续行，+22 行）与 `:1224`（§8.7④ 单元格内、字节 3075 起）。
+四把普查尺开工前后**都是 268 / 589 / 146 / 24**，我在合并态再跑一遍仍是这四枚 ⇒ 新写行号**全是裸 `:NNN`**、没有一枚连写。
+
+**它驳回我卡面的两处**：① 我说那三颗按钮在 `ui/settings/SettingsScreen.kt` ⇒ 实测在 **`ui/importing/ImportScreen.kt`**（738 行；
+`:473 Button(` =「口令导入」、`:481 enabled = shareCode.isNotBlank()`、`:483 OutlinedButton(`、`:485 scope.launch {`、`:505` 文案「分享本课表（口令）」）；
+② `CourseManagementScreen` 在 `ui/course/` 不在 `ui/home/`。⇒ **我在卡面上写文件路径也会写错，它按档案原文落笔没采纳我给的**。
+
+**它把 §9.4 的一句比较级也压低了（这一判我认，且它是拿尺压的，不是嘴硬）**：
+「`ConflictWizardDialog` 立着**全仓最完整的一族**旗」过头 —— 同一把尺（数旗名在宿主文件里的命中行）
+`grep -cE '\bsaving\b'` 在 `ui/editor/CourseEditorScreen.kt` ⇒ **11 行**（且多出两枚 CWD 没有的读者：折进纯判据 `editorCanSave` 与
+`BackHandler(enabled = isDraftDirty && !saving)`），`grep -cE 'pendin'` 在 CWD ⇒ **8 行**（扣两枚形参传递是 6 处读者）。
+⇒ 那一格真正独一份的是**另一维**：全仓唯一一枚**按课程身份 keyed** 的在飞旗
+（尺：`grep -rnE 'by remember \{ mutableStateOf\(setOf' app/src/main/java --include='*.kt'` ⇒ **2 行**、同在一枚文件里，另一枚是「已应用」标记）。
+⚠️ 同一个数法还顺手补出「九枚里不立 UI 旗的是 **8 枚**不是 9 枚」的旁证尺（那九处的宿主文件里 `enabled` 只落在
+翻页箭头 / `BackHandler` / 预览勾选 / 内容闸上，**没有一行**落在这九处点名的那颗控件上）。
+
+**我自己在合并态逐枚复算它写进两格的读数，六项全部复现**：CWD `:119`/`:213`/`:220` 原文、ImportScreen 五枚行号、
+11 行 vs 8 行、CMS `:215`（丢弃 Boolean）/`:218`（无条件 `actionLabel = "撤销",`）/`:222`、`remember setOf` 尺 = 2。
+
+**⚠️ 一枚过程事故（它自己照实报了，我核过结果）**：T126① 为拆枚 commit 用 `git apply --cached` 吃 `-U0` 补丁，
+本档工作树是 CRLF 而索引是 LF（`git ls-files --eol` ⇒ `i/lf w/crlf`），那 22 行被落到**文件尾**而不是 §8.6；
+T126② 把它们挪回原位（没 amend、没 reset）。⇒ **代价**：逐枚 review 时 `58a04c4` 单独 checkout 是错位的，盘面以 `51139bd` 为准。
+我已核 `git diff HEAD`（rebase 后）为空、合并态行数 1,453、四把尺未动 ⇒ **落地态无问题**。
+⇒ **新账进记忆**：拆枚 commit 时别对 CRLF 工作树用 `git apply --cached`，改档就整格一次 commit，或先 `git add` 再 commit。
+
+**它登记、欠我排卡的六格（本卡按红线都没动）**：① §8.6 的锚点自证格没补记（八枚读数只在这张卡的回执里）；
+② §8.1 末行"13 处"与 §8.6"63 处"按 §8.1 自己给的三条判据应为 **14 / 62**（CWD 那枚旗 + 柄两条都占）；
+③ ⚠️ **T121 已并进盘面 ⇒ §9 那几格的"今天"过期了**（`repository.deleteCourse` 现在带"到底删没删到"、VM 删不到行报 `false` 不压栈
+⇒ §9.2 #3 那句"今天无旗无锁 + phantom 落点"、§9.3 T121 行那句"唯一一枚三问走到底"都是**改前读数**，而 §8.7④ 的"收 1（#3）"指的正是这枚已被修掉的站点）；
+④ §9.5③ 那句"两处读者 …`CourseManagementScreen:222`" —— `:222` 原文是 `viewModel.undoDeleteCourse()` 不是 `viewModel.undo()`；
+⑤ §9.1 第 1b 条"9 行 / 5 枚文件"实测 **6 枚文件**（分解缺 `BuaaInPageFetcher` 里 `:281` 那枚 `cont.isActive`）；
+⑥「最完整」那枚旧比较级还留在 §9.2 #6 / §9.4 驳回② / §9.3 T121 行三处（本卡只被授权改两格）。
+⇒ 这六格 + TESTING.md 的现值（**1,698 ⇒ 1,719**、suites **200 ⇒ 203**、单测文件 **194 ⇒ 197**）一起并成下一轮的**文档束卡（T129）**。
+
+**合并顺序按规矩走**：先合带码的 T122，再 rebase 纯文档的 T126 ⇒ 文档里那句"现值 = 合并态读数"没被反着写。
+
+**新地板 = 1,719 tests · 203 suites · 0 失败 · 0 skipped / lint 0e·14w / 干净全量签名包 7,250,013 B（零涨幅 = 真零 dex 改动）。**
