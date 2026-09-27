@@ -329,6 +329,15 @@ class CourseGroupDeletionWiringGuardTest {
             byFile.filter { occurrences(it.value, "viewModel.deleteCourseGroup(") > 0 }.keys.toList(),
         )
         assertEquals(
+            "`viewModel.deleteCourseGroup(` 全仓**枚数**恰好一枚（落点由上一格钉，这一格钉次数）：" +
+                "同一份文件里调两回 = 第二回必然删不到 ⇒ 屏幕上念的那句与真正发生的那件事又分家了。" +
+                "⚠️ 只钉落点（文件集合）钉不住这一型：两回都在管理页那份文件里，册子照样绿。" +
+                "\n复算：grep -rc 'viewModel.deleteCourseGroup(' app/src/main --include='*.kt' | grep -v ':0'：" +
+                filesHint(byFile, "viewModel.deleteCourseGroup("),
+            1,
+            byFile.values.sumOf { occurrences(it, "viewModel.deleteCourseGroup(") },
+        )
+        assertEquals(
             "那一处**读了**返回值（`val deleted = viewModel.deleteCourseGroup(` 恰好一处）。" +
                 "这一格与下一格是同一笔账的两面：调用点册子只钉「有人调」，本卡真正的病是「调了不看」：" +
                 "\n复算：grep -rn 'val deleted = viewModel.deleteCourseGroup(' app/src/main --include='*.kt'",
