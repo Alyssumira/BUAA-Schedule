@@ -525,7 +525,10 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             }
             // 归一化失败（null）表示本次输入非法：不写库、也不上报成功，UI 保留草稿并提示
             if (edit == null) return@suspendCatching null
-            if (original != null) {
+            val group = if (options.applyToGroup && course.sourceGroupKey != null) {
+                repository.updateCourseGroupAppearance(course)
+            } else null // 组那一支先跑完：它写在兄弟行上，压栈点要读它交回的结论（T128 = T122 的前置）
+            if (original != null && updateUndoWorthRecording(original, course, edit.savedId, edit.removed.size, group)) {
                 // removed/reminders 也必须进快照：部分周次拆行会顺手清掉同组的兄弟片段，
                 // 只记 before/after 的话撤销之后它们永久消失（R5 F-35）
                 UndoManager.pushUpdate(
@@ -535,9 +538,6 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     removed = edit.removed,
                     reminders = edit.reminders,
                 )
-            }
-            if (options.applyToGroup && course.sourceGroupKey != null) {
-                repository.updateCourseGroupAppearance(course)
             }
             afterDataChangedInternal()
             edit.savedId

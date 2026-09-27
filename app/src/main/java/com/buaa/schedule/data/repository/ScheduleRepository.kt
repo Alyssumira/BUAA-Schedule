@@ -241,26 +241,27 @@ class ScheduleRepository(
      * （一门课拆成三段不能算三遍学分），不同步就等于"改小永远改不动"。但 `credit == null`
      * 在这里表示"这次没填"而不是"填了 0 分"，直接覆盖会把兄弟片段上已有的学分抹掉，
      * 所以只有非空才传播——想清空某一门课的学分就去单条编辑那一段。
+     *
+     * **这一支交出它自己的结论**（[GroupAppearanceEdit]，T128 = T122 排的那枚前置）：
+     * 逐字段已经等于目标态的那些行**一行都不写**，改掉了的行连同它们**改之前**的值一起交回去。
+     * 调用点 [com.buaa.schedule.ui.ScheduleViewModel.updateCourse] 拿它判"这一趟到底动没动东西"，
+     * 判据本体在 [groupAppearanceRow]（纯函数，零 android、零时钟）。
+     *
+     * @return 空表 = 整组本来就是这个样子，这一次什么都没写到
      */
-    suspend fun updateCourseGroupAppearance(course: Course) {
-        val groupKey = course.sourceGroupKey ?: return
+    suspend fun updateCourseGroupAppearance(course: Course): GroupAppearanceEdit {
+        val groupKey = course.sourceGroupKey ?: return GroupAppearanceEdit(emptyList())
         val customColor = CourseConstraints.normalizeCustomColorArgb(course.customColorArgb)
-        writeMutex.withLock {
+        return writeMutex.withLock {
             db.withTransaction {
+                val beforeRows = mutableListOf<Course>()
                 courseDao.getByGroupKey(groupKey).forEach { entity ->
                     val domain = entity.toDomain()
-                    courseDao.update(
-                        domain.copy(
-                            name = course.name,
-                            location = course.location,
-                            campus = course.campus,
-                            credit = course.credit ?: domain.credit,
-                            colorIndex = course.colorIndex.coerceAtLeast(0),
-                            customColorArgb = customColor,
-                            isManualOverride = true,
-                        ).toEntity()
-                    )
+                    val written = groupAppearanceRow(domain, course, customColor) ?: return@forEach
+                    beforeRows += domain
+                    courseDao.update(written.toEntity())
                 }
+                GroupAppearanceEdit(beforeRows.toList())
             }
         }
     }
