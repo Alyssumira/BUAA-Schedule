@@ -3838,3 +3838,25 @@ T122 当时判 deferred 的理由是"这一判今天在压栈点算不出来"（
 它**之后**的锚点整体 **+1**：盘面现值 `updateCourse` 裸 `:270`、`deleteCourse` 裸 `:282`、`deleteCourseGroup` 裸 `:300`、`deleteCourseRow` 裸 `:372`
 （上一档分别是 269 / 281 / 299 / 371）；`ScheduleViewModel` 行数一字未动（1,693），本卡在那一处的改动是**同行改写 + 前置三行**，
 压栈窗口今天读作裸 `:528-541`。⚠️ 这几枚数是我这轮 `grep -n` 现量的，不是从回执转抄的。
+
+## 09-28 凌晨：T136 收单（一页文档的现值 + 我自己那笔不自洽的加总）
+
+`ai/T136` 两枚已合到 `0f87453`：① `docs/TESTING.md` 现值刷新（24 格，744 ⇒ **803** 行）/ ② `docs/derived-field-audit.md` §9.5 表格第 ② 行重判
+（**同格改字、零增删行**，那一文件仍 **1,513** 行、那一行仍 4 枚列分隔符）。四把清点尺我自己在合并对象上复算：**589 / 24 / 268 / 4 一字未动**。
+
+- **它驳掉了我卡面上两枚数，两处都对，盘面为证**（我合并前逐条自己复算过）：
+  ① 我写 `git diff --name-status d22a3f8..HEAD -- app/src/test` = "2 行 `A` + 3 行 `M`"，盘面是 **2 行 `A` + 2 行 `M`**
+  （`A` = `CourseGroupAppearancePolicyTest` 与 `UndoUpdateAdmissionTest`，`M` = `UndoUpdateEntryGuardTest` 与 `ManualTimeOverrideWiringGuardTest`）；
+  ② 我写 `ManualTimeOverrideWiringGuardTest` 名下 12 ⇒ 13，盘面 **12 ⇒ 12**（`5eadb78` 把它从 701 行推到 726 行，却没添一枚 `@Test`）。
+  真账加总：1,770 + 6 + 6 +（7−6）+ 0 = **1,783**；**我卡面那份加总给到 1,784、跟我自己给的总数都不自洽**。
+  ⇒ 这是本轮第三枚被代理驳回的卡面数字（前两枚记在上面两节）。**新加一条自己的收单前置**：凡往卡面写"A + B + C = 总数"这种加总式账，
+  落笔前我自己先把那几项加一次 —— 这次只要加一遍就会发现差 1，成本是十秒钟，而它今天是**代理替我加的**。
+- **docs-only 卡不跑 gradle 的口径，这一轮第一次有盘上凭据**（以前只是惯例）：本仓**没有任何测试读 `docs/` 下的文件**
+  （复算 `grep -rn 'docs[/\\]' app/src/test --include=*.kt | grep -E 'Paths\.get|File\(|"docs/'` ⇒ **0 命中**），
+  且 `git diff 1b0fefb..0f87453 -- app/ docs/STATUS.md README.md .gitignore` ⇒ **0 行**
+  ⇒ 我在合并对象 `5eadb78` 上跑完的那六步（1,783 / 213 / 0 skipped、lint 0e·14w、benchmark 10/10、7,251,984 B）对这一棵文档树**继续有效**，不必重跑。
+  ⚠️ 这句话只对"零 `app/` 改动"的卡成立，下一张动 `app/` 的卡要照旧走完整六步。
+- **派单**：**T137**（撤销条目的**容量**那一半：`UndoAction.Update` 带得下组写改掉的行 + `undoUpdate` 按 id 复原 —— 审计档 §9.5② 那一格现在指名 T137）。
+  **T138** 排队：全仓指向 `ScheduleViewModel` / `ScheduleRepository` 的带漂锚点逐枚重钉（T135③ 与上一节各登记了一半），
+  **押到 T137 落地之后一次做完** —— 否则 T137 又要把同一批锚点推一遍，白扫一轮。
+
