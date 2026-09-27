@@ -295,7 +295,11 @@ fun StatsScreen(
                 allCourses = state.courses,
                 timeSlots = state.timeSlots,
                 modifier = modal,
-                onApplyShift = { target, newPeriods -> applyConflictShift(viewModel, target, newPeriods) },
+                // 与首页同一个 applyConflictShift、同一个作用域判据（T131 多带的那串组周
+                // 也来自同一处 group.weeks）：这一页不交第二串周次，也不自己收窄
+                onApplyShift = { target, newPeriods, groupWeeks ->
+                    applyConflictShift(viewModel, target, newPeriods, groupWeeks)
+                },
                 onDismiss = { showConflictWizard = false },
             )
         }

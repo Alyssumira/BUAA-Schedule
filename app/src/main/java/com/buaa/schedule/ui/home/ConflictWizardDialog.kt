@@ -66,19 +66,27 @@ private fun Course.wizardKey(): String = if (id != 0L) id.toString() else "n:$na
  *   所以它不能再抄一遍这段（抄漏这一条正是最难查的那种漏）。
  * - `join` 而非 fire-and-forget：调用方要拿到落库结果才能决定这一行是标成「已应用」
  *   还是把按钮还原让用户重试。join 只等完成、不传播取消，所以对话框关了也不会打断写入。
- * - 写的是 [CourseSaveOptions.partialWeeks]：只改冲突的那几周，其余周保持原排课。
+ * - 写的是 [CourseSaveOptions.partialWeeks]，而作用域由 [ConflictShiftWeekScope.weeksToShift]
+ *   算：**组周 ∩ target.weeks** 一起进 `copy`。只带 `periods` 的那一版（T131 之前）不动 `weeks`，
+ *   于是 `updateCourse` 那一判恒假、这枚旗标空转，落库退成整行覆盖 —— 连不冲突的周一起被挪走，
+ *   而按钮写着「只改这些周」。T131 起才真的只改这几周。
  *
+ * @param groupWeeks 那一组冲突实际涉及的周次（行头「第 N 周」念的就是它），来自
+ *   [com.buaa.schedule.domain.schedule.CourseConflictResolution.ConflictGroup.weeks]
  * @return true = 确实写进了库（`updateCourse` 返回了最终行 id）
  */
 suspend fun applyConflictShift(
     viewModel: ScheduleViewModel,
     target: Course,
     newPeriods: List<Int>,
+    groupWeeks: List<Int>,
 ): Boolean {
     var saved = false
+    // 判据只在调用点取一次，然后把算好的那几周交给写点（"各判一次"在本仓算违反）
+    val scopedWeeks = ConflictShiftWeekScope.weeksToShift(groupWeeks, target.weeks)
     val job = viewModel.viewModelScope.launch {
         saved = viewModel.updateCourse(
-            target.copy(periods = newPeriods),
+            target.copy(periods = newPeriods, weeks = scopedWeeks),
             CourseSaveOptions(partialWeeks = true),
         ) != null
     }
@@ -91,7 +99,8 @@ suspend fun applyConflictShift(
  *
  * 只做「建议 + 一键应用」，不做复杂拖拽：建议来自
  * [CourseConflictResolution.suggestNearestFreeShift]（同一天内最近空位，
- * 保持节次数量不变），落库走 partialWeeks——只改冲突周次，其余周不动。
+ * 保持节次数量不变），落库走 partialWeeks，作用域是「组周 ∩ target.weeks」——
+ * 只改行头那一串「第 N 周」里的周次，其余周不动（T131 才真的不动，见 [applyConflictShift]）。
  *
  * T82 起统计页也挂这一枚（同一个 composable、同一份 [applyConflictShift]）：
  * 冲突的处置 UI 全站只有这一套，两页只是入口不同。
@@ -104,8 +113,8 @@ fun ConflictWizardDialog(
     timeSlots: List<TimeSlot>,
     /** 调用方 [com.buaa.schedule.core.designsystem.ModalTransition] 给的进出场修饰符 */
     modifier: Modifier = Modifier,
-    /** 平移落库：挂起直到写完，返回 true 表示确实写进了库。 */
-    onApplyShift: suspend (Course, List<Int>) -> Boolean,
+    /** 平移落库：挂起直到写完，返回 true 表示确实写进了库。第三个参数是那组冲突的周次。 */
+    onApplyShift: suspend (Course, List<Int>, List<Int>) -> Boolean,
     onDismiss: () -> Unit,
 ) {
     // 「已应用过位移」记在弹窗这一层、按课程身份（wizardKey）索引：
@@ -163,7 +172,7 @@ private fun ConflictGroupRow(
     pendingCourses: Set<String>,
     onShiftStart: (String) -> Unit,
     onShiftEnd: (String, Boolean) -> Unit,
-    onApplyShift: suspend (Course, List<Int>) -> Boolean,
+    onApplyShift: suspend (Course, List<Int>, List<Int>) -> Boolean,
 ) {
     val target = group.courses.firstOrNull() ?: return
     val courseKey = target.wizardKey()
@@ -214,7 +223,7 @@ private fun ConflictGroupRow(
                         onClick = {
                             onShiftStart(courseKey)
                             rowScope.launch {
-                                onShiftEnd(courseKey, onApplyShift(target, suggestion.periods))
+                                onShiftEnd(courseKey, onApplyShift(target, suggestion.periods, group.weeks))
                             }
                         },
                     ) { Text(if (pending) "写入中…" else "只改这些周") }

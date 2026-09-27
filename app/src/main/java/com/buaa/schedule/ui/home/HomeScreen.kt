@@ -816,8 +816,12 @@ fun HomeScreen(
                 timeSlots = state.timeSlots,
                 modifier = modal,
                 // 落库那一步在 applyConflictShift 里（与统计页那一枚共用一份，T82）：
-                // viewModelScope + join + partialWeeks 三条账都在那一处，这里不再抄一遍
-                onApplyShift = { target, newPeriods -> applyConflictShift(viewModel, target, newPeriods) },
+                // viewModelScope + join + partialWeeks 三条账都在那一处，这里不再抄一遍。
+                // 第三个参数是这一组的周次（T131）：作用域判据在 ConflictShiftWeekScope 里，
+                // 首页不许自己先交一遍、统计页也不许交另一串。
+                onApplyShift = { target, newPeriods, groupWeeks ->
+                    applyConflictShift(viewModel, target, newPeriods, groupWeeks)
+                },
                 onDismiss = { showConflictWizard = false },
             )
         }
