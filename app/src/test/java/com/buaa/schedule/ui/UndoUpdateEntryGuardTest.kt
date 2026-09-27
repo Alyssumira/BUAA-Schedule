@@ -96,6 +96,21 @@ import org.junit.Test
  *
  * 本卡**没动**第 ⑥ 层那四把维度，也没动 `updateUndoWorthRecording` 的四个参数 ——
  * "该不该有条目"与"条目装不装得下"是两件事（那半句在 `UndoUpdateAdmission.kt` 段首也写着）。
+ *
+ * ## 现状（T139 落地，第 ⑨ 层是新增的一档；上面那些节仍一字未抹）
+ *
+ * T137 给兄弟行补的那道 `courseKey` 占用校验，**主行那一趟没有**：`undoUpdate` 头上那句注释
+ * （「before.id 同理，可能已被占用于其他课程，此时应改为新增而不是覆盖」）只有承诺、没有落地，
+ * 于是整学期重导换号之后再点撤销，会把一门无关的课覆盖成快照那一版。第 ⑨ 层钉的就是这一格：
+ * 主行那一趟读了这道校验（`ImportPlanner.courseKey(current)` 对**两枚**参照物：
+ * `normalize(action.after)` 与 `action.before`，取或）、**两支各自可达**
+ * （原地回写改前版 / 换新 id 重插 + 重挂提醒，两枚动作配对各档）、
+ * **四步次序仍是 1→2→3→4**（新增锚点全落在第 3 步那一区内），
+ * 以及那一区里 `GroupRowUndoDisposition` / `Skip` 必须 0 处 —— 两族判据形状相同、结论域反向。
+ * 判据本体与它的表驱动单测在 `data/repository/MainRowUndoPolicy.kt` / `MainRowUndoPolicyTest.kt`。
+ *
+ * 本层**没动**第 ⑦⑧ 层（兄弟行那两档）与第 ⑤ 层那枚 `normalize(action.before)` 回写锚点，
+ * 也没动撤销栈的身份那一族账（`undo()` 无参 / `pop()` 捞栈顶，归 T123）。
  */
 class UndoUpdateEntryGuardTest {
 
@@ -916,6 +931,226 @@ class UndoUpdateEntryGuardTest {
         )
     }
 
+    // ─────────────── ⑨ 档 ①（T139）：复原主行那一趟也读这道占用校验，两支都要落库 ───────────────
+
+    /**
+     * 本卡收的那一格。`undoUpdate` 头上那句注释（裸 :356 一族）早就写着「before.id 同理，
+     * 可能已被占用于其他课程，此时应改为新增而不是覆盖」—— 可第 3 步此前**只问读没读到**：
+     * `current != null` 那一支直接 `courseDao.update`，等于把"有人正占着这个号"当成"这一行归我"。
+     * 教务整学期重导是 `deleteBySemester` 之后重插 ⇒ id 会换人 ⇒ **换号以后再点撤销，
+     * 会把一门无关的课覆盖成快照那一版**，而那一坏没有任何撤销记录撤得回来。
+     *
+     * 这一层钉四件事：① 那一趟真的**读了**这道校验（读回的行 + 两枚参照物 + 判据调用）；
+     * ② **两支各自可达**（原地回写 / 换新 id 重插，两枚动作都在、各一处，而且配对了正确的档）；
+     * ③ **四步次序仍是 1→2→3→4**（本次新增的那几枚锚点全落在第 3 步那一区里）；
+     * ④ 主行那一区**不许借用兄弟行那把判据**（`GroupRowUndoDisposition` / `Skip` 0 处）——
+     *   两族形状相同、结论域反向：兄弟行的两档是"明确不动"，主行的两档是"落在哪一行上"。
+     *
+     * 参照物为什么是**两枚取或**（本卡最容易做错、也是"形状全对内容错"那一型变异唯一的抓手）：
+     * 只拿 `action.before` 当尺子，会把"我自己刚改过的那一行"判成别人的课 ⇒ 每次正常撤销都多插一行；
+     * 只拿 `after` 当尺子，会在**部分周次拆行**那一支犯错（`updateCoursePartialWeeks` 把剩余周次
+     * 写回原行、新行落在 `afterId` 上而它已被第 1 步删掉 ⇒ `before.id` 上留的恰是**改之前**那一版）。
+     * 判据本体（两档怎么分、为什么选"换新 id"、"另一支为什么不选"）在
+     * `data/repository/MainRowUndoPolicy.kt` 与其表驱动单测 `MainRowUndoPolicyTest`；这里只核接线与次序。
+     */
+    @Test
+    fun `复原主行那一趟也读占用校验 原地回写与换新id两支各自可达 次序仍是四步`() {
+        val repoRaw = readMainSource(SCHEDULE_REPOSITORY)
+        val repo = blankCommentsKeepingLiterals(repoRaw)
+        val undo = functionBody(repo, REPO_UNDO_UPDATE_SIGNATURE, "ScheduleRepository.undoUpdate")
+
+        // ── ① 那一趟真的读了这道校验 ──
+        assertEquals(
+            "主行那一趟仍必须先**按 id 把库里那一行读回来**（第 ⑧ 层那枚锚点）：`$REPO_READ_MAIN_ROW`",
+            1,
+            occurrences(undo.body, REPO_READ_MAIN_ROW),
+        )
+        assertEquals(
+            "读回来的那一行必须被拿去量尺子（`ImportPlanner.courseKey(current)` 恰好一处）：" +
+                "量了不读 = 拿条目里那份过期的对象自己比自己",
+            1,
+            occurrences(undo.body, MAIN_ROW_KEY_OF_CURRENT),
+        )
+        assertEquals(
+            "「这一 id 上还是不是这次编辑留下的那一行」必须仍用全仓那唯一一把尺子 " +
+                "`ImportPlanner.courseKey`，且**参照物之一**是归一化后的 `action.after`" +
+                "（与写库同一手；不先 normalize 就会让 periods 未经排序这一类漂移冒充成「被占」）：\n" +
+                "  实到 " + occurrences(undo.body, MAIN_ROW_AFTER_RULER) + " 处",
+            1,
+            occurrences(undo.body, MAIN_ROW_AFTER_RULER),
+        )
+        assertEquals(
+            "**另一枚参照物**必须是 `action.before`（拆行那一支：afterId 那行已被第 1 步删掉，" +
+                "before.id 上留的恰是改之前那一版）。两枚是**取或**关系，少一枚都会把一次正常的撤销" +
+                "判成「被别的课占了」：\n  实到 " + occurrences(undo.body, MAIN_ROW_BEFORE_RULER) + " 处",
+            1,
+            occurrences(undo.body, MAIN_ROW_BEFORE_RULER),
+        )
+        assertEquals(
+            "处置结论必须由**主行自己那枚**判据内核给，且吃的是「读回来的那一行 + 量好的那一枚布尔」" +
+                "（运行期事实由调用点当参数递进来 —— 本仓纯 JVM 边界）：" +
+                "\n  复算：grep -rn \"mainRowUndoDisposition(\" app/src/main --include='*.kt'" +
+                "\n  实到 " + occurrences(undo.body, MAIN_ROW_JUDGMENT_CALL) + " 处",
+            1,
+            occurrences(undo.body, MAIN_ROW_JUDGMENT_CALL),
+        )
+
+        // ── ② 两支各自可达：两枚动作都在、各一处，而且各配各的档 ──
+        assertEquals(
+            "`RestoreInPlace` 与 `RestoreAsNewRow` 两枚**都必须被接住**（各一处 when 分支）：" +
+                "少一支 = 那一族事实走到撤销这里什么也没做（那就是本卡判成不选的 (b) 支）。" +
+                "\n  原地回写分支 " + occurrences(undo.body, MAIN_ROW_ARM_IN_PLACE) +
+                " 处 / 换新 id 分支 " + occurrences(undo.body, MAIN_ROW_ARM_NEW_ID) + " 处",
+            listOf(1, 1),
+            listOf(
+                occurrences(undo.body, MAIN_ROW_ARM_IN_PLACE),
+                occurrences(undo.body, MAIN_ROW_ARM_NEW_ID),
+            ),
+        )
+        assertEquals(
+            "原地回写那一支必须仍然写 `normalize(action.before)`（第 ⑤ 层钉的是同一枚锚点，" +
+                "同值条目的净效果为零就出自它）",
+            1,
+            occurrences(undo.body, REPO_WRITE_BACK_BEFORE),
+        )
+        assertEquals(
+            "换新 id 那一支必须真的走 `insertWithReminders(listOf(action.before), action.reminders)`：" +
+                "换号以后提醒跟不过去就等于「撤销一次、丢一条课前提醒」",
+            1,
+            occurrences(undo.body, MAIN_ROW_INSERT_AS_NEW),
+        )
+        val paired = listOf(
+            undo.body.indexOf(MAIN_ROW_ARM_IN_PLACE),
+            undo.body.indexOf(REPO_WRITE_BACK_BEFORE),
+            undo.body.indexOf(MAIN_ROW_ARM_NEW_ID),
+            undo.body.indexOf(MAIN_ROW_INSERT_AS_NEW),
+        )
+        assertEquals(
+            "两枚动作必须各自排在**自己那一档**之后（配错档 = 把「不许覆盖」那一支写成了覆盖）。" +
+                "实到位置（体内偏移）：RestoreInPlace=${paired[0]} / 回写=${paired[1]} / " +
+                "RestoreAsNewRow=${paired[2]} / 重插=${paired[3]}",
+            paired.sorted(),
+            paired,
+        )
+
+        // ── ③ 四步次序仍是 1→2→3→4，且本次新增的锚点全在第 3 步那一区里 ──
+        val anchors = listOf(
+            "① 删拆行那一行" to REPO_AFTER_ID_GUARD,
+            "② 兄弟行那一趟起手" to REPO_READ_GROUP_ROWS,
+            "③ 读主行" to REPO_READ_MAIN_ROW,
+            "③ 量 after 那把尺" to MAIN_ROW_AFTER_RULER,
+            "③ 量 before 那把尺" to MAIN_ROW_BEFORE_RULER,
+            "③ 判据调用" to MAIN_ROW_JUDGMENT_CALL,
+            "③ 原地回写那一支" to MAIN_ROW_ARM_IN_PLACE,
+            "③ 换新 id 那一支" to MAIN_ROW_ARM_NEW_ID,
+            "④ 补回被清掉的片段" to REPO_INSERT_REMOVED,
+        )
+        val positions = anchors.map { undo.body.indexOf(it.second) to it.first }
+        assertEquals(
+            "九枚锚点必须各在恰好一处（多一处 = 同一件事做两遍；少一处 = 有一步被摘掉）：\n" +
+                anchors.joinToString("\n") { "  ${it.first}: " + occurrences(undo.body, it.second) + " 处" },
+            List(anchors.size) { 1 },
+            anchors.map { occurrences(undo.body, it.second) },
+        )
+        assertEquals(
+            "次序必须是「删拆行 → 兄弟行 → 读主行 → 量两把尺 → 判据 → 两支落库 → 补回被清掉的片段」，" +
+                "而本卡新增的那几枚必须**全落在第 3 步那一区里**（既不跑到兄弟行之前去，" +
+                "也不许跑到第 4 步之后 —— 补回的片段读的是复原之后的库）。" +
+                "\n  undoUpdate 起手在 L" + lineOf(repoRaw, undo.openBrace) +
+                "\n  实到次序：" + positions.joinToString(" → ") { it.second } +
+                "\n复算：awk '/private suspend fun undoUpdate/,/^    }/' " +
+                "app/src/main/java/com/buaa/schedule/data/repository/ScheduleRepository.kt",
+            positions.map { it.first }.sorted(),
+            positions.map { it.first },
+        )
+        assertEquals(
+            "九枚锚点位置互不相同（撞在同一处 = 有一步其实没落地）",
+            anchors.size,
+            positions.map { it.first }.distinct().size,
+        )
+
+        // ── ④ 主行那一区不许借用兄弟行那把判据（两族结论域反向）──
+        val regionStart = undo.body.indexOf(REPO_READ_MAIN_ROW)
+        val region = undo.body.substring(regionStart, undo.body.indexOf(REPO_INSERT_REMOVED))
+        assertEquals(
+            "主行那一区里 `GroupRowUndoDisposition` 必须 0 处：那两档的名字叫 **Skip**（明确的不动），" +
+                "而主行遇着同样两枚事实要的是「换到新的位置上去复原」。复用同一枚判据 = 名字教人犯错，" +
+                "下一次读到 Skip 就少写一次插行。**朝宽扭这里红**：谁把主行那一趟改回去覆盖，" +
+                "多半是先顺手把两族并成一枚枚举",
+            0,
+            occurrences(region, "GroupRowUndoDisposition"),
+        )
+        assertEquals(
+            "同理 `Skip` 那一族字面量在主行那一区必须 0 处（结论域不许混用）",
+            0,
+            occurrences(region, "Skip"),
+        )
+        assertEquals(
+            "兄弟行那一趟仍只有一处判据调用（第 ⑧ 层那枚）：主行这一档不许把它请过来用第二次",
+            1,
+            occurrences(undo.body, REPO_DISPOSITION_CALL),
+        )
+    }
+
+    /**
+     * 主行判据本体的落点与纯度（同第 ⑥⑧ 层那一族口径，只是对象换成本卡新长出来的那一枚）。
+     *
+     * 红线：纯 JVM 判据零 android import、零时钟读取，运行期事实（那一 id 上读回来的是谁、
+     * 算不算这次编辑留下的那一行）由调用点当参数递进来。
+     */
+    @Test
+    fun `主行那一档的判据也只有一份 且仍是纯判据 结论域只有两档`() {
+        val byFile = readAllMainSources().mapValues { (_, text) -> blankCommentsKeepingLiterals(text) }
+        assertEquals(
+            "`internal fun mainRowUndoDisposition(` 全仓 main 恰好一处，就在 MainRowUndoPolicy.kt。\n" +
+                "复算：grep -rn \"internal fun mainRowUndoDisposition(\" app/src/main/java --include='*.kt'\n" +
+                "**朝宽扭这里红**：谁在 `undoUpdate` 旁边把那两档又就地比一遍（" +
+                "「返回布尔后调用点各自判一次」那一族），这本册子就长出第二枚落点",
+            listOf(MAIN_ROW_POLICY_NAME),
+            byFile.filter { occurrences(it.value, MAIN_ROW_UNDO_SIGNATURE) > 0 }.keys.toList(),
+        )
+        assertEquals(
+            "读这枚判据的文件全仓恰好两处（判据本体 / 撤销那一趟）：长出第三处 = 主行又有一条自己的读法",
+            listOf("MainRowUndoPolicy.kt", "ScheduleRepository.kt"),
+            byFile.filter { occurrences(it.value, "mainRowUndoDisposition(") > 0 }.keys.sorted(),
+        )
+        assertEquals(
+            "结论域那**两档**必须各按名留在内核里（`-> MainRowUndoDisposition.` 恰好三枚分支、" +
+                "两档结论）：长出 Skip 之类第三档，本卡那笔「一次被吞掉的撤销」的账就要重判 ——" +
+                " 见 MainRowUndoPolicyTest 第 ③ 层同一格",
+            3,
+            occurrences(byFile.getValue(MAIN_ROW_POLICY_NAME), "-> MainRowUndoDisposition."),
+        )
+        assertEquals(
+            "**两枚事实必须各自路由到「换新 id」那一档**（`MainRowUndoDisposition.RestoreAsNewRow` " +
+                "在内核里恰好两枚：`current == null` 与 `!stillThisEditsRow`）—— 这一格钉的就是本卡" +
+                "那道判断题的答案本体「读不到与被占同处置」。写成 `current == null || !" +
+                "stillThisEditsRow ->` 合并成一枚分支也红：两枚事实的**为什么**不同（一门课整门消失 / " +
+                "覆盖一门无关的课），结论相同也得各留一名。",
+            2,
+            occurrences(byFile.getValue(MAIN_ROW_POLICY_NAME), "MainRowUndoDisposition.RestoreAsNewRow"),
+        )
+        assertEquals(
+            "`RestoreInPlace` 那一档在内核里只有一枚造法（`else ->`）：多一处 = 又有人把某枚事实" +
+                "翻成原地回写，而原地回写唯一站得住的依据就是「那一行还是这次编辑留下的」",
+            1,
+            occurrences(byFile.getValue(MAIN_ROW_POLICY_NAME), "MainRowUndoDisposition.RestoreInPlace"),
+        )
+        assertEquals(
+            "兄弟行那一族的三档没被顺手改成两档（两族各自的账各自钉，一枚都不许多也不许少）",
+            3,
+            occurrences(byFile.getValue(GROUP_ROW_POLICY_NAME), "-> GroupRowUndoDisposition."),
+        )
+        assertEquals(
+            MAIN_ROW_POLICY + " 的 import 册子变了（应当只有那一枚纯类型）。" +
+                "长出 android.* / androidx.* / java.time.* / System.currentTimeMillis 之类就是判据又学会了" +
+                "读外部事实 —— 本仓口径：运行期事实由调用点当参数递进来。" +
+                "\n复算：grep -n \"^import\" app/src/main/java/$MAIN_ROW_POLICY",
+            MAIN_ROW_POLICY_IMPORTS,
+            Regex("(?m)^import .*$").findAll(readMainSource(MAIN_ROW_POLICY)).map { it.value }.toList(),
+        )
+    }
+
     // ---- 源码核对小工具（抄 CourseDeletionWiringGuardTest，同一族口径）----
 
     /** `ScheduleViewModel.updateCourse` 的函数体（抹注释后的文本，体内偏移配 [bodyBase] 换回全文偏移） */
@@ -1256,5 +1491,21 @@ class UndoUpdateEntryGuardTest {
         const val GROUP_ROW_POLICY_NAME = "GroupRowUndoPolicy.kt"
         const val GROUP_ROW_UNDO_SIGNATURE = "internal fun groupRowUndoDisposition("
         val GROUP_ROW_POLICY_IMPORTS = listOf("import com.buaa.schedule.domain.model.Course")
+
+        // ⑨ T139：复原主行那一趟也读这道占用校验（两枚参照物取或、两支都落库）
+        const val MAIN_ROW_KEY_OF_CURRENT = "ImportPlanner.courseKey(current)"
+        const val MAIN_ROW_AFTER_RULER =
+            "CourseConstraints.normalize(action.after)?.let { ImportPlanner.courseKey(it) }"
+        const val MAIN_ROW_BEFORE_RULER = "key == afterKey || key == ImportPlanner.courseKey(action.before)"
+        const val MAIN_ROW_JUDGMENT_CALL = "mainRowUndoDisposition(current, stillThisEditsRow)"
+        const val MAIN_ROW_ARM_IN_PLACE = "MainRowUndoDisposition.RestoreInPlace ->"
+        const val MAIN_ROW_ARM_NEW_ID = "MainRowUndoDisposition.RestoreAsNewRow ->"
+        const val MAIN_ROW_INSERT_AS_NEW = "insertWithReminders(listOf(action.before), action.reminders)"
+
+        // ⑨ 主行判据本体的落点与纯度
+        const val MAIN_ROW_POLICY = "com/buaa/schedule/data/repository/MainRowUndoPolicy.kt"
+        const val MAIN_ROW_POLICY_NAME = "MainRowUndoPolicy.kt"
+        const val MAIN_ROW_UNDO_SIGNATURE = "internal fun mainRowUndoDisposition("
+        val MAIN_ROW_POLICY_IMPORTS = listOf("import com.buaa.schedule.domain.model.Course")
     }
 }
