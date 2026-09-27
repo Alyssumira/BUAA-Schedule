@@ -3391,3 +3391,105 @@ benchmark 一步过；收尾 md5 四枚全回基线、porcelain 0）。
 （前两回是 `Invalid argument`），共同点是**注册表已经注销、只剩目录** —— 判据不变：
 `git worktree list` 里没有它 + `git merge-base --is-ancestor <分支> master` 为真 ⇒ `rm -rf` 目录、
 **最后**才 `git branch -d`。（差别在成因：这张卡的代理终端上下文本就落在该目录里，进程没退干净时目录句柄还开着。）
+
+## T120：第四遍·§9「起手块**有没有闸**」（评估卡 · `19e796e` `831042b` `cdd12ac`）
+
+纯文档卡（零 gradle、零 adb、零 `local.properties`、`app/` 一字未动）。只碰 `docs/derived-field-audit.md`
+一枚：**+199/−1**，1,233 ⇒ **1,431** 行，新立 §9 一节（9.0 三问判据 / 9.1 尺子与宇宙 / 9.2 九处逐处 /
+9.3 档位分布 + 后续卡建议表 / 9.4 卡面对账 / 9.5 明留 / 9.6 上限）。
+
+**结论口径**：§8.7④ 那九处起手块，档位是 **收 1 枚（#3）· 不收 7 枚（#1 #2 #4 #5 #6 #7 #8）· 待真机 1 枚（#9）**。
+"不收"占七枚不是和稀泥 —— 九处里 **4 处今天结构上就点不动**（#2 #6 #7 #8）、**2 处的后果本节指不到落点**
+（#4 的混色被事务边界否掉、#5 的空删除被仓储层守卫否掉）、**1 处的后果不值**（#5 那句谎话用户无从分辨，先例 #117）。
+⇒ ⚠️ **§8.7④ 那句"这是下一轮排卡的最大一块"当场判成不成立**（九处收成一枚半）；旧句子留着不抹，订正句加在 §9.5④。
+
+**它驳回我卡面的三句（每句都带读数，我认）**：
+1. 「全仓今天只有两枚既有的按灭范本」⇒ 宽尺 `grep -rn 'enabled = !' app/src/main/java --include='*.kt'` 给 **13 行 / 8 枚文件**，
+   逐枚读原文后同族 **9 枚**。更要紧的是**我给的范本①名实不符**：`grep -rn 'enabled' .../update/ | wc -l` ⇒ **0** ——
+   `UpdateCheck` 那一族**根本没有按灭**，它是 `if (downloadJob?.isActive == true) return` **吞掉这次点击** + `when (shown)`
+   分支覆盖把整颗「立即下载」换掉。⇒ **这条如果照抄，正好抄成本仓已经修过一次的哑闸**（那枚 KDoc 警告过的形状）。
+   ⇒ 排卡的直接影响：T121 **不许**照范本①抄。（它在 §9.3 的表里就把这条写成了 T121 那一行的"照哪个范本"栏。）
+2. 「这 9 处一枚旗标都不立」⇒ 九枚里 **8 枚**不立，**#6 `ConflictWizardDialog` 立着全仓最完整的一族**
+   （弹窗层 `remember` + `enabled` + 文案 + 起讫配对）。⇒ §8.6 第二条那句"这些站点在操作飞着的时候按钮仍可点"对它是**断言不实**。
+3. 第 9 处的**名与实对调**：我写的锚点 `:485` 落在**「分享本课表（口令）」**那颗 `OutlinedButton`（`:483` 起），
+   而我嘴里说的「口令导入」是 `:473` 那枚 **`Button`** —— 它 UI 侧不起协程（launch 长在 VM `:1271`）、
+   `enabled = shareCode.isNotBlank()` 是**内容闸**、且过 `withImportLock` ⇒ **严格说它压根不是"起手块"**。
+   本节按锚点（不按名）判，两处都给了档（都判"不收"）。
+
+**我怀疑、它实测后不成立的那一条要单独记**：我在卡面问"§8.7④ 写'走 SignInViewModel 那套闸门'是不是指针写错了文件"，
+还说"如果闸门其实在 `IClassLoginScreen` 而不在 ViewModel，这本身就是本卡的一条产出"。⇒ **指针没写错**：
+`SignInViewModel` 今天立着 `private val flight = MutableStateFlow(false)` + 对外 `val inFlight` +
+`fun signIn(raw: String)` 首行 `if (flight.value) return` + `finally` 归还；T85 拆掉的是**另一族**（`alreadySigned` 那一档）。
+⇒ **文档不欠这笔订正**（我这条怀疑如果转抄进卡面就是假账）。
+
+**它自己登记的两处自踩**（§9.4 末格，写法照 §8.8）：① 初稿把范本①写成"`enabled` 在 `UpdateDialog` 那一侧"，
+重跑那条 `wc -l` 得 **0** 才改过来 ⇒ 这是"数字旁边必须带命令"那枚教训的**第二份实例**；② 复算九处行号走了
+"先按符号 `grep` 定位、再拿行号回对 §8.7④"的顺序，与 §7.1 那"当场 `awk 'NR==N'` 逐枚读"**反着**" ⇒
+结论同为"未漂"，但那是**先有结论再补的验证**，它自己要求下一遍别学。
+
+**我合并前复算**：`app/` 一字未动（`git diff --stat` 只有那一枚 docs 文件）；四把普查尺在合并后的 `865f420` 上
+仍是 **268 / 589 / 146 / 24**（本档 `-o` / 全仓 `-o` / 本档 `-c` / docs 里 `.md:行号`），一字未动 ⇒ 新写的行号
+**全是裸 `:NNN` + 同框符号名**，没有一枚连写文件名；`docs/STATUS.md`（当时 3,393 行）与 `docs/TESTING.md`（557 行）它没碰。
+
+**§9.3 那张建议卡表就是本轮排卡的来源**：T121（先开，#3 的 phantom 那一半，并顺手量仓储层缺的那道空快照早退）·
+T122（#1 #4 共用那枚 no-op 撤销条目，同值早退，范本 WeekView `:1113`）· T123（#3 跨对象那一半 + #5 被丢掉的 Boolean，
+**撤销的身份问题**，本节给不出范本、要装机）· T124（六处共用的**作用域**那一族，范本 `applyConflictShift`）·
+T125（#9 分享面板，低优先、要先装机判它叠不叠层）· T126（纯文档：§8.7④ + §8.6 那两格按 §9.2 收窄）。
+
+## T121：删除课程"删不到也报成功"—— 仓储层补上"到底删没删到"（`4dfd7d3` `cb9f599` `d4c6c51` `865f420`）
+
+**本卡有 main 改动**（五枚文件，**+1,046/−16**）：
+- 新增 `data/repository/CourseDeletionPolicy.kt`（**149 行**）：纯 JVM 判据内核 + `CourseDeletion`（`Removed` / `NothingRemoved`
+  两档），**零 android import、零时钟读**，与被调方同包 ⇒ 调用点不新增 import。
+- `data/repository/ScheduleRepository.kt`（22 行改动）：`deleteCourse` 在 `writeMutex.withLock` + `db.withTransaction` 内
+  **先按 id 把行读回来**，以读回来那份为准造结论，`if (deletion.removedAnything) deleteCourseRow(rows.first())`
+  —— 形状照同文件既有的 `deleteCourseGroup` 那道空快照早退。
+- `ui/ScheduleViewModel.kt`（10 行）：`val removed = deletion.removedCourse ?: return@suspendCatching false`
+  ⇒ **删不到就不报成功、不压撤销栈**；异常支走既有那句 `删除课程失败：${e.message}`。
+- 新增 `CourseDeletionPolicyTest.kt`（**292 行 / 9 枚**，表驱动四格 + 孤儿提醒档 + 空提醒档 + 连点两次档）与
+  `CourseDeletionWiringGuardTest.kt`（**589 行 / 6 枚**，逐处位置钉 + 调用点册子「仓储层一处、VM 层两处」+ 内核零 android 零时钟）。
+
+**根因**（T120 §9.2 #3 指到的那一半）：`deleteCourse` 缺 `deleteCourseGroup` 那道早退 ⇒ 库里没有那一行时 DAO 删 0 行、
+VM 照样回 `true`、照样 `UndoManager.pushDelete`、提示条照样念「已删除课程」并给一颗**点了什么也不会发生**的「撤销」。
+
+⚠️ **两枚主源码文件行数一字未动**（VM **1,693** / repo **680**）⇒ 没有欠下 #151 那笔文档行号漂移的账。
+这一条我是**逐枚锚点对内容**核的，不是看总行数推的：把两枚文件在 `cdd12ac` 与 `865f420` 上各 `git show` 一遍，
+拿全 docs + README 里指向这两枚文件的 `文件.kt:NNN` 锚点（VM **38** 枚 / repo **7** 枚）逐枚比同一行的原文 ⇒
+**漂移 0 枚**；两处改动窗口（VM `:550-556`、repo `:277-289`）里**没有一枚**文档锚点。
+
+**我的两支独立臂（它没扭的两处，都跑全量 1,713 枚、各红一枚）**：
+- **E1** 撤销插回**调用方手里那份**（可能已过期）的对象：`pushDelete(removed, …)` → `pushDelete(course, …)`
+  ⇒ 红 `CourseDeletionWiringGuardTest.VM 那一步真的读结论 判没删到就不报成功也不压栈`。
+- **E2** 根本不读库、直接信传进来的那份（**= 本卡修的根因**）：`val rows = listOfNotNull(courseDao.getById(course.id)?.toDomain())`
+  → `val rows = listOf(course)` ⇒ 红 `CourseDeletionWiringGuardTest.仓储层那一步按读回来的行本身判 且删不到就什么都不动`。
+- 两支都：变异后 md5 ≠ 基线（`256210e1…` / `6d8a51f4…`）、`rc=1` **且本轮 XML 里 `<testcase>` 计数 1,713 > 0**（不是编译死）、
+  还原只走 `git checkout --` 并当场复算回基线、porcelain 0。⇒ 这一族今天是被**位置钉**着的，E1/E2 这两处各落在一枚不同的判据上。
+
+**冷门禁（我自己在合并对象 `865f420` 上跑的五步）**：`--stop` + `tasklist` java 残留 **0** → `clean` rc=0 →
+`:app:assembleRelease` **S1=0**（91 tasks: **86 executed / 5 up-to-date**，与代理自报的 91/91 是读数差异、非红）→
+`:app:testDebugUnitTest --rerun-tasks` **RUN1 = 1,713 tests / 202 suites / 0 fail / 0 err / 0 skipped**（时间戳
+`2026-09-27T03:58:04Z→:10Z`）→ `:app:lintAnalyzeDebug --rerun :app:lintReportDebug --rerun` **S3=0，0 错 14 警**，
+九档分布与基线逐档相同（BatteryLife 1 / ConfigurationScreenWidthHeight 3 / FrequentlyChangingValue 2 / GradleDependency 3 /
+InlinedApi 1 / ObsoleteSdkInt 1 / OldTargetApi 1 / UseKtx 1 / WebViewApiAvailability 1）→ 测试再跑 **RUN2 = 同数 / 0 skipped**
+（`:04:01:01Z→:07Z`，两枚新套件 XML 都在场）→ `:benchmark:compileNonMinifiedReleaseKotlin` **S5=0**（10/10 executed）。
+**静态尺与门禁对得上**：单测文件 **196**（+2）、行首锚 `^    @Test` 全仓 **1,713** == 门禁 XML 那格（T108 那把尺第四次增量检验）。
+
+**签名包 7,250,013 B**（对 7,249,143 是 **+870 B**）。⚠️ **这一档不许读成"带内涨跌"**：本卡真往 dex 里加了新内核类，
+±几百字节那条带只适用于"零 dex 改动"的档。这里的判据换成**两次独立全量一致**：代理侧 7,250,013、编排侧 7,250,013 ⇒
+**记为新地板**。（下一轮如果又出现真 dex 改动，仍走"两次独立全量"这条，不走带。）
+
+**它驳回我的两处卡面前提**：
+1. 我给的真机可达路径「连点两次删除」在**当前 UI 下走不通**（第一趟删完那一行就不在列表里了）；
+   真路径是**手里那份 `Course` 已经陈旧**（导入/替换后 id 变过）⇒ 判据照样成立，但卡面写的触发方式不成立。
+   它没有为这一处动 main，只是把「连点两次」那枚用例段首补了一句档位说明（`865f420`：它杀不掉更宽那一臂，专杀它的是第②格）。
+2. 我在卡面说「androidTest 那几枚没跑，可以拿 Room 造这一格」暗示**没缝**；它核到 `app/src/androidTest` 有 **10 枚文件、含真 Room**
+   ⇒ **有缝、本卡没跑**。**装机级证据这一档本卡没做**，我按 T114 那条口径把"没量"登记下来，不转抄成"已证"。
+
+**明留 / 后续**：① `deleteCourse` 现在**读不到行就什么都不动**，连"库里残留的孤儿提醒"也不再顺手清（改前的写法会清）——
+这是本卡有意的取舍，**没有守卫覆盖这一格**，要不要单独补一条判据待议；② 每次删除多一枚 `courseDao.getById` 主键查询，
+开销没量（同一事务内、走索引，判断是"不值一提"，但没数）；③ `CourseEditorScreen` 那条 else 分支「删除失败，请重试」
+**从此走得通**（守卫第⑤枚钉的就是这个），措辞要不要单独一档我没定；④ 撤销条目没有身份（T123 的账，本卡按红线没碰）；
+⑤ 文档现值欠一遍订正：**1,698 ⇒ 1,713**、suites **200 ⇒ 202**、单测文件 **194 ⇒ 196**（`docs/TESTING.md` 的用例数那一格与
+逐枚守卫那一族），另 `app/build.gradle.kts` `:424`/`:428` 那两处「1,695」仍是老数（**构建输入**，要与下一次真改构建脚本的卡并走）。
+
+**新地板 = 1,713 tests · 202 suites · 0 失败 · 0 skipped / lint 0e·14w / 干净全量签名包 7,250,013 B。**
