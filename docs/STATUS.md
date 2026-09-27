@@ -3860,3 +3860,48 @@ T122 当时判 deferred 的理由是"这一判今天在压栈点算不出来"（
   **T138** 排队：全仓指向 `ScheduleViewModel` / `ScheduleRepository` 的带漂锚点逐枚重钉（T135③ 与上一节各登记了一半），
   **押到 T137 落地之后一次做完** —— 否则 T137 又要把同一批锚点推一遍，白扫一轮。
 
+## 09-28 凌晨续二：T137 收单（撤销条目装得下那一族行了；附一处"dex 里搜不到 ≠ 没进包"的反例）
+
+基点 `5a22395`，`ai/T137` 三枚：`9ed876d`（① 条目容量）/ `7e71aa3`（② 按 id 复原 + 新纯判据内核）/ `714447b`（③ 守卫加档）。
+盘面前置四条全过（三枚哈希 `cat-file -t` 都是 commit、`rev-list --count 5a22395..ai/T137` = 3、`git diff --name-only` 恰 8 枚且 `docs` 与 `README.md` **0 枚**、工作树 0）。
+`merge --ff-only` 到 `714447b`，合并后 `git diff ai/T137 --stat` = 0 行 ⇒ **我重跑门禁的那棵树就是合并对象**。
+
+- **收了什么**：`UndoAction.Update` 长出 `val groupBeforeRows: List<Course> = emptyList()`（走默认参数，本族既有先例），`pushUpdate` 透传，
+  VM 那一处把 T128 交回的 `group` 喂进条目；`undoUpdate` 里新增一趟**按 id** 逐行回写兄弟片的改前版。
+  三拍次序是**语义**不是风格：组写跑在主行写之后 ⇒ 它交回的那一版主行是"改完之后"的，兄弟行那一趟必须排在复原主行**之前**、由 `before` 收尾。
+- **判断题（我卡面故意留白、要它自己判的那一档）**：兄弟片段**读不到**怎么办 —— 它选了**跳过、不重插**，与主行那一手（读不到就 `insertWithReminders` 重挂提醒）**相反**，
+  理由四条写进新内核 `data/repository/GroupRowUndoPolicy.kt`（89 行、单一 `import` 只有 `Course`、结论域三档 `Restore` / `SkipMissing` / `SkipOccupiedByOtherCourse`）：
+  重导换号时那门课已以新 id 在库 ⇒ 再插一遍 = 屏上多一行重复课；兄弟行的提醒没进条目 ⇒ 重插出新 id 就丢一条课前提醒；
+  用户随后自己删掉那个片段时撤销一条换色记录不该复活他刚删的东西；主行不重插的代价（用户正看着那一格消失）不同量级。
+  "另一支"要成立得先分清"换号"还是"被删"，那需要条目带身份 ⇒ 归 **T123**，本卡按红线没越过去。**这一档我认可。**
+- **我这一趟的门禁分了两段，第一段是环境死**（上一节那条 Windows 文件锁的账第三次咬人）：
+  `clean` rc=1（`Unable to delete ... bundleDebugClassesToCompileJar\classes.jar`）、`assembleRelease` rc=1（`lintVitalAnalyzeRelease` 撞 `migrated-jars\...jar: 另一个程序正在使用此文件`）
+  ⇒ 那一趟里测试与 lint 虽然绿（1,792 / 214 / 0 red / **skipped=3** = 包不在盘上时那三条产物层判据 `assumeTrue` 跳过，本仓老账），
+  **但产物层没量到** ⇒ 补跑：`--stop`（1 Daemon stopped）后那两枚残留 java 自己退了（我**没有**杀进程 —— 先点过 `tasklist` 确认不是别家的），
+  然后 `clean` rc=0 → `assembleRelease` **BUILD SUCCESSFUL in 5m 21s**（91 枚任务 86 executed / 5 up-to-date）→
+  `:app:testDebugUnitTest --rerun-tasks` **1,792 tests / 214 suites / 0 失败 / 0 错误 / 0 skipped**（XML 本轮新时间戳 01:40:06）→
+  lint **0 error / 14 warning** → `:benchmark` 上一趟已 10/10 executed。**签名包 7,252,469 B。**
+- ⚠️ **一条新的产物层反例，会误导下一个人**：扫 release dex 找 `GroupRowUndoPolicy` 字面量 ⇒ **命中 0**，
+  而包体相对上一档（7,251,984）**+485 B** 是真的（代理侧与自己两侧同数）。
+  ⇒ **R8 会把只在一处被调用的 `internal` 顶层判据折进调用方**，所以"dex 里搜不到这个类名"**不能**当"这段代码没进包"的证据 ——
+  它与 `docs/TESTING.md` 里那条"改文件名没改内容 ⇒ 字符串计数不动"是同一族反例的另一头（**改内容没留名字 ⇒ 名字计数不动**）。
+  这一档**别再拿 dex 字符串当产物层证据**，要证进包得挑一句一定会被留在字符串表里的字面量。
+- **六支臂**（代理五支 A/B/C/D/E + 我四支，V 系；两侧都扭过）：
+  代理的 A/B 扭判据朝宽/朝窄（各红 2 枚 `GroupRowUndoPolicyTest`）、C 把 VM 实参退回 `emptyList()`（红容量那一档）、D 把写库闸改成 `if (true)`（红复原那一档）、
+  E 把那一趟整段挪到复原主行之后（红次序那一档）。**我自己另加的三支都不在它的方向上**：
+  **V1** 把 VM 那一枚实参**整枚删掉**（靠默认值兜住，比它的 `emptyList()` 更隐蔽）⇒ 红 2 枚（容量档 + 判据纯度档）；
+  **V2 兄弟行那一趟写回 `action.before` 而不是 `snapshot`** —— 枚数、形状、落点全对、**内容错** ⇒ 红 1 枚（这一型是代理五支里没试过的）；
+  **V3** 把那一趟挪到**补回 removed 之后**（同枚数同形状、只翻先后）⇒ 红 1 枚（次序档，且它报错要打四步实到位置）。
+  **V4** 判据朝宽（那一行已被别的课占住也照写）⇒ 红 2 枚表驱动。
+  四支各自 `rc=1`、XML `<testcase>` 计数本轮新时间戳且 > 0、编译错误行 0；每支跑完都 `git checkout --` 还原 + 当场复算 md5 回基线，**收尾 `git diff --quiet HEAD` = 0**。
+- **它顺手量到、我复算成立的一处既有不合账**（本卡按"别扩范围"没动，已单独登记 **T139**）：`undoUpdate` 函数内注释裸 `:356` 那句
+  「before.id 同理，可能已被占用于其他课程，此时应改为新增…」承诺了一道占用校验，而实现里主行那一趟（裸 `:377-382`）**只有"读不到才重插"、没有 `courseKey` 校验** ——
+  T137 给兄弟行那一族加了这道校验，主行反而没有。⇒ 真重导一学期换号之后撤销一次编辑，会把无关那一行覆盖掉。
+- **未验到（如实登记）**：Room `courseDao.update()` 对一个不存在的 id 的实际行为（它绕开了、没量）；
+  撤销与导入抢 `writeMutex` 的真实交错；"真重导之后再点撤销、那一格颜色到底回没回"**只有纯判据 + 静态接线两档证据，没有装机级**。
+- **本卡之后的尺与漂移（我合并后在 master 上重量）**：行首锚 `@Test` **1,783 ⇒ 1,792**（+9 = 4 表驱动 + 3 守卫 + 2 条目往返）、
+  test 文件 **207 ⇒ 208**、`^class ` **213 ⇒ 214**、Guard 文件名那把 **45 一字未动**、`grep -rl "src/main/java"` **83 ⇒ 84**。
+  带漂锚点（全部并给 **T138**）：`ScheduleRepository` 681 ⇒ **710** 行、`ScheduleViewModel` 1,693 ⇒ **1,696**、`UndoManager` 90 ⇒ **117**、
+  `UndoUpdateAdmission` 53 ⇒ **61**（只动 KDoc、判据本体裸 `:44` 一字未改，我逐行读过那份 diff 的非注释行 = 0）、
+  守卫 `UndoUpdateEntryGuardTest` 955 ⇒ **1,260** 行、名下 7 ⇒ **10** 枚。
+
