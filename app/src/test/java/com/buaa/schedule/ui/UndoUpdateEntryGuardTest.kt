@@ -82,6 +82,20 @@ import org.junit.Test
  *
  * 只做**源码核对**（JVM，无 Robolectric、无设备、不读时钟）。断言按**落点 / 次序 / 逐字**取判据，
  * 不数总出现次数 —— 「枚数对但落点错」是本仓登记过的洞。报错消息里带复算命令。
+ *
+ * ## 现状（T137 落地，第 ⑦⑧ 层是新增的两档；上面那些节一字未抹）
+ *
+ * T128 那段「残余的那一半」指名要下一张卡补"条目带得下组写改掉的行 + `undoUpdate` 按 id 复原"，
+ * 补它的就是本层文件里的第 ⑦⑧ 两档：⑦ 钉**容量**（`UndoAction.Update.groupBeforeRows` 真的长在
+ * 构造参数表里、带默认值、三榜逐位对齐、调用点把 `group` 的结论交回去且没另起一趟读数），
+ * ⑧ 钉**复原**（`undoUpdate` 按 id 逐行读回来、"算不算同一门课"仍用 `ImportPlanner.courseKey`
+ * 那一把尺子、写库只有 `Restore` 那一档拿得到、以及本卡那道判断题的答案 ——
+ * **兄弟行那一趟排在复原主行之前**，跳过那两档是明确的不动、`insertWithReminders(` 0 处）。
+ * 判据本体（三档怎么分）与它的表驱动单测在 `data/repository/GroupRowUndoPolicy.kt` /
+ * `GroupRowUndoPolicyTest.kt`，条目往返那一档在 `UndoManagerTest`。
+ *
+ * 本卡**没动**第 ⑥ 层那四把维度，也没动 `updateUndoWorthRecording` 的四个参数 ——
+ * "该不该有条目"与"条目装不装得下"是两件事（那半句在 `UndoUpdateAdmission.kt` 段首也写着）。
  */
 class UndoUpdateEntryGuardTest {
 
@@ -636,6 +650,272 @@ class UndoUpdateEntryGuardTest {
         }
     }
 
+    // ─────────────── ⑦ 档 ①（T137）：条目带得下组写改掉的行 ───────────────
+
+    /**
+     * T137 收的是 T128 在 `UndoUpdateAdmission.kt` 段首登记的那一半残账：**条目装不下组写改掉的行**。
+     * 这一层钉"装得下"这一半的形状。
+     *
+     * 三榜次序逐位对齐才是这一族的真守卫：字段声明顺序 / `pushUpdate` 形参顺序 / 透传给构造函数时
+     * 的实参顺序必须一模一样 —— 那一处透传是**按位置**写的
+     * （`UndoAction.Update(before, after, afterId, removed, reminders, groupBeforeRows)`），
+     * 三榜里任何一位错位，就有两枚字段悄悄换了对方的内容，而它照样编译、照样跑绿。
+     * 那正是本仓登记过的「枚数对但落点错」在这一族里的形状，也是第 ② 层那六枚断言管不到的方向
+     * （它们数的是 VM 那一处调用点的具名实参，命名传参把错位全遮住了）。
+     *
+     * 两侧各留一道口子：**朝宽扭**（把 `groupBeforeRows = group?.beforeRows.orEmpty(),` 换成
+     * `groupBeforeRows = emptyList()`，或整行删掉）红在被接收那一枚与落点册子；
+     * **朝窄扭**（给调用点另起一趟 `repository.` 读数去凑那族行）红在"实参里不许出现读数"那一枚，
+     * 顺带把第 ③ 层那枚"四趟写/读"一起叫红。
+     */
+    @Test
+    fun `条目带得下组写改掉的行 三榜次序逐位对齐 调用点把结论交回去`() {
+        val undo = blankCommentsKeepingLiterals(readMainSource(UNDO_MANAGER))
+
+        // ── 字段本体：在 Update 的构造参数表里、带默认值 ──
+        assertEquals(
+            "`data class Update(` 在 UndoManager 里恰好一处。" +
+                "长出第二枚 Update 家族 = 本守卫钉的那一格换了对象，要重判：" +
+                "\n复算：grep -n \"data class Update(\" app/src/main/java/com/buaa/schedule/data/undo/UndoManager.kt",
+            1,
+            occurrences(undo, UPDATE_CLASS_SIGNATURE),
+        )
+        val updateStart = undo.indexOf(UPDATE_CLASS_SIGNATURE)
+        val updateBlock = undo.substring(updateStart, undo.indexOf(": UndoAction", updateStart))
+        assertEquals(
+            "T137 新那一枚字段必须**带默认值**地长在 `UndoAction.Update` 的构造参数表里" +
+                "（`= emptyList(),` 那一截是形状的一部分：条目向后兼容，不带它旧形状照压）。" +
+                "实到 " + occurrences(updateBlock, GROUP_ROWS_FIELD_WITH_DEFAULT) + " 处（应为 1）",
+            1,
+            occurrences(updateBlock, GROUP_ROWS_FIELD_WITH_DEFAULT),
+        )
+        val declared = UPDATE_FIELD_NAME.findAll(updateBlock).map { it.groupValues[1] }.toList()
+
+        // ── pushUpdate 收下它（形参榜）+ 透传（实参榜）：三榜逐位相同 ──
+        assertEquals(
+            "`fun pushUpdate(` 恰好一处：条目只从这一枚入口造，别处长出第二条压 Update 的路",
+            1,
+            occurrences(undo, PUSH_UPDATE_SIGNATURE)
+        )
+        val paramsStart = undo.indexOf(PUSH_UPDATE_SIGNATURE) + PUSH_UPDATE_SIGNATURE.length
+        val paramsEnd = undo.indexOf(") = push(", paramsStart)
+        assertTrue(
+            "`pushUpdate` 的收尾必须是 `) = push(` 那一行（本层按位置比三榜，换了写法要跟着重钉）",
+            paramsEnd > paramsStart,
+        )
+        val params = UPDATE_FIELD_NAME.findAll(undo.substring(paramsStart, paramsEnd)).map { it.groupValues[1] }.toList()
+        val passStart = paramsEnd + ") = push(".length
+        val passHead = undo.indexOf(UPDATE_PASS_THROUGH, passStart)
+        assertEquals(
+            "`UndoAction.Update(` 那一处透传必须就在 `pushUpdate` 的收尾里（恰好一处）：" +
+                "换成交给别处造条目，下面那枚逐位对齐就无从算起",
+            1,
+            indexOfAll(undo.substring(passStart), UPDATE_PASS_THROUGH).size,
+        )
+        val passArgs = undo
+            .substring(passHead + UPDATE_PASS_THROUGH.length, undo.indexOf(')', passHead))
+            .split(',')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        val defaultFields = listOf("before", "after", "afterId", "removed", "reminders", "groupBeforeRows")
+        assertEquals(
+            "三榜（`data class Update` 的字段声明 / `pushUpdate` 的形参 / 透传给构造函数的实参）" +
+                "必须**逐位相同**、且就是那六枚 —— 那一处透传按位置传，错位就是两枚字段悄悄换内容：" +
+                "\n  声明榜 $declared" +
+                "\n  形参榜   $params" +
+                "\n  实参榜   $passArgs" +
+                "\n复算：awk 'NR>=39 && NR<=112' app/src/main/java/com/buaa/schedule/data/undo/UndoManager.kt",
+            listOf(defaultFields, defaultFields, defaultFields),
+            listOf(declared, params, passArgs),
+        )
+
+        // ── 调用点：那一族行确实被**交回去**了 ──
+        val body = updateCourseBody()
+        assertEquals(
+            "`groupBeforeRows = group?.beforeRows.orEmpty(),` 在 `updateCourse` 体内恰好一处：" +
+                "读的就是第 ②③ 层那一枚 `val group = ...` 接住的结论，不另起一趟读数。" +
+                "**朝宽扭这里红**：换成 `emptyList()` 等于把条目又掏空（T128 那半残账回来）\n" +
+                "复算：grep -n \"groupBeforeRows\" app/src/main/java/com/buaa/schedule/ui/ScheduleViewModel.kt",
+            1,
+            occurrences(body, VM_SNAPSHOT_GROUP_ROWS),
+        )
+        val pushAt = body.indexOf(PUSH_UPDATE)
+        val nextStatement = body.indexOf("afterDataChangedInternal()", pushAt)
+        val snapshotAt = body.indexOf(VM_SNAPSHOT_GROUP_ROWS, pushAt)
+        assertTrue(
+            "那一枚实参必须落在 `pushUpdate(` 与它的收尾之间（真的进了条目，不是压在旁边的另一句里）：" +
+                "\n  压栈 L" + lineOf(readMainSource(SCHEDULE_VIEW_MODEL), bodyBase(readMainSource(SCHEDULE_VIEW_MODEL)) + pushAt) +
+                " / 新实参 L" + lineOf(readMainSource(SCHEDULE_VIEW_MODEL), bodyBase(readMainSource(SCHEDULE_VIEW_MODEL)) + snapshotAt),
+            pushAt in 0 until snapshotAt && snapshotAt < nextStatement,
+        )
+        assertFalse(
+            "`pushUpdate(...)` 那一段实参里不许出现 `repository.`：结论只能来自已经跑完的那三趟" +
+                "（第 ③ 层那枚「四趟写/读」）—— 为撤销条目再读一趟库，就等于在事务外重算一遍兄弟行",
+            body.substring(pushAt, nextStatement).contains("repository."),
+        )
+        assertEquals(
+            "新实参排在 `reminders = edit.reminders,` **之后**（具名实参榜与第 ② 层那六枚同序）：" +
+                "次序变了说明那一族行的来源换了",
+            true,
+            body.indexOf(SNAPSHOT_REMINDERS) in 0 until body.indexOf(VM_SNAPSHOT_GROUP_ROWS),
+        )
+    }
+
+    // ─────────────── ⑧ 档 ②（T137）：undoUpdate 按 id 复原那一族行，且排在复原主行之前 ───────────────
+
+    /**
+     * 「带得下」只是一半，另一半是**复原得了**。这一层钉 `undoUpdate` 里那一趟新读，
+     * 并把本卡那道判断题的答案钉成**次序**：兄弟片段那一趟排在**复原主行之前**
+     * （我实现里就是这一种），因为组写跑在主行写之后、它交回的表里那一版主行其实是"改完之后"的 ——
+     * 次序反了，主行会停在改完之后那一版，撤销对主行等于没撤销。
+     *
+     * 另一侧的选择（"读不到那一行就重插"，照抄主行那一手）也被本层钉死在原地：
+     * 那一趟里 `insertWithReminders(` 必须 0 处 —— 跳过是**明确的不动**，不是"顺手插一下"。
+     * 判据本体（三档怎么分）是 `data/repository/GroupRowUndoPolicy.kt`，表驱动单测
+     * `GroupRowUndoPolicyTest` 逐格钉；这里只核接线与次序。
+     */
+    @Test
+    fun `undoUpdate 按 id 复原那一族行 读的次序在复原主行之前 跳过那一档不插行`() {
+        val repoRaw = readMainSource(SCHEDULE_REPOSITORY)
+        val repo = blankCommentsKeepingLiterals(repoRaw)
+        val undo = functionBody(repo, REPO_UNDO_UPDATE_SIGNATURE, "ScheduleRepository.undoUpdate")
+
+        // ── 被读：那一族行确实进了撤销那一趟，且按 id 逐行读回来 ──
+        assertEquals(
+            "`action.groupBeforeRows.forEach { snapshot ->` 在 `undoUpdate` 体内恰好一处（条目真的被读了）。" +
+                "\n复算：grep -n \"action.groupBeforeRows\" app/src/main/java/com/buaa/schedule/data/repository/ScheduleRepository.kt",
+            1,
+            occurrences(undo.body, REPO_READ_GROUP_ROWS),
+        )
+        assertEquals(
+            "那一趟必须**按 id** 把库里那一行读回来（`courseDao.getById(snapshot.id)`）：" +
+                "不读就写 = 拿条目里那份可能已经过期的快照去盖一个已经换号的新行",
+            1,
+            occurrences(undo.body, REPO_READ_SNAPSHOT_ROW),
+        )
+        assertEquals(
+            "「那一 id 上还是不是同一门课」必须仍用全仓那唯一一把尺子 `ImportPlanner.courseKey`" +
+                "（与 `afterId` 那道守卫同一个式子，第 ② 层钉过它），不许在本卡里长出第二把：\n" +
+                "  " + REPO_SAME_COURSE_RULER + " 实到 " + occurrences(undo.body, REPO_SAME_COURSE_RULER) + " 处",
+            1,
+            occurrences(undo.body, REPO_SAME_COURSE_RULER),
+        )
+        assertEquals(
+            "处置结论必须由判据内核给（`groupRowUndoDisposition(held, sameCourseAtId)` 恰好一处）——" +
+                "`undoUpdate` 里不许就地比一遍三档。复算：grep -rn \"groupRowUndoDisposition(\" app/src/main --include='*.kt'",
+            1,
+            occurrences(undo.body, REPO_DISPOSITION_CALL),
+        )
+        assertEquals(
+            "写库那一行必须只有 `Restore` 那一档拿得到（`courseDao.update(snapshot.toEntity())` 恰好一处）",
+            1,
+            occurrences(undo.body, REPO_RESTORE_WRITE),
+        )
+
+        // ── 四步次序：删拆行 → 兄弟行 → 主行 → 补回被清掉的片段 ──
+        val steps = listOf(
+            "① 删拆行那一行" to occurrences(undo.body, REPO_AFTER_ID_GUARD),
+            REPO_READ_GROUP_ROWS to occurrences(undo.body, REPO_READ_GROUP_ROWS),
+            REPO_READ_MAIN_ROW to occurrences(undo.body, REPO_READ_MAIN_ROW),
+            REPO_INSERT_REMOVED to occurrences(undo.body, REPO_INSERT_REMOVED),
+        )
+        assertEquals(
+            "`undoUpdate` 那四步的锚点必须各在恰好一处（多一处 = 同一件事做两遍）：\n" +
+                steps.joinToString("\n") { "  ${it.first}: ${it.second} 处" },
+            listOf(1, 1, 1, 1),
+            steps.map { it.second },
+        )
+        val order = listOf(
+            undo.body.indexOf(REPO_AFTER_ID_GUARD),
+            undo.body.indexOf(REPO_READ_GROUP_ROWS),
+            undo.body.indexOf(REPO_READ_MAIN_ROW),
+            undo.body.indexOf(REPO_INSERT_REMOVED),
+        )
+        assertEquals(
+            "次序必须是「删拆行 → **按 id 复原那一族兄弟行** → 复原主行 → 补回被清掉的片段」，" +
+                "且**兄弟行那一趟在复原主行之前**（本卡实现的就是这一种，理由：组写跑在主行写之后，" +
+                "它交回的表里那一版主行是「改完之后」的，只有 `action.before` 那一趟回得到真正的改前值）。" +
+                "实到位置（体内偏移）$order\n  undoUpdate 起手在 L" + lineOf(repoRaw, undo.openBrace) +
+                "\n复算：awk '/private suspend fun undoUpdate/,/^    }/' " +
+                "app/src/main/java/com/buaa/schedule/data/repository/ScheduleRepository.kt",
+            order.sorted(),
+            order,
+        )
+        assertTrue(
+            "而且四步的位置互不相同（两枚锚点撞在同一处 = 有一步其实没落地）：" + order.distinct().size,
+            4 == order.distinct().size,
+        )
+
+        // ── 跳过那一档 = 明确的不动：那一趟里不插行、也不过 normalize ──
+        val loopAt = undo.body.indexOf(REPO_READ_GROUP_ROWS)
+        val loop = braceBodyFrom(repo, repo.indexOf('{', undo.openBrace + loopAt))
+        assertEquals(
+            "「读不到那一行 / 那一 id 上已是别的课」两档都是**明确的不动**：" +
+                "那一趟里 `insertWithReminders(` 必须 0 处（重插是主行那一手，本卡判成不给兄弟行）——" +
+                "红了就去 `GroupRowUndoPolicy.kt` 段首那四条代价账重判，那是一笔不对称的账：" +
+                "跳过最坏是「某一格颜色没撤动」，重插最坏是「多一行重复课」或「丢一条提醒」",
+            0,
+            occurrences(loop.body, "insertWithReminders("),
+        )
+        assertEquals(
+            "兄弟行是**原样**写回那一版（`undoUpdate` 那一趟里 `courseDao.update(` 恰好一处）：" +
+                "快照本来就是从我们自己那张表里读回来的，再过一遍 normalize 等于在复原之外" +
+                "又写了一次别人的规则（它重排周次/节次、trim 名称、把脏学分冲成 null）",
+            1,
+            occurrences(loop.body, "courseDao.update("),
+        )
+        assertEquals(
+            "那一趟里不许出现 `CourseConstraints.normalize(`（主行那一趟保留它，第 ⑤ 层那枚没动）",
+            0,
+            occurrences(loop.body, "CourseConstraints.normalize("),
+        )
+        assertTrue(
+            "写库那一行必须排在判据之后（判成 Restore 才写）：" +
+                "\n  判据 体内偏移 " + loop.body.indexOf(REPO_DISPOSITION_CALL) +
+                " / 写库 体内偏移 " + loop.body.indexOf(REPO_RESTORE_WRITE),
+            loop.body.indexOf(REPO_DISPOSITION_CALL) in 0 until loop.body.indexOf(REPO_RESTORE_WRITE),
+        )
+    }
+
+    /**
+     * 判据本体的落点与纯度（同第 ⑥ 层那一族口径，只是对象换成本卡新长出来的那一枚）。
+     *
+     * 红线：纯 JVM 判据零 android import、零时钟读取，运行期事实（库里读回来的那一行、
+     * 那一行算不算同一门课）由调用点当参数递进来。
+     */
+    @Test
+    fun `那一族行的处置判据也只有一份 且仍是纯判据`() {
+        val byFile = readAllMainSources().mapValues { (_, text) -> blankCommentsKeepingLiterals(text) }
+        assertEquals(
+            "`internal fun groupRowUndoDisposition(` 全仓 main 恰好一处，就在 GroupRowUndoPolicy.kt。\n" +
+                "复算：grep -rn \"internal fun groupRowUndoDisposition(\" app/src/main/java --include='*.kt'\n" +
+                "**朝宽扭这里红**：谁在 `undoUpdate` 旁边把三档又比一遍（「返回布尔后调用点各自判一次」那一族），" +
+                "这本册子就长出第二枚落点",
+            listOf(GROUP_ROW_POLICY_NAME),
+            byFile.filter { occurrences(it.value, GROUP_ROW_UNDO_SIGNATURE) > 0 }.keys.toList(),
+        )
+        assertEquals(
+            "读 `groupBeforeRows` 那一族行的文件全仓恰好三处（条目本体 / 压栈点 / 撤销那一趟）：" +
+                "长出第四处 = 这一族又有一条自己的读法",
+            listOf("ScheduleRepository.kt", "ScheduleViewModel.kt", "UndoManager.kt"),
+            byFile.filter { occurrences(it.value, "groupBeforeRows") > 0 }.keys.sorted(),
+        )
+        assertEquals(
+            "结论域那三档各恰好一枚（`-> GroupRowUndoDisposition.`）：长出 Insert 之类第四档，" +
+                "本卡那笔「跳过 vs 重插」的代价账就要重判 —— 见 GroupRowUndoPolicyTest 第 ③ 层同一格",
+            3,
+            occurrences(byFile.getValue(GROUP_ROW_POLICY_NAME), "-> GroupRowUndoDisposition."),
+        )
+        assertEquals(
+            GROUP_ROW_POLICY + " 的 import 册子变了（应当只有那一枚纯类型）。" +
+                "长出 android.* / androidx.* / java.time.* / System.currentTimeMillis 之类就是判据又学会了" +
+                "读外部事实 —— 本仓口径：运行期事实由调用点当参数递进来。" +
+                "\n复算：grep -n \"^import\" app/src/main/java/$GROUP_ROW_POLICY",
+            GROUP_ROW_POLICY_IMPORTS,
+            Regex("(?m)^import .*$").findAll(readMainSource(GROUP_ROW_POLICY)).map { it.value }.toList(),
+        )
+    }
+
     // ---- 源码核对小工具（抄 CourseDeletionWiringGuardTest，同一族口径）----
 
     /** `ScheduleViewModel.updateCourse` 的函数体（抹注释后的文本，体内偏移配 [bodyBase] 换回全文偏移） */
@@ -951,5 +1231,30 @@ class UndoUpdateEntryGuardTest {
             "CourseConstraints.normalize(action.before)?.let { courseDao.update(it.toEntity()) }"
         const val REPO_INSERT_REMOVED = "insertWithReminders(action.removed, action.reminders)"
         const val VM_UNDO_SIGNATURE = "fun undo() {"
+
+        // ⑦ T137：条目带得下组写改掉的行（容量那一半）
+        const val UPDATE_CLASS_SIGNATURE = "data class Update("
+        const val GROUP_ROWS_FIELD_WITH_DEFAULT = "groupBeforeRows: List<Course> = emptyList(),"
+        const val PUSH_UPDATE_SIGNATURE = "fun pushUpdate("
+        const val UPDATE_PASS_THROUGH = "UndoAction.Update("
+
+        /** 字段名 / 形参名 / 实参名共用一把抽法：`(\w+):` —— 三榜都从原文里各抽一次，不是拿常量比常量 */
+        val UPDATE_FIELD_NAME = Regex("""(\w+):""")
+        const val VM_SNAPSHOT_GROUP_ROWS = "groupBeforeRows = group?.beforeRows.orEmpty(),"
+
+        // ⑧ T137：undoUpdate 按 id 复原那一族行（复原那一半）
+        const val REPO_UNDO_UPDATE_SIGNATURE = "private suspend fun undoUpdate("
+        const val REPO_READ_GROUP_ROWS = "action.groupBeforeRows.forEach { snapshot ->"
+        const val REPO_READ_SNAPSHOT_ROW = "courseDao.getById(snapshot.id)"
+        const val REPO_SAME_COURSE_RULER = "ImportPlanner.courseKey(held) == ImportPlanner.courseKey(snapshot)"
+        const val REPO_DISPOSITION_CALL = "groupRowUndoDisposition(held, sameCourseAtId)"
+        const val REPO_READ_MAIN_ROW = "val current = courseDao.getById(action.before.id)"
+        const val REPO_RESTORE_WRITE = "courseDao.update(snapshot.toEntity())"
+
+        // ⑧ 判据本体的落点与纯度
+        const val GROUP_ROW_POLICY = "com/buaa/schedule/data/repository/GroupRowUndoPolicy.kt"
+        const val GROUP_ROW_POLICY_NAME = "GroupRowUndoPolicy.kt"
+        const val GROUP_ROW_UNDO_SIGNATURE = "internal fun groupRowUndoDisposition("
+        val GROUP_ROW_POLICY_IMPORTS = listOf("import com.buaa.schedule.domain.model.Course")
     }
 }
