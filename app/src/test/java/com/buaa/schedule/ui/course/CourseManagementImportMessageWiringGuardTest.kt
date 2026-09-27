@@ -41,7 +41,7 @@ import org.junit.Test
  * 只做**源码核对**（JVM，无 Robolectric、无设备、不读时钟）。判据一律按**落点 / 次序 / 逐字**取，
  * 不只数总出现次数。零装机级证据（本仓红线：禁 adb / 禁模拟器 / 禁真机）。
  */
-class CourseManagementImportMessagePreconditionGuardTest {
+class CourseManagementImportMessageWiringGuardTest {
 
     // ─────────────── ① 病本体：VM 在这一页能触发的五句话，这一页一处也不读 ───────────────
 
