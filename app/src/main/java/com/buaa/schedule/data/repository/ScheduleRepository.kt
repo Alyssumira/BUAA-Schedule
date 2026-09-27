@@ -274,18 +274,18 @@ class ScheduleRepository(
     }
 
     /**
-     * 删除课程同时清掉对应提醒，避免孤儿提醒继续触发。
-     * 返回被清掉的提醒快照：撤销删除时按 [com.buaa.schedule.data.undo.UndoManager.UndoAction.Delete]
-     * 原样挂回，口径与组删除的 [deleteCourseGroup] 一致。
+     * 删一门课 + 连带清掉它的提醒，返回**这一趟到底删没删到**（[CourseDeletion]）：事务内读回来的行本身
+     * 才算数，提醒快照不算。形状为何这样选、全仓唯一调用点、谁拿返回值当"这课存在过"的证据，逐处写在
+     * `CourseDeletionPolicy.kt` 段首（判据本体 [deletionRemovedSomething]）；没读到行就什么都不动。
      */
-    suspend fun deleteCourse(course: Course): List<ReminderSetting> {
-        return writeMutex.withLock {
-            db.withTransaction {
-                val snapshot = reminderDao.getByCourse(course.id)?.toDomain()
-                    .let { listOfNotNull(it) }
-                deleteCourseRow(course)
-                snapshot
-            }
+    suspend fun deleteCourse(course: Course): CourseDeletion = writeMutex.withLock {
+        db.withTransaction {
+            // 先按 id 把行读回来：删的是库里那一行，不是调用方手里那份可能已经过期的对象
+            val rows = listOfNotNull(courseDao.getById(course.id)?.toDomain())
+            val reminders = rows.mapNotNull { reminderDao.getByCourse(it.id)?.toDomain() }
+            val deletion = courseDeletionOf(rows, reminders)
+            if (deletion.removedAnything) deleteCourseRow(rows.first())
+            deletion
         }
     }
 
