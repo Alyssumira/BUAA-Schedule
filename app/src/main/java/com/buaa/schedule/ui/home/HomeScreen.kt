@@ -422,13 +422,32 @@ fun HomeScreen(
             // 改课名/教师/地点/周次都不再传导到这一行，而且刷新会把教务那一版当新课补进来，
             // 同一门课在课表上出现两张卡（一张原时刻、一张手挪的），要用户手动删一张。
             // 判据与编辑器同源（`CourseEditorScreen.performSave` 那枚 `isManualOverride`），
-            // 差别只在：编辑器要问"改没改过这门课"，而走到这里的时间**必然**已经被人手摆过
-            // （落点侧 `WeekView` 的 onDragEnd 闸在 `targetDayIndex/targetStartPeriod` 与
-            // origin 不等上），所以这里无条件为真。
+            // 差别只在：编辑器要问"改没改过这门课"，这里要问的是"**这一趟**动没动时间"。
+            // T133b：原本这里写的是一次空操作也标真，理由是"落点侧已经闸在'时间真的变了'上"。
+            // 那句前提只覆盖了三分之二的落点 —— 拖拽那两枚 onDragEnd 确实挡住了同值
+            // （`WeekView.kt:899-902` 与 `:1030-1033`），但长按菜单与卡片动作的「移动到…」
+            // 那一路**没有同值闸**：选择框的初值就是出发那一格（`WeekView.kt:1370-1373`），
+            // `onConfirm` 与确认窗的「所有周 / 仅本周」全程无条件回调
+            // （`WeekView.kt:1244-1255`、`:1276`、`:1292`）⇒ 用户把选择框打开、选回原来那个
+            // 上课日和原来那个起始节、点两下确认，就是一笔逐字段什么都没改的写库，
+            // 而它上面那两件事（退出教务刷新 + 多一张重复卡）照样发生。
+            // 所以判据收在这里 —— `handleCourseMove` 是拖拽与选择框两条路的共同收口，只需一处判；
+            // 本体在 [ManualTimeOverridePolicy]（纯判据，外部事实由这里当参数递进去）。
+            // 缩放与向导那两枚 copy 仍无条件为真：它们的落点闸分别在 `WeekView.kt:1113`
+            // （`merged != r.course.periods`）与 `CourseConflictResolution.kt:126`（原地不算建议），
+            // 同值飞不到那两处。
+            val newDayOfWeek = newDayIndex + 1
+            val manualTimeOverride = ManualTimeOverridePolicy.forCourseMove(
+                originalIsManualOverride = course.isManualOverride,
+                newDayOfWeek = newDayOfWeek,
+                originalDayOfWeek = course.dayOfWeek,
+                newPeriods = shiftedPeriods,
+                originalPeriods = course.periods,
+            )
             val shifted = course.copy(
-                dayOfWeek = newDayIndex + 1,
+                dayOfWeek = newDayOfWeek,
                 periods = shiftedPeriods,
-                isManualOverride = true,
+                isManualOverride = manualTimeOverride,
             )
             scope.launch {
                 if (thisWeekOnly) {
@@ -452,7 +471,8 @@ fun HomeScreen(
     // 缩放改节次：松手后更新该课程的连续节次段（仅作用于整门课）
     // T133：改的就是 periods（courseKey 的一维），与上面拖课同一种病，同一味药 ——
     // 不标 manual 的话下一次教务刷新把这行按原节次冲回来、连带提醒一起删。
-    // 落点侧 `WeekView` 已经闸在 `merged != r.course.periods` 上，同值缩放飞不到这里。
+    // T133b 复核：这一枚**不需要**上面那判据 —— 落点侧 `WeekView.kt:1113` 已经闸在
+    // `merged != r.course.periods` 上，同值缩放飞不到这里（全站 `onCourseResize` 只有那一处调用）。
     val handleCourseResize: (Course, List<Int>) -> Unit = remember(viewModel, scope) {
         { course, newPeriods ->
             scope.launch {

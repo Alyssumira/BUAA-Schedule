@@ -78,6 +78,13 @@ private fun Course.wizardKey(): String = if (id != 0L) id.toString() else "n:$na
  *   注意**只有拆出来的那一行带这枚旗标**：`updateCoursePartialWeeks` 同时把原行的 `weeks` 收窄，
  *   那一行留 `false` 是有意的 —— 它的 `periods` 仍是教务给的那一份，标了 manual 就等于让教务
  *   那一版在**其余每一周**都补一张重复卡（而现状只重复被挪走的那几周）。
+ *   T133b 逐条复核过**这一枚没有同值可达的路**，所以它照旧无条件为真（不像拖课那一枚要改判据）：
+ *   `newPeriods` 来自 [CourseConflictResolution.suggestNearestFreeShift]，而它在枚举候选时有一记
+ *   `if (candidate == currentPeriods) continue`（`CourseConflictResolution.kt:126`，`currentPeriods`
+ *   正是 `target.periods.sorted()`）⇒ **原地压根不算建议**，那一行的按钮也就不会出场。
+ *   `scopedWeeks` 那一维确实能判回原值（[ConflictShiftWeekScope.weeksToShift] 的两记 no-op 分支在
+ *   `:63`、`:65` 把调用点递进来的 `targetWeeks` 原样送回），但周次既不在 `courseKey` 里、
+ *   同一趟的 `periods` 又必然已经换掉 ⇒ "只动周次、不动时间"这一格在向导里组不出来。
  *
  * @param groupWeeks 那一组冲突实际涉及的周次（行头「第 N 周」念的就是它），来自
  *   [com.buaa.schedule.domain.schedule.CourseConflictResolution.ConflictGroup.weeks]
