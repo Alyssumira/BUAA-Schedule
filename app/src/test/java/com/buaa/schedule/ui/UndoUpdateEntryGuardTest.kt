@@ -45,6 +45,20 @@ import org.junit.Test
  * （R5 F-35）、`savedId != course.id` 的另发行、组那一支写在兄弟行上的外观。
  * 真要改，先让第 ③ 层那枚签名断言红掉（组写开始返回结论），再回来连着那三条一起重判。
  *
+ * ## 第 ⑤ 枚那一格在 T127 改过一次判（改前钉的是病、改后钉的是药）
+ *
+ * 本文件落到 master 时，第五枚 `@Test` 的方法名是
+ * `管理页那枚无条件撤销按钮今天只登记不修 归T127`，它钉的是**病还在**：管理页那颗「撤销」
+ * `actionLabel = "撤销",` 无条件长在那儿，而 `viewModel.deleteCourseGroup(…)` 返回的 Boolean 被丢掉。
+ * T127 把那一支改成"读结论 ⇒ 文案与那颗按钮同读一枚 `deleted`"（同仓 `HomeScreen` 已有的形状，
+ * T121 收的），于是那一枚**当场红**（红是设计好的方向，不是事故）。改判时按红线**没有删那一格**，
+ * 而是把它的极性整个翻过来钉**药**：`UNGATED_LABEL` 从「必须恰好一处」改成「必须 0 处」，
+ * 新增「`takeIf` 那一闸必须恰好一处、且闸的是文案那一句读的同一枚变量」。
+ * 两侧各留一道口子：**朝宽扭**（有人把那颗按钮改回无条件 ⇒ 0 处那一断言红）；
+ * **朝窄扭**（有人把那颗按钮整颗删掉、或改闸到另一枚布尔上 ⇒ 同源与次序那几断言红）。
+ * 更细的落点账（VM 两枚早返回、仓储层空快照、调用点册子、两枚删除入口的对照表）在
+ * `CourseGroupDeletionWiringGuardTest`，本文件只留"撤销条目的可达性"这一族自己的账。
+ *
  * 只做**源码核对**（JVM，无 Robolectric、无设备、不读时钟）。断言按**落点 / 次序 / 逐字**取判据，
  * 不数总出现次数 —— 「枚数对但落点错」是本仓登记过的洞。报错消息里带复算命令。
  */
@@ -280,28 +294,109 @@ class UndoUpdateEntryGuardTest {
         )
     }
 
+    /**
+     * **T127 改判过的一格**（改前钉病、改后钉药，见类头那一节）。
+     *
+     * 改前它叫 `管理页那枚无条件撤销按钮今天只登记不修 归T127`，三枚断言全是**正向钉病灶**：
+     * `occurrences(code, "actionLabel = \"撤销\",") == 1`、
+     * `occurrences(code, "viewModel.deleteCourseGroup(target.fragments)") == 1`（那句没有 `val ` 接收 ⇒ 结论被丢）、
+     * `assertFalse(code.contains("val deleted = viewModel.deleteCourseGroup"))`。
+     * 那三枚能抓住的是"有人抢先把 T127 的活提前做了一半"（编排侧 M-A 臂就是这么叫红它的），
+     * 却**抓住病灶、抓不住修法**：真修的时候把 `takeIf { }` 里的变量名换成别的、或只闸文案不闸按钮，
+     * 它一个字都不吭。
+     *
+     * 改后钉的是药，两侧各有格子：**朝宽**（把那颗按钮改回无条件 `actionLabel = "撤销",`）红在
+     * [UNGATED_LABEL] 那枚 0 处断言与那枚"整句被丢掉"的反向钉；**朝窄**（把那颗按钮整颗删了 /
+     * 换一枚布尔去闸 / 只留成功那支文案）红在 [GATED_LABEL] 的 1 处、闸变量同源、以及两支文案那三枚。
+     */
     @Test
-    fun `管理页那枚无条件撤销按钮今天只登记不修 归T127`() {
-        val code = blankCommentsKeepingLiterals(readMainSource(COURSE_MANAGEMENT_SCREEN))
+    fun `管理页那一支T127落地 撤销按钮与提示文案同读一枚删除结论`() {
+        val raw = readMainSource(COURSE_MANAGEMENT_SCREEN)
+        val code = blankCommentsKeepingLiterals(raw)
 
+        // ── 反向钉：病（无条件 + 结论被丢掉）不许回来 ──
         assertEquals(
-            "`actionLabel = \"撤销\",` 只许出现在管理页这一处，且**不带任何闸**（无条件）。" +
-                "它是 T127 的靶子，本卡按红线一字未动。它一旦改成 `takeIf { … }`，这一枚会红 —— " +
-                "那是好事，回来把第 ④ 层那笔「什么时候捞得着栈顶」的账一起重钉",
-            1,
+            "`actionLabel = \"撤销\",` 那枚**无条件**的撤销按钮今天必须是 0 处（T127 已把它改成按删除结论闸）。\n" +
+                "复算：grep -n 'actionLabel = \"撤销\",' app/src/main/java/com/buaa/schedule/ui/course/CourseManagementScreen.kt\n" +
+                "**朝宽扭这里红**：谁把它改回无条件，用户就又会在一次什么都没删掉的删除之后看见一颗「撤销」，" +
+                "点它捞的是栈里上一枚别的条目（`undo()` 无参、`pop()` 捞栈顶，见第 ⑤ 层）",
+            0,
             occurrences(code, UNGATED_LABEL),
         )
-        assertEquals(
-            "`viewModel.deleteCourseGroup(target.fragments)` 的返回值今天被**丢掉**（前面没有 `val `）。\n" +
-                "复算：grep -n \"deleteCourseGroup(target.fragments)\" app/src/main/java/com/buaa/schedule/ui/course/CourseManagementScreen.kt\n" +
-                "本卡不动它（红线：那是 T127）。这一枚红 = 有人开始读那枚 Boolean 了，" +
-                "届时「删没删到」与「那颗按钮该不该存在」就成了对，可达性结论要重算",
-            1,
-            occurrences(code, DISCARDED_GROUP_DELETE),
-        )
         assertFalse(
-            "确认它今天仍然没被赋值给任何变量（本卡没顺手修）：不许出现 `val deleted = viewModel.deleteCourseGroup`",
-            code.contains("val deleted = viewModel.deleteCourseGroup"),
+            "`viewModel.deleteCourseGroup(target.fragments)` 不许再单独成一句（返回值被丢掉）——" +
+                "那正是本卡修的病灶本体：删没删到只有 VM 知道，UI 不读就无从分辨。\n" +
+                "复算：grep -n 'viewModel.deleteCourseGroup' app/src/main/java/com/buaa/schedule/ui/course/CourseManagementScreen.kt\n" +
+                "⚠️ 这一格不能按旧写法拿子串计数：`viewModel.deleteCourseGroup(target.fragments)` 是" +
+                "`val deleted = viewModel.deleteCourseGroup(target.fragments)` 的**子串**，改前改后都命中一次，" +
+                "数出来永远对 ⇒ 套套逻辑（#118 那一族）。这里改成整行比对",
+            code.lineSequence().any { it.trim() == DISCARDED_GROUP_DELETE },
+        )
+        assertEquals(
+            "那一支今天必须**读**这枚结论（`val deleted = viewModel.deleteCourseGroup(target.fragments)` 恰好一处）。" +
+                "**朝窄扭这里红**：整句换成别的接收法（`@Suppress(\"UNUSED_VARIABLE\")`、或换成再调一趟判存在性）" +
+                "都不算读了结论",
+            1,
+            occurrences(code, READING_GROUP_DELETE),
+        )
+
+        // ── 正向钉：药（同一枚结论同时决定文案与那颗按钮）──
+        val hits = indexOfAll(code, READING_GROUP_DELETE)
+        val launch = scopeLaunchBody(code, hits.first())
+        val launchBase = launch.openBrace + 1
+        assertEquals(
+            "那颗「撤销」必须**仍在那儿**、且被删除结论闸着（`actionLabel = \"撤销\".takeIf { deleted },` 恰好一处）：" +
+                "形状照同仓 `HomeScreen` 的单课删除那一支（T121 收的）。" +
+                "**朝窄扭这里红**：整颗按钮被删掉（连带成功那次也撤不回）不是收窄，是把另一头的功能弄丢",
+            1,
+            occurrences(launch.body, GATED_LABEL),
+        )
+        assertTrue(
+            "文案必须两支都在：成功念「已删除「…」」（这一句改前改后一字未动），" +
+                "失败念「删除失败：… 还在课表里」（与 `HomeScreen` 同一句话术，本卡没造新文案）。" +
+                "**朝窄扭这里红**：把 else 那一支抹掉 = 删不到时又只剩一句谎",
+            launch.body.contains(GROUP_SUCCESS_COPY) && launch.body.contains(GROUP_FAILURE_COPY),
+        )
+        // 同源：三处闸的是不是同一枚变量，**从原文里各抓一次名字**（拿常量比常量是套套逻辑）
+        val assigned = GROUP_ASSIGN_VARIABLE.find(launch.body)?.groupValues?.get(1)
+        val onMessage = MESSAGE_IF_VARIABLE.find(launch.body)?.groupValues?.get(1)
+        val onLabel = LABEL_TAKE_IF_VARIABLE.find(launch.body)?.groupValues?.get(1)
+        assertEquals(
+            "三处都得分得出闸在哪枚变量上（赋值句 / 文案那一句 / 那颗按钮），应当分出 3 处，" +
+                "实际 $assigned / $onMessage / $onLabel —— 有一处抓不到就是写法换了" +
+                "（三元换成 `when`、`takeIf` 换成 `if` 块…），本守卫要跟着重钉",
+            3,
+            listOfNotNull(assigned, onMessage, onLabel).size,
+        )
+        assertEquals(
+            "「文案两支怎么分」与「那颗按钮给不给」必须闸在**同一枚**变量上（同源），三处读到的名字：" +
+                "赋值句 `$assigned` / 文案 `$onMessage` / 按钮 `$onLabel`。" +
+                "对不上就是长出了第二把尺子 —— 提示条念「删除失败」却仍给一颗「撤销」这种自相矛盾的组合" +
+                "今天钉不住，明天就会漂出来（本卡的病恰恰是文案与按钮**都**无条件，同源得可笑）",
+            1,
+            listOfNotNull(assigned, onMessage, onLabel).distinct().size,
+        )
+        assertTrue(
+            "三拍次序：读结论 → 才分文案 → 才决定那颗按钮（都在同一个 `scope.launch` 块里）。" +
+                "次序倒了就是在读上一次删除的结果：\n" +
+                "  读结论 L${lineOf(raw, launchBase + launch.body.indexOf(READING_GROUP_DELETE))} / " +
+                "分文案 L${lineOf(raw, launchBase + launch.body.indexOf(GROUP_IF_DELETED))} / " +
+                "闸按钮 L${lineOf(raw, launchBase + launch.body.indexOf(GATED_LABEL))}",
+            launch.body.indexOf(READING_GROUP_DELETE) in 0 until launch.body.indexOf(GROUP_IF_DELETED) &&
+                launch.body.indexOf(GROUP_IF_DELETED) in 0 until launch.body.indexOf(GATED_LABEL),
+        )
+        assertEquals(
+            "点了那颗按钮才 pop 栈顶：`if (result == SnackbarResult.ActionPerformed) {` 那一闸必须还在恰好一处。" +
+                "撤销**捞的是栈顶而不是这一笔**（`undo()` 无参）本卡按红线未动 —— 那是 T123 的账，" +
+                "本卡只保证「删不到的那一次根本不给那颗按钮」",
+            1,
+            occurrences(launch.body, ACTION_PERFORMED_IF),
+        )
+        assertEquals(
+            "提示条时长仍是 `SnackbarDuration.Long`（恰好一处）：第 ④ 层那笔「同一次会话里栈顶被别的条目压上去」" +
+                "的可达性账全靠这扇窗，改成 `Indefinite` 之类要回来重判第 ④⑤ 两层",
+            1,
+            occurrences(launch.body, SNACKBAR_LONG),
         )
     }
 
@@ -436,6 +531,24 @@ class UndoUpdateEntryGuardTest {
     /** 那一处落在原文的第几行（失败消息要把人带到那一处，只报个数等于没有守卫） */
     private fun lineOf(rawSource: String, position: Int): Int =
         if (position < 0) -1 else rawSource.substring(0, position).count { it == '\n' } + 1
+
+    /**
+     * 从 [hit] 往前找包围它的那次 `scope.launch {`，再按花括号配平取出那一段体。
+     *
+     * 返回 [Extracted] 而不是裸串：调用点要拿 `openBrace` 把体内偏移换回全文偏移去报行号
+     * （`lineOf`）。只报"次序对不对"不报"落在第几行"，下一个人就没法核这条守卫读的是哪一处。
+     */
+    private fun scopeLaunchBody(source: String, hit: Int): Extracted {
+        val anchor = source.lastIndexOf(LAUNCH_ANCHOR, hit)
+        check(anchor >= 0) {
+            "那一处往前找不到包围它的 scope.launch {：这段操作换了载体（不在协程里了？），本守卫要跟着改"
+        }
+        val brace = anchor + LAUNCH_ANCHOR.length - 1
+        check(source[brace] == '{') { "`scope.launch {` 那锚点末尾不是花括号：写法变了" }
+        val extracted = braceBodyFrom(source, brace)
+        check(hit in extracted.openBrace + 1..extracted.closeBrace) { "取出的 scope.launch 体不含那一处：配平跑偏了" }
+        return extracted
+    }
 
     private fun filesHint(byFile: Map<String, String>, needle: String): String =
         byFile.filter { occurrences(it.value, needle) > 0 }
@@ -592,6 +705,23 @@ class UndoUpdateEntryGuardTest {
         const val HOME_GATED_LABEL = "actionLabel = \"撤销\".takeIf { deleted }"
         const val UNGATED_LABEL = "actionLabel = \"撤销\","
         const val DISCARDED_GROUP_DELETE = "viewModel.deleteCourseGroup(target.fragments)"
+
+        // ④ 管理页那一支（T127 改判后钉的是药）
+        const val LAUNCH_ANCHOR = "scope.launch {"
+        const val READING_GROUP_DELETE = "val deleted = viewModel.deleteCourseGroup(target.fragments)"
+        const val GROUP_IF_DELETED = "message = if (deleted) \"已删除「\${target.displayName}」\""
+        const val GROUP_SUCCESS_COPY = "\"已删除「\${target.displayName}」\""
+        const val GROUP_FAILURE_COPY = "\"删除失败：\${target.displayName} 还在课表里\""
+        const val GATED_LABEL = "actionLabel = \"撤销\".takeIf { deleted },"
+        const val ACTION_PERFORMED_IF = "if (result == SnackbarResult.ActionPerformed) {"
+
+        /**
+         * 三处闸的变量名**从原文里各抓一次**（不是拿常量比常量 —— 那是 #118 那种套套逻辑）。
+         * 每一枚都只对自己那一处负责：赋值句 / 文案那一句 / 那颗按钮。
+         */
+        val GROUP_ASSIGN_VARIABLE = Regex("""val (\w+) = viewModel\.deleteCourseGroup\(""")
+        val MESSAGE_IF_VARIABLE = Regex("""message = if \((\w+)\) "已删除「""")
+        val LABEL_TAKE_IF_VARIABLE = Regex("""actionLabel = "撤销"\.takeIf \{ (\w+) \},""")
 
         // ⑤ 栈语义与 Update 条目的落库
         const val STACK_FIELD = "private val stack = ArrayDeque<UndoEntry>()"
