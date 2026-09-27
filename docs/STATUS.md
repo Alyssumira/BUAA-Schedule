@@ -3786,3 +3786,55 @@ grep -c '^' app/src/main/java/com/buaa/schedule/ui/home/HomeScreen.kt
 ```
 这条与 [[ai-orchestrator-role]] 里那条老规矩同族、只是这次咬的是**我自己写进台账的行号**：凡"现值 = N"，落笔前要么有断言钉着、要么我自己 `awk` 读一次那一行的原文；
 从代理回执转抄的映射属于**未验到**，不能直接进账。
+
+## 09-27 深夜续：T128 收单（组外观那一支交出它自己的结论 = T122 埋的那枚扳机）
+
+基点 `d821b59`（T135③），分支 `ai/T128` 两枚：`34a265a`（① 组写回报自己的结论）/ `5eadb78`（② 把 T122 那枚扳机层从"钉前置未落地"翻成正向判据）。
+盘面前置四条先过：两枚哈希 `git cat-file -t` 都是 commit、`git rev-list --count d821b59..ai/T128` = 2、三枚新文件在盘、`git status --porcelain` 空。
+合并走 `merge --ff-only` ⇒ **我重跑门禁的那棵树就是合并对象本身**（合并后 `git diff ai/T128 --stat` 给 0 行）。
+
+治的是 `docs/derived-field-audit.md` §9.5② 那一格：`updateCourse` 的压栈点原来只闸在「原文读没读回来」上、写完库**无条件**压一条
+⇒ 同值重写也压 ⇒ 栈里躺一枚净效果为零的条目，而用户在删除之后那条提示条上点掉的是唯一那颗「撤销」。
+T122 当时判 deferred 的理由是"这一判今天在压栈点算不出来"（组那一支写的是**别的行**、却只回报 `Unit`），并留下一枚扳机：**前置卡落地即红**。
+本卡把前置落地（`GroupAppearanceEdit(beforeRows)`），并当场把扳机层重钉成正向判据 —— **一格没删**，`UndoUpdateEntryGuardTest` 名下 6 ⇒ **7**。
+新判据是四把维度取或（另发新行 / 顺手清掉的兄弟片段数 / 主行 before≠after / 组那一支交回的行非空），本体在纯 JVM 内核
+`ui/UndoUpdateAdmission.kt`（零 android import、零时钟读取），组写那一支的逐行判据在 `data/repository/CourseGroupAppearancePolicy.kt`。
+
+**我在合并对象上重跑的六步冷门禁（读数是我这轮量的，不是抄回执）**：
+- STEP 0 对象自证：行首锚 `@Test` 静态尺 **1,783**（卡面期望 1,783）、VM 行数 **1,693**（期望 1,693）、`git diff --quiet HEAD` = 0；
+- `clean` rc=0（上一轮三处死在 Windows 文件锁 ⇒ 起手 `--stop` + 杀 java + 清 `lint-cache`）；
+- `:app:assembleRelease` **先于**测试：BUILD SUCCESSFUL 4m19s、91 枚任务 **86 executed / 5 up-to-date**、签名包 **7,251,984 B**；
+  同一棵树第二次全量再读 **7,251,984 B** ⇒ 两次逐字节同数；扫 apk dex 得 `GroupAppearanceEdit` 命中 **1** ⇒ 真往 dex 加了类，
+  按口径**记新地板**（上一档 `d22a3f8` 那批的 7,250,597 ⇒ **+1,387 B**），"±几百字节的带"这一档**不适用**；
+- `:app:testDebugUnitTest --rerun-tasks` **两跑都是 1,783 tests / 213 suites / 0 失败 / 0 错误 / 0 skipped**（两枚 XML 时间戳 23:37:11 与 23:40:27，本轮新写的）；
+- `:app:lintAnalyzeDebug --rerun :app:lintReportDebug --rerun` rc=0、**0 error / 14 warning**、九枚 id 逐档同
+  （BatteryLife 1 / ConfigurationScreenWidthHeight 3 / FrequentlyChangingValue 2 / GradleDependency 3 / InlinedApi 1 / ObsoleteSdkInt 1 / OldTargetApi 1 / UseKtx 1 / WebViewApiAvailability 1）；
+- `:benchmark:compileNonMinifiedReleaseKotlin` rc=0、10 枚任务 10 executed。
+
+**静态尺五把（合并之后在 master 上重量）**：行首锚 `@Test` **1,783 == 门禁 XML 1,783**（同值第三次成立）、test 文件数 **205 ⇒ 207**、
+`^class ` 那把 **211 ⇒ 213**、文件名带 `Guard` 那把 **45 一字未动**（本卡零枚新守卫，只往两枚既有守卫里添 `@Test`）、
+`grep -rl "src/main/java"` 那把 **81 ⇒ 83**。⚠️ 83 里"提到 main 路径却没开文件"那一族今天从 **2 枚长成 3 枚**
+（新的是 `ui/UndoUpdateAdmissionTest.kt`：它只在类头 KDoc 里点了内核路径、没读文件），而 `data/repository/CourseGroupAppearancePolicyTest.kt`
+是真的开文件 ⇒ `docs/TESTING.md`「Guard 那一族与"读源码"那一族」那格 42⇒45 / 76⇒81 之间的差额账要按 **45 / 83 / 三枚例外**重算，已排 **T136**。
+
+**四支变异臂（朝宽、朝窄各扭一次；标"编排侧"的两支是代理没扭、我自己补的）**：
+- O1 摘掉内核总闸（no-op 行也照写）⇒ **5 枚红**：`CourseGroupAppearancePolicyTest` 4 + `UndoUpdateEntryGuardTest` 1；
+- O2 把判据里那枚组结论永远算成"没动"⇒ **4 枚红**：`UndoUpdateAdmissionTest` 3 + `UndoUpdateEntryGuardTest` 1；
+- O3（编排侧）**VM 闸门退回无条件压栈** = 把 §9.5② 的修法整条绕过 ⇒ **2 枚红**，全落在 `UndoUpdateEntryGuardTest`；
+- O4（编排侧）**次序那一半**：把组写搬到压栈块之后、原地只留一枚恒 `null` 的 `val group` ⇒ **2 枚红**，
+  一枚是"三拍次序：组写 → 判据 → 才压栈"（报错当场印出 组写 L541 / 判据 L529 / 压栈 L532），一枚是"那一处必须是**被接收**的"形状格。
+  ⚠️ 这一支**第一次没跑起来**：多行字面量锚点在 CRLF 工作树上 `count` 恒 0、python 自己 `assert` 拦下（[[mutation-test-hygiene]] 第 8 条），
+  改成按行切片重投才成立。四支各自复跑之后一律 `git checkout --` 还原 + 当场复算 md5 回基线、树 vs HEAD = 0。
+- 顺带一条环境事实（这次撞到的是我自己的取证脚本）：**Windows 版 python 往控制台 `print` 一个 `⇒` 会 `UnicodeEncodeError: 'gbk' codec`**，
+  而这行**有用的输出已经先打出去了** ⇒ 看到 Traceback 别把上一条结论一起作废，先看那行在不在。
+
+**没修的那一半，如实登记（本卡范围内不可修）**：第 4 维命中而第 3 维不命中时（管理页给整组换色、主行本来就是这个色）条目**照压**，
+但 `UndoAction.Update` 今天只带得回主行 ⇒ 撤销回去的是"主行原样"、兄弟片段留着新色 = 一次改色撤不干净。
+那是撤销条目的**容量**问题，与"要不要有条目"是两件事 ⇒ 下一枚代码卡：`UndoAction.Update` 加 `groupBefore: List<Course>`
+（走默认参数 —— 那一族第 ⑤ 层那把构造器尺只数主构造器）+ `undoUpdate` 按 id 复原。
+
+**带漂的文档锚点（本卡只登记、不动手，全部并给 T136）**：`ScheduleRepository` 680 ⇒ **681** 行（净插 1 枚），
+插入落在 `updateCourseGroupAppearance` 那段 KDoc 里 ⇒ 该函数自己从 246 走到 **252**（+6），
+它**之后**的锚点整体 **+1**：盘面现值 `updateCourse` 裸 `:270`、`deleteCourse` 裸 `:282`、`deleteCourseGroup` 裸 `:300`、`deleteCourseRow` 裸 `:372`
+（上一档分别是 269 / 281 / 299 / 371）；`ScheduleViewModel` 行数一字未动（1,693），本卡在那一处的改动是**同行改写 + 前置三行**，
+压栈窗口今天读作裸 `:528-541`。⚠️ 这几枚数是我这轮 `grep -n` 现量的，不是从回执转抄的。
