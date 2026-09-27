@@ -3707,7 +3707,7 @@ T119/T120/T126 三张是纯文档卡不在这一族）⇒ 它改得对，我只�
 **地板：1,770 tests · 211 suites · 0 失败 · 0 skipped**（两把尺对齐：XML 文件 211 = testsuite 根 211 = 去重类名 211）
 · lint **0 error / 14 warning / 九档**（`ConfigurationScreenWidthHeight` 3、`GradleDependency` 3、`FrequentlyChangingValue` 2，另六档各 1）
 · 干净全量签名包 **7,250,597 B**（基点 `ac8a6c9` 的 7,250,623 ⇒ **−26 B**；同一对象我这轮另一次增量档读到 7,250,605 ⇒ 差 8 B 在既有非确定性带内）。
-静态尺复算：`grep -rh '^    @Test' app/src/test --include=*.kt | wc -l` ⇒ 1770；`ls app/src/test/**/*.kt | wc -l` ⇒ 205 枚文件；带 `Guard` 的 ⇒ 46。
+静态尺复算：`grep -rh '^    @Test' app/src/test --include=*.kt | wc -l` ⇒ 1770；`find app/src/test -name '*.kt' | wc -l` ⇒ 205 枚文件；`find app/src/test -name '*Guard*.kt' | wc -l` ⇒ 45（基点 43 + 本批两枚新守卫）。
 
 ### 病（三处落点，全部由我自己回读过盘面）
 
