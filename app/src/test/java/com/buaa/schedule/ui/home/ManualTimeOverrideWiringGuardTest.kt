@@ -25,6 +25,10 @@ import org.junit.Test
  *
  * 全站写 `isManualOverride` 的 UI 落点只有三枚（拖课 / 缩放 / 向导）加一枚组外观。只数总枚数的话，
  * 「把旗标从拖课那处搬到别处去」也算对 ⇒ 本守卫按**文件 / 函数体 / 逐字 / 次序**四把尺子取。
+ * **现状（T128）**：那"一枚组外观"不再长在那枚无条件字面量上了 —— `updateCourseGroupAppearance`
+ * 从今天起逐行比过才写，旗标由 `CourseGroupAppearancePolicy.kt` 里那枚"跟着真改动走、且粘住"的
+ * 判据供给 ⇒ 无条件那一本少一枚（只剩缩放 / 向导两枚）、由判据供给那一本多一枚（两枚）。
+ * 档 ⑤ 那两本册子照实重钉，没删判据。
  *
  * ## T133b 改的那一枚：拖课那枚旗标不再恒真
  *
@@ -47,8 +51,9 @@ import org.junit.Test
  * 3. `handleCourseResize` 体内那记 copy 逐字带旗标（同一种病：改的就是 `periods`）；
  * 4. `applyConflictShift` 体内那记 copy 同时带 `weeks = scopedWeeks`、`partialWeeks = true`
  *    与旗标（T131 的账不许被本卡顶掉）；
- * 5. 落点册子**按新形状两本数**：字面 `isManualOverride = true` 只剩缩放 / 向导 / 组外观各一枚，
- *    由判据供给的 `isManualOverride = manualTimeOverride` 只有拖课那一枚；编辑器那一枚既有判据
+ * 5. 落点册子**按新形状两本数**（T128 之后）：字面 `isManualOverride = true` 只剩缩放 / 向导各一枚，
+ *    由判据供给的两枚 —— 拖课那枚 `isManualOverride = manualTimeOverride`、组外观那枚
+ *    `isManualOverride = original.isManualOverride || appearanceChanged`；编辑器那一枚既有判据
  *    表达式原样在（本卡照它的写法，不许顺手改它）；
  * 6. 提醒那一刀确实挂在这条链上：`replaceSemesterCoursesInTx` 五步次序 + keptIds/droppedIds
  *    两行逐字 + 教务刷新那一句调用点仍在；
@@ -78,6 +83,9 @@ class ManualTimeOverrideWiringGuardTest {
         const val VIEW_MODEL = "com/buaa/schedule/ui/ScheduleViewModel.kt"
         const val PLANNER = "com/buaa/schedule/domain/schedule/ImportPlanner.kt"
 
+        /** T128：组外观那一支的旗标改由判据供给，落在这一枚纯判据文件里 */
+        const val GROUP_APPEARANCE_POLICY = "com/buaa/schedule/data/repository/CourseGroupAppearancePolicy.kt"
+
         const val MOVE_COPY_ANCHOR = "val shifted = course.copy("
         const val MOVE_LAMBDA_ANCHOR = "val handleCourseMove: (Course, Int, Int, Boolean) -> Unit = remember("
         const val RESIZE_LAMBDA_ANCHOR = "val handleCourseResize: (Course, List<Int>) -> Unit = remember("
@@ -96,6 +104,9 @@ class ManualTimeOverrideWiringGuardTest {
         // ── T133b：拖课那一枚旗标改由判据内核算 ──
         const val JUDGED_WRITE = "isManualOverride = manualTimeOverride"
         const val MOVE_JUDGE_ANCHOR = "val manualTimeOverride = ManualTimeOverridePolicy.forCourseMove("
+
+        // ── T128：组外观那一枚旗标也改由判据供给（跟着真改动走、旗标仍粘） ──
+        const val APPEARANCE_JUDGED_WRITE = "isManualOverride = original.isManualOverride || appearanceChanged"
         const val POLICY_SIGNATURE = "fun forCourseMove("
         const val POLICY_BODY =
             "originalIsManualOverride || newDayOfWeek != originalDayOfWeek || newPeriods != originalPeriods"
@@ -110,16 +121,27 @@ class ManualTimeOverrideWiringGuardTest {
             "var dayIndex by remember(request) { mutableIntStateOf(request.dayIndex.coerceIn(0, dayNames.lastIndex)) }"
         const val PICKER_INITIAL_PERIOD = "mutableIntStateOf(request.segment.first.coerceIn(1, maxStartPeriod))"
 
-        /** 落点册子（文件 → 枚数）· 无条件那一本：两枚 UI 落点 + 一枚组外观 */
+        /**
+         * 落点册子（文件 → 枚数）· 无条件那一本：两枚 UI 落点。
+         *
+         * **T128 少一枚**：第三枚本来长在 `ScheduleRepository.updateCourseGroupAppearance`
+         * （`isManualOverride = true,` 无条件盖给整组每一行，连逐字段没变的行也算"动过"）。
+         * 那一枚今天由判据供给（下面那一本），本仓的口径自 T133 起是"真的改了才标 manual"，
+         * 而组外观那一支自 T128 起**一行都不必写的行就不写** ⇒ 空操作不再新立旗。
+         * 复算：git grep -n "isManualOverride = true" -- app/src/main
+         */
         val EXPECTED_LANDING = mapOf(
-            REPOSITORY to 1,
             HOME_SCREEN to 1,
             WIZARD to 1,
         )
 
-        /** 落点册子 · 由判据供给那一本：只有拖课那一枚（选择框与拖拽共用这一个收口） */
+        /**
+         * 落点册子 · 由判据供给那一本：拖课那一枚（选择框与拖拽共用同一收口）+
+         * T128 那一枚组外观（`CourseGroupAppearancePolicy.kt` 里的"跟着真改动走、且粘住"）。
+         */
         val EXPECTED_JUDGED = mapOf(
             HOME_SCREEN to 1,
+            GROUP_APPEARANCE_POLICY to 1,
         )
     }
 
@@ -240,17 +262,19 @@ class ManualTimeOverrideWiringGuardTest {
         mainSources().forEach { (relative, text) ->
             val code = blankComments(text)
             occurrences(code, FLAG_WRITE).takeIf { it > 0 }?.let { byFile[relative] = it }
-            occurrences(code, JUDGED_WRITE).takeIf { it > 0 }?.let { judgedByFile[relative] = it }
+            (occurrences(code, JUDGED_WRITE) + occurrences(code, APPEARANCE_JUDGED_WRITE))
+                .takeIf { it > 0 }
+                ?.let { judgedByFile[relative] = it }
         }
         assertEquals(
             "main 里字面 `isManualOverride = true` 的落点册子变了（实到 " +
                 byFile.toSortedMap().entries.joinToString { "${it.key}=${it.value}" } +
                 "）。应当是" + EXPECTED_LANDING.toSortedMap().entries.joinToString { "${it.key}=${it.value}" } +
-                "：两枚无条件 UI 落点（缩放 / 向导，落点闸见档 ⑫）+ 一枚组外观，一格格数。" +
+                "：两枚无条件 UI 落点（缩放 / 向导，落点闸见档 ⑫），一格格数。" +
                 "长出一枚 = 有人在别的路径上乱标（那一行同样从此退出教务刷新的匹配与覆盖）；" +
                 "少一枚 = 那条链又回到「下次刷新按原时刻冲回来、连带删提醒」。" +
-                "\n拖课那一枚不在这一本里 —— 它自 T133b 起由判据供给（下面那一本），" +
-                "拿它去补上面某一枚的数就是两头都不对。" +
+                "\n拖课那一枚与组外观那一枚都不在这一本里 —— 它们自 T133b / T128 起由判据供给" +
+                "（下面那一本），拿它们去补上面某一枚的数就是两头都不对。" +
                 "\n复算：git grep -n \"isManualOverride = true\" -- app/src/main",
             EXPECTED_LANDING.toSortedMap(),
             byFile.toSortedMap(),
@@ -259,9 +283,10 @@ class ManualTimeOverrideWiringGuardTest {
             "由判据供给的旗标落点册子变了（实到 " +
                 judgedByFile.toSortedMap().entries.joinToString { "${it.key}=${it.value}" } +
                 "），应当是" + EXPECTED_JUDGED.toSortedMap().entries.joinToString { "${it.key}=${it.value}" } +
-                "：只有拖课/选择框那个共同收口一枚。多一枚 = 有人给已经闸住的落点又叠了一道判据" +
-                "（两处判同一件事，本仓算违反）；少一枚 = 空操作又开始标 manual 了" +
-                "\n复算：git grep -n \"isManualOverride = manualTimeOverride\" -- app/src/main",
+                "：拖课/选择框那个共同收口一枚，组外观那一支一枚（T128，跟着真改动走、旗标仍粘）。" +
+                "多一枚 = 有人给已经闸住的落点又叠了一道判据（两处判同一件事，本仓算违反）；" +
+                "少一枚 = 空操作又开始标 manual 了" +
+                "\n复算：git grep -nE \"isManualOverride = (manualTimeOverride|original)\" -- app/src/main",
             EXPECTED_JUDGED.toSortedMap(),
             judgedByFile.toSortedMap(),
         )
@@ -291,7 +316,7 @@ class ManualTimeOverrideWiringGuardTest {
         val missing = steps.filter { !body.contains(it) }
         assertTrue(
             "仓储那五步缺了：" + missing.joinToString { "「$it」" } +
-                "\n复算：sed -n '499,519p' app/src/main/java/com/buaa/schedule/data/repository/ScheduleRepository.kt",
+                "\n复算：sed -n '500,520p' app/src/main/java/com/buaa/schedule/data/repository/ScheduleRepository.kt",
             missing.isEmpty(),
         )
         val positions = steps.map { body.indexOf(it) }

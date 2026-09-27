@@ -38,12 +38,33 @@ import org.junit.Test
  * 所以真正的**前置条件**是「组写先交出它自己的结论」（T121 那一族形状），那是仓储层的一张卡。
  * 下面第 ② ③ 两层钉的就是"前置条件还没落地"这件事本身。
  *
+ * ## 现状（T128 落地，扳机已响；上面那一段"为什么判 deferred"一字未抹，它量的是 `d22a3f8` 之前的盘面）
+ *
+ * T128 把前置做了：`updateCourseGroupAppearance` 现在返回 [com.buaa.schedule.data.repository.GroupAppearanceEdit]
+ * （逐字段已经等于目标态的行一行都不写，改掉的行连同**改前**值一起交回），第 ③ 层那枚签名断言
+ * **当场红** —— 那正是它设计出来的用途。按红线没有删那一格，而是把它的极性整个翻过来钉**药**
+ * （同 T127 改判第 ⑤ 枚的手法）：签名必须**带着**返回类型、组那一支必须**排在压栈之前**、
+ * 函数体内那枚无条件 `isManualOverride = true,` 必须是 0 处（判据改立在
+ * `CourseGroupAppearancePolicy.kt` 里）。压栈闸门那一侧由新的第 ⑥ 层钉：
+ * 判据本体只有 `updateUndoWorthRecording` 那一份，调用点只读它、不再自己比一遍。
+ *
+ * 四条机制逐条对账（上面那句「这一判今天在压栈点算不出来」从今天起不再成立）：
+ * ① 保证同值那条路径走的确实是组这一支 ⇒ 现在它自己报"整组一行都没改"；
+ * ② 组写返回 `Unit` ⇒ 已改；③ 压栈排在组写**之前** ⇒ 顺序翻过来了（第 ② 层新增那一格钉住）；
+ * ④ VM 手里那份课程表是过滤过的、不能当组视图用 ⇒ 仍然成立，所以这一判**不是** VM 自己读一组算的，
+ * 而是组写在它自己的事务里、按 `getByGroupKey` 读回来的那一组里算的（第 ③ 层那两枚"不许旁路"格仍在）。
+ *
  * ## 本守卫防的是什么
  *
  * 防下一个人拿 §9.5② 那句话当尺子，直接在 `if (original != null)` 上补一枚 `&& original != course`
  * 就把卡收了。那一改会同时踩掉三样真东西，第 ② 层逐样钉着：部分周次拆行顺手清掉的兄弟片段
  * （R5 F-35）、`savedId != course.id` 的另发行、组那一支写在兄弟行上的外观。
  * 真要改，先让第 ③ 层那枚签名断言红掉（组写开始返回结论），再回来连着那三条一起重判。
+ * **现状（T128）**：那一改落地了，走的正是这条路 —— 组写先返回结论（扳机红在第 ③ 层第一枚），
+ * 然后"要不要压"四把维度一起收进一枚纯判据内核 `updateUndoWorthRecording`，
+ * 三条真凭据一条没少（第 ② 层那六枚断言原样在，另加一枚"组写必须排在压栈之前"的新次序钉）。
+ * 本守卫今天防的从"提前收"变成"收了一半又退回去"：朝宽（组那一支不再报结论 / 无条件字面量回来）
+ * 与朝窄（少算一把维度 / 压栈点自己另起一趟读组）各扭一次，两次都必须红。
  *
  * ## 第 ⑤ 枚那一格在 T127 改过一次判（改前钉的是病、改后钉的是药）
  *
@@ -80,17 +101,28 @@ class UndoUpdateEntryGuardTest {
             readAllMainSources().filter { occurrences(it.value, PUSH_UPDATE) > 0 }.keys.toList(),
         )
         assertEquals(
-            "压栈的唯一闸门必须还是 `if (original != null) {`：`original` 是写库**之前**从库里读回来的那一行，" +
-                "今天它是「这次保存有没有对象可撤销」的唯一证据。这一处变了就是判据换了，" +
-                "要回来重判第 ② ③ 层（L" + lineOf(raw, base) + "）",
+            "压栈的闸门必须是 `if (original != null && updateUndoWorthRecording(` 那一枚（恰好一处）：" +
+                "`original` 是写库**之前**从库里读回来的那一行，它是「这次保存有没有对象可撤销」的证据，" +
+                "而「到底动没动东西」自 T128 起交回给判据内核去算（第 ⑥ 层钉的那一份）。" +
+                "**朝宽扭这里红**：谁把闸门改回只闸 `original != null`（无条件压栈），§9.5② 那枚 " +
+                "no-op 条目就又回栈里躺着（改前那一句 `if (original != null) {` 今天必须 0 处，见下一格）\n" +
+                "复算：grep -n \"if (original != null\" app/src/main/java/com/buaa/schedule/ui/ScheduleViewModel.kt\n" +
+                "（L" + lineOf(raw, base) + " 起那一段）",
             1,
+            occurrences(body, ADMISSION_GATE),
+        )
+        assertEquals(
+            "`if (original != null) {` 那一枚**无条件**闸门今天必须是 0 处（T128 之前的现状形状）。" +
+                "**朝宽扭这里红**：把判据那一半摘掉、只留「原文读没读回来」，就是把它改回来了",
+            0,
             occurrences(body, UNCONDITIONAL_GATE),
         )
-        // 反向钉：今天**没有**同值比较。谁加了，第 ② ③ 层会跟着红；只有那两层的前置条件落地才允许加。
+        // 反向钉：同值那一判只许长在内核里一份，不许在 VM 里就地比一遍
         assertFalse(
-            "压栈点今天不许出现只看主行的同值判据（`original != course` / `original == course`）。" +
-                "主行同值不等于整次保存什么都没动：见第 ② 层三条真凭据、第 ③ 层「组写报不出结论」。" +
-                "要加，先让 `updateCourseGroupAppearance` 返回它自己的结论，再连同那三样一起判",
+            "`updateCourse` 体内不许出现「调用点自己比一次主行」（`original != course` / `original == course`）。" +
+                "同值那一判的四把维度（主行 before-after / 另发行 / 被清掉的兄弟片段 / 组交回的行）" +
+                "只有 " + ADMISSION_FUNCTION + " 那一份本体 —— 在这里再比一遍就是第二把尺子，" +
+                "而 T122 驳回过的恰恰是「只判主行」那一把（三条真凭据在主行之外）",
             body.contains("original != course") || body.contains("original == course"),
         )
         assertEquals(
@@ -160,66 +192,108 @@ class UndoUpdateEntryGuardTest {
         )
         assertEquals(
             "`repository.updateCourseGroupAppearance(course)` 恰好一处：" +
-                "它就是本卡判 deferred 的那枚主角 —— 见第 ③ 层",
+                "它就是 T122 判 deferred 的那枚主角，自 T128 起它**交回自己的结论**（第 ③ 层）",
             1,
             occurrences(body, GROUP_WRITE),
         )
+        assertEquals(
+            "那一处必须是**被接收**的（`val group = if (...) {` 起头、`else null` 收尾）：" +
+                "结论没人接 = 第 ⑥ 层那四把维度少一把。" +
+                "复算：grep -n \"val group = if (options.applyToGroup\" app/src/main/java/com/buaa/schedule/ui/ScheduleViewModel.kt",
+            1,
+            occurrences(body, GROUP_RECEIVE),
+        )
         assertTrue(
-            "次序：压栈 → 才写组。这一条是「压栈点判不了组那一支」的**结构**证明，不是措辞：" +
-                "\n  压栈 L" + lineOf(vmRaw, base + push) +
-                " 早于 组写 L" + lineOf(vmRaw, base + body.indexOf(GROUP_WRITE)) +
+            "次序自 T128 起翻过来了：**组写 → 才压栈**。这一条仍是结构证明，不是措辞 —— " +
+                "判据要读组那一支交回的行，压栈就只能在它后面（改前是「压栈 → 才写组」，" +
+                "那笔顺序账正是 T122 四条机制里的第 ③ 条）：" +
+                "\n  组写 L" + lineOf(vmRaw, base + body.indexOf(GROUP_WRITE)) +
+                " 早于 压栈 L" + lineOf(vmRaw, base + push) +
                 "\n复算：grep -n \"pushUpdate(\\|updateCourseGroupAppearance(course)\" app/src/main/java/com/buaa/schedule/ui/ScheduleViewModel.kt",
-            push in 0 until body.indexOf(GROUP_WRITE),
+            body.indexOf(GROUP_WRITE) in 0 until push,
         )
     }
 
-    // ─────────────── ③ 前置条件还没落地：组写不报结论，VM 也没有权威的组视图 ───────────────
+    // ─────────────── ③ 前置已落地：组写交出它自己的结论（改前钉的是"报不出结论"） ───────────────
 
+    /**
+     * **T128 改判的一整层**（改前钉前置未落地、改后钉药；同 T127 改判第 ⑤ 枚的手法）。
+     *
+     * 改前第一枚断言钉的是 `suspend fun updateCourseGroupAppearance(course: Course) {` 那一枚
+     * **没有返回类型**的签名，并在失败消息里明写「这一枚一旦变红，说明前置条件落地了」。
+     * T128 让它红了 —— 按红线没有删那一格，而是把极性翻过来正向钉：签名必须**带着**
+     * [com.buaa.schedule.data.repository.GroupAppearanceEdit]，那一枚无返回类型的旧签名必须 0 处。
+     * 两侧各留一道口子：**朝宽扭**（把返回类型摘掉、或另起一枚会报结论的同名重载）红在头两枚；
+     * **朝窄扭**（组函数里不再调判据、或把 `isManualOverride = true,` 那枚无条件字面量搬回来）
+     * 红在接收结论那一枚与第 ⑥ 层。
+     */
     @Test
-    fun `组那一支今天不回报结论 所以同值判据在压栈点算不出来`() {
+    fun `组那一支交出它自己的结论 同值判据因此不再需要 VM 自己读一组`() {
         val repoRaw = readMainSource(SCHEDULE_REPOSITORY)
         val repo = blankCommentsKeepingLiterals(repoRaw)
         val group = functionBody(repo, GROUP_SIGNATURE, "ScheduleRepository.updateCourseGroupAppearance")
 
         assertEquals(
-            "`updateCourseGroupAppearance` 的签名必须仍是**没有返回类型**那一句（即 `Unit`）。\n" +
+            "`updateCourseGroupAppearance` 的签名必须**带着返回类型** " +
+                "[GroupAppearanceEdit]（恰好一处）。\n" +
                 "复算：grep -n \"suspend fun updateCourseGroupAppearance\" app/src/main/java/com/buaa/schedule/data/repository/ScheduleRepository.kt\n" +
-                "本卡判 deferred 的全部理由就是这一句：它写完一组行以后什么都不回报，调用点无从知道动没动。" +
-                "**这一枚一旦变红，说明前置条件落地了** —— 那时才允许回到 `updateCourse` 去判同值，" +
-                "并且要连同第 ② 层那三条维度一起判，不许只判主行",
+                "这一枚是 T122 那根扳机的正面形状：组写写完一组行以后要把「改了谁、动没动」交回去。" +
+                "**朝宽扭这里红**：把返回类型摘回 `Unit`，压栈点就又看不见兄弟行那一维，" +
+                "§9.5② 只能退回无条件压栈",
             1,
             occurrences(repo, GROUP_SIGNATURE),
         )
         assertEquals(
-            "也不许已经藏着一枚「换了名、会报结论」的组写绕开上面那枚签名" +
-                "（同名重载、或另起一枚 `updateCourseGroupAppearanceXxx`）",
+            "改前那一枚**没有返回类型**的旧签名必须 0 处（不许与上面那一枚并存 = 同名重载）。\n" +
+                "复算：grep -c \"suspend fun updateCourseGroupAppearance(course: Course) {\" " +
+                "app/src/main/java/com/buaa/schedule/data/repository/ScheduleRepository.kt",
+            0,
+            occurrences(repo, GROUP_SIGNATURE_UNIT),
+        )
+        assertEquals(
+            "也不许藏着一枚「换了名、会报结论」的组写绕开上面那枚签名" +
+                "（同名重载、或另起一枚 `updateCourseGroupAppearanceXxx`）：签名族合计只能一枚",
             1,
             occurrences(repo, "suspend fun updateCourseGroupAppearance"),
         )
         assertEquals(
             "它按 `sourceGroupKey` 逐行改写整组：`courseDao.getByGroupKey(groupKey).forEach` 必须还在。" +
-                "被改的行里**包含主行自己**，所以「主行同值」连主行都保不住",
+                "被改的行里**包含主行自己**，所以「主行同值」连主行都保不住 —— 这一判的读数只能来自这一趟",
             1,
             occurrences(group.body, GROUP_FOREACH),
         )
         assertEquals(
-            "`isManualOverride = true,` 必须仍被**无条件**写进组内每一行（恰好一处，L" +
-                lineOf(repoRaw, group.openBrace + group.body.indexOf(GROUP_MANUAL_OVERRIDE)) + "）：" +
-                "这是「组那一支即便外观全等也可能是真改动」的硬证据，" +
-                "也是本卡不肯按「跑过组写就算没动」省事的原因",
-            1,
+            "`isManualOverride = true,` 那枚**无条件**字面量在组函数体内今天必须 0 处（改前是 1 处，" +
+                "L" + lineOf(repoRaw, group.openBrace) + " 起那一段）。" +
+                "**朝宽扭这里红**：把它搬回来 = 反复点色板又开始给整组踢出教务匹配，" +
+                "而且空操作又被判成「动过东西」。判据那一枚（跟着真改动走、旗标仍粘）在第 ⑥ 层钉",
+            0,
             occurrences(group.body, GROUP_MANUAL_OVERRIDE),
         )
         assertEquals(
-            "仓储层今天没有供调用点预判的按组读数口（`getCoursesByGroupKey` 之类 = 0 枚）。\n" +
+            "组函数体必须**接住判据的结论**：判成不必写的那些行靠 `?: return@forEach` 跳过，" +
+                "改掉了的那些行的**改前**值靠 `beforeRows += domain` 攒进结论。" +
+                "两枚各一处，少一枚就是「报得出行数、报不出改了谁」或者反过来：" +
+                "\n  " + GROUP_RECEIVE_ROW + " 实到 " + occurrences(group.body, GROUP_RECEIVE_ROW) + " 处" +
+                " / " + GROUP_ACCUMULATE + " 实到 " + occurrences(group.body, GROUP_ACCUMULATE) + " 处\n" +
+                "复算：awk 'NR>=245 && NR<=275' app/src/main/java/com/buaa/schedule/data/repository/ScheduleRepository.kt",
+            listOf(1, 1, 1),
+            listOf(
+                occurrences(group.body, GROUP_RECEIVE_ROW),
+                occurrences(group.body, GROUP_ACCUMULATE),
+                occurrences(group.body, GROUP_EMIT),
+            ),
+        )
+        assertEquals(
+            "仓储层仍然没有、也不该有供调用点预判的按组读数口（`getCoursesByGroupKey` 之类 = 0 枚）。\n" +
                 "复算：grep -rn \"suspend fun get.*GroupKey\" app/src/main/java/com/buaa/schedule/data/repository/ScheduleRepository.kt\n" +
-                "若下一张卡选「让 VM 自己先读一组再判」这一条会红，那是要的：那条路得连带把" +
-                "「读到的组是不是写库前那一刻的组」这笔时序账钉清楚",
+                "T128 走的是「组写在它自己的事务里报结论」，不是「VM 先读一组再判」—— " +
+                "后者要另算一笔「读回来的组是不是写库前那一刻的组」的时序账",
             0,
             occurrences(repo, "suspend fun getCoursesByGroupKey"),
         )
 
-        // VM 手里那份课程表是过滤过的，不能当组视图用
+        // VM 手里那份课程表是过滤过的，不能当组视图用（这一条今天仍然成立，所以判据不许搬到 VM 去）
         val vm = blankCommentsKeepingLiterals(readMainSource(SCHEDULE_VIEW_MODEL))
         assertEquals(
             "`uiState.courses` 必须仍是过滤出来的 `visibleCourses`（不是全表）：" +
@@ -236,9 +310,13 @@ class UndoUpdateEntryGuardTest {
         )
         val body = updateCourseBody()
         assertEquals(
-            "`updateCourse` 体内对仓储层的调用今天恰好四趟：读原文 / 拆行写库 / 覆盖写库 / 组那一支外观写。\n" +
-                "复算：grep -n \"repository\\.\" app/src/main/java/com/buaa/schedule/ui/ScheduleViewModel.kt | sed -n '1,80p'\n" +
-                "多出第五趟 = 有人新加了一趟读数来判同值 —— 本卡判 deferred 时明确不走这条路（" +
+            "`updateCourse` 体内那四趟写/读各恰好一处（合计四趟）：读原文 / 拆行写库 / 覆盖写库 / " +
+                "组那一支外观写。本格按**逐字实参**算账，不数整份文件里的 `repository.`（那一把尺子在 " +
+                "ScheduleViewModel.kt 上有 50+ 行，`saveCourse` 那枚函数里还另有一趟 " +
+                "`repository.saveCourse(course)`，都跟这条链无关）。\n" +
+                "复算：awk 'NR>=517 && NR<=541' app/src/main/java/com/buaa/schedule/ui/ScheduleViewModel.kt " +
+                "| grep -c \"repository\\.\"   ⇒ 4\n" +
+                "updateCourse 体内长出第五趟 = 有人新加了一趟读数来判同值 —— T128 明确不走这条路（" +
                 "「读回来的那一组是不是写库前那一刻的那一组」这笔时序账得先钉清楚）；" +
                 "少一趟就是这条链换了入口，第 ②③ 层要重判：" +
                 "\n" + REPO_CALLS_IN_UPDATE.joinToString("\n") { "  ${it}: ${occurrences(body, it)} 趟" },
@@ -247,7 +325,7 @@ class UndoUpdateEntryGuardTest {
         )
         assertFalse(
             "`updateCourse` 体内不许出现「自己按组去读一回兄弟行来判同值」的旁路（`getByGroupKey` 之类）。" +
-                "要判组那一支动没动，走第 ③ 层第一枚那把签名的改法，别在 VM 里另起一趟读",
+                "要判组那一支动没动，读它自己交回的那张表（第 ⑥ 层），别在 VM 里另起一趟读",
             body.contains("getByGroupKey"),
         )
     }
@@ -462,6 +540,102 @@ class UndoUpdateEntryGuardTest {
         )
     }
 
+    // ─────────────── ⑥ 新判据落点（T128）：同值那一判只有内核那一份，压栈点只读它 ───────────────
+
+    /**
+     * 第 ① ③ 层钉的是「闸在哪、组写报不报结论」，这一层钉的是**新长出来的那两枚判据本体**：
+     * 落点（全仓 main 各一枚、不许在别的文件里再写一遍）、逐字（四把维度一把都不许多、都不许少）、
+     * 次序（组写 → 判据 → 压栈），以及两枚内核都**仍是纯判据**（零 android import、零时钟读取，
+     * 外部事实一律当参数递进来 —— 本仓收单硬判据，"返回布尔后调用点各自判一次"也算违反）。
+     */
+    @Test
+    fun `同值那一判落在纯内核里 压栈点只读它一次`() {
+        val byFile = readAllMainSources().mapValues { (_, text) -> blankCommentsKeepingLiterals(text) }
+        val admission = byFile.getValue(UNDO_UPDATE_ADMISSION_NAME)
+        val appearance = byFile.getValue(GROUP_POLICY_NAME)
+
+        // ── 落点册子：两枚判据本体各全仓一份 ──
+        assertEquals(
+            "`internal fun updateUndoWorthRecording(` 全仓 main 恰好一处，就在 UndoUpdateAdmission.kt。\n" +
+                "复算：grep -rn \"internal fun updateUndoWorthRecording(\" app/src/main/java --include='*.kt'\n" +
+                "**朝宽扭这里红**：谁在压栈点旁边再写一份同值比较（" +
+                "「返回布尔后调用点各自判一次」那一族），这本册子就长出第二枚文件",
+            listOf(UNDO_UPDATE_ADMISSION_NAME),
+            byFile.filter { occurrences(it.value, ADMISSION_SIGNATURE) > 0 }.keys.toList(),
+        )
+        assertEquals(
+            "`internal fun groupAppearanceRow(` 全仓 main 恰好一处，就在 CourseGroupAppearancePolicy.kt。\n" +
+                "复算：grep -rn \"internal fun groupAppearanceRow(\" app/src/main/java --include='*.kt'\n" +
+                "组函数体内那一处调用（第 ③ 层）不算这里 —— 它调判据、不复制判据",
+            listOf(GROUP_POLICY_NAME),
+            byFile.filter { occurrences(it.value, GROUP_ROW_SIGNATURE) > 0 }.keys.toList(),
+        )
+
+        // ── 逐字：压栈点只读一次，实参就是那五枚外部事实 ──
+        val body = updateCourseBody()
+        assertEquals(
+            "`updateCourse` 体内读这枚判据恰好一次，且实参逐字是那五枚外部事实" +
+                "（主行 before / 主行 after / 仓储层给的最终行 id / 被清掉的片段条数 / 组那一支的结论）：" +
+                "\n  " + ADMISSION_CALL + " 实到 " + occurrences(body, ADMISSION_CALL) + " 处" +
+                "\n复算：grep -n \"updateUndoWorthRecording\" app/src/main/java/com/buaa/schedule/ui/ScheduleViewModel.kt",
+            1,
+            occurrences(body, ADMISSION_CALL),
+        )
+        val vmRaw = readMainSource(SCHEDULE_VIEW_MODEL)
+        val updateBase = bodyBase(vmRaw)
+        assertTrue(
+            "三拍次序：组写 → 判据 → 才压栈（判据拿在中间的读数，压栈只在它后面）。" +
+                "次序倒了就是在压一枚还没算出来的条目：" +
+                "\n  组写 L" + lineOf(vmRaw, updateBase + body.indexOf(GROUP_WRITE)) +
+                " / 判据 L" + lineOf(vmRaw, updateBase + body.indexOf(ADMISSION_CALL)) +
+                " / 压栈 L" + lineOf(vmRaw, updateBase + body.indexOf(PUSH_UPDATE)),
+            body.indexOf(GROUP_WRITE) in 0 until body.indexOf(ADMISSION_CALL) &&
+                body.indexOf(ADMISSION_CALL) in 0 until body.indexOf(PUSH_UPDATE),
+        )
+
+        // ── 逐字 + 枚数：四把维度一把都不许多、都不许少 ──
+        val dimensions = ADMISSION_DIMENSIONS.filter { occurrences(admission, it) != 1 }
+        assertEquals(
+            "判据本体那四把维度必须各出现恰好一次（多一把 = 长出第五把尺子；少一把 = 那一维又没人算了，" +
+                "正是 T122 第 ② 层那三条真凭据的账）。不齐的：" +
+                dimensions.joinToString { "「$it」实到 " + occurrences(admission, it) + " 处" } +
+                "\n复算：awk '/^internal fun updateUndoWorthRecording/,/^}/' " +
+                "app/src/main/java/com/buaa/schedule/ui/UndoUpdateAdmission.kt",
+            emptyList<String>(),
+            dimensions,
+        )
+        assertEquals(
+            "组外观判据里那枚旗标必须是「跟着真改动走、且粘住」的那一句（恰好一处）。" +
+                "**朝宽扭**（写回无条件 true）与**朝窄扭**（写回恒 false，等于让改颜色不再护着本地外观）" +
+                "都红在这里：" +
+                "\n复算：grep -n \"isManualOverride = \" app/src/main/java/com/buaa/schedule/data/repository/CourseGroupAppearancePolicy.kt",
+            1,
+            occurrences(appearance, APPEARANCE_FLAG_JUDGMENT),
+        )
+        assertEquals(
+            "判据末尾那一枚「结构相等 = 不必写」的总闸必须恰好一处 —— 它才是「这一趟动没动」的唯一尺子，" +
+                "上面那六维比较只是给旗标用的：" +
+                "\n复算：grep -n \"takeIf { it != original }\" app/src/main/java/com/buaa/schedule/data/repository/CourseGroupAppearancePolicy.kt",
+            1,
+            occurrences(appearance, APPEARANCE_VERDICT),
+        )
+
+        // ── 两枚内核都仍是纯判据：零 android import、零时钟读取 ──
+        for ((name, expectedImports) in listOf(
+            UNDO_UPDATE_ADMISSION to UNDO_UPDATE_ADMISSION_IMPORTS,
+            GROUP_POLICY to GROUP_POLICY_IMPORTS,
+        )) {
+            assertEquals(
+                "$name 的 import 册子变了（应当只有那两枚纯类型、或更少）。" +
+                    "长出 android.* / androidx.* / java.time.* / System.currentTimeMillis 之类就是判据" +
+                    "又学会了读外部事实 —— 本仓口径：外部事实由调用点当参数递进来。" +
+                    "\n复算：grep -n \"^import\" app/src/main/java/$name",
+                expectedImports,
+                Regex("(?m)^import .*$").findAll(readMainSource(name)).map { it.value }.toList(),
+            )
+        }
+    }
+
     // ---- 源码核对小工具（抄 CourseDeletionWiringGuardTest，同一族口径）----
 
     /** `ScheduleViewModel.updateCourse` 的函数体（抹注释后的文本，体内偏移配 [bodyBase] 换回全文偏移） */
@@ -668,12 +842,39 @@ class UndoUpdateEntryGuardTest {
         const val HOME_SCREEN_NAME = "HomeScreen.kt"
         const val COURSE_MANAGEMENT_NAME = "CourseManagementScreen.kt"
 
+        // ⑥ T128：两枚新判据本体的落点
+        const val UNDO_UPDATE_ADMISSION = "com/buaa/schedule/ui/UndoUpdateAdmission.kt"
+        const val GROUP_POLICY = "com/buaa/schedule/data/repository/CourseGroupAppearancePolicy.kt"
+        const val UNDO_UPDATE_ADMISSION_NAME = "UndoUpdateAdmission.kt"
+        const val GROUP_POLICY_NAME = "CourseGroupAppearancePolicy.kt"
+        const val ADMISSION_SIGNATURE = "internal fun updateUndoWorthRecording("
+        const val GROUP_ROW_SIGNATURE = "internal fun groupAppearanceRow("
+        val UNDO_UPDATE_ADMISSION_IMPORTS = listOf(
+            "import com.buaa.schedule.data.repository.GroupAppearanceEdit",
+            "import com.buaa.schedule.domain.model.Course",
+        )
+        val GROUP_POLICY_IMPORTS = listOf("import com.buaa.schedule.domain.model.Course")
+
         // ① 压栈点
         const val VM_UPDATE_SIGNATURE =
             "suspend fun updateCourse(course: Course, options: CourseSaveOptions = CourseSaveOptions()): Long? ="
         const val READ_ORIGINAL = "val original = repository.getCourseById(course.id)"
         const val UNCONDITIONAL_GATE = "if (original != null) {"
         const val PUSH_UPDATE = "UndoManager.pushUpdate("
+
+        // ①⑥ T128 之后压栈闸门读的就是这一枚判据（逐字含那五枚外部事实）
+        const val ADMISSION_GATE = "if (original != null && updateUndoWorthRecording("
+        const val ADMISSION_FUNCTION = "updateUndoWorthRecording"
+        const val ADMISSION_CALL =
+            "updateUndoWorthRecording(original, course, edit.savedId, edit.removed.size, group)"
+
+        /** 判据本体那四把维度（一把都不许多、都不许少；逐字取自 `UndoUpdateAdmission.kt`） */
+        val ADMISSION_DIMENSIONS = listOf(
+            "savedId != original.id ||",
+            "removedCount > 0 ||",
+            "original != after ||",
+            "(group != null && group.beforeRows.isNotEmpty())",
+        )
 
         // ② 三条真凭据
         const val PARTIAL_WEEKS_WRITE = "repository.updateCoursePartialWeeks(original, course)"
@@ -683,11 +884,27 @@ class UndoUpdateEntryGuardTest {
         const val GROUP_BRANCH = "if (options.applyToGroup && course.sourceGroupKey != null) {"
         const val GROUP_WRITE = "repository.updateCourseGroupAppearance(course)"
 
-        // ③ 组写不报结论 + VM 没有权威组视图
-        const val GROUP_SIGNATURE = "suspend fun updateCourseGroupAppearance(course: Course) {"
+        /** ② T128 起那一枚组写是被**接收**的（结论要进判据），不再是一句裸调用 */
+        const val GROUP_RECEIVE = "val group = $GROUP_BRANCH"
+
+        // ③ 组写交出自己的结论（改前那一层钉的是"报不出结论"）
+        const val GROUP_SIGNATURE =
+            "suspend fun updateCourseGroupAppearance(course: Course): GroupAppearanceEdit {"
+
+        /** 改前的旧签名（没有返回类型那一枚）：今天必须 0 处，不许与新签名并存成同名重载 */
+        const val GROUP_SIGNATURE_UNIT = "suspend fun updateCourseGroupAppearance(course: Course) {"
         const val GROUP_FOREACH = "courseDao.getByGroupKey(groupKey).forEach"
         const val GROUP_MANUAL_OVERRIDE = "isManualOverride = true,"
         const val UPDATE_OVERWRITE_WRITE = "repository.updateCourse(course)?"
+
+        /** ③ 组函数体接住判据的三枚落点：跳过不必写的行 / 攒下改前值 / 交回结论 */
+        const val GROUP_RECEIVE_ROW = "val written = groupAppearanceRow(domain, course, customColor) ?: return@forEach"
+        const val GROUP_ACCUMULATE = "beforeRows += domain"
+        const val GROUP_EMIT = "GroupAppearanceEdit(beforeRows.toList())"
+
+        /** ⑥ 组外观判据里那枚旗标与那枚总闸（逐字） */
+        const val APPEARANCE_FLAG_JUDGMENT = "isManualOverride = original.isManualOverride || appearanceChanged"
+        const val APPEARANCE_VERDICT = "takeIf { it != original }"
 
         /** `updateCourse` 体内那四趟仓储层调用（第 ③ 层拿它钉「没有第五趟读数」） */
         val REPO_CALLS_IN_UPDATE = listOf(
