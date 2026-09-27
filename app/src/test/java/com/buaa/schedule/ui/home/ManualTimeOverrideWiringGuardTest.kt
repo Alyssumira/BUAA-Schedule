@@ -483,7 +483,7 @@ class ManualTimeOverrideWiringGuardTest {
         val body = code.substringAfter("): Boolean =").substringBefore("\n}").trim().replace(Regex("""\s+"""), " ")
         assertEquals(
             "判据本体不再是我们判的那三判析取（「原来已标 manual ⊷ 日变了 ⊷ 节次变了」），实到「$body」。" +
-                "\n复算：sed -n '61,72p' app/src/main/java/com/buaa/schedule/ui/home/ManualTimeOverridePolicy.kt\n" +
+                "\n复算：sed -n '61,69p' app/src/main/java/com/buaa/schedule/ui/home/ManualTimeOverridePolicy.kt\n" +
                 "朝宽扭（恒真、把周次也判进来）⇒ `ManualTimeOverridePolicyTest` 同值那三格红；" +
                 "朝窄扭（恒假、反着取、丢掉粘住那一支）⇒ 真改动那几格与粘住那一格红",
             POLICY_BODY,

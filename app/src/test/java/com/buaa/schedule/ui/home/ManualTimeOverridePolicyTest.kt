@@ -222,7 +222,7 @@ class ManualTimeOverridePolicyTest {
                     "\n  ${cell.reading(row)}" +
                     "\n  ${cell.why}" +
                     "\n  期望 isManualOverride = ${cell.expectFlag}" +
-                    "\n复算：sed -n '61,72p' app/src/main/java/com/buaa/schedule/ui/home/ManualTimeOverridePolicy.kt" +
+                    "\n复算：sed -n '61,69p' app/src/main/java/com/buaa/schedule/ui/home/ManualTimeOverridePolicy.kt" +
                     "\n  落库处：sed -n '439,451p' app/src/main/java/com/buaa/schedule/ui/home/HomeScreen.kt",
                 cell.expectFlag,
                 row.isManualOverride,
