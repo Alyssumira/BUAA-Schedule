@@ -341,8 +341,9 @@ class ScheduleRepository(
      * 1. 拆行另发的那一行（`afterId != before.id`）按 `courseKey` 校验后删掉；
      * 2. **T137 新增**：组那一支改掉的兄弟行（[UndoManager.UndoAction.Update.groupBeforeRows]）
      *    逐行**按 id** 回写它们的改前版 —— 读不到那一行 / 那一 id 上已是别的课就**明确不动**；
-     * 3. 主行按 id 复原，读不到就 `insertWithReminders` 重插并重挂它的提醒（与第 2 步相反，
-     *    两族代价不对称，账逐条写在 `GroupRowUndoPolicy.kt` 段首）；
+     * 3. **主行**复原，判据在 `MainRowUndoPolicy.kt`（T139 补的就是这一档）：那一 id 上仍是这次编辑
+     *    留下的那一行 ⇒ 原地回写改前版；**读不到** / 那一 id 上已是**别的课** ⇒ 都以**新 id** 重插
+     *    并重挂它的提醒（与第 2 步相反，两族代价不对称，账逐条写在 `GroupRowUndoPolicy.kt` 段首）；
      * 4. 补回这次编辑顺手清掉的片段（R5 F-35）。
      *
      * 第 2 步排在第 3 步**之前**是**语义**不是风格：组写跑在主行写之后 ⇒ 它交回的表里那一版主行
@@ -353,7 +354,9 @@ class ScheduleRepository(
         // 部分周次拆行时，先删掉新建/改写的那一行，再恢复原课程。两道守卫：
         // - afterId 对应的行可能在此期间被导入流程替换成了**别的课**，
         //   按 id 盲删会删掉无关课程；必须校验 courseKey 仍是这次撤销的目标。
-        // - before.id 同理，可能已被占用于其他课程，此时应改为新增而不是覆盖。
+        // - before.id 同理，可能已被占用于其他课程，此时应改为新增而不是覆盖
+        //   （这一道今天才真落地，就在下面复原主行那一趟里，判据见 MainRowUndoPolicy.kt）：
+        //   兄弟行那一族遇着同一枚事实选的是"明确不动"，主行选"换新 id 插"，两族结论相反。
         if (action.afterId != null && action.afterId != action.before.id) {
             courseDao.getById(action.afterId)?.toDomain()
                 ?.takeIf { ImportPlanner.courseKey(it) == ImportPlanner.courseKey(action.after) }
@@ -363,7 +366,8 @@ class ScheduleRepository(
         // 这一趟必须在下面复原主行**之前**：组写跑在主行写之后，它交回的表里若含主行那一 id，
         // 那一版其实是「改完之后」的，只有主行那一趟（拿 action.before 收尾）才回得到真正的改前值。
         // 读不到那一行、或那个 id 上已经是别的课 ⇒ 明确不动（不重插），代价账与两档取舍的理由
-        // 逐条写在 GroupRowUndoPolicy.kt 段首；复原主行用的是另一手（读不到就重插 + 重挂提醒）。
+        // 逐条写在 GroupRowUndoPolicy.kt 段首；复原主行用的是另一手（读不到、或那一 id 上已是别的课
+        // ⇒ 都换**新 id** 重插 + 重挂提醒，T139 补的就是后一半，判据在 MainRowUndoPolicy.kt）。
         action.groupBeforeRows.forEach { snapshot ->
             val held = courseDao.getById(snapshot.id)?.toDomain()
             val sameCourseAtId =
@@ -375,10 +379,23 @@ class ScheduleRepository(
             }
         }
         val current = courseDao.getById(action.before.id)?.toDomain()
-        if (current == null) {
-            insertWithReminders(listOf(action.before), action.reminders)
-        } else {
-            CourseConstraints.normalize(action.before)?.let { courseDao.update(it.toEntity()) }
+        // 主行这一趟也要问「这一 id 上还是不是这次编辑那一族留下的行」（T139，收的就是本函数
+        // 头上那句「before.id 同理……应改为新增而不是覆盖」此前只有承诺、没有落地的那一格）。
+        // 参照物**两枚取或**，不许照抄兄弟行那一趟的量法（拿 before 当尺子会把自己刚改过的那一行
+        // 判成别人的课 ⇒ 每次撤销多插一行），逐条理由与两枚参照物各自的落点在 MainRowUndoPolicy.kt 段首：
+        // - normalize(after)：原地改写那一支，库里就是改完之后那一版（尺子取归一化后的，与写库同一手）
+        // - before：部分周次拆行那一支，afterId 那行已被第 1 步删掉，before.id 上留的恰是改之前那一版
+        val afterKey = CourseConstraints.normalize(action.after)?.let { ImportPlanner.courseKey(it) }
+        val stillThisEditsRow = current != null && ImportPlanner.courseKey(current).let { key ->
+            key == afterKey || key == ImportPlanner.courseKey(action.before)
+        }
+        // 两档都写库，区别只在落在哪一行上：读不到 / 已被别的课占用 ⇒ 换**新 id** 复原并把提醒
+        // 按新 id 重挂（insertWithReminders 那一手），绝不原地覆盖无关课程那一行。
+        when (mainRowUndoDisposition(current, stillThisEditsRow)) {
+            MainRowUndoDisposition.RestoreInPlace ->
+                CourseConstraints.normalize(action.before)?.let { courseDao.update(it.toEntity()) }
+            MainRowUndoDisposition.RestoreAsNewRow ->
+                insertWithReminders(listOf(action.before), action.reminders)
         }
         insertWithReminders(action.removed, action.reminders)
     }
