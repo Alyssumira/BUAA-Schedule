@@ -547,12 +547,12 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         }
 
     suspend fun deleteCourse(course: Course): Boolean = suspendCatching {
-        // 先删库、成功才压栈：反过来会让"删除失败"留下一条悬空撤销记录，
-        // 之后任意一次撤销都会按新 id 重插这门根本没删掉的课
         val deletion = repository.deleteCourse(course)
-        UndoManager.pushDelete(course, deletion.removedReminders)
+        val removed = deletion.removedCourse ?: return@suspendCatching false // 删不到 ⇒ 不报成功、不压栈
+        UndoManager.pushDelete(removed, deletion.removedReminders)           // 先删库、成功才压栈
         afterDataChangedInternal()
-    }.fold({ true }, { e ->
+        true
+    }.fold({ it }, { e ->
         _importMessage.value = AppMessage("删除课程失败：${e.message}", isError = true)
         false
     })
