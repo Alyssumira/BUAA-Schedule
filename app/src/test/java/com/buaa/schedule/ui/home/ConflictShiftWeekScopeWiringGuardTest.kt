@@ -289,7 +289,9 @@ class ConflictShiftWeekScopeWiringGuardTest {
         const val RESOLUTION = "com/buaa/schedule/domain/schedule/CourseConflictResolution.kt"
 
         const val APPLY_SIGNATURE = "suspend fun applyConflictShift("
-        const val COPY_WITH_WEEKS = "target.copy(periods = newPeriods, weeks = scopedWeeks)"
+        // T133 起这一行还带 `isManualOverride = true`（不标就会在下次教务刷新被整行冲掉，
+        // 逐字钉子跟着挪家；那一维单独由 ManualTimeOverrideWiringGuardTest 钉，本文件只管周次）
+        const val COPY_WITH_WEEKS = "target.copy(periods = newPeriods, weeks = scopedWeeks, isManualOverride = true)"
         const val JUDGE_CALL = "ConflictShiftWeekScope.weeksToShift("
     }
 }

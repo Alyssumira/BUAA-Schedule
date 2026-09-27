@@ -413,9 +413,22 @@ fun HomeScreen(
             if (shiftedPeriods.any { it < 1 || it > com.buaa.schedule.domain.schedule.CourseConstraints.MAX_PERIOD }) {
                 return@move
             }
+            // T133：这一记 copy 改的是 dayOfWeek / periods，而 `ImportPlanner.courseKey`
+            // 把这两维算在身份钥匙里 ⇒ 不标 manual 的话，下一次教务刷新
+            // （`ScheduleRepository.replaceSemesterCoursesInTx`）按教务的原始时刻另起一行，
+            // 这一行因为钥匙对不上被**整行丢掉**，挂在它上面的提醒也随
+            // `deleteRemindersOfDroppedCourses` 一起被清掉（用户看到的是"挪一次、下次刷新冲回来"）。
+            // 代价（要说清）：标了 manual 这一行就**永远退出教务刷新的匹配与覆盖** —— 教务之后
+            // 改课名/教师/地点/周次都不再传导到这一行，而且刷新会把教务那一版当新课补进来，
+            // 同一门课在课表上出现两张卡（一张原时刻、一张手挪的），要用户手动删一张。
+            // 判据与编辑器同源（`CourseEditorScreen.performSave` 那枚 `isManualOverride`），
+            // 差别只在：编辑器要问"改没改过这门课"，而走到这里的时间**必然**已经被人手摆过
+            // （落点侧 `WeekView` 的 onDragEnd 闸在 `targetDayIndex/targetStartPeriod` 与
+            // origin 不等上），所以这里无条件为真。
             val shifted = course.copy(
                 dayOfWeek = newDayIndex + 1,
                 periods = shiftedPeriods,
+                isManualOverride = true,
             )
             scope.launch {
                 if (thisWeekOnly) {
@@ -437,9 +450,14 @@ fun HomeScreen(
     }
 
     // 缩放改节次：松手后更新该课程的连续节次段（仅作用于整门课）
+    // T133：改的就是 periods（courseKey 的一维），与上面拖课同一种病，同一味药 ——
+    // 不标 manual 的话下一次教务刷新把这行按原节次冲回来、连带提醒一起删。
+    // 落点侧 `WeekView` 已经闸在 `merged != r.course.periods` 上，同值缩放飞不到这里。
     val handleCourseResize: (Course, List<Int>) -> Unit = remember(viewModel, scope) {
         { course, newPeriods ->
-            scope.launch { viewModel.updateCourse(course.copy(periods = newPeriods.sorted())) }
+            scope.launch {
+                viewModel.updateCourse(course.copy(periods = newPeriods.sorted(), isManualOverride = true))
+            }
         }
     }
 

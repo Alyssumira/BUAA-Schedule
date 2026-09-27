@@ -70,6 +70,14 @@ private fun Course.wizardKey(): String = if (id != 0L) id.toString() else "n:$na
  *   算：**组周 ∩ target.weeks** 一起进 `copy`。只带 `periods` 的那一版（T131 之前）不动 `weeks`，
  *   于是 `updateCourse` 那一判恒假、这枚旗标空转，落库退成整行覆盖 —— 连不冲突的周一起被挪走，
  *   而按钮写着「只改这些周」。T131 起才真的只改这几周。
+ * - `copy` 必须带上 `isManualOverride = true`（T133）：这一记改的是 `periods`，而
+ *   `ImportPlanner.courseKey` 把 `dayOfWeek`/`periods` 算在身份钥匙里 ⇒ 不标 manual 的行在下次
+ *   教务刷新时钥匙对不上，被**整行丢掉**（挂在它上面的提醒也随 `deleteRemindersOfDroppedCourses`
+ *   清掉），用户看到的是"向导里点完当场生效、下次刷新按教务原时刻冲回来"。代价：这一行从此退出
+ *   教务刷新的匹配与覆盖，刷新会把教务那一版当新课补进来（同一门课两张卡）。
+ *   注意**只有拆出来的那一行带这枚旗标**：`updateCoursePartialWeeks` 同时把原行的 `weeks` 收窄，
+ *   那一行留 `false` 是有意的 —— 它的 `periods` 仍是教务给的那一份，标了 manual 就等于让教务
+ *   那一版在**其余每一周**都补一张重复卡（而现状只重复被挪走的那几周）。
  *
  * @param groupWeeks 那一组冲突实际涉及的周次（行头「第 N 周」念的就是它），来自
  *   [com.buaa.schedule.domain.schedule.CourseConflictResolution.ConflictGroup.weeks]
@@ -86,7 +94,7 @@ suspend fun applyConflictShift(
     val scopedWeeks = ConflictShiftWeekScope.weeksToShift(groupWeeks, target.weeks)
     val job = viewModel.viewModelScope.launch {
         saved = viewModel.updateCourse(
-            target.copy(periods = newPeriods, weeks = scopedWeeks),
+            target.copy(periods = newPeriods, weeks = scopedWeeks, isManualOverride = true),
             CourseSaveOptions(partialWeeks = true),
         ) != null
     }
