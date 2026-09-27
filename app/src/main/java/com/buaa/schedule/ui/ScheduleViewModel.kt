@@ -531,12 +531,15 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             if (original != null && updateUndoWorthRecording(original, course, edit.savedId, edit.removed.size, group)) {
                 // removed/reminders 也必须进快照：部分周次拆行会顺手清掉同组的兄弟片段，
                 // 只记 before/after 的话撤销之后它们永久消失（R5 F-35）
+                // groupBeforeRows 是同一族的另一半（T137）：组那一支改的是**别的行**，
+                // 条目装不下它们的话，「整组换色而主行本来就是那个色」那一格就撤不干净
                 UndoManager.pushUpdate(
                     before = original,
                     after = course,
                     afterId = edit.savedId,
                     removed = edit.removed,
                     reminders = edit.reminders,
+                    groupBeforeRows = group?.beforeRows.orEmpty(),
                 )
             }
             afterDataChangedInternal()
