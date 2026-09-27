@@ -23,19 +23,32 @@ import org.junit.Test
  *
  * ## 为什么必须按落点取判据
  *
- * 全站 `isManualOverride = true` 只有四枚合法落点（三枚 UI + 一枚组外观）。只数总枚数的话，
+ * 全站写 `isManualOverride` 的 UI 落点只有三枚（拖课 / 缩放 / 向导）加一枚组外观。只数总枚数的话，
  * 「把旗标从拖课那处搬到别处去」也算对 ⇒ 本守卫按**文件 / 函数体 / 逐字 / 次序**四把尺子取。
  *
- * ## 钉九档
+ * ## T133b 改的那一枚：拖课那枚旗标不再恒真
+ *
+ * T133 给三处 copy 一律标 `= true`，前提是"落点侧已经闸在时间真的变了上"——那前提只覆盖了
+ * 三分之二的落点：长按菜单/卡片动作的「移动到…」那一路**没有同值闸**（`onConfirm` 无条件把
+ * 选中的日与节装成 `CourseMoveRequest`，确认窗再无条件回调 `onCourseMove`），于是"打开选择框、
+ * 选回原来那一格、点两下确认"这一笔空操作也会把一门课标成 manual ⇒ 它从此退出教务刷新的匹配与
+ * 覆盖，刷新还补一张重复卡。T133b 把拖课那一枚改成 [ManualTimeOverridePolicy.forCourseMove] 算的
+ * 值；缩放与向导两枚**照旧恒真**（落点闸分别还在 `WeekView.kt:1113` 与
+ * `CourseConflictResolution.kt:126`，档 ⑫ 钉着那三道闸）。判据本身逐格红在哪，见
+ * `ManualTimeOverridePolicyTest`（表②）。
+ *
+ * ## 钉十二档
  *
  * 1. `handleCourseMove` 体内 `val shifted = course.copy(...)` 那一次调用里，`dayOfWeek`、
- *    `periods`、`isManualOverride = true` 三项**同在一记 copy 内**且按此次序；
+ *    `periods`、`isManualOverride` 三项**同在一记 copy 内**且按此次序，且第三项交的是判据的
+ *    结果（不再是一枚字面 `true`）；
  * 2. 该 handler 的三支写库（整课 / 本周但拿不到周号 / 本周 partialWeeks）递的都是 `shifted`，
  *    没有绕过它去 `updateCourse(course)` 的旁路；
  * 3. `handleCourseResize` 体内那记 copy 逐字带旗标（同一种病：改的就是 `periods`）；
  * 4. `applyConflictShift` 体内那记 copy 同时带 `weeks = scopedWeeks`、`partialWeeks = true`
  *    与旗标（T131 的账不许被本卡顶掉）；
- * 5. 落点册子：main 里 `isManualOverride = true` 的文件×枚数逐格对上，编辑器那一枚既有判据
+ * 5. 落点册子**按新形状两本数**：字面 `isManualOverride = true` 只剩缩放 / 向导 / 组外观各一枚，
+ *    由判据供给的 `isManualOverride = manualTimeOverride` 只有拖课那一枚；编辑器那一枚既有判据
  *    表达式原样在（本卡照它的写法，不许顺手改它）；
  * 6. 提醒那一刀确实挂在这条链上：`replaceSemesterCoursesInTx` 五步次序 + keptIds/droppedIds
  *    两行逐字 + 教务刷新那一句调用点仍在；
@@ -43,13 +56,23 @@ import org.junit.Test
  *    旗标，被收窄的原行那一记 copy 里不许出现旗标；
  * 8. 本卡修法成立的前提：`courseKey` 仍含 `dayOfWeek` 与 `periods` 两维；谁摘掉它就该回来重判；
  * 9. 报错消息里的行号自检：`lineOf` 与按行切分两种独立算法必须给出同一个数（本仓登记过把行号
- *    拼错的洞，故行号一律显式加括号，不写左结合的那一种）。
+ *    拼错的洞，故行号一律显式加括号，不写左结合的那一种）；
+ * 10. 拖课那一枚旗标确实是**内核算出来的**：`val manualTimeOverride = ManualTimeOverridePolicy
+ *    .forCourseMove(` 那五枚具名实参逐字在、按次序，且递进去的"要写的值"与"那一行现在的值"
+ *    就是同一记 copy 落库/比对的那两份（不许各算一遍）；
+ * 11. 判据内核仍是纯判据：`ManualTimeOverridePolicy.kt` 里零 import（android/androidx/Room/JVM
+ *    时钟一律进不来）、全仓只有这一处 `fun forCourseMove(`、函数本体仍是那三判的析取；
+ * 12. 反向格子：选择框那条路**必须还在**（不许拿"删掉不闸的那一路"当修法），且它的
+ *    `onConfirm` 体内一道 `if` 都没有 —— 这正是本卡判据必须收在 handler 的证据。
  */
 class ManualTimeOverrideWiringGuardTest {
 
     private companion object {
         const val HOME_SCREEN = "com/buaa/schedule/ui/home/HomeScreen.kt"
         const val WIZARD = "com/buaa/schedule/ui/home/ConflictWizardDialog.kt"
+        const val WEEK_VIEW = "com/buaa/schedule/ui/home/WeekView.kt"
+        const val POLICY = "com/buaa/schedule/ui/home/ManualTimeOverridePolicy.kt"
+        const val CONFLICT_RESOLUTION = "com/buaa/schedule/domain/schedule/CourseConflictResolution.kt"
         const val EDITOR = "com/buaa/schedule/ui/editor/CourseEditorScreen.kt"
         const val REPOSITORY = "com/buaa/schedule/data/repository/ScheduleRepository.kt"
         const val VIEW_MODEL = "com/buaa/schedule/ui/ScheduleViewModel.kt"
@@ -70,11 +93,33 @@ class ManualTimeOverrideWiringGuardTest {
         const val INSERT_FRAGMENT = "courseDao.insert(normalized.copy(id = 0L).toEntity())"
         const val REFRESH_CALL = "repository.replaceSemesterCourses(fetched.semester, fetched.courses)"
 
-        /** 落点册子（文件 → 枚数）：三枚 UI 落点 + 一枚组外观，一格格数 */
+        // ── T133b：拖课那一枚旗标改由判据内核算 ──
+        const val JUDGED_WRITE = "isManualOverride = manualTimeOverride"
+        const val MOVE_JUDGE_ANCHOR = "val manualTimeOverride = ManualTimeOverridePolicy.forCourseMove("
+        const val POLICY_SIGNATURE = "fun forCourseMove("
+        const val POLICY_BODY =
+            "originalIsManualOverride || newDayOfWeek != originalDayOfWeek || newPeriods != originalPeriods"
+        const val NEW_DAY_LOCAL = "val newDayOfWeek = newDayIndex + 1"
+
+        // ── 三处落点的同值闸（判据只补第三处没有的那一道） ──
+        const val DRAG_GATE = "d.targetDayIndex != d.originDayIndex ||"
+        const val RESIZE_GATE = "if (merged != r.course.periods) {"
+        const val SUGGESTION_GATE = "if (candidate == currentPeriods) continue"
+        const val PICKER_ON_CONFIRM = "onConfirm = { dayIndex, startPeriod ->"
+        const val PICKER_INITIAL_DAY =
+            "var dayIndex by remember(request) { mutableIntStateOf(request.dayIndex.coerceIn(0, dayNames.lastIndex)) }"
+        const val PICKER_INITIAL_PERIOD = "mutableIntStateOf(request.segment.first.coerceIn(1, maxStartPeriod))"
+
+        /** 落点册子（文件 → 枚数）· 无条件那一本：两枚 UI 落点 + 一枚组外观 */
         val EXPECTED_LANDING = mapOf(
             REPOSITORY to 1,
-            HOME_SCREEN to 2,
+            HOME_SCREEN to 1,
             WIZARD to 1,
+        )
+
+        /** 落点册子 · 由判据供给那一本：只有拖课那一枚（选择框与拖拽共用这一个收口） */
+        val EXPECTED_JUDGED = mapOf(
+            HOME_SCREEN to 1,
         )
     }
 
@@ -85,17 +130,28 @@ class ManualTimeOverrideWiringGuardTest {
         val raw = source(HOME_SCREEN)
         val code = blankComments(raw)
         val args = callArgs(code, MOVE_COPY_ANCHOR, "handleCourseMove 里的 `val shifted = course.copy(`")
-        val order = listOf("dayOfWeek = newDayIndex + 1", "periods = shiftedPeriods", "isManualOverride = true")
-            .map { args.indexOf(it) }
+        val order = listOf(
+            "dayOfWeek = newDayOfWeek",
+            "periods = shiftedPeriods",
+            "isManualOverride = manualTimeOverride",
+        ).map { args.indexOf(it) }
         assertTrue(
             "拖课那一记 copy 里三行必须齐全且按「dayOfWeek → periods → isManualOverride」次序。" +
                 "\n  实到（$MOVE_COPY_ANCHOR 之后）：" + args.trim().replace(Regex("""\s+"""), " ") +
                 "\n  起手在 L" + lineOf(raw, raw.indexOf(MOVE_COPY_ANCHOR)) +
-                "\n复算：sed -n '428,432p' app/src/main/java/com/buaa/schedule/ui/home/HomeScreen.kt\n" +
+                "\n复算：sed -n '447,451p' app/src/main/java/com/buaa/schedule/ui/home/HomeScreen.kt\n" +
                 "少了旗标 = 这一次挪动改了 courseKey 的两维 ⇒ 下次教务刷新整行按原时刻冲回来，" +
                 "并且挂在它上面的提醒被 deleteRemindersOfDroppedCourses 一起删掉。" +
                 "次序也算：把旗标放到 copy 之外（另一记 copy 里）就是本守卫要防的「枚数对但落点错」",
             order.distinct().size == 3 && order == order.sorted(),
+        )
+        assertEquals(
+            "T133b 之后拖课这一枚不许再是字面 `true`：那是把「打开选择框、选回原来那一格、点两下确认」" +
+                "这一笔逐字段什么都没改的空操作也标成 manual ⇒ 那一行从此退出教务刷新的匹配与覆盖，" +
+                "刷新还会补一张重复卡进来。旗标必须由档 ⑩ 那一枚判据供给" +
+                "（实到「$FLAG_WRITE」在 copy 实参里 " + occurrences(args, FLAG_WRITE) + " 处）",
+            0,
+            occurrences(args, FLAG_WRITE),
         )
     }
 
@@ -175,25 +231,39 @@ class ManualTimeOverrideWiringGuardTest {
         )
     }
 
-    // ─────────────── ⑤ 落点册子：文件 × 枚数，不是全仓总数 ───────────────
+    // ─────────────── ⑤ 落点册子：文件 × 枚数，不是全仓总数（无条件/判据两本） ───────────────
 
     @Test
-    fun `main里标手动覆盖的四枚落点逐格对上不多不少`() {
+    fun `main里标手动覆盖的落点逐格对上不多不少`() {
         val byFile = mutableMapOf<String, Int>()
+        val judgedByFile = mutableMapOf<String, Int>()
         mainSources().forEach { (relative, text) ->
-            val n = occurrences(blankComments(text), FLAG_WRITE)
-            if (n > 0) byFile[relative] = n
+            val code = blankComments(text)
+            occurrences(code, FLAG_WRITE).takeIf { it > 0 }?.let { byFile[relative] = it }
+            occurrences(code, JUDGED_WRITE).takeIf { it > 0 }?.let { judgedByFile[relative] = it }
         }
         assertEquals(
-            "main 里 `isManualOverride = true` 的落点册子变了（实到 " +
+            "main 里字面 `isManualOverride = true` 的落点册子变了（实到 " +
                 byFile.toSortedMap().entries.joinToString { "${it.key}=${it.value}" } +
                 "）。应当是" + EXPECTED_LANDING.toSortedMap().entries.joinToString { "${it.key}=${it.value}" } +
-                "：三枚 UI 落点（拖课 / 缩放 / 向导）+ 一枚组外观，一格格数。" +
-                "长出第五枚 = 有人在别的路径上乱标（那一行同样从此退出教务刷新的匹配与覆盖）；" +
+                "：两枚无条件 UI 落点（缩放 / 向导，落点闸见档 ⑫）+ 一枚组外观，一格格数。" +
+                "长出一枚 = 有人在别的路径上乱标（那一行同样从此退出教务刷新的匹配与覆盖）；" +
                 "少一枚 = 那条链又回到「下次刷新按原时刻冲回来、连带删提醒」。" +
+                "\n拖课那一枚不在这一本里 —— 它自 T133b 起由判据供给（下面那一本），" +
+                "拿它去补上面某一枚的数就是两头都不对。" +
                 "\n复算：git grep -n \"isManualOverride = true\" -- app/src/main",
             EXPECTED_LANDING.toSortedMap(),
             byFile.toSortedMap(),
+        )
+        assertEquals(
+            "由判据供给的旗标落点册子变了（实到 " +
+                judgedByFile.toSortedMap().entries.joinToString { "${it.key}=${it.value}" } +
+                "），应当是" + EXPECTED_JUDGED.toSortedMap().entries.joinToString { "${it.key}=${it.value}" } +
+                "：只有拖课/选择框那个共同收口一枚。多一枚 = 有人给已经闸住的落点又叠了一道判据" +
+                "（两处判同一件事，本仓算违反）；少一枚 = 空操作又开始标 manual 了" +
+                "\n复算：git grep -n \"isManualOverride = manualTimeOverride\" -- app/src/main",
+            EXPECTED_JUDGED.toSortedMap(),
+            judgedByFile.toSortedMap(),
         )
         assertEquals(
             "编辑器那一枚既有判据表达式（「我改过这门课」的先例口径）必须原样在：" +
@@ -334,6 +404,177 @@ class ManualTimeOverrideWiringGuardTest {
             "算出来的那一行必须真的含着旗标那一行文本：" + raw.lines()[computed - 1].trim(),
             true,
             raw.lines()[computed - 1].contains(FLAG_WRITE),
+        )
+    }
+
+    // ─────────────── ⑩ 拖课那一枚旗标确实是内核算出来的（五枚具名实参 + 与 copy 同源） ───────────────
+
+    @Test
+    fun `拖课那一枚旗标由判据内核算出 不是恒真也不是各算一遍`() {
+        val raw = source(HOME_SCREEN)
+        val code = blankComments(raw)
+        val body = balancedBlock(code, MOVE_LAMBDA_ANCHOR, "handleCourseMove")
+        val args = callArgs(code, MOVE_JUDGE_ANCHOR, "拖课那一枚判据调用")
+        val required = listOf(
+            "originalIsManualOverride = course.isManualOverride",
+            "newDayOfWeek = newDayOfWeek",
+            "originalDayOfWeek = course.dayOfWeek",
+            "newPeriods = shiftedPeriods",
+            "originalPeriods = course.periods",
+        )
+        val order = required.map { args.indexOf(it) }
+        val missing = required.filterNot { args.contains(it) }
+        assertTrue(
+            "判据调用缺了具名实参：" + missing.joinToString { "「$it」" } +
+                "（实到 " + args.trim().replace(Regex("""\s+"""), " ") + "）" +
+                "\n  起手在 L" + lineOf(raw, raw.indexOf(MOVE_JUDGE_ANCHOR)) +
+                "\n复算：sed -n '440,446p' app/src/main/java/com/buaa/schedule/ui/home/HomeScreen.kt\n" +
+                "五枚缺一不可：少了 `originalIsManualOverride` 就是丢掉粘住（一次空操作把编辑器早已" +
+                "标过的行洗回 false）；少了 original 那一侧就无从比对；换成常量就是本档最后一判要拦的",
+            order.distinct().size == 5 && order == order.sorted(),
+        )
+        assertTrue(
+            "判据必须在这记 copy **之前**算好（`isManualOverride = manualTimeOverride` 引用的就是它）：" +
+                "\n  判据 L" + lineOf(raw, raw.indexOf(MOVE_JUDGE_ANCHOR)) +
+                " vs copy L" + lineOf(raw, raw.indexOf(MOVE_COPY_ANCHOR)),
+            body.indexOf(MOVE_JUDGE_ANCHOR) in 0 until body.indexOf(MOVE_COPY_ANCHOR),
+        )
+        val copyArgs = callArgs(code, MOVE_COPY_ANCHOR, "拖课那一记 copy")
+        assertTrue(
+            "判据收到的「要写进去的那一份」必须就是 copy 落库的那同一份（两处各算一遍迟早分叉）：" +
+                "\n  判据实参里没有「newDayOfWeek = newDayOfWeek」或 copy 里没有「dayOfWeek = newDayOfWeek」" +
+                "、\n  判据实参里没有「newPeriods = shiftedPeriods」或 copy 里没有「periods = shiftedPeriods」",
+            args.contains("newDayOfWeek = newDayOfWeek") && copyArgs.contains("dayOfWeek = newDayOfWeek") &&
+                args.contains("newPeriods = shiftedPeriods") && copyArgs.contains("periods = shiftedPeriods"),
+        )
+        assertEquals(
+            "「日列 → dayOfWeek」那一句加法在 handler 体内只能出现一次（就是 $NEW_DAY_LOCAL 那一枚局部量）：" +
+                "判据与 copy 各写一遍 `newDayIndex + 1` 就是两处判同一件事的分叉点",
+            1,
+            occurrences(body, "newDayIndex + 1"),
+        )
+        assertFalse(
+            "判据调用里出现了字面量实参（有人把它退回恒真/恒假）：" +
+                "\n  实到 " + args.trim().replace(Regex("""\s+"""), " "),
+            Regex("""=\s*(true|false)\s*[,)]""").containsMatchIn(args),
+        )
+        assertFalse(
+            "handler 体内又长出第二道「日/节次变没变」的判据 —— 本仓「各判一次」算违反，" +
+                "判据本体只许有 [ManualTimeOverridePolicy] 那一份（档 ⑪ 钉着它）",
+            Regex("""newDayOfWeek\s*!=|shiftedPeriods\s*!=""").containsMatchIn(body),
+        )
+    }
+
+    // ─────────────── ⑪ 判据内核仍是纯判据、全仓只此一份 ───────────────
+
+    @Test
+    fun `判据内核仍是纯判据 零依赖且全仓只此一份`() {
+        val raw = source(POLICY)
+        val imports = raw.lines().map { it.trim() }.filter { it.startsWith("import ") }
+        assertEquals(
+            "判据内核 $POLICY 里出现了 import（实到 " + imports.joinToString { "「$it」" } + "）。" +
+                "这一族的入门条件是零 android/androidx import、零时钟读取、不碰 ViewModel 也不碰数据库" +
+                "（外部事实一律由调用点当参数递进来，见 `ConflictShiftWeekScope.kt` 段首）。" +
+                "内核自己去嗅课表 / 读当下，就与首页那两枚 `remember` 的失效链脱钩了（T41/T43 那一类坑）",
+            emptyList<String>(),
+            imports,
+        )
+        val code = blankComments(raw)
+        val body = code.substringAfter("): Boolean =").substringBefore("\n}").trim().replace(Regex("""\s+"""), " ")
+        assertEquals(
+            "判据本体不再是我们判的那三判析取（「原来已标 manual ⊷ 日变了 ⊷ 节次变了」），实到「$body」。" +
+                "\n复算：sed -n '61,72p' app/src/main/java/com/buaa/schedule/ui/home/ManualTimeOverridePolicy.kt\n" +
+                "朝宽扭（恒真、把周次也判进来）⇒ `ManualTimeOverridePolicyTest` 同值那三格红；" +
+                "朝窄扭（恒假、反着取、丢掉粘住那一支）⇒ 真改动那几格与粘住那一格红",
+            POLICY_BODY,
+            body,
+        )
+        val homes = mainSources().filter { (_, text) -> blankComments(text).contains(POLICY_SIGNATURE) }.keys
+        assertEquals(
+            "`fun forCourseMove(` 的定义全仓必须只有一处（两处判据本体迟早分叉）：$homes",
+            1,
+            homes.size,
+        )
+        assertTrue("唯一那一处必须在 $POLICY 里，实到 $homes", homes.contains(POLICY))
+    }
+
+    // ─────────────── ⑫ 反向格子：选择框那条路还在、且确实没有同值闸 ───────────────
+
+    @Test
+    fun `选择框那条路还在而它确实没有同值闸`() {
+        val code = blankComments(source(WEEK_VIEW))
+        assertEquals(
+            "「移动到…」的入口册子变了（实到三处应当是：长按菜单一项 + 宽窄两屏各一枚卡片动作）。" +
+                "⚠️ 不许有人为了绕开这一卡的空操作问题把选择框那条路整个删掉 —— 它是 WCAG 2.2 · 2.5.7 " +
+                "Dragging Movements 给读屏与精细动作受限用户的**唯一**改时间入口，删掉它等于把病改成残废。" +
+                "\n复算：grep -n -A2 \"movePickerFor =\" app/src/main/java/com/buaa/schedule/ui/home/WeekView.kt",
+            3,
+            Regex("""movePickerFor\s*=\s*CourseMovePickerRequest\(""").findAll(code).count(),
+        )
+        assertEquals(
+            "选择框那一扇 `ModalTransition(payload = movePickerFor)` 必须还在（payload 版，收场播得出来）",
+            1,
+            occurrences(code, "ModalTransition(payload = movePickerFor) { request, modal ->"),
+        )
+        assertEquals(
+            "`CourseMovePickerDialog` 的调用与定义两处必须都在",
+            2,
+            occurrences(code, "CourseMovePickerDialog("),
+        )
+        assertEquals(
+            "落库前的确认窗那一扇 `ModalTransition(payload = pendingMove)` 必须还在",
+            1,
+            occurrences(code, "ModalTransition(payload = pendingMove) { request, modal ->"),
+        )
+        assertEquals("「所有周」那枚按钮必须还在", 1, occurrences(code, """Text("所有周")"""))
+        assertEquals("「仅本周」那枚按钮必须还在", 1, occurrences(code, """Text("仅本周")"""))
+        assertEquals(
+            "`onCourseMove?.invoke(` 的调用点必须还是确认窗那两处（拖拽与选择框共用同一套语义）",
+            2,
+            occurrences(code, "onCourseMove?.invoke("),
+        )
+        assertEquals(
+            "首页仍把**同一份** `handleCourseMove`（本卡判据所在的那个收口）端给宽屏与窄屏两个分支 ——" +
+                "换掉或摘掉任何一枚，选择框那条路就绕过了判据",
+            2,
+            occurrences(blankComments(source(HOME_SCREEN)), "onCourseMove = handleCourseMove"),
+        )
+        assertEquals(
+            "选择框的初值仍是**出发那一格**（日）—— 这一句被改掉，本卡判的「同值可达」就不成立了，" +
+                "得回来重判要不要判据",
+            1,
+            occurrences(code, PICKER_INITIAL_DAY),
+        )
+        assertEquals("选择框的初值仍是**出发那一格**（节次）", 1, occurrences(code, PICKER_INITIAL_PERIOD))
+        val onConfirm = balancedBlock(code, PICKER_ON_CONFIRM, "选择框的 onConfirm")
+        assertEquals(
+            "`onConfirm` 仍无条件把选中的日与节装成 `CourseMoveRequest` 交给确认窗",
+            1,
+            occurrences(onConfirm, "pendingMove = CourseMoveRequest("),
+        )
+        assertFalse(
+            "选择框的 `onConfirm` 里出现了 `if` —— 有人在那一侧加了同值闸。那就该把 handler 里那一枚判据" +
+                "撤掉，两处判同一件事在本仓算违反（判据本体只许一份）。\n  实到 " +
+                onConfirm.trim().replace(Regex("""\s+"""), " "),
+            Regex("""\bif\b""").containsMatchIn(onConfirm),
+        )
+        assertEquals(
+            "拖拽那两枚 `onDragEnd` 的同值闸（宽/窄各一枚）必须还在 —— 本卡判据说「拖回原地不回放到 " +
+                "handler」靠的就是它（`ManualTimeOverridePolicyTest` 第三格与它同向）",
+            2,
+            occurrences(code, DRAG_GATE),
+        )
+        assertEquals(
+            "缩放那一路的同值闸必须还在 —— 它是 `handleCourseResize` 那一枚仍然恒真的唯一理由",
+            1,
+            occurrences(code, RESIZE_GATE),
+        )
+        assertEquals(
+            "向导那一路「原地不算建议」那一判必须还在（`suggestNearestFreeShift` 跳过 candidate == " +
+                "currentPeriods）—— 它是 `applyConflictShift` 那一枚仍然恒真的唯一理由。" +
+                "同值可达性两判在 `ManualTimeOverridePolicyTest` 档 ③ 用真码跑",
+            1,
+            occurrences(blankComments(source(CONFLICT_RESOLUTION)), SUGGESTION_GATE),
         )
     }
 
