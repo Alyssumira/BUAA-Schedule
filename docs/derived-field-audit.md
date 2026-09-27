@@ -240,7 +240,7 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
 ```
 按字面走，这就是 a+b+c（卡片颜色由周/日视图按 `colorIndex` 取调色板）。**它不是 a**，理由是这条关系根本不是不变式，只是导入时的一次性播种：
 - 它是用户可以另起一手的独立量：`ui/editor/CourseEditorScreen.kt:500-508` 那排色板的 `onClick = { colorIndex = index; customColor = null }` 就是"自己挑一支"，`:121` 的初值 `initialCourse?.colorIndex ?: 0` 只把它当草稿起点、不是当约束；
-- 写侧也按"两枚无关"处理：`data/repository/ScheduleRepository.kt:253-259` 的 `updateCourseGroupAppearance` 在同组片段之间同步的正是 `colorIndex = course.colorIndex.coerceAtLeast(0)`，而各片段的 `dayOfWeek` **刻意不同步**（KDoc `:233` 「不含时间、教师、周次——同组片段本就可能有不同的时间安排」）；
+- 写侧也按"两枚无关"处理：`data/repository/CourseGroupAppearancePolicy.kt:83` 那一行（T128 把这段逐行 copy 从函数里抽了出来，函数本体 `updateCourseGroupAppearance` 今天裸 `:252`）在同组片段之间同步的正是 `val colorIndex = incoming.colorIndex.coerceAtLeast(0)`，而各片段的 `dayOfWeek` **刻意不同步**（KDoc `:233` 「不含时间、教师、周次——同组片段本就可能有不同的时间安排」）；
 - 同一格的两枚值若真该相等，`:144` 就不会写成 `% 8` 这种"散列取色"而不是"换算"的形状。
 
 ⇒ 把课拖到别的星期之后卡片颜色不变，是**用户挑过的颜色该留着**，不是旧值。这一枚如果按 a 收，就是给一条本来正确的行为开一张改错方向的卡。
