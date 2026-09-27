@@ -1231,3 +1231,100 @@ grep -rnE "state\.value\.copy\(|SignInState\.[A-Za-z]+\([^)]*\)\.copy\(" app/src
 2. 本节一度把 `cameraError` 那两枚字段在 main 侧的落点数成 16，重跑 §7.4 第 3 条得 **19** 才改过来 ——
    写进 §7.4 的是复算之后的读数（分解表同格）。**这就是 §0.4 第 4 条那句"数字旁边必须带命令"的用途。**
 
+## 9. T120 第四遍·§9：起手块**有没有闸**这一遍（评估卡 · 只判档不改动）
+
+分支 `ai/T120`，基点 `b84248f`（§8 那一族之后主源码未动）。**零 main 改动、零测试改动、零 gradle、零 adb、零设备**；
+全部读数来自 `grep` / 逐枚读原文。**本节新增文本一枚 `文件.kt:行号` 连写都没有**（自证见 §9.6 末格），
+§8.7④ 那九处的行号在本节基点上逐枚复算**一字未漂**（复算账在 §9.1 第 6 条），因此本节既不钉新锚点、也不需要重钉旧锚点。
+
+### 9.0 这一遍问的问题，与"立判据"那句话（§8.7④ 欠的债）
+
+- §8 问的是**起手块清没清对岸**（同一次操作的上一个产物有没有被收回去）。
+- **本节问的是同一批站点的另一枚问题：这一次操作在飞的时候，那颗控件还点不点得动。** §8.6 第二条已经把话说到门口就
+  停住了 ——「那是**缺旗标**，与本节判的'起手漏清对岸'不是同一族病，本节不给它们判任何一档 —— 要排卡得先立判据」，
+  §8.7④ 把这句话接成"下一轮排卡的唯一来源里最大的一块"。**本节就是去还这一格：先立判据，再逐处判档。**
+
+**判据不是本节发明的。** 全仓今天只有**一处**把它写成了原文，在 `SignInViewModel` 那颗 `flight` 闸门的 KDoc 里
+（它讲的是扫码签到，但口径是通用的）：「签到这件事重复提交比"这次没吃进去"更糟，而**排队只会把同一张码再投一次**」，
+下一句是「修法是**让动作本身反映实情（按钮在忙的时候点不动）**，不是排队」。⇒ 本仓的既定口径是
+**"按灭 > 排队"，且按灭的理由是"别把用户这次点击吃掉得无声无息"**。本节把这一句摊成三问，按顺序问：
+
+1. **这道闸今天是不是已经有别人替它守着了？**（四种间接闸都算：`enabled =` 条件、点一下就自关的载体
+   （确认框/浮层/把手在 invoke 之前自己置 `null`）、系统选择器一次只回一枚 uri、**仓库层的互斥锁**）
+   ⇒ 有，且第二问答"否" ⇒ **不收**。
+2. **第二枚真的落下来，用户当场看见的谎是不是就生效了？** 判据是"指得到落点的代码"，不是"感觉会乱"：
+   写库返回值被丢掉、snackbar 那句措辞、撤销捞错对象、面板多出一枚。指不到 ⇒ 老实写"本遍没找到落点"。
+3. **按灭挡不挡得住它？**（这一问是本判据的核心分辨，也是本节唯一新增的东西）——**「按灭」只挡同一枚控件的重复触发**，
+   它挡不住这三族：**(a) 跨对象**（两条链各写一门课，后果在 LIFO 撤销栈上交错，按钮各按各的灭）；
+   **(b) scope 被取消**（`rememberCoroutineScope()` 绑 composition，页面一划走协程就死在两次取锁中间）；
+   **(c) 退场动画那 300 ms**（`ModalTransition` 的挂载闸门语义决定收场期间内容**仍然挂着、仍然吃点击**，
+   置 `null` 只是不再进场）。凡后果落在 (a)(b)(c) 的 ⇒ 判**不收**，理由必须写成"按灭无效，修法在别处"，并登记到 §9.5。
+
+三档定名（与 §6/§8 的四档**不通用**，本节这一族只有三档够用）：
+**收** = 三问全走到底（今天无闸 · 后果当场可见 · 只有按灭挡得住）；
+**不收** = 第 1 问或第 2 问答"否"，或第 3 问判"按灭挡不住"（**这是完全合法的收法**，先例 #117"真的但不值钱"、
+#114"测试台产物、零代码改动"）；
+**待真机** = 第 2 问的答案取决于运行期行为（Activity 任务栈、退场动画占几帧），本卡红线禁设备 ⇒ 只能挂这一档。
+
+⚠️ **本节顺手把 §8.7④ 那句指针复核掉了，它是对的**：卡面怀疑"那套闸门其实在 `IClassLoginScreen` 而不在 ViewModel"，
+实测**在** ViewModel —— `SignInViewModel` 里今天**确实还立着一枚再入闸**：`private val flight = MutableStateFlow(false)`
+对外暴露成 `val inFlight`，`fun signIn(raw: String)` 第一行就是 `if (flight.value) return`，`finally` 里归还，
+而界面侧 `enabled = !inFlight` 读的是同一枚值（复算见 §9.1 第 4 条）。它被 T85 拆掉的是**另一族**
+（`alreadySigned` 那一档，注释原文在 sealed 族里，本节读过、不动它）。⇒ 文档指针不欠订正。
+
+### 9.1 复算命令与读数（卡面三条照抄、本节三条补尺）
+
+```
+# 1  卡面尺①：Job 句柄那一族（⇒ 2 行，与卡面给的"两枚站点"一字不差）
+grep -rn '?\.isActive == true' app/src/main/java --include='*.kt'
+#    UpdateCheck 的 startDownload 与 retryInstall 各一枚（裸 `if (downloadJob?.isActive == true) return`）
+# 1b 换一把宽尺才看见全貌（⇒ 9 行 / 5 枚文件）：这把尺把第二枚 Job 闸漏了
+grep -rn 'isActive' app/src/main/java --include='*.kt' | wc -l
+#    其中"再入闸"形状共 **3 枚站点**：UpdateCheck 那两枚 + ScheduleViewModel 的
+#    `if (job.isActive) {`（buaaRefreshJob 那一族，§8.2 #4 判过它的读者）。它不带 `?.` 也不带 `== true`
+#    ⇒ **卡面那把尺天生吃不到它**。剩下 6 行是 `continuation.isActive`（两处）/ `DayView` 的
+#    while 自旋 / `SettingsScreen` 一枚同名局部 val / `import kotlinx.coroutines.isActive` 那行 import
+# 2  卡面尺②：UI 本地旗那一族（⇒ 12 行 / **1 枚文件**，全在 IClassLoginScreen，含 3 行注释）
+grep -rn 'submitting' app/src/main/java --include='*.kt'
+grep -rln 'submitting' app/src/main/java --include='*.kt' | wc -l   # ⇒ 1
+# 3  仓库层那把锁（⇒ **8 枚调用点**，定义不算、`return@withImportLock` 早退不算）
+grep -n 'withImportLock {' app/src/main/java/com/buaa/schedule/ui/ScheduleViewModel.kt
+# 4  卡面没给的补尺：全仓"操作在飞就按灭"的界面读者（⇒ 13 行 / 8 枚文件）
+grep -rn 'enabled = !' app/src/main/java --include='*.kt'
+# 5  退场窗口的长度（⇒ 300，判据第 3 问 (c) 那族的量）
+grep -rn 'DURATION_DIALOG_EXIT *=' app/src/main/java --include='*.kt'
+```
+
+**第 3 条那 8 枚调用点包住的链（逐枚点名，这是"重复触发到底会不会并发写"的唯一凭据）**：
+`importCourses`、`confirmPendingImport`、`refreshFromBuaa`、`previewBuaaCourses`、`importIcs`、`importText`、
+`importBackup`、`importShareCode`。**九处里最终经过它的只有两处** —— `importIcs`、`importText`
+（那两枚 SAF 回调的落库口）。**`updateCourse` / `deleteCourse` / `deleteCourseGroup` / `undo` 一条都不过它**，
+它们只过 `ScheduleRepository` 那把 `writeMutex`。
+
+⚠️ **这把锁的形状决定了它挡什么、不挡什么**（原文：`if (!importMutex.tryLock()) { _importMessage.value =
+AppMessage("已有导入正在进行，请稍候"); return null }`）：它是 `tryLock` **不是 `withLock`** ⇒
+第二枚触发**不排队、直接吃一句人话回绝**。而数据层那把 `writeMutex` 用的是 `withLock` ⇒ **排队**、
+两笔都落、后写的赢。这两把锁一把拒一份排，正好是 §9.0 那句"按灭 > 排队"在仓库层的两份不同实现。
+
+**第 4 条那 13 行的分档**（本节把"是不是在飞旗"逐枚读了原文）：真正"操作在飞 ⇒ 按灭"的是 **9 族**，
+卡面说的"只有两枚"**不成立**（账在 §9.4 驳回①）——
+`CourseEditorScreen` 的 `saving`（起讫两枚写点 + `enabled = !saving` + 那句 `if (saving) "保存中..."`，
+**还额外折进了 `editorCanSave` 的实参表**）、`ConflictWizardDialog` 的 `pendingCourses`、
+`SpocScanScreen` 的 `inFlight`（读的是第 5 条那枚 StateFlow）、`TermAndCampusBar` 的 `refreshing`
+（**这一枚顺手补了 §8.2 #4 的空格**：`_buaaRefreshing` + `buaaRefreshJob` 那两枚字段的界面读者原来没点过名，
+它就在闸里面）、`SettingsScreen` 的 `enabled = !calendarSync.syncing`（§8.2 #1 那道闸）、
+`OnboardingScreen` 的 `checking`（§8.7⑤ 已判 deferred）、`IClassLoginScreen` 的 `submitting`（卡面范本②）、
+`SignInViewModel` 的 `flight`。
+**⚠️ 这一把尺一行都不吃卡面范本①**：`grep -rn 'enabled' app/src/main/java/com/buaa/schedule/update/ | wc -l`
+⇒ **0** —— `UpdateCheck` 那一族**根本没有按灭**，它的第二层是 `when (shown)` 的**分支覆盖**
+（`Downloading` 那一档换 `DownloadingDialog`，`confirmButton = {}`，那颗「立即下载」整枚不存在）。
+⇒ 卡面把它叫"按灭范本"**名实不符**，账在 §9.4 驳回①。
+**不是闸门的是两枚内容闸**：`WidgetConfigActivity` 的 `enabled = !isDefault`、`SettingsScreen` 那枚
+`enabled = !preview.versionTooNew` —— 与卡面点名的 `enabled = shareCode.isNotBlank()` 同类（那是**内容闸**，
+它管"输入够不够"，不管"上一次飞没飞"），本节按卡面那句原样承认这一条判据。
+
+**第 6 件必记的事：九处的行号在本节基点上逐枚复算，全部未漂。** 拿 `awk 'NR==N'` 逐枚读原文与 §8.7④ 同框的
+符号名对账 ⇒ `HomeScreen` 三枚（拖拽 / 缩放 / 删除那三条链的 `scope.launch`）、`CourseManagementScreen` 两枚、
+`ConflictWizardDialog` 一枚、`ImportScreen` 三枚，**九枚全部一字不差**（T115 之后这五枚文件没动过 main）。
+⇒ 本节沿用 §8.7④ 的行号不写"按 T120 盘面复算的新值"，四把尺因此没有挪动的理由。
+
