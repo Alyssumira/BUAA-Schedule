@@ -41,7 +41,10 @@ import org.junit.Test
  * 3. 管理页 `onPickColor` 体内：同一形状，一笔写库，copy 与 `CourseSaveOptions(applyToGroup = true)`
  *    逐字原样（搬接收者不许顺手改载荷）；
  * 4. 三枚落点的**宿主行逐字**是 `viewModel.viewModelScope.launch {`，行号由两种独立算法
- *    （数换行 / 按 `\n` 切分）给出同一个数，报错消息逐枚点名 文件 + 行号 + 原文；
+ *    （数换行 / 按 `\n` 切分）给出同一个数，报错消息逐枚点名 文件 + 行号 + 原文；这一档原来还挂着
+ *    一枚「被点名的行数 == `MOVED.size`」，T124a⑤ 判成恒等式删掉（那份 report 每轮恰好 append 一枚
+ *    换行 ⇒ 右侧量的就是循环轮数，而循环就是按 `MOVED` 迭代的），它想钉的「盘上 ↔ 名册互为等集」
+ *    由档 ⑧ 那格独立数盘接管；
  * 5. 三枚 body 里 composition-only 调用 0 处（提示条 / 分页 / 滚动 / 触感 / `LaunchedEffect`）：
  *    这一格是"整块搬成立"的证据，也是谁把 snackbar 塞进这一枚协程时的红名；
  * 6. **反向棘轮**：全仓每一枚由 `rememberCoroutineScope()` 供给的变量名下，写库那一手的册子
@@ -189,7 +192,6 @@ class WriteChainReceiverWiringGuardTest {
 
     @Test
     fun `三枚落点的宿主行逐字是 viewModelScope 那一枚 行号两种算法给同一个数`() {
-        val report = StringBuilder()
         for ((file, anchor, _) in MOVED) {
             val raw = source(file)
             val code = blankComments(raw)
@@ -217,9 +219,13 @@ class WriteChainReceiverWiringGuardTest {
                 VM_SCOPE_LAUNCH,
                 lineText,
             )
-            report.append("\n  ").append(file).append(" L").append(byLineOf).append("：「").append(lineText).append("」")
         }
-        assertEquals("三枚落点都要被点到名（逐枚 文件 + 行号 + 原文）", MOVED.size, report.count { it == '\n' })
+        // 这里原来还有一枚 `assertEquals("三枚落点都要被点到名", MOVED.size, report.count { it == '\n' })`：
+        // 那个 report 在循环里每轮恰好 append 一枚 `\n` ⇒ 右侧量的就是「循环跑了几轮」，而循环就是按
+        // `MOVED` 迭代的 ⇒ 左右同为 MOVED.size、恒等、结构上不可能红（与 T118 判掉 DG ③ 那一格同款的尺）。
+        // 本格因此只留下三枚真判据：体内那一枚协程恰好一处、两种行号算法给同一个数、宿主行逐字。
+        // 它原本想钉的「盘上落点与名册互为等集」已由档 ⑧ 那格（一次 `MOVED` 都不读的独立盘扫 ↔
+        // 一次盘都不开的名册身份，双向差集）接管 ⇒ 按同一判法删掉，不留死码。
 
         // 两枚文件的接线前提：import 在、且那枚页 scope 声明本卡没顺手删（B 档还要用它）
         for (file in listOf(HOME_SCREEN, MANAGEMENT)) {
