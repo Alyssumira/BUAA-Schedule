@@ -4031,3 +4031,18 @@ T122 当时判 deferred 的理由是"这一判今天在压栈点算不出来"（
 - ⚠️ **一枚我这轮才看清的环境事实**（它解释了我读数里的一枚幽灵）：harness 报 `Shell cwd was recovered from D:\schedule\BUAA-Schedule\.worktrees\T83` —— 那枚目录**早就不存在**（本轮与上轮都删过 worktree）。持久 CWD 停在死目录上不会报错，只会让**不自己 `cd` 的命令偶尔多读出一行**：我这轮 STEP 0 就量到过一枚 `docs/androidTest 被动=1`，随后逐枚 `git show --name-only` 复核五枚 commit 全为 0、第二趟同一条尺复量也是 0 ⇒ **判定为那枚幽灵读数、不是盘上事实**。往后凡"我没显式 cd 就得到的数"要复量一次再入账。
 - **未验到（今天仍然只有 JVM 证据）**：① "切 tab 时目的地被卸载、页 scope 被取消"这条**因果**只有静态调用形状（`popUpTo{saveState}` + 本仓两处自陈）作证；② 取消点落在写库之后时"撤销条目没压 / 课前铃与组件那一趟没重排"没在设备上复现过；③ 这三处交互（拖课、改节次、整组换色）改后 UI 无回归，只有 1,807 枚单测 + lint 证据。⇒ 与 T123、T125、#98 同属设备批那一台机器上一起看。
 
+- **T124b（B 档两枚删除链）已 ff-only 合进 master（顶端 `3019f23`，三枚 commit：`0622a87` VM 两枚入口 / `72b0c98` 调用点 + 新格与棘轮收窄 / `3019f23` 连带重钉）**。
+  形状：VM 侧 `deleteCourseAndAwait` / `deleteCourseGroupAndAwait` 各 `var deleted = false` + `viewModelScope.launch { deleted = ... }` + `job.join()` + `return deleted`；
+  **`join` 仍跑在页 scope 上**、`showSnackbar` 与那颗 `"撤销".takeIf { deleted }` 与 `if (result == …) viewModel.undo()` **一字未动** ⇒ 修的是"库与后续那一趟"，不是"提示条一定弹得出"。
+  我盘面复算过：main 侧三枚文件（VM 1,696 ⇒ **1,749**、两枚 UI 各只改一行调用名、行数 1,416 / 456 未动）、`data/repository/` 与 `docs/` 与编辑器**零字节**；五把尺 **1,809 / 210 / 216 / 86 / 46**，其中行首锚那把与门禁 XML **同值 1,809**（代理另报的"1,814"是**不带行首锚那把宽尺**，两把不同数不是矛盾）。
+  ⚠️ **它驳我卡面一条、成立**：我让它"把那两**对**从棘轮参照物里摘掉"——盘面 `viewModel.undo(` 与 `viewModel.undoDeleteCourse(` 今天**仍长在那同一块页 scope 体内**（`if (result == …) viewModel.undo()` 就在那一块里），摘掉会让棘轮格反向红；只 `deleteCourse(` / `deleteCourseGroup(` 那两手可摘（它照盘面做了），且 `fun undo()` 自己在 VM 里就起在 `viewModelScope`、非 suspend ⇒ 本来就不需要搬。
+  ⚠️ **真红的守卫是 5 枚不是我点名的 3 枚**（`UndoUpdateEntryGuardTest` 1 格、`CourseManagementImportMessageWiringGuardTest` 3 格也在内），它按同一手法重钉并自报出白名单之外 ⇒ 收下（不收就是把过期字面量留在盘上）。
+- **编排侧两臂（`3019f23` 上，我挑的是代理没扭的那一侧）**：
+  | 臂 | 扭法 | 结果 |
+  |---|---|---|
+  | Z1 | VM 里**第二枚**方法 `deleteCourseGroupAndAwait` 退成透传（`= deleteCourseGroup(courses)`） | rc=1、编译错误 0、XML 216（13:58:01）、1809 枚执行、**红 1 枚 = 档 ⑨**（`B档两枚AndAwait的VM体内 写库那一手在viewModelScope的job里且结论由它带回`） |
+  | Z2 | 管理页调用点换回裸 `viewModel.deleteCourseGroup(` | rc=1、编译错误 0、XML 216（13:54:20）、**红 9 枚跨四枚守卫**（`WriteChain` 2 + `CourseGroupDeletion` 3 + `CourseManagementImportMessage` 3 + `UndoUpdateEntry` 1） |
+  ⚠️ 我自己第一版 Z1 **不存在**：切片那串 `old` 少带了方法体那枚收尾 `    }` ⇒ 换成表达式体后剩一枚野花括号 ⇒ **331 行编译错、XML 0 枚**。⇒ 记一条手法：**扭"整枚方法体"时 needle 必须含收尾花括号**，且判臂存在的第一把尺就是 `^e:` 计数（非 0 就没有臂）。
+- **合并对象上的六步门禁（我跑）**：`clean` 两次撞文件锁（`Unable to delete …classes.jar`）⇒ `--stop` + 等 30 s 补跑各成功一次 → `assembleRelease` **BUILD SUCCESSFUL**、apk **7,251,680 B** → 全量测试 **1809 / 216 suites / 0 失败 / 0 skipped**（13:35:11）→ lint **0 error / 14 warning** → 第二趟单跑仍 skipped=0（13:42:08）→ `:benchmark` 10 executed →
+  第二遍独立全量再给 **7,251,680 B**（两枚 md5 不同：`6b3de744…` / `d1f49eca…` ⇒ zip 时间戳）⇒ 按"两次独立全量一致"记新地板：**7,252,339 ⇒ 7,251,680（−659 B）**。⚠️ 本轮真往 dex 加了两枚方法、包却**变小 659 B** ⇒ 归因未查，如实挂着（同一 commit 两遍之间字节稳、所以不是噪声能解释的量级）。
+
