@@ -561,6 +561,39 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     })
 
     /**
+     * [deleteCourse] 的「等一个结论」版 —— 给页面上那一支**还挂在 `rememberCoroutineScope()`
+     * 上**的删除链用（T124b · B 档）。
+     *
+     * ## 为什么不把整块搬走，也不直接透传
+     *
+     * [deleteCourse] 体内是三拍：删库 → 压撤销条目（`UndoManager.pushDelete`）→
+     * `afterDataChangedInternal()`（重排课前铃 / 桌面组件 / 明日预告）。调用它的那一支紧接着还要
+     * `snackbarHostState.showSnackbar(...)` —— 那是只在组合期成立的东西，整块搬进
+     * [viewModelScope] 会把提示条的回灌链拆断。反过来**整支留在页 scope 上**就是这一族的病：
+     * 目的地被 dispose（切 tab 走 `popUpTo { saveState = true }`）时页 scope 被取消，取消点若落在
+     * 「删已成」与「压撤销条目 / 重排那一趟」之间 ⇒ 库里删了、撤销栈没有、那一趟没跑，而界面一句没说。
+     *
+     * ## 这一枚把哪一半搬走
+     *
+     * 写库那一手放进 [viewModelScope] 里的那一枚 job（它不归页面管，页 scope 取消也照样跑完），
+     * `join()` 仍跑在**调用者的 scope** 上 —— 它只是让 UI 等一个结论：
+     *  - 页面还在 ⇒ 拿到 `deleted`，提示条照常；
+     *  - 页面已走 ⇒ `join()` 随调用者一起被取消，而那一枚 job 继续跑到底。
+     *
+     * ⚠️ 两个方向都不许改：把 `join()` 换成 `withContext` / 把本函数写成直接 `suspend` 透传，
+     * 等于写库那一手又落回调用者的 scope（本卡白做）；把 `deleted` 升级成 VM 的共享可变属性，
+     * 等于新造一枚没人清的状态。它**必须**是函数内的局部捕获。
+     *
+     * 先例是本仓 `ConflictWizardDialog.applyConflictShift`（同一形状：`val job = … .launch {` + `job.join()`）。
+     */
+    suspend fun deleteCourseAndAwait(course: Course): Boolean {
+        var deleted = false
+        val job = viewModelScope.launch { deleted = deleteCourse(course) }
+        job.join()
+        return deleted
+    }
+
+    /**
      * 删除同一门课的全部片段（课表管理页的「删除整门课」）。
      *
      * 与逐个 [deleteCourse] 的差别正是这个入口存在的理由：
@@ -579,6 +612,26 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             _importMessage.value = AppMessage("删除课程失败：${e.message}", isError = true)
             false
         })
+    }
+
+    /**
+     * [deleteCourseGroup] 的「等一个结论」版 —— 课表管理页那一支**还挂在
+     * `rememberCoroutineScope()` 上**的删组链用（T124b · B 档第二枚）。
+     *
+     * 形状与理由与 [deleteCourseAndAwait] 同一份（那里逐条写了），这里只登记差异：
+     * 组删除那一支紧接着的 `showSnackbar` 与那颗「撤销」是 composition-only 的调用，
+     * 所以**只搬写库那一手** —— [deleteCourseGroup] 体内「删库 → 压一条组撤销快照 →
+     * `afterDataChangedInternal()`」那一整趟放进 [viewModelScope] 的那一枚 job，
+     * 页 scope 被 dispose 取消时它照样跑完；`join()` 留在调用者的 scope 上，只等一个结论。
+     *
+     * ⚠️ 不许退成 `return deleteCourseGroup(courses)`（透传 = 写库又落回页 scope，本卡白做），
+     * 也不许把 `deleted` 做成 VM 的属性（新造一枚没人清的状态）。
+     */
+    suspend fun deleteCourseGroupAndAwait(courses: List<Course>): Boolean {
+        var deleted = false
+        val job = viewModelScope.launch { deleted = deleteCourseGroup(courses) }
+        job.join()
+        return deleted
     }
 
     /**
