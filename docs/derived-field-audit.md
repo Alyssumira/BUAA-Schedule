@@ -507,26 +507,26 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
 
 **A. #11 `(calendars, calendarsLoaded)`：闸门不在字段对上，而在被调方里。**
 `ui/ScheduleViewModel.kt:1615` 那一档确实写了 `calendarsLoaded = true,` 而没有 `calendars = …`，
-读点也确实看得见：`:1394` `current.calendars.isEmpty() -> _calendarSync.update {` 会据此落一句
+读点也确实看得见：`:1493` `current.calendars.isEmpty() -> _calendarSync.update {` 会据此落一句
 `NO_WRITABLE_CALENDAR_MESSAGE`（`:116` 定义，内容是「没有检索到可写的日历…」），而那一档的真相是「查询失败」。
-但那条链的第一环走不到：`:1513` `val loaded = suspendCatching { calendarSyncManager.queryCalendars() }`
+但那条链的第一环走不到：`:1612` `val loaded = suspendCatching { calendarSyncManager.queryCalendars() }`
 的被调方 `data/calendar/CalendarSyncManager.kt:69-91` 把整段 contentResolver 查询包进
 `runCatching { … }`，`:90` `.onFailure { Log.w(TAG, "读取日历列表失败", it) }` 只留日志，
 `:91` `return result` 交回的仍然是列表 ⇒ `queryCalendars()` 正常返回时**永不抛**，`getOrElse` 那一档在
 今天不产生任何用户可读的状态。**所以它判「结构不可能」靠的是别人的 `runCatching`，不是字段对自身的性质**——
 这句话必须记着：谁把 `CalendarSyncManager.kt:71` 那个 `runCatching` 拆掉（或换成 `Result` 往外抛），
 #11 立刻从「结构不可能」搬到「真漏清」，且错的是那句"没有检索到可写的日历"（它会把权限没给说成设备没日历，
-并且 `:1512` `if (_calendarSync.value.calendarsLoaded) return` 会让这一页**再也不同步重试**）。
+并且 `:1611` `if (_calendarSync.value.calendarsLoaded) return` 会让这一页**再也不同步重试**）。
 登记进 §6.8②。
 
 **A 的现状（T110 收了缓存那一半，吞异常那一半没动）**：`calendarsLoaded` 现在有一枚复位站点 ——
-`:1449` 开窗那一档连带写 `calendarsLoaded = false`（改前那格记的"0 行复位 ⇒ 进程寿命缓存"留着，
-它是那一遍的读数），于是上面那句"`:1512` 会让这一页**再也不同步重试**"在**开窗那一路**已不复成立：
-每次开窗都重查一遍，选择器不再列陈名单，`:1523` 的 `targetGone` 也随之每次跑一趟，并配上了撤偏好那档
-（`:1538`，两枚 key 成对撤 + `loaded.isNotEmpty()` 才动手）。而 `:71` / `:90` / `:91` 那颗
+`:1548` 开窗那一档连带写 `calendarsLoaded = false`（改前那格记的"0 行复位 ⇒ 进程寿命缓存"留着，
+它是那一遍的读数），于是上面那句"`:1611` 会让这一页**再也不同步重试**"在**开窗那一路**已不复成立：
+每次开窗都重查一遍，选择器不再列陈名单，`:1622` 的 `targetGone` 也随之每次跑一趟，并配上了撤偏好那档
+（`:1637`，两枚 key 成对撤 + `loaded.isNotEmpty()` 才动手）。而 `:71` / `:90` / `:91` 那颗
 `runCatching` 的本体一字未动 ⇒ `getOrElse` 那一档今天仍然几乎走不到、"查询失败"仍然被洗成
 "这台设备没有日历"，**#11 判「结构不可能」用的那道外来闸门仍在原地**，本节上面那句"这句话必须记着"
-继续有效。同步入口 `:1391` 也仍然吃缓存（取舍与代价见 §6.8② 那一格「现状」）。
+继续有效。同步入口 `:1488` 也仍然吃缓存（取舍与代价见 §6.8② 那一格「现状」）。
 
 **B. #7 `(message, permissionPermanentlyDenied)`：改前判"两个方向各有一道闸"—— 那半边是错的，T106 已修。**
 
@@ -564,10 +564,10 @@ T97 之后主源码只动过一枚文件，而那枚文件正好是本档引用�
 T104（`saving`/`saveError`）。这是**同行改写**：`ScheduleViewModel.kt` 与 `SettingsScreen.kt` 都没增删行
 （1683 / 2154 行不变）⇒ 本档那批 `X.kt:NNN` 锚点一处不漂。
 选它的前提是「**进到 `startCalendarSync()` 时权限必然已到手**」，这条对**每一个入口**都成立（`grep -rn "startCalendarSync" app/src/main/java`
-⇒ 5 处提及，逐条：`:1383` 定义、`SettingsScreen.kt:319` 在"全部授予"那一档内、`:341` 在闸的 `action` 里、
+⇒ 5 处提及，逐条：`:1479` 定义、`SettingsScreen.kt:319` 在"全部授予"那一档内、`:341` 在闸的 `action` 里、
 `:1641` 调的是 `:341` 那枚本地包装、`ScheduleViewModel.kt:1562` 在 `selectCalendarTarget`（`:1556`）体内 ——
 它是唯一一枚不过 `withCalendarPermission` 的调用点，但它的宿主只能被 `:1625`
-`onClick = { withCalendarPermission { viewModel.openCalendarPicker() } }` 或 `:1397`（长在 `startCalendarSync` 体内）
+`onClick = { withCalendarPermission { viewModel.openCalendarPicker() } }` 或 `:1496`（长在 `startCalendarSync` 体内）
 打开的选择器那一层触发，而 `showPicker = true` 全仓就这两枚写点）⇒ 旗标被清的那一刻权限是真的，
 这句话不是假话。弃另一条（把 `:1677` 的读侧改成「旗标为真**且**当前确实没权限」）的理由：它让那颗按钮的可见性
 从此**每次重组都查一次实时权限**，且界面同时信两把尺子（旗标仍是脏的，只是不念）——
@@ -580,16 +580,16 @@ T104（`saving`/`saveError`）。这是**同行改写**：`ScheduleViewModel.kt`
 （上面那 5 枚入口逐条钉，含 `precedingFunHead` 认宿主）。
 
 **T110 又收了第二条链（同形状、不同入口）**：「移除已同步的日程」那条链自己不进 `startCalendarSync`
-—— VM `:1478` `removeSyncedEvents()` 的起手（`:1481`）此前只立 `syncing = true`、收尾只写 `message`，
-上一次永久拒绝留下的旗标清不掉，而 `:1486` 那句「已移除 N 个日程」恰好把 `:1664` 那格重新点亮 ⇒
+—— VM `:1577` `removeSyncedEvents()` 的起手（`:1580`）此前只立 `syncing = true`、收尾只写 `message`，
+上一次永久拒绝留下的旗标清不掉，而 `:1585` 那句「已移除 N 个日程」恰好把 `:1664` 那格重新点亮 ⇒
 完成句旁边继续挂着 `:1677` 那颗按钮。它**不经**上面那一刀盖住的入口，所以 T106 的覆盖面到不了它。
-改法取的仍是"起手成对清"（`:1481` 现在写 `it.copy(syncing = true, message = null, permissionPermanentlyDenied = false)`，
+改法取的仍是"起手成对清"（`:1580` 现在写 `it.copy(syncing = true, message = null, permissionPermanentlyDenied = false)`，
 同行改写、零行号漂移），**弃"再套一道权限闸"那一支**：这条链今天就已经在唯一那道闸里（那颗行
 `onClick` 就在 `withCalendarPermission { … }` 内，复算 `grep -rn "withCalendarPermission {" app/src/main/java` ⇒ 3 处），
 而 `:331` 那句短路的 true 分支直接 `action()`、根本不启动 launcher ⇒ "再套一道闸"既不撤旗标，
 又把**造成这枚病的**那件短路再犯一遍。清旗标在语义上等于"宣布此刻已授权"，这句由**入口在闸里**兜住
 （真·永久拒绝时那条路根本不落 `showRemoveConfirm = true`，进不到那次 copy）；剩下的残态只有
-"确认框开着的那几秒里回系统设置把权限关掉再点移除"那一格，方向安全：落的是 `:1487` 那句
+"确认框开着的那几秒里回系统设置把权限关掉再点移除"那一格，方向安全：落的是 `:1586` 那句
 「移除失败：日历写入异常，请检查权限后重试」，文案自己就写着要检查权限，而下一次点同步会走闸重新立旗标。
 ③ 那一族因此按新盘面重钉（旗标赋值 3→4、`message = null` 1→2，且"必须带旗标"改成**逐处**取），
 并添第四枚判据 `everyRouteIntoTheRemoveChainStandsInsideTheSameGateAndClearsTheFlagPaired`
