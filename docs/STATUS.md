@@ -3989,3 +3989,45 @@ T122 当时判 deferred 的理由是"这一判今天在压栈点算不出来"（
   都在两枚许可文件内 ⇒ 收下；但它按 T138 先例把覆盖表行首两列**同格改字**成 1,799 / 209（旧值留在同格现状句里），这一款是本页既有口径、不是我这次给的。
   **零 gradle 这件事我复验过成立**：合并对象上"读 `docs/` 的测试枚数"与"读 README 的测试枚数"两把尺各给 **0** ⇒ 文档卡不动产物层。
 
+## 09-28 上午续：T124 这一族开卡（评估卡零改动交回、A 档三枚已派出）
+
+队列从 T139 之后转到 **T124**（§9.5② 那笔"六处共用的**作用域**"）。先派了一张**纯读评估卡**（分支 `ai/T124-eval`、基点 `7dd660e`，**零 commit、零改动**，`git status --porcelain` 与 `git diff --stat` 收尾都空）⇒ 结论由我入账，代码改动一律在后续卡里做。
+
+- **这一族被从"六处"重排成"七枚真写库"**（我按盘面逐枚复算过它点名的前三枚，其余属它的读数）：
+  `rememberCoroutineScope` 全仓 **25 行 / 13 枚文件**、真声明 **11** 枚、页 scope 名下 `launch` **21** 枚 / 10 枚文件；
+  其中**写 Room** 的是 7 枚 —— 首页裸 `:452`/`:478`/`:490`、管理页裸 `:181`/`:214`、**编辑器 `CourseEditorScreen` 裸 `:230`/`:613`**
+  ⇒ ⚠️ **§9.2 那九处里漏了编辑器这两枚**（它们挂在同一枚 `scope`（声明裸 `:128`）上，正是文档自己说"读者枚数排第一"的那枚 `saving` 名下），
+  而 §9.5② 点名的 `#9`（`ImportScreen` 裸 `:485` 的 `buildShareCode`）**根本不写库**（VM 那函数只读；`importIcs`/`importText` 是**非 suspend**、写库本就在 VM 的 `viewModelScope` + `withImportLock` 里）⇒ "六处共用作用域"这个名单**名与数都不对**。
+  另登记一枚噪声：`BuaaLoginScreen` 裸 `:108` 的 `scope` 声明**零处使用**（死声明）。
+- **两枚评估卡在同一问上互相推翻，判档归我**：上一遍有人按盘面驳掉"切 tab 会 dispose 目的地"，这一遍它按 `MainActivity` 裸 `:1110` 那句
+  `popUpTo(graph.findStartDestination().id) { saveState = true }`（我 `grep -n popUpTo` 复算过这一行）+ 本仓两处自陈（首页那句"下次回到首页再弹一遍陈旧提示"、`ImportScreen` 那句"无订阅者即丢"，二者都以"页面不在时 collect 不活着"为前提）
+  ⇒ **判"离开目的地确实会卸载组合、页 scope 随之被取消"成立、前一判作废**。⚠️ 残余要说清：navigation 库源码不在盘上，"saveState 存的是状态不是 composition"这一层属**从本仓注释与调用形状读出来的推断**，不是库内实证 ⇒ 装机级证据仍零枚。
+- **修法分三档**（下一批卡的骨架）：**A 档** = 三枚"结果本来就被丢掉"的写库链（首页裸 `:452`/`:478` + 管理页裸 `:181`，`updateCourse` 那个 `Long?` 今天没人读，VM 声明裸 `:516`）⇒ 整块换接收者、**零 VM diff**；
+  **B 档** = 两枚"结果要回灌 snackbar 文案与那颗撤销"的删除链（首页裸 `:490`、管理页裸 `:214`）⇒ 照 `applyConflictShift` 那形状加 `...AndAwait` + `join()`，而 **`join` 必须仍跑在页 scope 上**；
+  编辑器那两枚**只能半搬**（接收者走 `viewModelScope`、`saving`/`saveError` 留组合本地，而 `onBack` 那一支**不许**跟着搬 ⇒ 它会对着 navController 多 pop 一格）；**C 档 = 不收**（`ImportScreen` 三枚 / 向导那枚 / 设置页与引导页与两处动画那批，理由逐枚是"结果本就只回灌组合本地"或"写库本就在 VM 侧"）。
+- **串行边界（这条是排卡用的硬约束，不是建议）**：A/B/编辑器三组**不许并行** —— 虽然三枚 UI 文件互不相交，但 `CourseGroupDeletion…`/`UndoUpdate…`/`CourseManagementImportMessage…`/`ManualTimeOverride…` 这**四枚守卫同时读两到三枚文件**，任一枚文件的行号一动就把另两组的守卫打红。次序 A 档 → B 档 → 编辑器，单卡上限仍 **≤3 枚落点**；`ScheduleRepository.kt` 这一族**三张都不该碰**。
+- **T124a（A 档三枚）交回三枚 commit**（`8a99a66` main / `3e85a7e` 新守卫 `WriteChainReceiverWiringGuardTest` 名下 7 枚 / `9b3f666` 连带重钉三枚守卫），我在合并对象 `9b3f666` 上盘面复算过：
+  main 侧只两枚文件（VM 与仓储**零字节** ⇒ `git diff --name-only -- app/src/main | grep -cE 'ScheduleViewModel|ScheduleRepository'` 给 **0**）、新落点裸 `:459`/`:488`/`:186`、B 档那两枚仍挂在页 scope 上（裸 `:500`/`:219`）、
+  五把尺 **1,806 / 210 / 216 / 86 / 46** 与它报的一字不差（首页 1,406 ⇒ **1,416** 行、管理页 451 ⇒ **456** 行）。⚠️ 它驳掉我卡面一处成立：**"这三枚文件被 6 枚守卫读着"不全** —— 盘面 22 枚测试文件引用这两枚路径（点名的 6 枚都在其中，真红的只有 1 枚）。
+  它报签名包 **7,252,339 B**（比地板**少 286 B**）。
+- **T124a 已 ff-only 合进 master（顶端 `3fa7625`，五枚 commit：`8a99a66` main / `3e85a7e` 新守卫 / `9b3f666` 连带重钉 / `f369d6c` 补等集格 / `3fa7625` 清恒等式与过期方法名）**。
+  ⚠️ **我那枚 Y3 探针打出了洞**：第一趟从 `MOVED` 名册里摘掉管理页那一枚 ⇒ **BUILD SUCCESSFUL、1806 枚全绿、零枚红** ⇒ 那枚守卫只钉"在册的每一枚合格"、不钉"盘上该点名的都进了名册"（**本仓第二次撞"只钉落点不钉枚数"**，第一次是 #127 那枚 `CourseGroupDeletionWiringGuardTest`）。⇒ 处置：**不合并**，先补一张只改测试文件的小卡 ——
+  新格 `盘上扫出的 viewModelScope 落点集合与名册互为等集 摘一枚或长一枚都红` 的盘上侧**刻意不取 `MOVED` 的键**（取了名册的键，摘一枚会连扫描范围一起缩、本格永不红），比的是**多重集双向差**而非只比 size。
+- **编排侧四臂（全部在我自己的树上扭、跑完 `git checkout --` 还原并复算 md5 回基线，收尾 `树vsHEAD=0`）**：
+  | 臂 | 扭法 | 哪一侧 | 红名 |
+  |---|---|---|---|
+  | Y1 | 首页第二枚接收者写回 `scope.launch {` | 朝宽 | 4 枚，全在 `WriteChainReceiverWiringGuardTest` |
+  | Y2 | 协程**体内**把那一手写库复制成两笔（接收者行一字不动） | **形状全对、内容错** | 3 枚：守卫档② + `ManualTimeOverrideWiringGuardTest` 两枚 |
+  | Y3 | 摘掉 `MOVED` 名册里管理页那一枚 | 朝窄 | **1 枚：只有那枚新等集格**（补格之后就红了 ⇒ 洞已闭；补之前零枚） |
+  | Y4 | 把已搬的那整块原地复制一份（盘上多出一枚未登记） | 朝窄（盘上侧） | 5 枚：新守卫 3 + `ManualTimeOverride` 2 |
+  四臂均 rc=1、`BUILD FAILED`、`grep -acE '^e: '` = **0**、XML 216 枚全量执行、时间戳逐趟新写（10:07:47 / 10:10:20 / 10:12:12 / 12:06:44）。⚠️ Y2 的**第一版设计根本编译不过**（把 suspend 调用挪出协程 ⇒ `Suspend function 'updateCourse' should be called only from a coroutine`、XML 0 枚）⇒ 那一型要靠"体内复制一笔"来测，不是"挪出协程"。
+- **合并对象上的六步冷门禁（我跑的，env 三件套齐、`assembleRelease` 先于测试）**：`clean` rc=0 → `:app:assembleRelease` **BUILD SUCCESSFUL**、apk **7,252,339 B** →
+  `:app:testDebugUnitTest --rerun-tasks` **1807 tests / 216 suites / 0 失败 / 0 skipped**（XML 新时间戳 11:55:03）→ lint **0 error / 14 warning** → `:benchmark:compileNonMinifiedReleaseKotlin` rc=0 →
+  第二遍独立全量 `clean`+`assembleRelease` 再给 **7,252,339 B**（两遍**字节数同、md5 不同**：`0c022072…` vs `cef9d932…` ⇒ zip 时间戳，按"两次独立全量一致"**记新地板**，比上一档少 **286 B**）。
+  ⚠️ 两趟 lint 失败都不是代码红：一次是**我把整串任务名当了一个参数**（`as project 'lintAnalyzeDebug --rerun ' not found`）、一次是 `bundleDebugClassesToCompileJar … classes.jar` 被文件锁咬 ⇒ `--stop` + 等待后补跑才拿到 0/14。
+  ⚠️ 还有**一趟不算验收**：第一次跑 `clean` 被锁死 ⇒ 没产物 ⇒ 那趟 `skipped=3` 正是那三枚读 apk 的产物层测试 `assumeTrue` 跳过（**这一条已在册，本轮第四次兑现**）。
+- **改后的尺**：`@Test` 1,799 ⇒ **1,807**（+8 = 新守卫名下 7 枚 + 等集格 1 枚）、测试文件 209 ⇒ **210**、`^class ` 215 ⇒ **216**、Guard 45 ⇒ **46**、"读 main 源码"那一族 85 ⇒ **86**；
+  `ScheduleViewModel.kt` 仍 **1,696** 行、`ScheduleRepository.kt` 仍 **727** 行（A 档的定义就是零 VM/零仓储 diff，`git diff --name-only 7dd660e..HEAD -- app/src/main` 只两枚 UI 文件）；首页 1,406 ⇒ **1,416** 行、管理页 451 ⇒ **456** 行。
+- ⚠️ **一枚我这轮才看清的环境事实**（它解释了我读数里的一枚幽灵）：harness 报 `Shell cwd was recovered from D:\schedule\BUAA-Schedule\.worktrees\T83` —— 那枚目录**早就不存在**（本轮与上轮都删过 worktree）。持久 CWD 停在死目录上不会报错，只会让**不自己 `cd` 的命令偶尔多读出一行**：我这轮 STEP 0 就量到过一枚 `docs/androidTest 被动=1`，随后逐枚 `git show --name-only` 复核五枚 commit 全为 0、第二趟同一条尺复量也是 0 ⇒ **判定为那枚幽灵读数、不是盘上事实**。往后凡"我没显式 cd 就得到的数"要复量一次再入账。
+- **未验到（今天仍然只有 JVM 证据）**：① "切 tab 时目的地被卸载、页 scope 被取消"这条**因果**只有静态调用形状（`popUpTo{saveState}` + 本仓两处自陈）作证；② 取消点落在写库之后时"撤销条目没压 / 课前铃与组件那一趟没重排"没在设备上复现过；③ 这三处交互（拖课、改节次、整组换色）改后 UI 无回归，只有 1,807 枚单测 + lint 证据。⇒ 与 T123、T125、#98 同属设备批那一台机器上一起看。
+
