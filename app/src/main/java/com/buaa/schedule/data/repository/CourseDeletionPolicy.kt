@@ -59,8 +59,8 @@ import com.buaa.schedule.domain.model.ReminderSetting
  * `repository.deleteCourse` 的调用点**全仓恰好一处**（逐处复算过，不是数出现次数）：
  * `ScheduleViewModel` 的 `deleteCourse` 体内那一行 `val … = repository.deleteCourse(course)`。
  * 另有两处同名函数是**另一枚函数**（VM 那一步的调用点：签名不变，返回值语义变了）——
- * `MainActivity` 的编辑器入口 `onDelete = { viewModel.deleteCourse(it) }` :892，
- * 以及 `HomeScreen` 的 `val deleted = viewModel.deleteCourse(course)` :453。
+ * `MainActivity` 的编辑器入口 `onDelete = { viewModel.deleteCourseAndAwait(it) }` :892，
+ * 以及 `HomeScreen` 的 `val deleted = viewModel.deleteCourseAndAwait(course)` :501。
  *
  * 有没有哪一处拿返回值当"这课存在过"的证据去做**不止提示条文案**的决定？有，两处，都在 VM 那一层：
  * 1. `HomeScreen` 的 `handleCourseDelete` —— 同一枚布尔同时决定文案
