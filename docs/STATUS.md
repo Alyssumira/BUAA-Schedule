@@ -4046,3 +4046,30 @@ T122 当时判 deferred 的理由是"这一判今天在压栈点算不出来"（
 - **合并对象上的六步门禁（我跑）**：`clean` 两次撞文件锁（`Unable to delete …classes.jar`）⇒ `--stop` + 等 30 s 补跑各成功一次 → `assembleRelease` **BUILD SUCCESSFUL**、apk **7,251,680 B** → 全量测试 **1809 / 216 suites / 0 失败 / 0 skipped**（13:35:11）→ lint **0 error / 14 warning** → 第二趟单跑仍 skipped=0（13:42:08）→ `:benchmark` 10 executed →
   第二遍独立全量再给 **7,251,680 B**（两枚 md5 不同：`6b3de744…` / `d1f49eca…` ⇒ zip 时间戳）⇒ 按"两次独立全量一致"记新地板：**7,252,339 ⇒ 7,251,680（−659 B）**。⚠️ 本轮真往 dex 加了两枚方法、包却**变小 659 B** ⇒ 归因未查，如实挂着（同一 commit 两遍之间字节稳、所以不是噪声能解释的量级）。
 
+
+### 09-28 午后续（T124c 收单 · C 档半搬 · T124 一族三张代码卡到此落地）
+
+- **T124c（编辑器那两枚的半搬）已 ff-only 合进 master（顶端 `79b817b`，三枚 commit：`b01a948` VM 两枚入口 / `7da623c` MainActivity 三枚 lambda 换调 / `79b817b` 档 ⑪⑫⑬ + 棘轮判词 + 连带重钉）**。
+  形状：VM 侧新增 `saveCourseAndAwait`（裸 `:534`）与 `updateCourseAndAwait`（裸 `:588`），逐字沿用 T124b 那份 —— `var savedId: Long? = null` + `viewModelScope.launch { savedId = … }` + `job.join()` + `return savedId`；
+  **端出去的是行 id 而不是布尔**（编辑器据此决定要不要保留草稿）；`MainActivity` 裸 `:884` / `:886` / `:892` 三枚换成 `...AndAwait`，**`onSave` / `onBack` / `onSaveReminder` 三枚签名一个字没动**；
+  编辑器体内那三样 composition 本地的东西（`saving` / `saveError` / `onBack()`）**有意留在页 scope** —— 那枚文件本次**零字节**。⇒ 这条链是"半搬"：写库那一手进了 VM 的 `viewModelScope`，等结论那一拍仍挂在页 scope 上。
+- ⚠️ **一枚环境偏离，裁决记下**：这张卡派下去时 `.worktrees/T124c` **在盘上不存在** —— 是我建漏了（违"一子代理一 worktree"那条，且这条已经在册），不是代理越界。它自报并按卡面声明逐字重建了同一枚沙箱，还顺手 `cp local.properties`。
+  复核那枚 `cp` 的爆炸半径：`.gitignore` 裸 `:4` 就写着 `/local.properties`、`git log --all -- '*local.properties'` 返回空 ⇒ 这枚文件在**任何一枚分支上从未入库**；本次分支 diff 只有四枚文件、不含它 ⇒ **零泄漏**，口令字节也没进任何日志（它自报未读未打印，"未读"我反证不了，"未入库"是可证的）。
+  裁决：**动作越界、后果为零 ⇒ 收下成果、不追认动作**。规矩不变并已收紧：派卡前由我建 worktree 并 `cp`，卡面今后写死「沙箱缺失就停下来回执，不许自建、不许碰凭据文件」。
+- **我盘面复算过（合并对象 = `79b817b`）**：main 侧两枚文件（VM 1,749 ⇒ **1,792**；MainActivity **1,258 行未动**，只改三枚调用名）、`data/repository/` 与 `docs/` 与 androidTest **零字节**、编辑器 md5 与 master 逐字节同；五把尺 `@Test` **1,812** / 文件 **210** / `^class` **216** / 读 main **86** / Guard **46**（+3 = 档 ⑪⑫⑬）；needle：VM 里两枚 `...AndAwait` 定义各一枚、MainActivity 里裸 `viewModel.saveCourse(` 与 `viewModel.updateCourse(` **0 枚**、`...AndAwait(` **3 枚**。
+- **编排侧三支臂（都在合并对象上扭，挑的都是代理没碰的那一侧）**：
+  | 臂 | 扭法 | 结果 |
+  |---|---|---|
+  | Z1 | **朝宽**：VM 里 `updateCourseAndAwait` 退成透传（`= updateCourse(course, options)`；needle 含收尾花括号 ⇒ 一次成） | rc=1、编译错误 0、XML 216（15:50:41）、1,812 枚执行、**红 1 枚 = 档 ⑪**（`C档两枚AndAwait的VM体内…`） |
+  | Z2 | **朝窄**：删除链那枚 `saving = true` **挪出**协程体（代理的 X2 是删掉 ⇒ 换了扭法） | rc=1、编译错误 0、**红 2 枚**：档 ⑫ + `CourseEditorSaveErrorClearPairingGuardTest`（配对那格读的是 launch 块内，挪出即失配） |
+  | Z3 | **换序**：保存链体内 `onBack()` 与 `saving = false` 交换 | rc=1、编译错误 0、**红 1 枚 = 档 ⑫ 那半条五拍次序判据** ⇒ 证明次序格不是装饰 |
+- **合并对象上的六步冷门禁（我跑，env 三件套齐、`assembleRelease` 先于测试）**：`clean` rc=0 → `:app:assembleRelease` **BUILD SUCCESSFUL**、apk **7,253,554 B** → `:app:testDebugUnitTest --rerun-tasks` **1,812 tests / 216 suites / 0 失败 / 0 skipped**（新时间戳 15:32:08）→ lint **0 error / 14 warning**（这次先把任务名分开传参，没再犯上一趟那枚错）→ 再单跑一次仍 **1,812 / 0 / 0 skipped**（15:39:10）→ benchmark rc=0 → 第二遍独立全量 `clean`+`assembleRelease` 再给 **7,253,554 B**（md5 不同 ⇒ zip 时间戳）。
+  ⇒ 按"两次独立全量一致"记新地板：**7,251,680 ⇒ 7,253,554（+1,874 B）**。⚠️ 这一档真往 dex 加了两枚 suspend 入口再加三枚守卫格 ⇒ 属"真 dex 改动"那一类，±几百字节的带**不适用**，涨落照实记。
+- **T124 一族到此收完的状态**：A 档（三枚写库挪进 `viewModelScope`，T124a）+ B 档（两枚删除链 `...AndAwait`，T124b）+ C 档（编辑器两枚半搬，本卡）都落地；棘轮那本账（页 scope 名下写库落点册子）由**双向等集**那一格钉着，摘一枚或长一枚都红。
+- **不收的那一半，带理由登记**：① `onSaveReminder` 在 VM 里**本来**就是非 suspend 的 fire-and-forget（体内自起 `viewModelScope` job）⇒ 给它造 `...AndAwait` 要改签名，那是签名变化、不是换接收者，本卡不许；② 编辑器编排那三样留组合本地有硬理由 —— 那颗 `BackHandler(enabled = isDraftDirty && !saving)` 读的就是 `saving`，搬走即把返回闸拆了。
+  ⇒ **「主行已提交 / 提醒那一趟未跑」那扇窗没有被这张卡关掉**：关它的唯一路径是把 `onSaveReminder` 改成 suspend（连带 MainActivity 那枚 lambda 与编辑器形参两处同文），**判 deferred**，这张卡的成果不覆盖它。
+- ⚠️ **我订正我自己上一条对外给出去的话**（那半句是错的，写在状态表里，现按实测改口）：我说 T124 之后文档卡只需重钉审计档 §9.1 #6 / §9.2 #5 / §9.5 ② 那几枚。实测落在漂移区的**连写**锚点（`文件名.kt:号` 那种写法）远不止此 —— 审计档 **30** 枚、STATUS **19** 枚（含 1 枚越界）、两枚历史档 **3** 枚、`docs/TESTING.md` **0** 枚（它通篇用裸 `:号`，不受影响）。⇒ 交 **T141**，卡面带我量到的分段窗口：VM `≤515:+0 / 516–551:+25 / 552–562:+43 / 563–583:+76 / ≥584:+96`、首页 `≤88:+0 / 89–451:+1 / 452–477:+7 / ≥478:+10`、管理页 `≤61:+0 / 62–180:+1 / ≥181:+5`。
+- ⚠️ **一条手法账（这轮我自己踩的）**：验证锚点漂移时**两侧都必须从 ref 读**。我第一趟拿主仓工作树（那时还是 T124b 之后那版 VM）的内容去配 `ai/T124c` 的净数，读出"8 枚相符 / 22 枚不符"的假账，差点把"审计档大部分锚点早已带漂"写进卡面；改成 `git show 7dd660e:` 与 `git show ai/T124c:` 两侧对同一枚文件比，**30 枚全相符** ⇒ 那批锚点写下的号在 T140 之后逐枚都是对的，只是被 T124 一族整段推漂。**混树测量能造出一批看起来很扎实的假缺陷。**
+- **未验到（本卡同样只有 JVM 证据）**：① 「切 tab / 弹栈把编辑器卸载时，取消点落在哪一格」从未在设备上复现，静态形状只证"接收者是谁"；② `pendingPulseCourseId`（首页那枚脉冲）在 `...AndAwait` 之后仍由页 scope 那一侧写，脉冲丢没丢看不见；③ 五拍次序格钉的是**字面顺序**，不证「`saving` 落晚一秒会不会真多弹一次丢弃确认框」；④ 包体 +1,874 B 是两遍独立全量同值，不是"归因给这三枚调用名"。
+- **台账过期项（交 T141）**：`docs/TESTING.md` 现值那格仍写 1,809 那一档、包体地板那格仍写 7,251,680 ⇒ 都过期；连同 `CourseDeletionPolicy` 裸 `:62-63` 那两行过期注释（还写着 `onDelete = { viewModel.deleteCourse(it) }` 和首页那句裸调用，今天两处都已是 `...AndAwait`）一起收。约束照旧：审计档 **1,513** 行零增删、全仓连写尺 **589** 不许动、历史档只追加不擦改前读数。
+- **push 账**：本地 **48 枚**未推（远端仍在 `ac8a6c9`）、发版仍未授权。
