@@ -20,7 +20,8 @@ import org.junit.Test
  *    结论由内核造、**删行动作被结论闸住**（不许再出现裸的 `deleteCourseRow(course)`）。
  * 2. [VM 那一步真的读结论 判没删到就不报成功也不压栈] —— 四拍的**次序**：删库 → 判没删到就早退 →
  *    才压栈 → 才刷 UI；且块里的 Boolean 被 `.fold({ it }, …)` 原样端出去（不是旧那句 `.fold({ true }, …)`）。
- * 3. [调用点册子 仓储层一处VM层两处 枚数与落点都要对得上] —— 全仓 main 扫，枚数 + 落在哪几份文件。
+ * 3. [调用点册子 仓储层一处 裸删课与AndAwait各一处 枚数与落点都要对得上] —— 全仓 main 扫，枚数 + 落在哪几份文件
+ *    （T124b 把首页那一支换成了 `...AndAwait`，于是裸的那一枚只剩编辑器）。
  * 4. [首页那一支…]/[编辑器那一支…] —— 一枚布尔两张嘴：一处管提示条文案与那颗「撤销」按钮，
  *    一处管**要不要退出编辑页**。这两处源码本卡一字未改，改了要回来重判。
  * 5. [判据内核零android零时钟 结论只有内核一处能造] —— 内核纯度与"唯一构造点"。
@@ -154,9 +155,14 @@ class CourseDeletionWiringGuardTest {
     /**
      * 形状一改要跟着改的就是这几处。**枚数与落点一起钉**：只数枚数的话，有人把仓储层那一处
      * 挪去别的文件、再在别处补一枚同名调用，守卫照样绿（本仓登记过这一洞）。
+     *
+     * **T124b 重钉过的一格**：卡面原本钉 `viewModel.deleteCourse(` 全仓两处（编辑器 + 首页长按菜单）。
+     * B 档把首页那一支换成了 `viewModel.deleteCourseAndAwait(`（写库那一手进 VM 的 viewModelScope job，
+     * `join()` 留页 scope），裸 `viewModel.deleteCourse(` 于是只剩编辑器那一处（MainActivity 的 onDelete，
+     * 那是 **T124c** 的账、本卡不许动）。两枚名字各钉一处落点与枚数：删掉任何一面都会有另一边接住。
      */
     @Test
-    fun `调用点册子 仓储层一处VM层两处 枚数与落点都要对得上`() {
+    fun `调用点册子 仓储层一处 裸删课与AndAwait各一处 枚数与落点都要对得上`() {
         val byFile = readAllMainSources().mapValues { (_, text) -> blankCommentsKeepingLiterals(text) }
 
         assertEquals(
@@ -174,12 +180,28 @@ class CourseDeletionWiringGuardTest {
             occurrences(byFile.getValue(SCHEDULE_VIEW_MODEL_NAME), VM_CALLS_REPOSITORY),
         )
         assertEquals(
-            "`viewModel.deleteCourse(` 的调用点全仓恰好两处：**编辑器**（MainActivity 的 onDelete）与" +
-                "**首页长按菜单**（HomeScreen 的 handleCourseDelete）。这枚函数的签名没变、返回值语义变了" +
-                "（“不抛异常” → “真的删到了那一行”），两处消费方各拿它做什么由第 ④ 层钉：" +
-                filesHint(byFile, VM_CALL_SITE),
-            listOf(MAIN_ACTIVITY_NAME, HOME_SCREEN_NAME).sorted(),
-            byFile.filter { occurrences(it.value, VM_CALL_SITE) > 0 }.keys.toList().sorted(),
+            "`viewModel.deleteCourse(`（裸的那一枚 suspend 函数）的调用点全仓恰好一处：**编辑器**" +
+                "（MainActivity 的 onDelete）。T124b 之前这里是两处（编辑器 + 首页长按菜单），" +
+                "首页那一支现在走下面那一格的 `...AndAwait`。这枚函数的签名与返回值语义本卡都没动，" +
+                "两处消费方各拿它做什么由第 ④ 层钉：" + filesHint(byFile, VM_CALL_SITE),
+            listOf(MAIN_ACTIVITY_NAME),
+            byFile.filter { occurrences(it.value, VM_CALL_SITE) > 0 }.keys.toList(),
+        )
+        assertEquals(
+            "`viewModel.deleteCourseAndAwait(` 的调用点全仓恰好一处：**首页长按菜单**（HomeScreen 的 " +
+                "handleCourseDelete）。**朝窄扭（把调用点换回裸 `deleteCourse(`）红在这一格** —— " +
+                "那一支的协程接收者是 `rememberCoroutineScope()`，换回去就等于把写库那一手" +
+                "（删库 → 压撤销条目 → 重排课前铃与桌面组件）重新挂回组合期上：" +
+                filesHint(byFile, VM_AND_AWAIT_CALL_SITE),
+            listOf(HOME_SCREEN_NAME),
+            byFile.filter { occurrences(it.value, VM_AND_AWAIT_CALL_SITE) > 0 }.keys.toList(),
+        )
+        assertEquals(
+            "全仓 `deleteCourseAndAwait(` 的定义与调用点合起来恰好两枚（VM 定义一处 + 首页一处），" +
+                "且**枚数**不能靠换文件蒙过去（落点由上一格钉）：长出第二枚调用点 = 又多一条链" +
+                "在页 scope 上等这枚结论，它得连同第 ④ 层一起重判：" + filesHint(byFile, AND_AWAIT_NEEDLE),
+            2,
+            byFile.values.sumOf { occurrences(it, AND_AWAIT_NEEDLE) },
         )
         assertEquals(
             "`CourseDeletion.Removed(` 全仓只许出现在内核里一处（`courseDeletionOf` 之内）：" +
@@ -205,7 +227,10 @@ class CourseDeletionWiringGuardTest {
         val code = blankCommentsKeepingLiterals(raw)
         val hits = indexOfAll(code, HOME_DELETE_CALL)
         assertEquals(
-            "首页的 `val deleted = viewModel.deleteCourse(course)` 应当恰好一处（长按菜单那条链）",
+            "首页的 `val deleted = viewModel.deleteCourseAndAwait(course)` 应当恰好一处（长按菜单那条链）。" +
+                "T124b 之前这一句钉的是裸的 `viewModel.deleteCourse(course)`：那一支的写库改进了 VM 的" +
+                "`viewModelScope` job 里（`...AndAwait`），提示条那一手仍留在页 scope 上 —— 换的是接收者，" +
+                "不是这枚布尔被读的方式",
             1,
             hits.size,
         )
@@ -222,7 +247,7 @@ class CourseDeletionWiringGuardTest {
             occurrences(launch, HOME_UNDO_BUTTON),
         )
         assertTrue(
-            "两处消费方都必须排在 `viewModel.deleteCourse(course)` 之后（同一个 launch 块里读同一枚 " +
+            "两处消费方都必须排在 `viewModel.deleteCourseAndAwait(course)` 之后（同一个 launch 块里读同一枚 " +
                 "`deleted`）：顺序倒了就是在读上一次删除的结果",
             launch.indexOf(HOME_DELETE_CALL) < launch.indexOf(HOME_IF_DELETED) &&
                 launch.indexOf(HOME_IF_DELETED) < launch.indexOf(HOME_UNDO_BUTTON),
@@ -553,6 +578,8 @@ class CourseDeletionWiringGuardTest {
         const val VM_SIGNATURE = "suspend fun deleteCourse(course: Course): Boolean = suspendCatching {"
         const val VM_CALLS_REPOSITORY = "repository.deleteCourse(course)"
         const val VM_CALL_SITE = "viewModel.deleteCourse("
+        const val VM_AND_AWAIT_CALL_SITE = "viewModel.deleteCourseAndAwait("
+        const val AND_AWAIT_NEEDLE = "deleteCourseAndAwait("
         const val REPO_CALL_SITE = "repository.deleteCourse("
         const val VM_EARLY_EXIT = "val removed = deletion.removedCourse ?: return@suspendCatching false"
         const val VM_PUSH_FOUND_ROW = "UndoManager.pushDelete(removed, deletion.removedReminders)"
@@ -561,7 +588,7 @@ class CourseDeletionWiringGuardTest {
         const val VERDICT_CONSTRUCTION = "CourseDeletion.Removed("
 
         // ④ 消费方
-        const val HOME_DELETE_CALL = "val deleted = viewModel.deleteCourse(course)"
+        const val HOME_DELETE_CALL = "val deleted = viewModel.deleteCourseAndAwait(course)"
         const val HOME_IF_DELETED = "if (deleted)"
         const val HOME_DELETED_COPY = "\"已删除「"
         const val HOME_STILL_THERE_COPY = "还在课表里"

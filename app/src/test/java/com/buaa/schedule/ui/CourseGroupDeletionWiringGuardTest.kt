@@ -27,10 +27,14 @@ import org.junit.Test
  * ## 药（本卡落的形状，一字照同仓 `HomeScreen` 单课删除那一支对齐 · T121 收的）
  *
  * ```
- * val deleted = viewModel.deleteCourseGroup(target.fragments)
+ * val deleted = viewModel.deleteCourseGroupAndAwait(target.fragments)
  * message = if (deleted) "已删除「${target.displayName}」" else "删除失败：${target.displayName} 还在课表里",
  * actionLabel = "撤销".takeIf { deleted },
  * ```
+ *
+ * ⚠️ 第一行是 **T124b 之后**的形状（B 档：`deleteCourseGroup` → `deleteCourseGroupAndAwait`，写库那一手
+ * 挪进 VM 的 `viewModelScope` job、`join()` 与提示条留页 scope）。T127 落的那三拍本身一字未改 ——
+ * 本守卫下面那张表除 `readVerdict` / `assignPattern` 两格外其余格子仍按 T127 的原文钉。
  *
  * 提示条文案与那颗按钮**同读一枚** `deleted`，且两处都在同一次 `scope.launch` 里 —— 于是
  * "念了删除失败却还给一颗撤销"这种自相矛盾的组合在形状上就拼不出来。
@@ -314,46 +318,61 @@ class CourseGroupDeletionWiringGuardTest {
     /**
      * 形状一改要跟着改的就是这几处。**枚数与落点一起钉**：只数枚数的话，有人把管理页那一处挪去
      * 别的文件、再在别处补一枚同名调用，守卫照样绿（本仓登记过这一洞）。
+     *
+     * **T124b 重钉**：`deleteCourseGroup` 那一面换成了 `deleteCourseGroupAndAwait`（写库那一手进 VM 的
+     * `viewModelScope` job，`join()` 与提示条留页 scope）。这一族现在**两面一起钉**：
+     * `...AndAwait(` 钉回管理页那一处、枚数一枚，而**裸的** `viewModel.deleteCourseGroup(` 钉成 0 处
+     * —— 那一面今天只剩 VM 内部自己调（不带 `viewModel.` 前缀），谁把调用点换回去这一格就红。
      */
     @Test
     fun `调用点册子 组删除谁调它 返回值谁读 枚数与落点一起钉`() {
         val byFile = readAllMainSources().mapValues { (_, text) -> blankCommentsKeepingLiterals(text) }
 
         assertEquals(
-            "`viewModel.deleteCourseGroup(` 的调用点全仓恰好落在课表管理页这一处文件" +
-                "（首页那枚走的是单课 `deleteCourse`，两族各有自己的入口）。\n" +
-                "复算：grep -rn 'viewModel.deleteCourseGroup(' app/src/main --include='*.kt'\n" +
+            "`viewModel.deleteCourseGroupAndAwait(` 的调用点全仓恰好落在课表管理页这一处文件" +
+                "（首页那枚走的是单课 `deleteCourseAndAwait`，两族各有自己的入口）。\n" +
+                "复算：grep -rn 'viewModel.deleteCourseGroupAndAwait(' app/src/main --include='*.kt'\n" +
                 "多一处 = 又有一条链拿到这枚 Boolean，要按第 ① 层那套「读结论 → 两支文案 → 闸按钮」重钉一次；" +
-                "少一处 = 这条链换了入口，整本册子要重算：" + filesHint(byFile, "viewModel.deleteCourseGroup("),
+                "少一处 = 这条链换了入口，整本册子要重算：" + filesHint(byFile, GROUP_AND_AWAIT_CALL_SITE),
             listOf(COURSE_MANAGEMENT_NAME),
-            byFile.filter { occurrences(it.value, "viewModel.deleteCourseGroup(") > 0 }.keys.toList(),
+            byFile.filter { occurrences(it.value, GROUP_AND_AWAIT_CALL_SITE) > 0 }.keys.toList(),
         )
         assertEquals(
-            "`viewModel.deleteCourseGroup(` 全仓**枚数**恰好一枚（落点由上一格钉，这一格钉次数）：" +
+            "`viewModel.deleteCourseGroupAndAwait(` 全仓**枚数**恰好一枚（落点由上一格钉，这一格钉次数）：" +
                 "同一份文件里调两回 = 第二回必然删不到 ⇒ 屏幕上念的那句与真正发生的那件事又分家了。" +
                 "⚠️ 只钉落点（文件集合）钉不住这一型：两回都在管理页那份文件里，册子照样绿。" +
-                "\n复算：grep -rc 'viewModel.deleteCourseGroup(' app/src/main --include='*.kt' | grep -v ':0'：" +
-                filesHint(byFile, "viewModel.deleteCourseGroup("),
+                "\n复算：grep -rc 'viewModel.deleteCourseGroupAndAwait(' app/src/main --include='*.kt' | grep -v ':0'：" +
+                filesHint(byFile, GROUP_AND_AWAIT_CALL_SITE),
             1,
-            byFile.values.sumOf { occurrences(it, "viewModel.deleteCourseGroup(") },
+            byFile.values.sumOf { occurrences(it, GROUP_AND_AWAIT_CALL_SITE) },
         )
         assertEquals(
-            "那一处**读了**返回值（`val deleted = viewModel.deleteCourseGroup(` 恰好一处）。" +
+            "T124b 之后**裸的** `viewModel.deleteCourseGroup(`（不带 `AndAwait`）全仓 0 处：这一面今天只剩" +
+                "VM 内部那一趟自调（`deleted = deleteCourseGroup(courses)`，没有 `viewModel.` 接收者）。" +
+                "**朝窄扭（调用点换回裸的那一枚）红在这一格** —— 那一支挂在 `rememberCoroutineScope()` 上，" +
+                "换回去就是让「删库 → 压撤销条目 → 重排课前铃与桌面组件」那一整趟重新跟着目的地一起被取消。\n" +
+                "复算：grep -rn 'viewModel.deleteCourseGroup(' app/src/main --include='*.kt'（应为空）：" +
+                filesHint(byFile, GROUP_BARE_CALL_SITE),
+            emptyList<String>(),
+            byFile.filter { occurrences(it.value, GROUP_BARE_CALL_SITE) > 0 }.keys.toList(),
+        )
+        assertEquals(
+            "那一处**读了**返回值（`val deleted = viewModel.deleteCourseGroupAndAwait(` 恰好一处）。" +
                 "这一格与下一格是同一笔账的两面：调用点册子只钉「有人调」，本卡真正的病是「调了不看」：" +
-                "\n复算：grep -rn 'val deleted = viewModel.deleteCourseGroup(' app/src/main --include='*.kt'",
+                "\n复算：grep -rn 'val deleted = viewModel.deleteCourseGroupAndAwait(' app/src/main --include='*.kt'",
             1,
-            occurrences(byFile.getValue(COURSE_MANAGEMENT_NAME), "val deleted = viewModel.deleteCourseGroup("),
+            occurrences(byFile.getValue(COURSE_MANAGEMENT_NAME), GROUP_READ_AND_AWAIT),
         )
         assertEquals(
-            "全仓不许再出现「调了组删除却不看返回值」那种裸语句（行首就是 `viewModel.deleteCourseGroup(`）。" +
+            "全仓不许再出现「调了组删除却不看返回值」那种裸语句（行首就是 `viewModel.deleteCourseGroupAndAwait(`）。" +
                 "**朝宽扭这里红**：把那枚 `val deleted = ` 拆掉，本格与第 ① 层同时塌；" +
-                "⚠️ 这一格必须按整行判，不能数子串 —— `viewModel.deleteCourseGroup(target.fragments)` 是" +
-                "`val deleted = viewModel.deleteCourseGroup(target.fragments)` 的子串，改前改后都命中一次",
+                "⚠️ 这一格必须按整行判，不能数子串 —— `viewModel.deleteCourseGroupAndAwait(target.fragments)` 是" +
+                "`val deleted = viewModel.deleteCourseGroupAndAwait(target.fragments)` 的子串，改前改后都命中一次",
             emptyList<String>(),
             byFile.mapNotNull { (name, text) ->
                 val line = text.lineSequence()
                     .map { it.trim() }
-                    .firstOrNull { it.startsWith("viewModel.deleteCourseGroup(") && !it.startsWith("val ") }
+                    .firstOrNull { it.startsWith(GROUP_BARE_LINE) }
                 line?.let { "$name: $it" }
             },
         )
@@ -700,7 +719,13 @@ class CourseGroupDeletionWiringGuardTest {
         const val UNGATED_LABEL = "actionLabel = \"撤销\","
         const val GATED_LABEL = "actionLabel = \"撤销\".takeIf { deleted },"
         const val GROUP_SUCCESS_COPY = "\"已删除「\${target.displayName}」\""
-        const val GROUP_READ_VERDICT = "val deleted = viewModel.deleteCourseGroup(target.fragments)"
+        const val GROUP_READ_VERDICT = "val deleted = viewModel.deleteCourseGroupAndAwait(target.fragments)"
+
+        // ④ 调用点册子（T124b 换名：写库那一手进了 VM 的 viewModelScope job，调用点只剩 join）
+        const val GROUP_AND_AWAIT_CALL_SITE = "viewModel.deleteCourseGroupAndAwait("
+        const val GROUP_BARE_CALL_SITE = "viewModel.deleteCourseGroup("
+        const val GROUP_READ_AND_AWAIT = "val deleted = viewModel.deleteCourseGroupAndAwait("
+        const val GROUP_BARE_LINE = "viewModel.deleteCourseGroupAndAwait(target.fragments)"
 
         // ② VM
         const val VM_GROUP_SIGNATURE =
@@ -733,13 +758,18 @@ class CourseGroupDeletionWiringGuardTest {
         /**
          * 第 ① 层那张表：两枚删除入口。`file` 用 `app/src/main/java/com/buaa/schedule/` 之下的相对路径。
          *
-         * 首页那一行**本卡一字未动**（红线：那是 T121 的产物），它进表是为了把"对齐"钉成可判的东西。
+         * **T124b 把两行的 `readVerdict` / `assignPattern` 一起换成了 `...AndAwait` 那一面**：
+         * 卡面红线只许换"接收者与调用名"，读结论那三拍（分文案 / 闸按钮 / 点了才撤销）一字未动，
+         * 所以这张表的其余格子（messageExpression / gatedLabel / failureCopy / actionPerformed / undoCall /
+         * 两个抓变量的正则的形状）全部保持原样 —— 换名只发生在"读的那一句叫什么"这一维。
+         * ⚠️ 别只改一行：这张表把"两支对齐"钉成可判的东西，两行的 `readVerdict` 一侧改一侧不改
+         * 就是让其中一支偷偷漂回裸调用（那一支会红在 `readVerdict` 的"恰好一处"上）。
          */
         val DELETION_ENTRIES = listOf(
             DeletionEntry(
                 who = "首页长按删一门课（T121）",
                 file = "com/buaa/schedule/ui/home/HomeScreen.kt",
-                readVerdict = "val deleted = viewModel.deleteCourse(course)",
+                readVerdict = "val deleted = viewModel.deleteCourseAndAwait(course)",
                 messageExpression =
                     "message = if (deleted) \"已删除「\${course.displayName}」\" " +
                         "else \"删除失败：\${course.displayName} 还在课表里\",",
@@ -747,14 +777,14 @@ class CourseGroupDeletionWiringGuardTest {
                 gatedLabel = GATED_LABEL,
                 actionPerformed = "if (result == SnackbarResult.ActionPerformed) viewModel.undo()",
                 undoCall = "viewModel.undo()",
-                assignPattern = Regex("""val (\w+) = viewModel\.deleteCourse\(course\)"""),
+                assignPattern = Regex("""val (\w+) = viewModel\.deleteCourseAndAwait\(course\)"""),
                 messagePattern = Regex("""message = if \((\w+)\) "已删除「"""),
                 labelPattern = Regex("""actionLabel = "撤销"\.takeIf \{ (\w+) \},"""),
             ),
             DeletionEntry(
                 who = "课表管理页删一整组（T127）",
                 file = "com/buaa/schedule/ui/course/CourseManagementScreen.kt",
-                readVerdict = "val deleted = viewModel.deleteCourseGroup(target.fragments)",
+                readVerdict = "val deleted = viewModel.deleteCourseGroupAndAwait(target.fragments)",
                 messageExpression =
                     "message = if (deleted) \"已删除「\${target.displayName}」\" " +
                         "else \"删除失败：\${target.displayName} 还在课表里\",",
@@ -762,7 +792,7 @@ class CourseGroupDeletionWiringGuardTest {
                 gatedLabel = GATED_LABEL,
                 actionPerformed = "if (result == SnackbarResult.ActionPerformed) {",
                 undoCall = "viewModel.undoDeleteCourse()",
-                assignPattern = Regex("""val (\w+) = viewModel\.deleteCourseGroup\(target\.fragments\)"""),
+                assignPattern = Regex("""val (\w+) = viewModel\.deleteCourseGroupAndAwait\(target\.fragments\)"""),
                 messagePattern = Regex("""message = if \((\w+)\) "已删除「"""),
                 labelPattern = Regex("""actionLabel = "撤销"\.takeIf \{ (\w+) \},"""),
             ),

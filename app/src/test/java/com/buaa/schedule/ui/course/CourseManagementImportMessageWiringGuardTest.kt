@@ -567,7 +567,8 @@ class CourseManagementImportMessageWiringGuardTest {
             "suspend fun updateCourse(course: Course, options: CourseSaveOptions = CourseSaveOptions()): Long? ="
 
         // ④ T127 那一支（本卡一字不许动）
-        const val GROUP_READ_VERDICT = "val deleted = viewModel.deleteCourseGroup(target.fragments)"
+        // T124b（B 档）：调用名换成 ...AndAwait，**仍在 :220 那一行**（改名不插行 ⇒ 十八枚锚点的行号没漂）
+        const val GROUP_READ_VERDICT = "val deleted = viewModel.deleteCourseGroupAndAwait(target.fragments)"
         const val GROUP_MESSAGE_EXPRESSION =
             "message = if (deleted) \"已删除「\${target.displayName}」\" " +
                 "else \"删除失败：\${target.displayName} 还在课表里\","
