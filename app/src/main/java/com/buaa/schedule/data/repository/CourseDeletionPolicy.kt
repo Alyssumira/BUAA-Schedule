@@ -58,13 +58,13 @@ import com.buaa.schedule.domain.model.ReminderSetting
  *
  * `repository.deleteCourse` 的调用点**全仓恰好一处**（逐处复算过，不是数出现次数）：
  * `ScheduleViewModel` 的 `deleteCourse` 体内那一行 `val … = repository.deleteCourse(course)`。
- * 另有两处同名函数是**另一枚函数**（VM 那一步的调用点：签名不变，返回值语义变了）——
+ * 另有两处页面调用点今天是**另一枚函数** `deleteCourseAndAwait`（T124b；`deleteCourse` 今天唯一的调用点就在它体内 :634）——
  * `MainActivity` 的编辑器入口 `onDelete = { viewModel.deleteCourseAndAwait(it) }` :892，
  * 以及 `HomeScreen` 的 `val deleted = viewModel.deleteCourseAndAwait(course)` :501。
  *
  * 有没有哪一处拿返回值当"这课存在过"的证据去做**不止提示条文案**的决定？有，两处，都在 VM 那一层：
  * 1. `HomeScreen` 的 `handleCourseDelete` —— 同一枚布尔同时决定文案
- *    （「已删除「…」」/「删除失败：… 还在课表里」）和 `actionLabel = "撤销".takeIf { deleted }` :456；
+ *    （「已删除「…」」/「删除失败：… 还在课表里」）和 `actionLabel = "撤销".takeIf { deleted }` :504；
  * 2. `CourseEditorScreen` 的 `if (onDelete(target)) { onBack() } else { saveError = … }` :619
  *    —— 它决定的是**要不要退出编辑页**，与提示条无关。改形状之前那条 else 支路从来没走过
  *    （不抛异常就是 true）；修完以后它会走：删不到 ⇒ 留在编辑页亮既有那句红条，
