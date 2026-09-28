@@ -1577,7 +1577,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     fun removeSyncedEvents() {
         _calendarSync.update { it.copy(showRemoveConfirm = false) }
         viewModelScope.launch {
-            _calendarSync.update { it.copy(syncing = true, message = null, permissionPermanentlyDenied = false) } // T110：起手成对清，与 :1389 同一枚仪式（这条链不经那个入口）
+            _calendarSync.update { it.copy(syncing = true, message = null, permissionPermanentlyDenied = false) } // T110：起手成对清，与 :1488 同一枚仪式（这条链不经那个入口）
             val removed = suspendCatching { calendarSyncManager.removeAllSyncedEvents() }.getOrNull()
             _calendarSync.update {
                 it.copy(
