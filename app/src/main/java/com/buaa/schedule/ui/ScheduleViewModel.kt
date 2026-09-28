@@ -1545,7 +1545,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun openCalendarPicker() {
-        _calendarSync.update { it.copy(showPicker = true, calendarsLoaded = false) } // T110：复位缓存旗标，列表不再"进程寿命"（唯一读点是 :1512 那次早返回）
+        _calendarSync.update { it.copy(showPicker = true, calendarsLoaded = false) } // T110：复位缓存旗标，列表不再"进程寿命"（唯一读点是 :1611 那次早返回）
         viewModelScope.launch { ensureCalendarsLoaded() }
     }
 
@@ -1628,7 +1628,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 targetName = if (targetGone) null else it.targetName,
             )
         }
-        // T110：死 id 只清内存不够 —— 上面那两枚初值是从偏好里读回来的（:1373-1374），下一次冷启动
+        // T110：死 id 只清内存不够 —— 上面那两枚初值是从偏好里读回来的（:1472-1473），下一次冷启动
         // 又把死 id 捞回来：界面继续念那个已经不存在的日历名，真去同步时 CALENDAR_ID 打进死 id、异常被
         // CalendarSyncManager 那颗 runCatching 吞掉，用户读到的就成了「同步失败：日历写入异常」。
         // 撤的时候两枚 key 也必须成对（它们与 targetId/targetName 是同一件事的两头，漏一枚等于换个方向

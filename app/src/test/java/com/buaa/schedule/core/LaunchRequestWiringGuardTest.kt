@@ -119,7 +119,7 @@ class LaunchRequestWiringGuardTest {
                 body.lines().count { it.contains("$state.value =") },
             )
             assertTrue(
-                "$state 这一行不再是 ?.let 形状（基点 :227-229 的写法是对的，本卡要保住它）：" +
+                "$state 这一行不再是 ?.let 形状（MainActivity 里 onNewIntent 体内 :250-252 那三行是对的写法，本卡要保住它）：" +
                     "桌面图标那条 intent 上三枚请求全是 null，无条件赋值等于每次切回前台都清一遍",
                 Regex("""fresh\.$field\?\.let \{ $state\.value = it \}""").containsMatchIn(body),
             )
