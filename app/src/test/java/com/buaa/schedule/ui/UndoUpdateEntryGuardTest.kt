@@ -180,7 +180,7 @@ class UndoUpdateEntryGuardTest {
 
         // 维度一：部分周次那一支顺手清掉的兄弟片段 —— 快照必须带着它们
         assertEquals(
-            "`removed = edit.removed,` 必须还进快照（恰好一处）。这一行就是 `:528` 那段 KDoc 说的账：" +
+            "`removed = edit.removed,` 必须还进快照（恰好一处）。这一行就是 `:557` 那段 KDoc 说的账：" +
                 "部分周次拆行会顺手清掉同组兄弟片段，只记 before/after 的话撤销之后它们永久消失（R5 F-35）。" +
                 "谁把同值判据加在 `if (original != null)` 上而不同判这一条，丢的就是这些行",
             1,
@@ -935,7 +935,7 @@ class UndoUpdateEntryGuardTest {
     // ─────────────── ⑨ 档 ①（T139）：复原主行那一趟也读这道占用校验，两支都要落库 ───────────────
 
     /**
-     * 本卡收的那一格。`undoUpdate` 头上那句注释（裸 :356 一族）早就写着「before.id 同理，
+     * 本卡收的那一格。`undoUpdate` 头上那句注释（裸 :357 一族）早就写着「before.id 同理，
      * 可能已被占用于其他课程，此时应改为新增而不是覆盖」—— 可第 3 步此前**只问读没读到**：
      * `current != null` 那一支直接 `courseDao.update`，等于把"有人正占着这个号"当成"这一行归我"。
      * 教务整学期重导是 `deleteBySemester` 之后重插 ⇒ id 会换人 ⇒ **换号以后再点撤销，
