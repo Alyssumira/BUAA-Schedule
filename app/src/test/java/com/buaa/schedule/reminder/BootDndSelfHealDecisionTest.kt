@@ -214,7 +214,7 @@ class BootDndSelfHealDecisionTest {
 
         val expected = mapOf(
             "com/buaa/schedule/reminder/ClassProgressReceiver.kt" to 1,  // 下课铃 ACTION_END
-            "com/buaa/schedule/reminder/ClassProgressScheduler.kt" to 2, // 带判据的清理 :290 + cancelAll :434
+            "com/buaa/schedule/reminder/ClassProgressScheduler.kt" to 2, // 带判据的清理 :314 + cancelAll :523
             "com/buaa/schedule/reminder/CourseFluidService.kt" to 1,
             "com/buaa/schedule/reminder/LiveClassResyncer.kt" to 1,
             "com/buaa/schedule/ui/settings/SettingsScreen.kt" to 1,
