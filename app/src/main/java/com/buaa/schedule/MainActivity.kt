@@ -881,15 +881,15 @@ private fun AppNavHost(
                         onSave = { edited, options ->
                             // 写库返回最终落库行 id，null = 失败（编辑器据此保留草稿）
                             val savedId = if (edited.id == 0L) {
-                                viewModel.saveCourse(edited)
+                                viewModel.saveCourseAndAwait(edited)
                             } else {
-                                viewModel.updateCourse(edited, options)
+                                viewModel.updateCourseAndAwait(edited, options)
                             }
                             // 新增的课程也有真实 id 了，能定位到刚建的那张卡；失败则不脉冲
                             if (savedId != null) pendingPulseCourseId = savedId
                             savedId
                         },
-                        onDelete = { viewModel.deleteCourse(it) },
+                        onDelete = { viewModel.deleteCourseAndAwait(it) },
                         onBack = { navController.popBackStack() },
                         onSaveReminder = { id, enabled, minutes ->
                             viewModel.saveReminder(
