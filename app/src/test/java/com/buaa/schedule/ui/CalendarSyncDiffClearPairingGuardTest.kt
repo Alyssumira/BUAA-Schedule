@@ -121,7 +121,7 @@ class CalendarSyncDiffClearPairingGuardTest {
      * `skippedOccurrences` 这一对 —— 而它今天不收是对的，凭的是**两扇弹窗彼此挡住对方的入口**（§8.4-B）。
      *
      * §8.4-B 末那句「现有那枚 diff 守卫**管不到**这一格」是这一卡的账本：第一枚判据数的是
-     * `diff = null` 那类**清点点**（钉"3 处、每处都带 `skippedOccurrences = 0`"），而 `:1481` 根本不写
+     * `diff = null` 那类**清点点**（钉"3 处、每处都带 `skippedOccurrences = 0`"），而 `:1580` 根本不写
      * `diff` ⇒ 它不在那枚判据的宇宙里。本判据就是补那一格，判"不动 main"（理由见下面第三段）：
      *
      * 1. 这条链既不生产也不读那一对：`diff` 的唯一生产者是 `diff = computed.first`（上一枚判据钉着），
@@ -145,18 +145,18 @@ class CalendarSyncDiffClearPairingGuardTest {
      *    要判"真嵌套"得改成按花括号配平取两扇窗各自的**块范围**再比包含关系，而"真嵌套"那一臂
      *    **只有改 `SettingsScreen.kt` 才造得出来** —— 本卡红线是 main 一字不许动 ⇒ 按卡面判档走 (B)：
      *    删格子、把账写在这里，那一格的位置由「入口落点 ×2 + 收场路落点」三格接住。
-     * 3. **"照 `:1389` 的仪式把这一对一起收"那一支不采纳**：那不是清场，那是拿「移除」去**作废一份用户
+     * 3. **"照 `:1488` 的仪式把这一对一起收"那一支不采纳**：那不是清场，那是拿「移除」去**作废一份用户
      *    还没确认的 diff**。今天两扇窗互斥 ⇒ 那种 diff 不存在，补收是纯 no-op；而一旦上面第 2 条那两道
      *    位置判据被人改掉（给确认卡顺手补一颗「先移除再同步」，这是本仓另一种常见写法），补收就从
      *    "无害"变成"点一颗写着移除的按钮把用户正要确认的那份差异吞掉" —— 比它假装修的残值更糟。
      *    正确的落点是"移除完成之后要不要让那份 diff 作废"，那是产品判断，不是这一族的清场仪式。
-     *    ⚠️ 另一枚成本：往 `:1481` 补 `diff = null` 会把本文件第一枚判据的宇宙从 3 处顶成 4 处，
+     *    ⚠️ 另一枚成本：往 `:1580` 补 `diff = null` 会把本文件第一枚判据的宇宙从 3 处顶成 4 处，
      *    那一格的"3"是按 §6.3 那笔改前账钉的，两处都得重钉。
      *
      * 两头都钉：
      * - **朝宽**（把闸挪走）：那枚入口被搬进任一扇窗之内 → 两格落点判据红；`dismissCalendarSyncDiff()`
      *   的两枚收场路长出 diff 窗（或界面长出第三处）→ 最后一格红；
-     *   `:1481` 被拆回 `it.copy(syncing = true)`（连 T110 那两枚都不收了）→ 逐字判据红；
+     *   `:1580` 被拆回 `it.copy(syncing = true)`（连 T110 那两枚都不收了）→ 逐字判据红；
      * - **朝紧**（把它改成收）：这条链三枚写点里任何一枚开始动 `diff` 或 `skippedOccurrences` →
      *   逐处负判据红，且起手那枚的实参表不再是逐字原文 → 同一枚判据再红一次。
      * ⚠️ 与 T115②′ 同一课：**逐处 + 按位置 + 逐字**取，不数出现次数了事 —— 这一族的假格子正是"枚数对、
@@ -194,7 +194,7 @@ class CalendarSyncDiffClearPairingGuardTest {
             updateSiteArguments(code, at, if (index + 1 < updates.size) updates[index + 1] else bodyEnd)
         }
         assertEquals(
-            "`:1481` 起手那枚 copy 的实参表不再是**逐字** `$REMOVE_ENTRY_ARGS`（现在是：" + args[1].trim() +
+            "`:1580` 起手那枚 copy 的实参表不再是**逐字** `$REMOVE_ENTRY_ARGS`（现在是：" + args[1].trim() +
                 "）—— 这一格钉的是 T110 那刀的**边界**：这条链起手收两枚（旗标 + 句子，归 " +
                 "`CalendarSyncTargetPairingGuardTest` ③ 那一族管），**不收本文件这一对**。" +
                 "**少一枚**（连 `syncing` 都不立了）= 移除在飞的时候那两颗按钮没人按得住；" +
@@ -271,7 +271,7 @@ class CalendarSyncDiffClearPairingGuardTest {
                 at in diffAt until diffEnd,
             )
             assertFalse(
-                "移除那一行的入口跑进了移除确认框之内 —— 开窗点自己长在窗里，:1471 那枚唯一写点的账要重推",
+                "移除那一行的入口跑进了移除确认框之内 —— 开窗点自己长在窗里，:1570 那枚唯一写点的账要重推",
                 at in removeAt until removeEnd,
             )
         }
@@ -279,7 +279,7 @@ class CalendarSyncDiffClearPairingGuardTest {
         val dismisses = indexOfAll(screen, DISMISS_DIFF_CALL)
         assertEquals(
             "界面上 `viewModel.dismissCalendarSyncDiff()` 的调用点不再是 2 处（:1906 那扇窗的 onDismissRequest、" +
-                ":1935 那颗「取消」）。**多一处** = 又添一条能把 diff 收掉的通道，它同样得成对清" +
+                ":1936 那颗「取消」）。**多一处** = 又添一条能把 diff 收掉的通道，它同样得成对清" +
                 "（上面第一枚判据按 VM 侧数，数不到界面这一头）：" + lineHints(screen, dismisses),
             2,
             dismisses.size,
@@ -420,7 +420,7 @@ class CalendarSyncDiffClearPairingGuardTest {
      * - `CalendarModeClassBellCleanupTest.blankCommentsAndLiterals`（连字面量内容一起抹）会把
      *   `SettingsScreen.kt:1916` 那句 `"有 ${calendarSync.skippedOccurrences} 个课次…"` 一起抹掉，
      *   界面唯一读点的两处就数出一处。
-     * 反过来，`SettingsScreen.kt:1167` 那个**写在字符串字面量里**的块注释开头两个字符，若按
+     * 反过来，`SettingsScreen.kt:1151` 那个**写在字符串字面量里**的块注释开头两个字符，若按
      * "不认字面量的行扫描"处理会把后面的代码整段吞掉（同族那条警告说的就是这件事），所以这里
      * 照 `blankCommentsAndLiterals` 的走法认字面量，只是**不抹它的内容**。
      *
