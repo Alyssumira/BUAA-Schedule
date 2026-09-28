@@ -59,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buaa.schedule.core.designsystem.ColorSwatch
 import com.buaa.schedule.core.designsystem.CourseColors
@@ -178,7 +179,11 @@ fun CourseManagementScreen(
                                 },
                                 onPickColor = { index ->
                                     val primary = group.fragments.first()
-                                    scope.launch {
+                                    // T124a：接收者从本页 `rememberCoroutineScope()` 换成 `viewModel.viewModelScope` ——
+                                    // 组外观那一笔写库挂在 composition scope 上时，这一页被卸载（切 tab 走
+                                    // popUpTo+saveState）就会把这一手带动取消：库里改了、撤销条目没压、
+                                    // 课前铃/桌面组件/明日预告不重排，UI 上静默。本体只有这一次写库，整块搬。
+                                    viewModel.viewModelScope.launch {
                                         viewModel.updateCourse(
                                             primary.copy(colorIndex = index, customColorArgb = null),
                                             CourseSaveOptions(applyToGroup = true),

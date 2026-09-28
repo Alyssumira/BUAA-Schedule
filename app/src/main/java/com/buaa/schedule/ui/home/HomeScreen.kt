@@ -86,6 +86,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlin.math.ceil
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.EmptyState
@@ -449,7 +450,13 @@ fun HomeScreen(
                 periods = shiftedPeriods,
                 isManualOverride = manualTimeOverride,
             )
-            scope.launch {
+            // T124a：接收者是 `viewModel.viewModelScope`，不是本页 `rememberCoroutineScope()` 的那枚 scope。
+            // 顶层导航切 tab 走的是 popUpTo(startDestinationId){saveState=true}，目的地会被真的卸载：
+            // 取消点若落在写库之后、`pushUpdate(...)`/`afterDataChangedInternal(...)` 之前，就是
+            // 「库里改了、撤销条目没压、课前铃/桌面组件/明日预告不重排」，而 UI 上完全静默。
+            // 本体内没有任何只在组合期成立的东西（无提示条、无滚动、无动画），故整块搬；
+            // 三笔 `updateCourse` 的返回值今天照旧被丢掉（读它那一档是 B/K3 的账，不在本卡）。
+            viewModel.viewModelScope.launch {
                 if (thisWeekOnly) {
                     val week = moveWeek ?: moveCurrentWeek
                     if (week == null) {
@@ -475,7 +482,10 @@ fun HomeScreen(
     // `merged != r.course.periods` 上，同值缩放飞不到这里（全站 `onCourseResize` 只有那一处调用）。
     val handleCourseResize: (Course, List<Int>) -> Unit = remember(viewModel, scope) {
         { course, newPeriods ->
-            scope.launch {
+            // T124a：同拖课那一枚 —— 写库那一手不许挂在页的 composition scope 上（目的地被卸载时
+            // 这一手会被一起取消：撤销条目没压、课前铃/桌面组件/明日预告不重排，而界面上一片静默）。
+            // 本体只有这一次写库，故整块搬。
+            viewModel.viewModelScope.launch {
                 viewModel.updateCourse(course.copy(periods = newPeriods.sorted(), isManualOverride = true))
             }
         }
