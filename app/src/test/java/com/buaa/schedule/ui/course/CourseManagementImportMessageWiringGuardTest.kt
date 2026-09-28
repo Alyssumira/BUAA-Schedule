@@ -24,7 +24,7 @@ import org.junit.Test
  * 3. **接桥会付三笔账**：① `deleteCourseGroup` 异常那一档与 `:221` 那一条双念；② 同一条
  *    `SnackbarHostState` 上后 show 的取消先 show 的 ⇒ 「已删除 + 那颗撤销」会被随后任何一句
  *    `importMessage` 提前收掉（T127 §6 与 UndoUpdateEntry 第 ④ 层钉的就是那颗按钮的窗口）；
- *    ③ `HomeScreen :467-472` 那枚桥吃掉的是**整个** `StateFlow`：用户从首页带着一句未完成的话跳进
+ *    ③ `HomeScreen :515-520` 那枚桥吃掉的是**整个** `StateFlow`：用户从首页带着一句未完成的话跳进
  *    管理页，那句话会被管理页吃掉、回首页就不再念。 ⇒ 判「这一页不该接 `importMessage`、
  *    真正的账在 VM 的对外形状上」，交付物 = 本守卫（扳机钉住前置未落地那一格）。
  *
@@ -99,7 +99,7 @@ class CourseManagementImportMessageWiringGuardTest {
             byFile.values.sumOf { occurrences(it, READER_NEEDLE) },
         )
         assertEquals(
-            "`showSnackbar(message.text)` 那枚「读完即清」的桥今天全仓只有一枚（首页 `:470`）：" +
+            "`showSnackbar(message.text)` 那枚「读完即清」的桥今天全仓只有一枚（首页 `:518`）：" +
                 "第二枚进来就是「两页抢吃同一枚 StateFlow」，谁先组合谁吃掉 ⇒ 必须连本卡第 ①② 层的判词一起重判。" +
                 "\n复算：grep -rn 'showSnackbar(message.text)' app/src/main --include='*.kt'",
             1,
@@ -554,7 +554,7 @@ class CourseManagementImportMessageWiringGuardTest {
         const val EMPTY_BRANCH_ANCHOR = "if (isEmpty) {"
         const val LAUNCH_ANCHOR = "scope.launch {"
 
-        // ① VM 写给「这一页能触发的动作」的那五句（删除课程失败一枚在单课 :556、一枚在整组 :576）
+        // ① VM 写给「这一页能触发的动作」的那五句（删除课程失败一枚在单课 :602、一枚在整组 :655）
         val VM_POINTS_FOR_THIS_PAGE = mapOf(
             "AppMessage(\"更新课程失败：\${e.message}\", isError = true)" to 1,
             "AppMessage(\"删除课程失败：\${e.message}\", isError = true)" to 2,
