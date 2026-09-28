@@ -513,6 +513,31 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         null
     }
 
+    /**
+     * [saveCourse] 的「等一个结论」版 —— 课程编辑器那一支**还挂在 `rememberCoroutineScope()`
+     * 上**的保存链用（T124c · 编辑器两枚半搬的第一枚）。
+     *
+     * 形状与 [deleteCourseAndAwait] 逐字同款（那里逐条写了为什么既不整块搬、也不直接透传），
+     * 这里只登记差异：编辑器那一块 body 里 `saving = true` / `saveError = …` / `onBack()` 三样都是
+     * **组合本地**的回灌动作 —— `saving` 还兼管着 `BackHandler(enabled = isDraftDirty && !saving)`
+     * 那颗返回闸，而 `onBack()` 对应的是 `navController.popBackStack()`：整块搬进 [viewModelScope]
+     * 要么把返回闸拆断，要么多 pop 一格。所以**只搬写库那一手**：
+     * 「落库 → 对新增压撤销条目 → `afterDataChangedInternal()`」那一趟放进 [viewModelScope] 的
+     * 那一枚 job（页 scope 被 dispose 取消也照样跑完），`join()` 仍跑在调用者（页 scope）上，
+     * 只等一个结论 —— 这枚结论是 `Long?`（真正落库的行 id）：编辑器据此把提醒写到正确的行，
+     * MainActivity 据此决定要不要给那张卡打脉冲。
+     *
+     * ⚠️ 不许退成 `return saveCourse(course)`（透传 = 写库那一手又落回调用者的 scope，本卡白做），
+     * 也不许把 `savedId` 升级成 VM 的共享可变属性（那会新造一枚没人清的状态）。它**必须**是函数内的
+     * 局部捕获。先例：本卡 [deleteCourseAndAwait] 与本仓 `ConflictWizardDialog.applyConflictShift`。
+     */
+    suspend fun saveCourseAndAwait(course: Course): Long? {
+        var savedId: Long? = null
+        val job = viewModelScope.launch { savedId = saveCourse(course) }
+        job.join()
+        return savedId
+    }
+
     suspend fun updateCourse(course: Course, options: CourseSaveOptions = CourseSaveOptions()): Long? =
         suspendCatching {
             val original = repository.getCourseById(course.id)
@@ -548,6 +573,24 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             _importMessage.value = AppMessage("更新课程失败：${e.message}", isError = true)
             null
         }
+
+    /**
+     * [updateCourse] 的「等一个结论」版 —— 与 [saveCourseAndAwait] 是**同一枚编辑器保存链**的两扇门
+     * （调用方按 `edited.id == 0L` 分流：新增走上一枚，改既有课走这一枚；那道分流本身留在调用点没搬）。
+     *
+     * 形状、理由与两条「不许」都逐字同 [saveCourseAndAwait]，这里只登记这一枚独有的那一半：
+     * [updateCourse] 体内除了主行那一趟，还带着**部分周次拆行**（`updateCoursePartialWeeks`）与
+     * **整组换色**（`updateCourseGroupAppearance`）两支写库，撤销条目压的是它们交回的结论
+     * （T128/T137 那两笔账）。页 scope 被 dispose 时取消点若落在「主行已提交」与「组那一支 /
+     * 压撤销条目 / 重排课前铃」之间，库里就是一门改了一半的课 —— 把**整趟**放进同一枚
+     * `viewModelScope` job 才是把这一族收干净：要么整趟跑完，要么整趟没开始。
+     */
+    suspend fun updateCourseAndAwait(course: Course, options: CourseSaveOptions): Long? {
+        var savedId: Long? = null
+        val job = viewModelScope.launch { savedId = updateCourse(course, options) }
+        job.join()
+        return savedId
+    }
 
     suspend fun deleteCourse(course: Course): Boolean = suspendCatching {
         val deletion = repository.deleteCourse(course)
