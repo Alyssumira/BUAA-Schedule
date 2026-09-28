@@ -109,7 +109,7 @@ class ScanGiveUpReasonDerivationGuardTest {
                 "字段本身在 :65 的参数表上，所以多一处赋值 = 多一把尺子：",
             1, assignmentCount(code),
         )
-        // 位置：唯一那处赋值必须还长在判死那一支里（:155-:161），不是在别处"顺手补一行"
+        // 位置：唯一那处赋值必须还长在判死那一支里（:155-:162），不是在别处"顺手补一行"
         val branch = giveUpBranch(kernelBody(code))
         assertEquals(
             "ScanRecoveryPolicy.kt:160 那处赋值不在判死分支（if (cycles >= MaxDecodeSuspensionCycles)）里了：" +
