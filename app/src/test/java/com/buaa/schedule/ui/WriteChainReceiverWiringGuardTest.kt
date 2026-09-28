@@ -33,7 +33,7 @@ import org.junit.Test
  * 档 ⑤ 因此钉"被整块搬走的三枚 body 里 composition-only 调用恰好 0 处"（真搬了），
  * 档 ⑥ 反向钉"页 scope 名下不许再长出新的写库链"。
  *
- * ## 钉法（七档，两侧都有格子）
+ * ## 钉法（八档，两侧都有格子）
  *
  * 1. 拖课 handler 体内：`viewModel.viewModelScope.launch {` 恰好一枚、页 scope 那一枚恰好 0 枚、
  *    三笔 `viewModel.updateCourse(` **全部**躺在那一枚协程体里（落点 + 读形状，不是文件级计数）；
@@ -49,6 +49,11 @@ import org.junit.Test
  *    B/K3 把剩下的继续搬走时这一格照样只说真话；新长出一枚、或把搬走的那一枚搬回来才红）。
  *    册子被掏空也红（那一格就不判任何东西了）；
  * 7. 先例未被顶掉：`applyConflictShift` 仍走 `viewModel.viewModelScope` + `job.join()`。
+ * 8. **双向闭合**：档 ①〜③ 只钉「名册 `MOVED` 里在册的每一枚都合格」，本格钉另一侧「盘上该被点名的
+ *    每一枚都进了名册」—— 从盘上按 `VM_SCOPE_LANDING_FILES` 那两枚文件独立扫出所有
+ *    `viewModel.viewModelScope.launch {`（接收者形状 + 花括号配平取体，全程不读 `MOVED`），
+ *    身份 = 文件 × 那一枚协程体内写库的笔数，与 `MOVED` 那把**一次盘都不开**的身份多重集互为等集
+ *    （数量与身份都等，双向差各自点名）。⇒ 摘掉名册里一枚、或盘上多长出一枚（把 B 档落点悄悄搬过去也算）都红。
  */
 class WriteChainReceiverWiringGuardTest {
 
@@ -116,6 +121,14 @@ class WriteChainReceiverWiringGuardTest {
             Triple(HOME_SCREEN, RESIZE_ANCHOR, 1),
             Triple(MANAGEMENT, PICK_COLOR_ANCHOR, 1),
         )
+
+        /**
+         * 档 ⑧ 的**扫描清单**：这里把两枚文件自己列一遍，**不取 `MOVED` 的键** ——
+         * 取了名册的键，「摘掉名册里那一枚」就会同时把盘上那一侧的扫描范围一起缩掉，
+         * 两把尺一起退、本格永不红（那正是它要堵的那一扭）。
+         * 新落点若长在这两枚文件之外：这里与 `MOVED` 要一起补，只补一边都红。
+         */
+        val VM_SCOPE_LANDING_FILES = listOf(HOME_SCREEN, MANAGEMENT)
     }
 
     // ─────────────── ① 拖课：整块搬到了 viewModelScope 上 ───────────────
@@ -308,6 +321,62 @@ class WriteChainReceiverWiringGuardTest {
         assertEquals("先例那一枚体内仍读返回值（那一笔 updateCourse 还在）", 1, occurrences(code, UPDATE_COURSE))
     }
 
+    // ─────────────── ⑧ 双向闭合：盘上扫出的落点集合 ↔ 名册 MOVED 互为等集 ───────────────
+
+    /**
+     * 档 ①〜③ 的读法都是「拿 `MOVED` 当输入去查盘」⇒ 它只钉得住**在册的每一枚都合格**；
+     * 谁把某一枚落点写回页 scope 之后顺手把名册里那一枚也删掉，那三档一起退、这一族反而全绿。
+     * 本格钉的是另一侧：**盘上该被点名的每一枚都进了名册**，两把尺互相证伪 ——
+     *  - 盘上那一侧：[diskVMScopeLandingIdentities] 只认 [VM_SCOPE_LANDING_FILES] 那两枚文件，
+     *    按接收者形状扫 `viewModel.viewModelScope.launch {`，花括号配平取体、在体内数写库笔数，
+     *    **一次 `MOVED` 都不读**；
+     *  - 名册那一侧：`MOVED` 逐枚把 文件 × 登记的笔数 拼成身份，**一次盘都不开**。
+     * ⇒ 身份拼法同一个函数、两侧输入两条独立路径：名册少登记一枚（含被摘掉那一枚）红，
+     * 盘上多长出一枚（B 档落点被悄悄搬过去、或复制一份）也红；只比 size 会漏「一枚身份换成另一枚」那一扭，
+     * 故按身份做**多重集**双向差。
+     */
+    @Test
+    fun `盘上扫出的 viewModelScope 落点集合与名册互为等集 摘一枚或长一枚都红`() {
+        val disk = diskVMScopeLandingIdentities()
+        val roster = MOVED.map { (file, anchor, writes) ->
+            Landing(
+                file = file,
+                site = "名册登记的 anchor「$anchor」",
+                identity = landingIdentity(file, writes),
+                excerpt = "登记体内写库 $writes 笔",
+            )
+        }
+        assertTrue(
+            "盘上那一侧一枚 `$VM_SCOPE_LAUNCH` 都没扫到 ⇒ 本格不再判任何东西（空集对空集也算闭合）：" +
+                "\n  扫描清单：$VM_SCOPE_LANDING_FILES" +
+                "\n  名册登记的身份：" + roster.map { it.identity },
+            disk.isNotEmpty(),
+        )
+        val byDisk = disk.map { it.identity }.groupingBy { it }.eachCount()
+        val byRoster = roster.map { it.identity }.groupingBy { it }.eachCount()
+        val unregistered = byDisk.filter { (identity, n) -> n > (byRoster[identity] ?: 0) }.keys
+        val notOnDisk = byRoster.filter { (identity, n) -> n > (byDisk[identity] ?: 0) }.keys
+        assertTrue(
+            "盘上导出的落点集合与名册 `MOVED` 互为等集这一判不成立（朝宽：盘上长了一枚没登记；" +
+                "朝窄：名册里那一枚在盘上已不存在）：" +
+                (if (unregistered.isEmpty()) "" else "\n  盘上有、名册没登记：" + disk.filter { it.identity in unregistered }
+                    .joinToString("；") { "${it.file} 那一枚（体内首行「${it.excerpt}」）= ${it.identity}" }) +
+                (if (notOnDisk.isEmpty()) "" else "\n  名册有、盘上扫不到：" + roster.filter { it.identity in notOnDisk }
+                    .joinToString("；") { "${it.file} 的 ${it.site} = ${it.identity}" }) +
+                "\n  盘上导出 ${disk.size} 枚：" + disk.joinToString("；") { "${it.file}→${it.identity}" } +
+                "\n  名册登记 ${roster.size} 枚：" + roster.joinToString("；") { "${it.file}→${it.identity}" } +
+                "\n身份 = 文件 + 那一枚协程体内 `$UPDATE_COURSE` 的笔数；两把尺一条只读盘、一条只读名册，" +
+                "所以『把落点写回页 scope 再顺手把名册那一枚删掉』与『把一枚 B 档落点悄悄搬上 viewModelScope』" +
+                "都会在这一格露出来。" +
+                "\n收法只有两种，都得明说：① 那一枚本就该在 viewModelScope 上 ⇒ 往 `MOVED` 补一枚" +
+                "（宿主 anchor 与体内笔数一起登记，档 ①②③④⑤ 跟着它走）；" +
+                "② 那一枚不该在 ⇒ 把盘上那一枚写回原处，**别摘名册**（摘名册不摘盘就是本格要堵的那一扭）。" +
+                "\n复算：grep -n 'viewModel.viewModelScope.launch' " +
+                VM_SCOPE_LANDING_FILES.joinToString(" ") { "app/src/main/java/$it" },
+            unregistered.isEmpty() && notOnDisk.isEmpty(),
+        )
+    }
+
     // ---------------- helpers ----------------
 
     /** 档 ①②③ 的共同判：那一枚协程在、页 scope 不在、写库笔数对、且每笔都在那一枚协程体内 */
@@ -400,6 +469,43 @@ class WriteChainReceiverWiringGuardTest {
     }
 
     private data class Block(val text: String, val start: Int)
+
+    /** 档 ⑧ 两侧共用的落点身份：file/site 供点名，identity 供等集比对，excerpt 是盘上那枚协程体的首行原文 */
+    private data class Landing(val file: String, val site: String, val identity: String, val excerpt: String)
+
+    /**
+     * 两把尺共用的**身份拼法**（只是拼串，不是任何一侧的输入）：文件 + 那一枚 viewModelScope 协程体内
+     * `$UPDATE_COURSE` 的笔数。名册那一侧的笔数取自 `MOVED` 的登记值、盘上那一侧取自体内实数 ——
+     * 档 ①②③ 已经钉过「该 handler 体内的每一笔写库都在那一枚协程体内」，故两侧今天必须是同一个数，
+     * 有人把一笔写库留在协程体外时这里也会一起露出来。
+     */
+    private fun landingIdentity(file: String, writes: Int): String = "$file#$UPDATE_COURSE×$writes"
+
+    /**
+     * 档 ⑧ 的**盘上那一侧**（独立读形状，全程不读 `MOVED`、不读 anchor 名）：
+     * 扫 [VM_SCOPE_LANDING_FILES] 那两枚文件里每一枚 `viewModel.viewModelScope.launch {`
+     * （接收者形状：前面不许贴标识符字符），花括号配平取它自己的协程体，在体内数写库笔数当身份。
+     */
+    private fun diskVMScopeLandingIdentities(): List<Landing> {
+        val out = mutableListOf<Landing>()
+        for (file in VM_SCOPE_LANDING_FILES) {
+            val code = blankComments(source(file))
+            for (at in receiverOccurrencesWithOffset(code, VM_SCOPE_LAUNCH)) {
+                val body = bodyOf(code, at + VM_SCOPE_LAUNCH.length - 1, "$file 里那一枚 `$VM_SCOPE_LAUNCH` 的协程体")
+                out += Landing(
+                    file = file,
+                    site = "盘上扫到的那一枚协程",
+                    identity = landingIdentity(file, occurrences(body, UPDATE_COURSE)),
+                    excerpt = firstLineExcerpt(body),
+                )
+            }
+        }
+        return out.sortedBy { it.identity }
+    }
+
+    /** 点名用的原文片段：体内第一行非空白（刻意不给行号 ⇒ 行号漂了这句也不会指错地方） */
+    private fun firstLineExcerpt(body: String): String =
+        body.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() } ?: "<协程体为空>"
 
     /** 从锚点起按花括号配平取整块（含锚点本身），返回块文本与它在原文里的起点偏移 */
     private fun blockOf(code: String, anchor: String, label: String): Block {
