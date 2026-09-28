@@ -31,11 +31,15 @@ import org.junit.Test
  * B 档（读返回值那一手）body 里带着 `snackbarHostState.showSnackbar(...)` 这类只在组合期成立的东西，
  * **整块搬**会把提示条的回灌链拆断 ⇒ 只能半搬：写库那一手进 VM 新增的 `...AndAwait` 里的
  * `viewModelScope` job，`join()` 与提示条留在页 scope 上。T124b 收的就是这两枚（首页长按删课、
- * 管理页删整组），形状由档 ⑨（VM 侧）与档 ⑩（调用点侧）钉；K3（编辑器那两枚）今天仍**没动**。
+ * 管理页删整组），形状由档 ⑨（VM 侧）与档 ⑩（调用点侧）钉；K3（编辑器那两枚）由 **T124c** 收，
+ * 形状由档 ⑪（VM 侧）⑫（编辑器 body 侧）⑬（MainActivity lambda 侧）三档钉 —— 那一族的半搬比 B 档
+ * 还多绕了一手：编辑器没有 `viewModel` 参数，它 body 里的写库那一手是注入的 lambda
+ * （`saveCourseDraft(` / `onDelete(target)`），真正落库的那一枚 `viewModel...` 调用长在
+ * MainActivity 递进去的那两枚 lambda 里，所以 ⑫ 与 ⑬ 是**一条链的两端**、必须成对读。
  * 档 ⑤ 因此钉"被整块搬走的三枚 body 里 composition-only 调用恰好 0 处"（真搬了），
  * 档 ⑥ 反向钉"页 scope 名下不许再长出新的写库链"。
  *
- * ## 钉法（十档，两侧都有格子）
+ * ## 钉法（十三档，两侧都有格子）
  *
  * 1. 拖课 handler 体内：`viewModel.viewModelScope.launch {` 恰好一枚、页 scope 那一枚恰好 0 枚、
  *    三笔 `viewModel.updateCourse(` **全部**躺在那一枚协程体里（落点 + 读形状，不是文件级计数）；
@@ -66,6 +70,23 @@ import org.junit.Test
  *     `viewModel....AndAwait(`，裸的 `viewModel.deleteCourse(` / `viewModel.deleteCourseGroup(` 0 处，
  *     而 `showSnackbar(` / 那颗 `actionLabel = "撤销".takeIf { deleted },` / 撤销那一手逐字各一处。
  *     ⇒ 朝窄扭（调用点换回旧名）红。
+ * 11. **C 档 VM 侧（T124c）**：`saveCourseAndAwait` / `updateCourseAndAwait` 两枚各自体内那一枚
+ *     `val job = viewModelScope.launch {` 是唯一一枚协程、`savedId = saveCourse(course)` /
+ *     `savedId = updateCourse(course, options)` 逐字落在那一枚协程体里、`job.join()` 在体外、
+ *     `return savedId` 排在 join 之后、`var savedId: Long? = null` 是体内局部捕获、
+ *     透传那一型 0 处 ⇒ 朝宽扭（把入口退成 `return saveCourse(course)`）红。
+ * 12. **C 档编辑器 body 侧（T124c）**：编辑器页 scope 名下恰好两枚协程，按**写库那一手**的字面身份
+ *     （`saveCourseDraft(` / `onDelete(target)`）分档后，每枚体内 `saving = true` / `saving = false` /
+ *     `saveError = null` / 那句失败文案 / `onBack()` 各恰好一处且次序是 立旗标 → 清场 → 写库 →
+ *     退出 → 落旗标；体内 `viewModel.` 0 处；那颗 `BackHandler(enabled = isDraftDirty && !saving)`
+ *     与三枚注入 lambda 的签名逐字仍在 ⇒ 朝窄扭（把 `saving = true` 挪出那一块）红。
+ * 13. **C 档 lambda 侧（T124c）**：MainActivity 的 `onSave` lambda 体内两扇门都调 `...AndAwait(`、
+ *     裸的 `viewModel.saveCourse(` / `viewModel.updateCourse(` 0 处、`pendingPulseCourseId` 那一行与
+ *     端出的 `savedId` 逐字仍在（返回语义不变）；`onDelete` 整行逐字是
+ *     `onDelete = { viewModel.deleteCourseAndAwait(it) },` 且全文裸 `viewModel.deleteCourse(` 0 处；
+ *     `onSaveReminder` 那一手仍写 `viewModel.saveReminder(` 且 VM 里 `fun saveReminder` 体内自己就起在
+ *     `viewModelScope`（盘面事实：它的接收者早就不在页 scope 上 ⇒ 本卡不为它造 AndAwait，造它要改签名）；
+ *     VM 全文 `onBack(` 0 处 ⇒ 那一支没被搬进协程。
  */
 class WriteChainReceiverWiringGuardTest {
 
@@ -134,7 +155,15 @@ class WriteChainReceiverWiringGuardTest {
          * ⚠️ 另两枚**留在册子上没摘**，因为它们在盘上确实还挂在页 scope 名下、本卡按红线也不动它们：
          * `viewModel.undo(` 与 `viewModel.undoDeleteCourse(` 是**非 suspend** 的 fire-and-forget，
          * VM 里 `fun undo()` 自己就起在 `viewModelScope` 上 ⇒ 搬不搬这一手都是既成事实，别顺手摘。
-         * ⚠️ 编辑器的 `saveCourseDraft(` / `onDelete(target)` 是 **T124c** 的账，本卡不许动。
+         *
+         * ⚠️ **T124c 对编辑器那两手的判词（照盘面判"仍在册"，不是"该摘"）**：
+         * `saveCourseDraft(` 与 `onDelete(target)` 今天**一枚都没从盘上消失** —— 本卡选的是 S1（半搬），
+         * 按定义把编排版面整块留在那两枚页 scope 协程里，搬走的只是 MainActivity 那两枚 lambda 里
+         * 真正落库的那一枚 `viewModel...` 调用（它进了 VM `...AndAwait` 体内那枚 `viewModelScope` job，
+         * 形状由新增的档 ⑪⑫⑬ 三格成对钉住）。档 ⑥ 的盘上侧读的是「那一手的**字面调用**在不在页 scope
+         * 协程体内」⇒ 摘掉名册里这两枚会得到"名册没登记、盘上却扫得到"那一侧的红，而那正是本档要堵的
+         * 『摘名册不摘盘』那一扭。所以这两枚留在册子上；它们名下这一格的含义随之收窄成
+         * **"这一两块 body 里不许再长出别的写库那一手"**（多一枚、或把那两枚之一挪走都还要回来重判）。
          */
         val PAGE_SCOPE_WRITE_LEDGER = mapOf(
             HOME_SCREEN to mapOf("viewModel.undo(" to 1),
@@ -209,6 +238,83 @@ class WriteChainReceiverWiringGuardTest {
             val rawCall: String,
             val undoCall: String,
         )
+
+        // ───────── C 档（T124c）：编辑器那两枚「只能半搬」的落点 ─────────
+
+        /** MainActivity 递给编辑器那三枚 lambda 的宿主文件（编辑器自己没有 `viewModel` 参数） */
+        const val MAIN_ACTIVITY = "com/buaa/schedule/MainActivity.kt"
+
+        /**
+         * 编辑器 `:128` 那枚页 scope 名下两枚协程各自的**写库那一手**（逐字身份，用来把两枚分档）。
+         *
+         * ⚠️ 这两枚字面量在 T124c 之后**仍在页 scope 那一块体内**：S1 搬走的不是这一行调用，
+         * 而是它一路下去真正落库的那一枚 `viewModel...` 调用 —— 那一手现在长在 MainActivity 的
+         * lambda 里、且已经进了 VM 的 `...AndAwait`（档 ⑫⑬ 钉的就是这条链）。
+         */
+        const val C_SAVE_HAND = "saveCourseDraft("
+        const val C_DELETE_HAND = "onDelete(target)"
+
+        /** C 档两枚 VM 入口：签名 / 那一枚 job 体内的写库 / 不许退成的透传（形状共用 B 档那五枚字面量） */
+        val C_STAGED = listOf(
+            CStage(
+                label = "编辑器「新增一门课」那一支（saveCourseAndAwait）",
+                signature = "suspend fun saveCourseAndAwait(course: Course): Long? {",
+                jobWrite = "savedId = saveCourse(course)",
+                passthrough = "return saveCourse(course)",
+            ),
+            CStage(
+                label = "编辑器「改既有课」那一支（updateCourseAndAwait）",
+                signature = "suspend fun updateCourseAndAwait(course: Course, options: CourseSaveOptions): Long? {",
+                jobWrite = "savedId = updateCourse(course, options)",
+                passthrough = "return updateCourse(course, options)",
+            ),
+        )
+        const val C_LOCAL_FLAG = "var savedId: Long? = null"
+        const val C_RETURN_FLAG = "return savedId"
+
+        /** C 档一枚的登记形状（与 [BStage] 同构，只是结论是 `Long?` 而非 `Boolean`） */
+        data class CStage(
+            val label: String,
+            val signature: String,
+            val jobWrite: String,
+            val passthrough: String,
+        )
+
+        /** 编辑器那一块 body 里**一枚都不许跟着写库搬走**的三样 composition 本地回灌 */
+        const val C_SAVING_RAISED = "saving = true"
+        const val C_SAVING_LOWERED = "saving = false"
+        const val C_SAVE_ERROR_CLEARED = "saveError = null"
+        const val C_ON_BACK_CALL = "onBack()"
+        const val C_SAVE_ERROR_SAVE_COPY = "saveError = \"保存失败，请重试；草稿已保留\""
+        const val C_SAVE_ERROR_DELETE_COPY = "saveError = \"删除失败，请重试\""
+
+        /** `saving` 这一位同时管着那颗返回闸 —— 它是「必须留在组合本地」的硬理由，逐字钉住 */
+        const val C_BACK_HANDLER =
+            "BackHandler(enabled = isDraftDirty && !saving) { showDiscardDialog = true }"
+
+        /** 编辑器入口的签名：返回语义（`Long?` / `Boolean` / `Unit`）一枚都不许跟着本卡变 */
+        const val C_ON_SAVE_SIGNATURE = "onSave: suspend (Course, CourseSaveOptions) -> Long?,"
+        const val C_ON_DELETE_SIGNATURE = "onDelete: suspend (Course) -> Boolean,"
+        const val C_ON_SAVE_REMINDER_SIGNATURE =
+            "onSaveReminder: (Long, Boolean, Int) -> Unit = { _, _, _ -> },"
+
+        /** MainActivity 递给编辑器的那三枚 lambda 的宿主锚点与那一手返回闸的逐字 */
+        const val C_ON_SAVE_ANCHOR = "onSave = { edited, options ->"
+        const val C_ON_SAVE_BRANCH = "val savedId = if (edited.id == 0L) {"
+        const val C_PULSE_LINE = "if (savedId != null) pendingPulseCourseId = savedId"
+        const val C_ON_DELETE_LAMBDA = "onDelete = { viewModel.deleteCourseAndAwait(it) },"
+        const val C_ON_BACK_LAMBDA = "onBack = { navController.popBackStack() },"
+        const val C_ON_SAVE_REMINDER_ANCHOR = "onSaveReminder = { id, enabled, minutes ->"
+        const val C_RAW_SAVE_CALL = "viewModel.saveCourse("
+        const val C_RAW_UPDATE_CALL = "viewModel.updateCourse("
+        const val C_RAW_DELETE_CALL = "viewModel.deleteCourse("
+
+        /** 提醒那一手「不用 AndAwait」的盘面事实：VM 里 `fun saveReminder` 自己就起在 viewModelScope 上 */
+        const val C_SAVE_REMINDER_SIG = "fun saveReminder(setting: ReminderSetting) {"
+        const val C_SAVE_REMINDER_REPO = "repository.saveReminder(setting)"
+
+        /** 页 scope 那一块体里不许出现任何 VM 直达的写法（编辑器的写库只经注入的 lambda） */
+        const val C_VM_DIRECT = "viewModel."
     }
 
     // ─────────────── ① 拖课：整块搬到了 viewModelScope 上 ───────────────
@@ -624,6 +730,358 @@ class WriteChainReceiverWiringGuardTest {
         }
     }
 
+    // ─────────────── ⑪ C 档：编辑器那两枚的 VM 侧（T124c） ───────────────
+
+    /**
+     * 与档 ⑨ 同一条判据、换了结论的类型：编辑器那两枚半搬之后，真正落库的那一手长在 VM 的
+     * `saveCourseAndAwait` / `updateCourseAndAwait` 体内那一枚 `viewModelScope` job 里，
+     * 端出去的是**行 id**（`Long?`）而不是布尔。逐枚按签名花括号配平切出自己的函数体，在**体内**判：
+     *  1. `val job = viewModelScope.launch {` 恰好一枚，且它是体内**唯一**一枚 `launch {`；
+     *  2. 写库那一手（`savedId = saveCourse(course)`）逐字恰好一枚且整枚躺在那一枚协程体里；
+     *  3. `job.join()` 恰好一枚且在协程体**外** ⇒ 它是调用者（页 scope）那一侧的等待点；
+     *  4. `return savedId` 排在 join 之后 ⇒ 端出去的就是那一枚 job 写进局部量的结论；
+     *  5. `var savedId: Long? = null` 恰好一枚且排在 launch 之前 ⇒ 局部捕获，没升级成 VM 的属性；
+     *  6. 反向钉 `return saveCourse(course)` 那一型 0 处 —— **朝宽扭（把入口退成透传）红在这一格**。
+     */
+    @Test
+    fun `C档两枚AndAwait的VM体内 写库那一手在viewModelScope的job里且行id由它带回`() {
+        val code = blankComments(source(SCHEDULE_VIEW_MODEL))
+        for (stage in C_STAGED) {
+            val fn = blockOf(code, stage.signature, "VM 的「${stage.signature}」").text
+
+            assertEquals(
+                "${stage.label}：体内那一枚 `$B_JOB_LAUNCH` 恰好一处（实到 " +
+                    occurrences(fn, B_JOB_LAUNCH) + " 处）——这一枚 job 就是写库那一手的接收者，" +
+                    "它挂在 viewModelScope 上，编辑器那一页被 dispose 时不会被取消。" +
+                    "\n复算：grep -n 'viewModelScope.launch' app/src/main/java/$SCHEDULE_VIEW_MODEL",
+                1,
+                occurrences(fn, B_JOB_LAUNCH),
+            )
+            assertEquals(
+                "${stage.label}：体内 `$B_ANY_LAUNCH` 总数必须恰好 1（实到 " + occurrences(fn, B_ANY_LAUNCH) +
+                    " 处）：除了那一枚 viewModelScope 协程，这里不许再起第二枚协程（把接收者写回页 scope 的" +
+                    "`scope.launch` 会同时塌掉两格）",
+                1,
+                occurrences(fn, B_ANY_LAUNCH),
+            )
+            val jobAt = fn.indexOf(B_JOB_LAUNCH)
+            val jobBody = bodyOf(fn, jobAt + B_JOB_LAUNCH.length - 1, stage.label + " 的那一枚 viewModelScope 协程体")
+            assertEquals(
+                "${stage.label}：写库那一手 `${stage.jobWrite}` 在体内逐字恰好一处（实到 " +
+                    occurrences(fn, stage.jobWrite) + " 处）",
+                1,
+                occurrences(fn, stage.jobWrite),
+            )
+            assertEquals(
+                "${stage.label}：那一笔写库必须在**那一枚 job 的协程体内**（体外还漏了 " +
+                    (occurrences(fn, stage.jobWrite) - occurrences(jobBody, stage.jobWrite)) +
+                    " 笔）：枚数对而落点在体外 = 它又跟着页 scope 一起被取消",
+                1,
+                occurrences(jobBody, stage.jobWrite),
+            )
+            assertEquals(
+                "${stage.label}：`$B_JOIN` 在体内恰好一处（实到 " + occurrences(fn, B_JOIN) +
+                    " 处），且**不许在协程体内**（实到 " + occurrences(jobBody, B_JOIN) +
+                    " 处）：join 是编辑器那一侧的等待点，塞进 job 里就没人等行 id 了",
+                true,
+                occurrences(fn, B_JOIN) == 1 && occurrences(jobBody, B_JOIN) == 0,
+            )
+            assertEquals(
+                "${stage.label}：局部捕获 `$C_LOCAL_FLAG` 在体内恰好一处（实到 " +
+                    occurrences(fn, C_LOCAL_FLAG) + " 处）——它一旦升级成 VM 的属性，这一处就会从体内消失",
+                1,
+                occurrences(fn, C_LOCAL_FLAG),
+            )
+            assertEquals(
+                "${stage.label}：`$C_RETURN_FLAG` 在体内恰好一处（实到 " + occurrences(fn, C_RETURN_FLAG) + " 处）",
+                1,
+                occurrences(fn, C_RETURN_FLAG),
+            )
+            val flagAt = fn.indexOf(C_LOCAL_FLAG)
+            val joinAt = fn.indexOf(B_JOIN)
+            val returnAt = fn.indexOf(C_RETURN_FLAG)
+            assertTrue(
+                "${stage.label}：四拍次序应当是 局部捕获 → 起 job → 等 job → 端行 id：" +
+                    "\n  $C_LOCAL_FLAG@$flagAt / $B_JOB_LAUNCH@$jobAt / $B_JOIN@$joinAt / " +
+                    "$C_RETURN_FLAG@$returnAt（-1 表示那一处压根没找着）",
+                flagAt in 0 until jobAt && jobAt in 0 until joinAt && joinAt in 0 until returnAt,
+            )
+            assertEquals(
+                "${stage.label}：不许退成透传 `${stage.passthrough}`（实到 " +
+                    occurrences(fn, stage.passthrough) + " 处）。**朝宽扭就在这一格红**：直接 suspend 转调" +
+                    " = 写库那一手又落回调用者（页 scope）的上下文，本卡白做",
+                0,
+                occurrences(fn, stage.passthrough),
+            )
+        }
+    }
+
+    // ─────────────── ⑫ C 档：编辑器那两枚 body 里 composition 本地那三样 ───────────────
+
+    /**
+     * 这一档钉的是「半搬」的另一半：**编排版面全部留在页 scope**。
+     *
+     * 取法（读形状，不是行号也不是文件级计数）：编辑器里 `:128` 那枚 `val scope =
+     * rememberCoroutineScope()` 名下恰好两枚 `scope.launch {`，各自花括号配平取体，再按**写库那一手**
+     * 的字面身份（`saveCourseDraft(` / `onDelete(target)`）分档 —— 哪一枚 body 里含哪一手，那一手就是
+     * 它的身份证（含 0 处或含 2 处都直接红，因为分档本身就要求恰好一处）。
+     * 在每一枚体内判：`saving = true` / `saving = false` / `saveError = null` / 那句错误文案 /
+     * `onBack()` 各恰好一处，次序是 立旗标 → 清场 → 写库那一手 → `onBack()` → 落旗标，
+     * 且体内 `viewModel.` 恰好 0 处（编辑器的写库只经注入的 lambda，不直达 VM）。
+     * 另在文件里逐字钉住那颗 `BackHandler(enabled = isDraftDirty && !saving)` —— 它就是 `saving`
+     * 必须留在组合本地的硬理由，也是**朝窄扭（把 `saving = true` 挪出那一块）红的那一格**。
+     */
+    @Test
+    fun `编辑器两枚页scope协程体里 saving与saveError与onBack三样一字未搬 写库那一手仍在同一块体内`() {
+        val code = blankComments(source(EDITOR))
+        assertEquals(
+            "`val scope = rememberCoroutineScope()` 的声明恰好一处（本卡不动声明，那两枚落点还要挂在它上面）",
+            1,
+            occurrences(code, SCOPE_DECL),
+        )
+        val braces = launchBraces(code, "scope.launch")
+        assertEquals(
+            "编辑器 `:128` 那枚页 scope 名下必须**恰好两枚**协程（保存链 `:230` 与删除链 `:613`，实到 " +
+                braces.size + " 枚）：枚数变了就是分档的前提变了，本守卫要跟着重判",
+            2,
+            braces.size,
+        )
+        val bodies = braces.map { bodyOf(code, it, "$EDITOR 的那一枚页 scope 协程体") }
+
+        val chains = listOf(
+            Triple(C_SAVE_HAND, C_SAVE_ERROR_SAVE_COPY, "保存链（performSave 那一枚 scope.launch）"),
+            Triple(C_DELETE_HAND, C_SAVE_ERROR_DELETE_COPY, "删除链（删除确认框那颗按钮那一枚 scope.launch）"),
+        )
+        for ((hand, errorCopy, label) in chains) {
+            val hosts = bodies.filter { occurrences(it, hand) == 1 }
+            assertEquals(
+                "$label：写库那一手 `$hand` 必须在**恰好一枚**页 scope 协程体里（实到 ${hosts.size} 枚宿主，" +
+                    "盘上页 scope 协程共 ${bodies.size} 枚）：它就是这一族的身份证",
+                1,
+                hosts.size,
+            )
+            val body = hosts.first()
+            assertEquals(
+                "$label：`$C_SAVING_RAISED` 必须**仍在这同一块体内**且恰好一处（实到 " +
+                    occurrences(body, C_SAVING_RAISED) + " 处）。**朝窄扭就在这一格红**：把立旗标挪出协程体" +
+                    "（或删掉）之后，`saving` 不再由那趟操作管，那颗 `BackHandler(enabled = isDraftDirty && !saving)` " +
+                    "返回闸就在写库进行当中放行丢弃确认框 —— 这一位管的不只是底栏那句「保存中...」",
+                1,
+                occurrences(body, C_SAVING_RAISED),
+            )
+            assertEquals(
+                "$label：收尾的 `$C_SAVING_LOWERED` 同样留在体内恰好一处（实到 " +
+                    occurrences(body, C_SAVING_LOWERED) + " 处）",
+                1,
+                occurrences(body, C_SAVING_LOWERED),
+            )
+            assertEquals(
+                "$label：起手那次 `$C_SAVE_ERROR_CLEARED` 留在体内恰好一处（实到 " +
+                    occurrences(body, C_SAVE_ERROR_CLEARED) + " 处）：它与立旗标是同一次「开始一项写库操作」" +
+                    "的两半（配对本事由 CourseEditorSaveErrorClearPairingGuardTest 钉，这里钉的是**落点**）",
+                1,
+                occurrences(body, C_SAVE_ERROR_CLEARED),
+            )
+            assertEquals(
+                "$label：那句失败文案逐字一字未动（`$errorCopy` 恰好一处，实到 " +
+                    occurrences(body, errorCopy) + " 处）",
+                1,
+                occurrences(body, errorCopy),
+            )
+            assertEquals(
+                "$label：`$C_ON_BACK_CALL` 必须**仍在这同一块体内**且恰好一处（实到 " +
+                    occurrences(body, C_ON_BACK_CALL) + " 处）。它对应 MainActivity 的 " +
+                    "`$C_ON_BACK_LAMBDA`，搬进 VM 或搬进那一枚 job 就是多 pop 一格（档 ⑬ 反向钉 VM 里 0 处）",
+                1,
+                occurrences(body, C_ON_BACK_CALL),
+            )
+            assertEquals(
+                "$label：这一枚体里不许出现 `$C_VM_DIRECT`（实到 " + occurrences(body, C_VM_DIRECT) +
+                    " 处）：编辑器只经注入的 lambda 写库，页 scope 名下没有一行直达 VM",
+                0,
+                occurrences(body, C_VM_DIRECT),
+            )
+            val raisedAt = body.indexOf(C_SAVING_RAISED)
+            val clearAt = body.indexOf(C_SAVE_ERROR_CLEARED)
+            val handAt = body.indexOf(hand)
+            val backAt = body.indexOf(C_ON_BACK_CALL)
+            val loweredAt = body.indexOf(C_SAVING_LOWERED)
+            assertTrue(
+                "$label：五拍次序应当是 立旗标 → 收回上一句错 → 写库那一手 → 成功才退出 → 落旗标：" +
+                    "\n  $C_SAVING_RAISED@$raisedAt / $C_SAVE_ERROR_CLEARED@$clearAt / $hand@$handAt / " +
+                    "$C_ON_BACK_CALL@$backAt / $C_SAVING_LOWERED@$loweredAt（-1 表示那一处没找着）",
+                raisedAt in 0 until clearAt && clearAt in 0 until handAt &&
+                    handAt in 0 until backAt && backAt in 0 until loweredAt,
+            )
+        }
+
+        // 那颗返回闸：`saving` 留在组合本地的硬理由，逐字钉住
+        assertEquals(
+            "`$C_BACK_HANDLER` 必须逐字仍在（实到 " + occurrences(code, C_BACK_HANDLER) +
+                " 处）：enabled 表达式里那半句 `!saving` 读的就是这一档钉住的那枚旗标 —— " +
+                "写库那一手搬进 VM 的时候这一位**不许**跟着搬",
+            1,
+            occurrences(code, C_BACK_HANDLER),
+        )
+        // 三枚注入 lambda 的签名与返回语义（本卡只换接收者，签名一枚没动）
+        // ⚠️ onSave 那一枚在**这一枚文件里逐字出现两处**：composable 入口的形参（`:83`）与内部编排函数
+        // `saveCourseDraft` 的形参（`:699`）—— 两处必须同文，因为编辑器的页 scope 体走的是后者、
+        // MainActivity 递进去的是前者。改成 1 处 = 有人只动了一边，返回语义就分叉了。
+        assertEquals(
+            "`onSave: suspend (Course, CourseSaveOptions) -> Long?,` 应当恰好两处" +
+                "（composable 入口 + saveCourseDraft 的形参各一处，实到 " +
+                occurrences(code, C_ON_SAVE_SIGNATURE) + " 处）：本卡不许改返回语义",
+            2,
+            occurrences(code, C_ON_SAVE_SIGNATURE),
+        )
+        assertEquals(
+            "`onDelete: suspend (Course) -> Boolean,` 恰好一处（只 composable 入口有）：" +
+                "实到 " + occurrences(code, C_ON_DELETE_SIGNATURE) + " 处",
+            1,
+            occurrences(code, C_ON_DELETE_SIGNATURE),
+        )
+        assertEquals(
+            "`onSaveReminder: (Long, Boolean, Int) -> Unit = { _, _, _ -> },` 恰好一处 —— " +
+                "它**不是** suspend：本卡若为它造 `...AndAwait`，就得把这枚改成 suspend（签名变化），" +
+                "而盘面事实是它的接收者早已在 VM 的 viewModelScope 上（档 ⑬ 钉那个事实）；" +
+                "实到 " + occurrences(code, C_ON_SAVE_REMINDER_SIGNATURE) + " 处",
+            1,
+            occurrences(code, C_ON_SAVE_REMINDER_SIGNATURE),
+        )
+    }
+
+    // ─────────────── ⑬ C 档：MainActivity 那两枚 lambda 里写库那一手已换成 AndAwait ───────────────
+
+    /**
+     * 与档 ⑫ 成一对：编辑器体内那两枚字面调用之后，真正落库的那一手在 MainActivity 递进去的
+     * lambda 里，而那一手现在必须调 `...AndAwait`。
+     *  - `onSave` 那一枚：体内按 `edited.id == 0L` 分的那道流、`if (savedId != null) pendingPulseCourseId = savedId`
+     *    那一行、以及末尾原样端出的 `savedId` 都逐字仍在（**返回语义不变**），两扇门的调用名换成了
+     *    `viewModel.saveCourseAndAwait(` / `viewModel.updateCourseAndAwait(`，而裸的 `viewModel.saveCourse(` /
+     *    `viewModel.updateCourse(` 在**这一枚 lambda 体内** 0 处 ⇒ 朝宽扭（换回裸名）红在这一格；
+     *  - `onDelete` 那一枚整行逐字是 `onDelete = { viewModel.deleteCourseAndAwait(it) },`，裸的
+     *    `viewModel.deleteCourse(` 在 MainActivity 全文 0 处（这一手走的是 T124b 已经建好的那条路）；
+     *  - `onSaveReminder` 那一枚仍写 `viewModel.saveReminder(` —— 盘面事实是它在 VM 里**本来**就是
+     *    非 suspend 的 fire-and-forget（体内自己起 `viewModelScope.launch`），接收者今天不在页 scope 上，
+     *    所以本卡不为它造 AndAwait（造它就得把 `(Long, Boolean, Int) -> Unit` 改成 suspend，那是签名变化）；
+     *  - `onBack` 在 VM 全文（抹注释后）0 处、MainActivity 里那一行逐字仍在 ⇒ 那一支没被搬进协程。
+     */
+    @Test
+    fun `MainActivity两枚lambda里写库那一手已换成AndAwait而onBack与提醒那一手未跟着搬`() {
+        val code = blankComments(source(MAIN_ACTIVITY))
+        val vm = blankComments(source(SCHEDULE_VIEW_MODEL))
+        // 编辑器那一枚调用点的整段实参表：下面 onBack 那一格的落点就限定在这一块里
+        val editorCall = callArgs(code, "CourseEditorScreen(", "$MAIN_ACTIVITY 的 CourseEditorScreen 调用点")
+
+        val saveBlock = blockOf(code, C_ON_SAVE_ANCHOR, "$MAIN_ACTIVITY 的 onSave lambda").text
+        assertEquals(
+            "onSave 里那道分流逐字仍在（`$C_ON_SAVE_BRANCH` 恰好一处）：新增走 saveCourseAndAwait、" +
+                "改既有课走 updateCourseAndAwait，分流本身留在调用点没搬进 VM",
+            1,
+            occurrences(saveBlock, C_ON_SAVE_BRANCH),
+        )
+        assertEquals(
+            "新增那一支必须调 `viewModel.saveCourseAndAwait(edited)`（实到 " +
+                occurrences(saveBlock, "viewModel.saveCourseAndAwait(edited)") + " 处）",
+            1,
+            occurrences(saveBlock, "viewModel.saveCourseAndAwait(edited)"),
+        )
+        assertEquals(
+            "改既有课那一支必须调 `viewModel.updateCourseAndAwait(edited, options)`（实到 " +
+                occurrences(saveBlock, "viewModel.updateCourseAndAwait(edited, options)") + " 处）",
+            1,
+            occurrences(saveBlock, "viewModel.updateCourseAndAwait(edited, options)"),
+        )
+        assertEquals(
+            "**朝宽扭就在这一格红**：这一枚 lambda 体内不许再出现裸的 `$C_RAW_SAVE_CALL`（实到 " +
+                occurrences(saveBlock, C_RAW_SAVE_CALL) + " 处）—— 换回裸名就是写库那一手又落回" +
+                "编辑器的页 scope：切 tab / 弹栈把目的地 dispose 时取消点落在「主行已提交」与" +
+                "「提醒那一趟 / 后续那一趟」之间，库里课存了而课前铃按旧值响，界面一句都没说",
+            0,
+            occurrences(saveBlock, C_RAW_SAVE_CALL),
+        )
+        assertEquals(
+            "同一枚 lambda 体内也不许再出现裸的 `$C_RAW_UPDATE_CALL`（实到 " +
+                occurrences(saveBlock, C_RAW_UPDATE_CALL) + " 处）：改既有课那一支体内还带着" +
+                "部分周次拆行与整组换色两笔写库，搬进同一枚 job 才是整趟跑完或整趟没开始",
+            0,
+            occurrences(saveBlock, C_RAW_UPDATE_CALL),
+        )
+        assertEquals(
+            "失败/成功那两支行内语义一字未动（`$C_PULSE_LINE` 恰好一处，实到 " +
+                occurrences(saveBlock, C_PULSE_LINE) + " 处）：这枚 lambda 仍然端出 `Long?` 那个行 id",
+            1,
+            occurrences(saveBlock, C_PULSE_LINE),
+        )
+
+        assertEquals(
+            "删除那一枚 lambda 整行逐字是 `$C_ON_DELETE_LAMBDA`（实到 " +
+                occurrences(code, C_ON_DELETE_LAMBDA) + " 处）：走的是 T124b 已经建好的那条 AndAwait 路",
+            1,
+            occurrences(code, C_ON_DELETE_LAMBDA),
+        )
+        assertEquals(
+            "MainActivity 全文不许再出现裸的 `$C_RAW_DELETE_CALL`（实到 " +
+                occurrences(code, C_RAW_DELETE_CALL) + " 处）：编辑器删除链的写库接收者已经不在页 scope 上",
+            0,
+            occurrences(code, C_RAW_DELETE_CALL),
+        )
+
+        val reminderBlock = blockOf(code, C_ON_SAVE_REMINDER_ANCHOR, "$MAIN_ACTIVITY 的 onSaveReminder lambda").text
+        assertEquals(
+            "提醒那一手仍写 `viewModel.saveReminder(`（实到 " + occurrences(reminderBlock, "viewModel.saveReminder(") +
+                " 处）：它在 VM 里本来就是非 suspend 的 fire-and-forget，接收者早已在 viewModelScope 上" +
+                "（下面两格钉的就是那个事实），所以本卡不为它造 AndAwait —— 造它就得把这枚签名改成 " +
+                "suspend，那是签名变化、不是换接收者",
+            1,
+            occurrences(reminderBlock, "viewModel.saveReminder("),
+        )
+        val reminderFn = blockOf(vm, C_SAVE_REMINDER_SIG, "VM 的「$C_SAVE_REMINDER_SIG」").text
+        assertEquals(
+            "VM 的 `$C_SAVE_REMINDER_SIG` 体内那一枚 `viewModelScope.launch {` 恰好一处（实到 " +
+                occurrences(reminderFn, "viewModelScope.launch {") + " 处）—— 这就是提醒那一手**今天已经**" +
+                "不归页 scope 管的证据，也是它不需要 AndAwait 的理由",
+            1,
+            occurrences(reminderFn, "viewModelScope.launch {"),
+        )
+        assertEquals(
+            "写库那一手 `repository.saveReminder(` 仍在那一枚 job 的协程体内（实到 " +
+                occurrences(reminderFn, C_SAVE_REMINDER_REPO) + " 处）",
+            1,
+            occurrences(reminderFn, C_SAVE_REMINDER_REPO),
+        )
+
+        assertEquals(
+            "`$C_ON_BACK_LAMBDA` 那一行必须逐字仍在**编辑器那一枚调用点的实参表里**（实到 " +
+                occurrences(editorCall, C_ON_BACK_LAMBDA) + " 处）：它就是编辑器 body 里那枚 `onBack()` " +
+                    "的另一端。⚠️ 这一句在 MainActivity 全文还有另外七枚同名（别的目的地上），" +
+                    "所以本格的取法是「按 `CourseEditorScreen(` 的实参表切一块」而不是文件级计数 —— " +
+                    "文件级计数既判不到这一处、又替别人背债（本卡第一版就撞在这上面）",
+            1,
+            occurrences(editorCall, C_ON_BACK_LAMBDA),
+        )
+        assertEquals(
+            "MainActivity 里 `CourseEditorScreen(` 那一枚调用点恰好一处（实到 " +
+                occurrences(code, "CourseEditorScreen(") + " 处）——上面三格（onSave / onDelete / onBack）" +
+                "取的都是它的实参表，这一枚就是那块的身份",
+            1,
+            occurrences(code, "CourseEditorScreen("),
+        )
+        assertEquals(
+            "**`onBack` 不许搬进 VM 或搬进那一枚 job**：VM 全文（抹注释后）`onBack(` 恰好 0 处（实到 " +
+                occurrences(vm, "onBack(") + " 处）。它对应 `$C_ON_BACK_LAMBDA`，" +
+                "跟着写库进协程就是对着 navController 多 pop 一格",
+            0,
+            occurrences(vm, "onBack("),
+        )
+        assertEquals(
+            "编辑器那一枚文件里也不许出现 `viewModel.`（实到 " + occurrences(blankComments(source(EDITOR)), "viewModel.") +
+                " 处）：这一族的写法只经注入 lambda，本卡没给编辑器开一条直达 VM 的路",
+            0,
+            occurrences(blankComments(source(EDITOR)), C_VM_DIRECT),
+        )
+    }
+
     // ---------------- helpers ----------------
 
     /** 档 ①②③ 的共同判：那一枚协程在、页 scope 不在、写库笔数对、且每笔都在那一枚协程体内 */
@@ -761,6 +1219,44 @@ class WriteChainReceiverWiringGuardTest {
         val open = code.indexOf('{', at)
         assertTrue("$label 找不到开括号", open >= 0)
         return Block(code.substring(at, closeBraceOf(code, open, label) + 1), at)
+    }
+
+    /**
+     * 从 [anchor]（一枚调用点，形如 `Foo(`）那一个 `(` 起按**圆括号配平**取出整段实参表的文本。
+     *
+     * 用途是把判据**限定在那一枚调用点的实参里**：MainActivity 这种整页都是 `composable { … }` 的文件里，
+     * 同一句 `onBack = { navController.popBackStack() },` 在别的目的地上还有七枚 —— 拿文件级计数当判据
+     * 既判不到编辑器这一处（八枚里分不清谁是谁）、又替别的调用点背债（本卡第一版就撞在这上面，实到 8 处）。
+     * 字符串字面量里的括号不计（与 [blankComments] 同一套走法：认 `\` 转义、认成对的引号）。
+     */
+    private fun callArgs(code: String, anchor: String, label: String): String {
+        val at = code.indexOf(anchor)
+        assertTrue("$label 的调用点锚点没找到（改名/挪家要回来重钉本守卫）：「$anchor」", at >= 0)
+        val open = code.indexOf('(', at)
+        assertTrue("$label 找不到实参表的开括号：「$anchor」", open >= 0)
+        var depth = 0
+        var i = open
+        var inString = false
+        var escaped = false
+        while (i < code.length) {
+            val c = code[i]
+            when {
+                inString -> when {
+                    escaped -> escaped = false
+                    c == '\\' -> escaped = true
+                    c == '"' -> inString = false
+                }
+
+                c == '"' -> inString = true
+                c == '(' -> depth++
+                c == ')' -> {
+                    depth--
+                    if (depth == 0) return code.substring(open + 1, i)
+                }
+            }
+            i++
+        }
+        throw IllegalStateException("$label 的实参表圆括号没配平：「$anchor」")
     }
 
     /** [openBrace] 那枚花括号的**体内**文本（不含两侧花括号） */

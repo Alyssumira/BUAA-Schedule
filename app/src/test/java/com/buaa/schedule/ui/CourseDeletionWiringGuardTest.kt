@@ -158,11 +158,16 @@ class CourseDeletionWiringGuardTest {
      *
      * **T124b 重钉过的一格**：卡面原本钉 `viewModel.deleteCourse(` 全仓两处（编辑器 + 首页长按菜单）。
      * B 档把首页那一支换成了 `viewModel.deleteCourseAndAwait(`（写库那一手进 VM 的 viewModelScope job，
-     * `join()` 留页 scope），裸 `viewModel.deleteCourse(` 于是只剩编辑器那一处（MainActivity 的 onDelete，
-     * 那是 **T124c** 的账、本卡不许动）。两枚名字各钉一处落点与枚数：删掉任何一面都会有另一边接住。
+     * `join()` 留页 scope），裸 `viewModel.deleteCourse(` 于是不剩调用点。
+     *
+     * **T124c 又把它重钉了一遍（盘面现值）**：编辑器那一支（MainActivity 的 `onDelete`）也换成了
+     * `viewModel.deleteCourseAndAwait(` ⇒ 裸的那一枚 suspend 函数今天**零枚调用点**（它自己还在 VM 里，
+     * 由 `...AndAwait` 体内那一手调，形状钉在 `WriteChainReceiverWiringGuardTest` 档 ⑨）；
+     * `viewModel.deleteCourseAndAwait(` 的调用点于是涨到两处（首页长按菜单 + MainActivity 的编辑器入口），
+     * 全仓 `deleteCourseAndAwait(` 的定义 + 调用合起来三枚。枚数与落点仍各钉一面，删掉任何一面都有另一边接住。
      */
     @Test
-    fun `调用点册子 仓储层一处 裸删课与AndAwait各一处 枚数与落点都要对得上`() {
+    fun `调用点册子 仓储层一处 裸删课零处而AndAwait两处 枚数与落点都要对得上`() {
         val byFile = readAllMainSources().mapValues { (_, text) -> blankCommentsKeepingLiterals(text) }
 
         assertEquals(
@@ -180,27 +185,29 @@ class CourseDeletionWiringGuardTest {
             occurrences(byFile.getValue(SCHEDULE_VIEW_MODEL_NAME), VM_CALLS_REPOSITORY),
         )
         assertEquals(
-            "`viewModel.deleteCourse(`（裸的那一枚 suspend 函数）的调用点全仓恰好一处：**编辑器**" +
-                "（MainActivity 的 onDelete）。T124b 之前这里是两处（编辑器 + 首页长按菜单），" +
-                "首页那一支现在走下面那一格的 `...AndAwait`。这枚函数的签名与返回值语义本卡都没动，" +
-                "两处消费方各拿它做什么由第 ④ 层钉：" + filesHint(byFile, VM_CALL_SITE),
-            listOf(MAIN_ACTIVITY_NAME),
+            "`viewModel.deleteCourse(`（裸的那一枚 suspend 函数）的调用点全仓**零处**：T124b 收了首页" +
+                "长按菜单那一支、T124c 收了 MainActivity 的编辑器入口那一支（`onDelete` 现在写 " +
+                "`viewModel.deleteCourseAndAwait(it)`）⇒ 盘上不该再有裸调用点。**长出任何一枚都红** —— " +
+                "那意味着又有一条链把「删库 → 压撤销条目 → 重排课前铃与桌面组件」挂回了组合期：" +
+                filesHint(byFile, VM_CALL_SITE),
+            emptyList<String>(),
             byFile.filter { occurrences(it.value, VM_CALL_SITE) > 0 }.keys.toList(),
         )
         assertEquals(
-            "`viewModel.deleteCourseAndAwait(` 的调用点全仓恰好一处：**首页长按菜单**（HomeScreen 的 " +
-                "handleCourseDelete）。**朝窄扭（把调用点换回裸 `deleteCourse(`）红在这一格** —— " +
-                "那一支的协程接收者是 `rememberCoroutineScope()`，换回去就等于把写库那一手" +
-                "（删库 → 压撤销条目 → 重排课前铃与桌面组件）重新挂回组合期上：" +
+            "`viewModel.deleteCourseAndAwait(` 的调用点全仓恰好两处：**首页长按菜单**（HomeScreen 的 " +
+                "handleCourseDelete，T124b）+ **MainActivity 的编辑器入口**（`onDelete`，T124c）。" +
+                "**朝窄扭（把任一处调用点换回裸 `deleteCourse(`）红在这一格** —— 那两处的协程接收者都是 " +
+                "`rememberCoroutineScope()`，换回去就等于把写库那一手重新挂回组合期上：" +
                 filesHint(byFile, VM_AND_AWAIT_CALL_SITE),
-            listOf(HOME_SCREEN_NAME),
-            byFile.filter { occurrences(it.value, VM_AND_AWAIT_CALL_SITE) > 0 }.keys.toList(),
+            listOf(HOME_SCREEN_NAME, MAIN_ACTIVITY_NAME),
+            byFile.filter { occurrences(it.value, VM_AND_AWAIT_CALL_SITE) > 0 }.keys.toList().sorted(),
         )
         assertEquals(
-            "全仓 `deleteCourseAndAwait(` 的定义与调用点合起来恰好两枚（VM 定义一处 + 首页一处），" +
-                "且**枚数**不能靠换文件蒙过去（落点由上一格钉）：长出第二枚调用点 = 又多一条链" +
-                "在页 scope 上等这枚结论，它得连同第 ④ 层一起重判：" + filesHint(byFile, AND_AWAIT_NEEDLE),
-            2,
+            "全仓 `deleteCourseAndAwait(` 的定义与调用点合起来恰好三枚（VM 定义一处 + 首页一处 + 编辑器入口" +
+                "一处，T124c 之前是两枚），且**枚数**不能靠换文件蒙过去（落点由上一格钉）：长出第四枚 = " +
+                "又多一条链在页 scope 上等这枚结论，它得连同第 ④ 层一起重判：" +
+                filesHint(byFile, AND_AWAIT_NEEDLE),
+            3,
             byFile.values.sumOf { occurrences(it, AND_AWAIT_NEEDLE) },
         )
         assertEquals(
@@ -272,8 +279,8 @@ class CourseDeletionWiringGuardTest {
         val code = blankCommentsKeepingLiterals(raw)
         assertEquals(
             "编辑器入口的签名 `onDelete: suspend (Course) -> Boolean,` 必须还在：MainActivity 那个" +
-                "`onDelete = { viewModel.deleteCourse(it) }` 就是按它接的。改成 Unit 就等于把" +
-                "“删没删到”这条真相从编辑页拿掉",
+                "`$MAIN_ACTIVITY_ON_DELETE` 就是按它接的（T124c 把这一手换成了 `...AndAwait`，" +
+                "签名与返回语义一个字没动）。改成 Unit 就等于把“删没删到”这条真相从编辑页拿掉",
             1,
             occurrences(code, EDITOR_PARAM_TYPE),
         )
@@ -299,7 +306,9 @@ class CourseDeletionWiringGuardTest {
             launch.contains(EDITOR_ON_BACK),
         )
         assertEquals(
-            "MainActivity 那处 `onDelete = { viewModel.deleteCourse(it) }` 也应当恰好一处",
+            "MainActivity 那处 `$MAIN_ACTIVITY_ON_DELETE` 也应当恰好一处（T124c 之后它写的是 " +
+                "`...AndAwait` 那一枚，编辑器删除链的写库接收者已经不在页 scope 上；" +
+                "换回裸名会同时红掉 WriteChainReceiverWiringGuardTest 的档 ⑬ 与上面那一格枚数册子）",
             1,
             occurrences(blankCommentsKeepingLiterals(readMainSource(MAIN_ACTIVITY)), MAIN_ACTIVITY_ON_DELETE),
         )
@@ -599,7 +608,7 @@ class CourseDeletionWiringGuardTest {
         const val EDITOR_IF_ON_DELETE = "if (onDelete(target)) {"
         const val EDITOR_ERROR_COPY = "saveError = \"删除失败，请重试\""
         const val EDITOR_ON_BACK = "onBack()"
-        const val MAIN_ACTIVITY_ON_DELETE = "onDelete = { viewModel.deleteCourse(it) }"
+        const val MAIN_ACTIVITY_ON_DELETE = "onDelete = { viewModel.deleteCourseAndAwait(it) }"
 
         // ⑤ 内核
         const val KERNEL_PREDICATE = "internal fun deletionRemovedSomething("
