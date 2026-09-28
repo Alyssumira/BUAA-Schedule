@@ -96,7 +96,8 @@ class ConflictShiftWeekScopeWiringGuardTest {
                 Regex("""onApplyShift\s*=\s*\{\s*target,\s*newPeriods,\s*groupWeeks\s*->""")
                     .containsMatchIn(code),
             )
-            // 那一枚 lambda 自己不许夹带写库：HomeScreen 另有拖拽那条 updateCourse（:424-442），
+            // 那一枚 lambda 自己不许夹带写库：HomeScreen 另有拖拽那条 updateCourse（:463-472），
+            // 本行原写 :424-442 —— 那是这张卡之前就漂了的旧数，T124a① 又把它顶了 7 行，顺带订正。
             // 那是「整门课都挪」的另一件事，本卡不动它，所以只掐向导这一支
             val at = code.indexOf("onApplyShift")
             assertTrue("$relative 找不到 onApplyShift 那一句", at >= 0)

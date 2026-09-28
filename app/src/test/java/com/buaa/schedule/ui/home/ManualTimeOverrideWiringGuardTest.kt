@@ -161,7 +161,7 @@ class ManualTimeOverrideWiringGuardTest {
             "拖课那一记 copy 里三行必须齐全且按「dayOfWeek → periods → isManualOverride」次序。" +
                 "\n  实到（$MOVE_COPY_ANCHOR 之后）：" + args.trim().replace(Regex("""\s+"""), " ") +
                 "\n  起手在 L" + lineOf(raw, raw.indexOf(MOVE_COPY_ANCHOR)) +
-                "\n复算：sed -n '447,451p' app/src/main/java/com/buaa/schedule/ui/home/HomeScreen.kt\n" +
+                "\n复算：sed -n '448,452p' app/src/main/java/com/buaa/schedule/ui/home/HomeScreen.kt\n" +
                 "少了旗标 = 这一次挪动改了 courseKey 的两维 ⇒ 下次教务刷新整行按原时刻冲回来，" +
                 "并且挂在它上面的提醒被 deleteRemindersOfDroppedCourses 一起删掉。" +
                 "次序也算：把旗标放到 copy 之外（另一记 copy 里）就是本守卫要防的「枚数对但落点错」",
@@ -453,7 +453,7 @@ class ManualTimeOverrideWiringGuardTest {
             "判据调用缺了具名实参：" + missing.joinToString { "「$it」" } +
                 "（实到 " + args.trim().replace(Regex("""\s+"""), " ") + "）" +
                 "\n  起手在 L" + lineOf(raw, raw.indexOf(MOVE_JUDGE_ANCHOR)) +
-                "\n复算：sed -n '440,446p' app/src/main/java/com/buaa/schedule/ui/home/HomeScreen.kt\n" +
+                "\n复算：sed -n '441,447p' app/src/main/java/com/buaa/schedule/ui/home/HomeScreen.kt\n" +
                 "五枚缺一不可：少了 `originalIsManualOverride` 就是丢掉粘住（一次空操作把编辑器早已" +
                 "标过的行洗回 false）；少了 original 那一侧就无从比对；换成常量就是本档最后一判要拦的",
             order.distinct().size == 5 && order == order.sorted(),
