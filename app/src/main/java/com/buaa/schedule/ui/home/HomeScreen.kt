@@ -498,7 +498,7 @@ fun HomeScreen(
     val handleCourseDelete: (Course) -> Unit = remember(viewModel, scope, snackbarHostState) {
         { course ->
             scope.launch {
-                val deleted = viewModel.deleteCourse(course)
+                val deleted = viewModel.deleteCourseAndAwait(course)
                 val result = snackbarHostState.showSnackbar(
                     message = if (deleted) "已删除「${course.displayName}」" else "删除失败：${course.displayName} 还在课表里",
                     actionLabel = "撤销".takeIf { deleted },

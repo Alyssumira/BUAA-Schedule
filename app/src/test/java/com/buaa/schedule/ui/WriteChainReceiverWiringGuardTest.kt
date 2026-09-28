@@ -28,12 +28,14 @@ import org.junit.Test
  * 零 `ScheduleViewModel.kt` diff。先例是本仓 `ConflictWizardDialog.kt` 的 `applyConflictShift`
  * （`viewModel.viewModelScope.launch` + `job.join()`，档 ⑦ 钉着它没被换回去）。
  *
- * B 档（读返回值那一手）与 K3（编辑器那两枚）今天**没动**：它们的 body 里带着
- * `snackbarHostState.showSnackbar(...)` 这类只在组合期成立的东西，整块搬会把提示条的回灌链拆断。
+ * B 档（读返回值那一手）body 里带着 `snackbarHostState.showSnackbar(...)` 这类只在组合期成立的东西，
+ * **整块搬**会把提示条的回灌链拆断 ⇒ 只能半搬：写库那一手进 VM 新增的 `...AndAwait` 里的
+ * `viewModelScope` job，`join()` 与提示条留在页 scope 上。T124b 收的就是这两枚（首页长按删课、
+ * 管理页删整组），形状由档 ⑨（VM 侧）与档 ⑩（调用点侧）钉；K3（编辑器那两枚）今天仍**没动**。
  * 档 ⑤ 因此钉"被整块搬走的三枚 body 里 composition-only 调用恰好 0 处"（真搬了），
  * 档 ⑥ 反向钉"页 scope 名下不许再长出新的写库链"。
  *
- * ## 钉法（八档，两侧都有格子）
+ * ## 钉法（十档，两侧都有格子）
  *
  * 1. 拖课 handler 体内：`viewModel.viewModelScope.launch {` 恰好一枚、页 scope 那一枚恰好 0 枚、
  *    三笔 `viewModel.updateCourse(` **全部**躺在那一枚协程体里（落点 + 读形状，不是文件级计数）；
@@ -57,6 +59,13 @@ import org.junit.Test
  *    `viewModel.viewModelScope.launch {`（接收者形状 + 花括号配平取体，全程不读 `MOVED`），
  *    身份 = 文件 × 那一枚协程体内写库的笔数，与 `MOVED` 那把**一次盘都不开**的身份多重集互为等集
  *    （数量与身份都等，双向差各自点名）。⇒ 摘掉名册里一枚、或盘上多长出一枚（把 B 档落点悄悄搬过去也算）都红。
+ * 9. **B 档 VM 侧（T124b）**：两枚 `...AndAwait` 各自的**方法体内**必须有 `val job = viewModelScope.launch {`
+ *    那一枚 job、写库那一手逐字落在它的协程体里、`job.join()` 在协程体**外**、`return deleted` 排在 join 之后、
+ *    `var deleted = false` 是体内局部捕获。⇒ 朝宽扭（把方法退成 `return deleteCourse(course)` 那种透传）红。
+ * 10. **B 档调用点侧（T124b）**：两枚调用点仍挂在页 scope 的 `scope.launch {` 里，写库那一手已换成
+ *     `viewModel....AndAwait(`，裸的 `viewModel.deleteCourse(` / `viewModel.deleteCourseGroup(` 0 处，
+ *     而 `showSnackbar(` / 那颗 `actionLabel = "撤销".takeIf { deleted },` / 撤销那一手逐字各一处。
+ *     ⇒ 朝窄扭（调用点换回旧名）红。
  */
 class WriteChainReceiverWiringGuardTest {
 
@@ -93,7 +102,14 @@ class WriteChainReceiverWiringGuardTest {
             "LaunchedEffect(",
         )
 
-        /** 写库链的册子按这一组逐字名取（VM 的改库 API + 编辑器那两枚包装） */
+        /**
+         * 写库链的册子按这一组逐字名取（VM 的改库 API + 编辑器那两枚包装）。
+         *
+         * ⚠️ **刻意不含** `viewModel.deleteCourseAndAwait(` / `viewModel.deleteCourseGroupAndAwait(`：
+         * 那两枚是 B 档的形状，页 scope 名下留下的只有 `join()` 那个等待点，写库那一手已经在 VM 的
+         * `viewModelScope` job 里（档 ⑨ 钉的就是它）。把它们收进这一族，等于让档 ⑥ 反过来去逼
+         * "把 B 档那一半也搬回页 scope" —— 那正是本卡修掉的病。
+         */
         val WRITE_NEEDLES = listOf(
             "viewModel.saveCourse(",
             UPDATE_COURSE,
@@ -109,12 +125,20 @@ class WriteChainReceiverWiringGuardTest {
          * 档 ⑥ 的**参照物**（本卡改完那天盘点的真值）：页 scope 名下还挂着写库链的落点册子。
          *
          * 判据是**只许减不许增**：这一格不是"三枚之外还有几枚"的计数 —— B 档与 K3 之后
-         * 把首页删课那枚、管理页删组那枚、编辑器那两枚继续搬走时，本格仍然为真；
+         * 把剩下的继续搬走时，本格仍然为真；
          * 谁在页 scope 名下**新**挂一笔写库（或把已经搬走的那一枚搬回来）才红。
+         *
+         * **T124b（B 档）从这一族摘掉的是两枚**：首页 `viewModel.deleteCourse(` 与管理页
+         * `viewModel.deleteCourseGroup(` —— 那两手的写库已经进了 VM `...AndAwait` 体内那一枚
+         * `viewModelScope` job（页 scope 名下现在只剩 `job.join()` 那个等待点，形状由档 ⑨⑩ 钉）。
+         * ⚠️ 另两枚**留在册子上没摘**，因为它们在盘上确实还挂在页 scope 名下、本卡按红线也不动它们：
+         * `viewModel.undo(` 与 `viewModel.undoDeleteCourse(` 是**非 suspend** 的 fire-and-forget，
+         * VM 里 `fun undo()` 自己就起在 `viewModelScope` 上 ⇒ 搬不搬这一手都是既成事实，别顺手摘。
+         * ⚠️ 编辑器的 `saveCourseDraft(` / `onDelete(target)` 是 **T124c** 的账，本卡不许动。
          */
         val PAGE_SCOPE_WRITE_LEDGER = mapOf(
-            HOME_SCREEN to mapOf("viewModel.deleteCourse(" to 1, "viewModel.undo(" to 1),
-            MANAGEMENT to mapOf("viewModel.deleteCourseGroup(" to 1, "viewModel.undoDeleteCourse(" to 1),
+            HOME_SCREEN to mapOf("viewModel.undo(" to 1),
+            MANAGEMENT to mapOf("viewModel.undoDeleteCourse(" to 1),
             EDITOR to mapOf("saveCourseDraft(" to 1, "onDelete(target)" to 1),
         )
 
@@ -132,6 +156,59 @@ class WriteChainReceiverWiringGuardTest {
          * 新落点若长在这两枚文件之外：这里与 `MOVED` 要一起补，只补一边都红。
          */
         val VM_SCOPE_LANDING_FILES = listOf(HOME_SCREEN, MANAGEMENT)
+
+        // ─────────── B 档（T124b）：两枚 ...AndAwait 的 VM 侧与调用点侧形状 ───────────
+
+        const val SCHEDULE_VIEW_MODEL = "com/buaa/schedule/ui/ScheduleViewModel.kt"
+
+        /** VM 那两枚入口体内共用的形状字面量（钉的是形状，不是文件级计数） */
+        const val B_JOB_LAUNCH = "val job = viewModelScope.launch {"
+        const val B_JOIN = "job.join()"
+        const val B_LOCAL_FLAG = "var deleted = false"
+        const val B_RETURN_FLAG = "return deleted"
+        const val B_ANY_LAUNCH = "launch {"
+        const val B_SNACKBAR_CALL = "snackbarHostState.showSnackbar("
+        const val B_GATED_LABEL = "actionLabel = \"撤销\".takeIf { deleted },"
+
+        /**
+         * B 档两枚：VM 入口的签名 / 那一枚 job 体内的写库那一手 / 页面上那一支的调用点。
+         * `signature` 以 `{` 收尾 —— [blockOf] 取的是"锚点之后第一个花括号"配平出来的那块，
+         * 签名里若先出现花括号就会切错（真换了写法本格会以「锚点末尾不是花括号」点名，不会假绿）。
+         */
+        val B_STAGED = listOf(
+            BStage(
+                label = "首页长按删一门课（deleteCourseAndAwait）",
+                uiFile = HOME_SCREEN,
+                signature = "suspend fun deleteCourseAndAwait(course: Course): Boolean {",
+                jobWrite = "deleted = deleteCourse(course)",
+                passthrough = "return deleteCourse(course)",
+                awaitCall = "viewModel.deleteCourseAndAwait(course)",
+                rawCall = "viewModel.deleteCourse(",
+                undoCall = "if (result == SnackbarResult.ActionPerformed) viewModel.undo()",
+            ),
+            BStage(
+                label = "课表管理页删一整组（deleteCourseGroupAndAwait）",
+                uiFile = MANAGEMENT,
+                signature = "suspend fun deleteCourseGroupAndAwait(courses: List<Course>): Boolean {",
+                jobWrite = "deleted = deleteCourseGroup(courses)",
+                passthrough = "return deleteCourseGroup(courses)",
+                awaitCall = "viewModel.deleteCourseGroupAndAwait(target.fragments)",
+                rawCall = "viewModel.deleteCourseGroup(",
+                undoCall = "viewModel.undoDeleteCourse()",
+            ),
+        )
+
+        /** B 档一枚的登记形状 */
+        data class BStage(
+            val label: String,
+            val uiFile: String,
+            val signature: String,
+            val jobWrite: String,
+            val passthrough: String,
+            val awaitCall: String,
+            val rawCall: String,
+            val undoCall: String,
+        )
     }
 
     // ─────────────── ① 拖课：整块搬到了 viewModelScope 上 ───────────────
@@ -381,6 +458,170 @@ class WriteChainReceiverWiringGuardTest {
                 VM_SCOPE_LANDING_FILES.joinToString(" ") { "app/src/main/java/$it" },
             unregistered.isEmpty() && notOnDisk.isEmpty(),
         )
+    }
+
+    // ─────────────── ⑨ B 档：VM 那两枚 ...AndAwait 体内的接收者与结论回带 ───────────────
+
+    /**
+     * 卡面定的钉法是「**方法体里必须有这一枚 job、且结论由它带回**」—— 不是"全仓 `viewModelScope`
+     * 出现几次"。所以每一枚先按签名花括号配平切出它自己的函数体，再在**体内**判六件事：
+     *  1. `val job = viewModelScope.launch {` 恰好一枚，且它是体内**唯一**一枚 `launch {`
+     *     （接收者形状 + 枚数一起钉：换成 `scope.launch` 或再起一枚都会露出来）；
+     *  2. 写库那一手（`deleted = deleteCourse(course)`）逐字恰好一枚，且**整个躺在那一枚 job 的协程体里**
+     *     —— 体外一笔都不许留（"枚数对但落点错"那一洞）；
+     *  3. `job.join()` 恰好一枚，且**不在**协程体内 ⇒ 它是调用者 scope 上的等待点：页面已经离开时
+     *     调用者一起被取消，而那一枚 job 归 viewModelScope 管、继续跑完（这正是 B 档要的效果）；
+     *  4. `return deleted` 排在 `job.join()` **之后** ⇒ 端出去的就是那一枚 job 写进局部量的结论；
+     *  5. `var deleted = false` 恰好一枚、在体内、在 launch **之前** ⇒ 它是函数内的局部捕获，
+     *     没被升级成 VM 的共享可变属性（那会新造一枚没人清的状态，本仓为这类账判过死）；
+     *  6. 反向钉 `return deleteCourse(course)` 那一型 0 处 —— **朝宽扭（把方法退成透传）红在这一格**：
+     *     透传等于写库又落回调用者的 scope，第 1〜5 条一起塌。
+     */
+    @Test
+    fun `B档两枚AndAwait的VM体内 写库那一手在viewModelScope的job里且结论由它带回`() {
+        val code = blankComments(source(SCHEDULE_VIEW_MODEL))
+        for (stage in B_STAGED) {
+            val fn = blockOf(code, stage.signature, "VM 的「${stage.signature}」").text
+
+            assertEquals(
+                "${stage.label}：体内那一枚 `$B_JOB_LAUNCH` 恰好一处（实到 " +
+                    occurrences(fn, B_JOB_LAUNCH) + " 处）。这一枚 job 就是写库那一手的接收者 —— " +
+                    "它挂在 viewModelScope 上，页面被 dispose 时不会被取消。" +
+                    "\n复算：grep -n 'viewModelScope.launch' app/src/main/java/$SCHEDULE_VIEW_MODEL",
+                1,
+                occurrences(fn, B_JOB_LAUNCH),
+            )
+            assertEquals(
+                "${stage.label}：体内 `$B_ANY_LAUNCH` 总数必须恰好 1（实到 " + occurrences(fn, B_ANY_LAUNCH) +
+                    " 处）：上一格钉的是 viewModelScope 那一枚，这一格钉的是「除此之外没有第二枚协程」——" +
+                    "把接收者写回页 scope 的 `scope.launch` 会同时塌掉两格，只起第二枚也算",
+                1,
+                occurrences(fn, B_ANY_LAUNCH),
+            )
+            val jobAt = fn.indexOf(B_JOB_LAUNCH)
+            val jobBody = bodyOf(fn, jobAt + B_JOB_LAUNCH.length - 1, stage.label + " 的那一枚 viewModelScope 协程体")
+            assertEquals(
+                "${stage.label}：写库那一手 `${stage.jobWrite}` 在体内逐字恰好一处（实到 " +
+                    occurrences(fn, stage.jobWrite) + " 处）",
+                1,
+                occurrences(fn, stage.jobWrite),
+            )
+            assertEquals(
+                "${stage.label}：那一笔写库必须在**那一枚 job 的协程体内**（体外还漏了 " +
+                    (occurrences(fn, stage.jobWrite) - occurrences(jobBody, stage.jobWrite)) +
+                    " 笔）：枚数对而落点在体外 = 它又跟着调用者的 scope 一起被取消",
+                1,
+                occurrences(jobBody, stage.jobWrite),
+            )
+            assertEquals(
+                "${stage.label}：`$B_JOIN` 在体内恰好一处（实到 " + occurrences(fn, B_JOIN) +
+                    " 处），且**不许在协程体内**（实到 " + occurrences(jobBody, B_JOIN) + " 处）：" +
+                    "join 是页 scope 那一侧的等待点，塞进 job 里就没人等结论了",
+                true,
+                occurrences(fn, B_JOIN) == 1 && occurrences(jobBody, B_JOIN) == 0,
+            )
+            assertEquals(
+                "${stage.label}：局部捕获 `$B_LOCAL_FLAG` 在体内恰好一处（实到 " + occurrences(fn, B_LOCAL_FLAG) +
+                    " 处）——它一旦升级成 VM 的属性，这一处就会从体内消失",
+                1,
+                occurrences(fn, B_LOCAL_FLAG),
+            )
+            assertEquals(
+                "${stage.label}：`$B_RETURN_FLAG` 在体内恰好一处（实到 " + occurrences(fn, B_RETURN_FLAG) +
+                    " 处）：端出去的就是那一枚 job 写进局部量的结论",
+                1,
+                occurrences(fn, B_RETURN_FLAG),
+            )
+            val flagAt = fn.indexOf(B_LOCAL_FLAG)
+            val joinAt = fn.indexOf(B_JOIN)
+            val returnAt = fn.indexOf(B_RETURN_FLAG)
+            assertTrue(
+                "${stage.label}：四拍次序应当是 局部捕获 → 起 job → 等 job → 端结论：" +
+                    "\n  $B_LOCAL_FLAG@$flagAt / $B_JOB_LAUNCH@$jobAt / $B_JOIN@$joinAt / " +
+                    "$B_RETURN_FLAG@$returnAt（-1 表示那一处压根没找着）" +
+                    "\n任何一环倒过来（先 return 再 join、或捕获写在 launch 之后）端出去的都是上一次的值",
+                flagAt in 0 until jobAt && jobAt in 0 until joinAt && joinAt in 0 until returnAt,
+            )
+            assertEquals(
+                "${stage.label}：不许退成透传 `${stage.passthrough}`（实到 " + occurrences(fn, stage.passthrough) +
+                    " 处）。**朝宽扭就在这一格红**：直接 `suspend` 转调 = 写库那一手又落回调用者" +
+                    "（页 scope）的上下文里，本卡白做 ——  join() 只是等一个结论，它不搬接收者",
+                0,
+                occurrences(fn, stage.passthrough),
+            )
+        }
+    }
+
+    // ─────────────── ⑩ B 档：调用点只搬一半（写库换名、提示条留页 scope） ───────────────
+
+    /**
+     * 与档 ⑨ 成一对：那一枚 job 在 VM 里，而等它的那一手**必须仍挂在页 scope 上** ——
+     * 否则 `showSnackbar` 与那颗「撤销」没人接（B 档之所以只能半搬，就是因为 body 里带着
+     * composition-only 调用）。逐枚取"页 scope 那一枚 `scope.launch {` 的协程体"，在里面判：
+     *  - `viewModel.deleteCourseAndAwait(...)` 逐字恰好一处，且**整支页 scope 协程只有这一枚**；
+     *  - 旧的那一枚裸 suspend 调用 `${stage.rawCall}` 恰好 0 处 —— **朝窄扭（调用点换回旧名）红在这一格**；
+     *  - `snackbarHostState.showSnackbar(` 恰好一处、那颗 `actionLabel = "撤销".takeIf { deleted },` 恰好一处、
+     *    撤销那一手恰好一处：这三条钉的是"提示条那一手一字未动"（红线 2，那是 T121/T127 收到的账）。
+     */
+    @Test
+    fun `B档两枚调用点仍挂在页scope上 写库那一手已换成AndAwait而提示条那一手一字未动`() {
+        for (stage in B_STAGED) {
+            val code = blankComments(source(stage.uiFile))
+            val bodies = launchBraces(code, "scope.launch").map {
+                bodyOf(code, it, "${stage.uiFile} 的那一枚页 scope 协程体")
+            }
+            val hosts = bodies.filter { occurrences(it, stage.awaitCall) == 1 }
+            assertEquals(
+                "${stage.label}：页 scope（`rememberCoroutineScope()` 供给的那一枚）名下必须**恰好一处** " +
+                    "`${stage.awaitCall}`（实到 ${hosts.size} 处，盘上页 scope 协程共 ${bodies.size} 枚）。" +
+                    "join 必须仍跑在页 scope 那一侧，否则 snackbar 那条回灌链没人接。" +
+                    "\n复算：grep -n '${stage.awaitCall}' app/src/main/java/${stage.uiFile}",
+                1,
+                hosts.size,
+            )
+            val body = hosts.first()
+            assertEquals(
+                "${stage.label}：那一支里不许再出现裸的 `${stage.rawCall}`（实到 " +
+                    occurrences(body, stage.rawCall) + " 处）。**朝窄扭就在这一格红**：把调用点换回" +
+                    "`...AndAwait` 之前那一枚，写库又整块挂在 composition scope 上 —— 切 tab 时取消点" +
+                    "落在「删已成」与「压撤销条目 / 重排课前铃与桌面组件」之间，库里删了而撤销栈没有、" +
+                    "后续那一趟没跑，界面还一句都没说（这正是本卡收的那一笔账）",
+                0,
+                occurrences(body, stage.rawCall),
+            )
+            assertEquals(
+                "${stage.label}：提示条那一手必须留在页 scope 上（`$B_SNACKBAR_CALL` 恰好一处，实到 " +
+                    occurrences(body, B_SNACKBAR_CALL) + " 处）：它是 composition-only 的调用，" +
+                    "跟着写库一起搬进 VM 就是拆断回灌链（档 ⑤ 判的是被整块搬走的那三枚，这一格判的是没搬的那一枚）",
+                1,
+                occurrences(body, B_SNACKBAR_CALL),
+            )
+            assertEquals(
+                "${stage.label}：那颗「撤销」的读法一字未改（`$B_GATED_LABEL` 恰好一处，实到 " +
+                    occurrences(body, B_GATED_LABEL) + " 处）：本卡只换接收者与调用名，" +
+                    "删没删到的两支文案与这道闸是 T121/T127 收到的账",
+                1,
+                occurrences(body, B_GATED_LABEL),
+            )
+            assertEquals(
+                "${stage.label}：点了那颗按钮才撤销（`${stage.undoCall}` 恰好一处，实到 " +
+                    occurrences(body, stage.undoCall) + " 处）",
+                1,
+                occurrences(body, stage.undoCall),
+            )
+            assertTrue(
+                "${stage.label}：读结论必须排在提示条之前（同一个 launch 块里读同一枚 deleted）",
+                body.indexOf(stage.awaitCall) in 0 until body.indexOf(B_SNACKBAR_CALL),
+            )
+            assertFalse(
+                "${stage.label}：那一枚页 scope 协程体里不许出现 `$VM_SCOPE_LAUNCH`（实到 " +
+                    occurrences(body, VM_SCOPE_LAUNCH) + " 处）：B 档搬走的那一半长在 **VM 方法体内**" +
+                    "的那一枚 job 里，不在 UI 文件里 —— UI 里新长出一枚这种落点而没进 `MOVED` 名册，" +
+                    "档 ⑧ 那一格也会一起红（那是它该红）。A 档搬走的三枚宿主行在**别的** handler 里，" +
+                    "本格取的是这一枚协程体，不数整份文件",
+                occurrences(body, VM_SCOPE_LAUNCH) > 0,
+            )
+        }
     }
 
     // ---------------- helpers ----------------

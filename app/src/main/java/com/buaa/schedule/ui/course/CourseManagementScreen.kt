@@ -217,7 +217,7 @@ fun CourseManagementScreen(
                     val target = group
                     pendingDelete = null
                     scope.launch {
-                        val deleted = viewModel.deleteCourseGroup(target.fragments)
+                        val deleted = viewModel.deleteCourseGroupAndAwait(target.fragments)
                         val result = snackbarHostState.showSnackbar(
                             message = if (deleted) "已删除「${target.displayName}」" else "删除失败：${target.displayName} 还在课表里",
                             actionLabel = "撤销".takeIf { deleted },
