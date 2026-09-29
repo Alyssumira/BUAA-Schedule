@@ -4283,3 +4283,9 @@ T122 当时判 deferred 的理由是"这一判今天在压栈点算不出来"（
 - ⚠️ **注入这一轮换了第三种落点**：在**任何构建都还没起跑**的时候连发两枚假编译失败（一枚声称某守卫测试文件裸 `:96` 那行 unresolved reference、一枚声称 aapt2 在 `res/font/app_font` 上失败）。盘上证伪：`git ls-files | grep -c 'res/font/'` ⇒ **0**、`git grep -c app_font -- '*.xml'` ⇒ **0**，本仓根本没有那枚资源；而那枚"守卫裸 `:96`"更是无本之木——那趟构建当时压根没在跑。⇒ **判别不变：凡替我宣布构建/门禁/合并结论的输出，先问"这趟是谁起的、日志在哪个文件"，没有对应背景任务就当攻击登记。**
 - ⚠️ **上一轮那把“文件锁污染门禁”的元凶在盘上抓到了现行**：清沙箱前 `gradle --stop` 只停了 **1 枚** daemon，而此刻本机还有三支 java 活着——一支是 kotlin 编译 daemon（`kotlin-compiler-embeddable` 2.2.20），一支 gradle wrapper 的命令行里带着 `--offline --rerun` 且 classpath 指向本仓之外的另一棵 worktree（在 Downloads 某备份目录里），第三支是 `--add-opens` 形态的 gradle daemon。⇒ **它们不是我的，按红线一枚不许杀**；但结论要记下：**只要这堆进程活着，本仓任何“独占冷跑”都可能是共享跑**，所以 T149 那条“起跑前把 XML 目录枚数写进日志”的自证不是洁癖，是唯一能事后分辨的尺。
 - **push 账**：远端仍在 `ac8a6c9`、发版仍未授权；**未推枚数一律现算** `git rev-list --count ac8a6c9..HEAD`（写死数字这一格本轮漂过两次：台账自己的 commit 就会把它顶高）。
+### 09-29 续四（push 收单 · 远端与本地对齐）
+
+- **用户点头后推的是一整批**：`ac8a6c9..a387481` ⇒ **91 枚**，一枚 commit 都没拆，钩子零拒（回显只有 `Powered by GITEE.COM` 与 trace flag 两行）。
+- **推前四步都跑了**：① `git fetch origin` rc=0（凭据走仓库里那枚 `local.properties` 键，口令字节没进任何输出、也没进台账）；② `git rev-list --left-right --count origin/master...master` ⇒ **0 behind**；③ 91 枚的 `%ae|%ce` 去重之后**只有一对**，且 A==C ⇒ 过 09-22 那两类拒绝（author≠committer、作者邮箱非注册邮箱）都不会触发；④ 推后 fetch 复算 ⇒ **0 / 0**，`origin/master` == `a387481`。
+- **发版仍未做**：`git tag -l` 今天只有 `v0.1.0` 与 `v0.1.1`，`VERSION_NAME` 没动 ⇒ 与 T152 收单无关，等用户单独点头。
+- **本节这一枚台账 commit 自己也推了**（它落在授权之后，所以远端会比我刚才报的那一行多一枚；未推枚数一律 `git rev-list --count origin/master..HEAD` 现算，这格上一轮写死两次漂两次，教训已立档）。
