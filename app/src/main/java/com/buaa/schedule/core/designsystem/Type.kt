@@ -107,6 +107,12 @@ val ScheduleTypography = Typography(
     // labelMedium 的别名：与它逐字段相同，保留只为钉住 M3 默认的 11sp 静默降级
     // （不定义就会有一路文字悄悄掉到 11sp）。调用点已全部迁到 labelMedium（②V-08），
     // 新代码不要再选它——两个名字一个样式，选哪个纯凭手感就是这么来的。
+    //
+    // 这句"已全部迁完"不是靠自觉维持的：TypographyAliasGuardTest 逐行扫 app/src/main/java
+    // 里的排版取用，任何读这一槽的调用点都会让它红，并点名文件 + 行号 + 整行原文。
+    // 直取（MaterialTheme.typography 后面接槽名）和先把 typography 存进局部 val 再取槽，
+    // 两种写法都在射程里。唯一被排除的是下面这一枚定义本身——别名一删，
+    // M3 组件内部（NavigationBar 等）读它的那一路就掉回默认 11sp。
     labelSmall = TextStyle(
         fontWeight = FontWeight.Medium,
         fontSize = 12.sp,
