@@ -21,6 +21,26 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
 /**
+ * 色板「此处还没有颜色」那颗占位点的取色——**唯一来源**。
+ *
+ * 收口前同一件事有两页两种灰：设置页「主题种子色 / 默认」那颗是 `0xFFBDBDBD`，
+ * 课程编辑器「自定义」那颗是 `0xFF9E9E9E`。两颗都是固定值，于是切到深色主题时
+ * 谁都不会跟着换档，并排看就是一深一浅、且在暗底上发闷。
+ *
+ * 判据是**这颗点不需要与主题无关**：它表达的是"空"，而 M3 的中性色阶里"空"
+ * 本来就有一档 —— [androidx.compose.material3.ColorScheme.outlineVariant] 是
+ * 低强调中性面/描边的槽位，浅色与深色两套各钉了一值，主题换档它就跟着换档，
+ * 所以复用槽位即可，不再新增 token。
+ *
+ * 两条下限同时满足：点上的文字（"自定义"）经 [contentOn] 选墨后，本项目深浅两套
+ * 都在 9:1 以上（浅底走近黑、深底走纯白，两支落点离 [contentOnLuma] 的黑白交点都远，
+ * 换主题或换动态取色都不会翻转）；反过来它也不亮到被读成一门真课的颜色——
+ * 占位点的职责是"这里没值"，不是"这里有个灰"。
+ */
+@Composable
+fun swatchPlaceholderColor(): Color = MaterialTheme.colorScheme.outlineVariant
+
+/**
  * 色板选点：调色板里的一个圆点，选中时加粗描边 + 勾。
  *
  * 审查 V-色板：编辑器、课程管理、自定义色入口此前各有一份同款圆点（尺寸 30/28/32、

@@ -63,6 +63,7 @@ import com.buaa.schedule.core.designsystem.fieldError
 import com.buaa.schedule.core.designsystem.fieldImeActions
 import com.buaa.schedule.core.designsystem.fieldImeOptions
 import com.buaa.schedule.core.designsystem.motionSpec
+import com.buaa.schedule.core.designsystem.swatchPlaceholderColor
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.CourseSaveOptions
 import com.buaa.schedule.domain.model.NO_PERIOD_GAP
@@ -508,7 +509,8 @@ fun CourseEditorScreen(
                         )
                     }
                     ColorSwatch(
-                        color = customColor?.let { Color(it) } ?: Color(0xFF9E9E9E),
+                        // 还没选过自定义色：占位点与设置页「默认」那颗同源取色
+                        color = customColor?.let { Color(it) } ?: swatchPlaceholderColor(),
                         selected = customColor != null,
                         label = "自定义",
                         onClick = { showColorPicker = true },

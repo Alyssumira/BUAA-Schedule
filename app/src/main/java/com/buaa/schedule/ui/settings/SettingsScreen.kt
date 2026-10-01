@@ -93,6 +93,7 @@ import com.buaa.schedule.core.designsystem.SettingsSwitchRow
 import com.buaa.schedule.core.designsystem.fieldError
 import com.buaa.schedule.core.designsystem.fieldImeActions
 import com.buaa.schedule.core.designsystem.fieldImeOptions
+import com.buaa.schedule.core.designsystem.swatchPlaceholderColor
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlotProfile
 import com.buaa.schedule.domain.schedule.CourseConstraints
@@ -910,9 +911,10 @@ fun SettingsScreen(
                             verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceXS),
                         ) {
                             // 「默认」不画空心圈：共享色点在透明底上撑不住勾与描边，
-                            // 用一颗中性灰点占位，语义与"未指定种子色"一致
+                            // 用一颗中性占位点顶上，语义与"未指定种子色"一致。
+                            // 取色走 [swatchPlaceholderColor]，与编辑器「自定义」那颗同源
                             ColorSwatch(
-                                color = argb?.let { Color(it) } ?: Color(0xFFBDBDBD),
+                                color = argb?.let { Color(it) } ?: swatchPlaceholderColor(),
                                 selected = Personalization.seedColorArgb == argb,
                                 onClick = {
                                     Personalization.seedColorArgb = argb
