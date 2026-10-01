@@ -625,7 +625,7 @@ private fun SectionHeading(title: String, subtitle: String) {
             text = title,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(DesignTokens.spaceMicro))
         Text(

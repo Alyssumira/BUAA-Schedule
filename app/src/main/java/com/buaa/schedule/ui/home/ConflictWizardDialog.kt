@@ -206,6 +206,7 @@ private fun ConflictGroupRow(
                 "第 ${group.weeks.joinToString(",")} 周",
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         group.courses.forEach { course ->
             Text(
