@@ -204,7 +204,7 @@ private fun ChangelogRow(line: ChangelogLine) {
             text = line.text,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 6.dp),
         )
         is ChangelogLine.Bullet -> Row {
