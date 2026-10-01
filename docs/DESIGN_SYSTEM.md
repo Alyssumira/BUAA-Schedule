@@ -10,6 +10,7 @@
 | `cornerPanel` | 18dp | 面板 / 分组卡片 |
 | `cornerCourse` | 10dp | 课程卡、小色块容器 |
 | `cornerPill` | 50 | 胶囊（分段的段内形状） |
+| `cornerChip` | 6dp | 内联小胶囊圆角：顶栏「课次/时间」这类包着单行小字的块。不复用 `cornerCourse`(10dp)——那档服务一整张课程卡（几十 dp 高），同一半径落在 24dp 高的胶囊上会读成"药丸"，而这里的意图是"一块标签" |
 | `spaceMicro` | 2dp | 行距级微间距：同一块内容里两行小字之间的缝、胶囊的上下内衬。**不是版面刻度**（版面用下面那一套），小于它就会咬住降部 |
 | `spaceXS/S/M/L/XL` | 4/8/12/16/24dp | 间距刻度，**不要自造 10dp/18dp** |
 | `minTouchTarget` | — | 可点击元素的最小触控尺寸 |
@@ -80,7 +81,7 @@ M3 的 16 档时长不能凭感觉挑。一条可执行的规则（Material 官�
 - `EasingStandard` —— 位移、淡入淡出，任何"从 A 到 B"的位置变化。
 - `EasingEmphasized` —— 需要"弹出感"的场合（FAB 图标旋转、菜单展开、大面板出现）。
 - **关闭方向不要用打开方向的倒放**：`LiquidMenu` 的开/合用了两组独立曲线
-  （`OpenPositionEasing` / `CloseEasing`），关闭更快更直接 —— 这是有依据的，别为了"统一"合并。
+  （打开段尺寸用 `OpenSizeEasing`、位置与 FAB 图标旋转共用 `EasingEmphasized`，收场段用 `CloseEasing`），关闭更快更直接 —— 这是有依据的，别为了"统一"合并。
 
 ### 2.4 转场模式：Material 的四类，对应到本项目
 
@@ -99,7 +100,7 @@ M3 的 16 档时长不能凭感觉挑。一条可执行的规则（Material 官�
 
 ### 2.5 reduce-motion：Android 有**三个**独立开关，不是一个
 
-`rememberReduceMotion()` 现在只读 `TRANSITION_ANIMATION_SCALE`。但 Android 把动画时长拆成了三个
+`rememberReduceMotion()` 改前只读 `TRANSITION_ANIMATION_SCALE`。但 Android 把动画时长拆成了三个
 **互不相干**的全局项：
 
 | 开发者选项 | Settings key | 影响 |
@@ -309,7 +310,7 @@ M3 这一档**只加动效、不换组件**：确认框与弹层的进出场由 
 
 ## 4. 排版
 
-- `ScheduleTypography` 已补齐 10 级刻度；**禁止**直接写 `fontSize = 11.sp` 这类魔法数，
+- `ScheduleTypography` 已补齐刻度（15 个排版槽位全部显式定义、落在 10 个不同字号上）；**禁止**直接写 `fontSize = 11.sp` 这类魔法数，
   否则会静默回落到 M3 默认值（此前的课程卡就是被这个坑过）。
 - 强调用 `FontWeight`，不要用"换一个更小的字号"来表达层级。
 - **页面级与区块级标题必须拉开**：`headlineSmall` 26sp / 行高 34，`titleLarge` 那一档留给区块。
@@ -325,7 +326,7 @@ M3 这一档**只加动效、不换组件**：确认框与弹层的进出场由 
 - `labelSmall` 现在是 `labelMedium` 的**同值别名**（12sp）。两个名字钉在一起是有意的：
   M3 组件内部（如 `NavigationBar`）会读 `labelSmall`，放任它回落到默认 11sp 就会重现
   "名义 12sp、实际 11sp"那条断链。**新代码一律写 `labelMedium`**，`labelSmall` 只留作那道守卫。
-- 最大档 `displaySmall`（34sp SemiBold / 行高 42）已补进刻度，引导页 hero 用它。
+- 引导页 hero 用 `displaySmall`（34sp SemiBold / 行高 42）；它已不是最大档——刻度上另有 `displayLarge`（48）与 `displayMedium`（40），这两档当前全仓零调用点，仍显式定义是因为 `Typography` 的 15 个参数每一个都带 M3 默认值、少写一档不会编译失败只会静默落到 baseline 的 57/45/32/28sp。
   R7 普查口径：全库 `fontSize = N.sp` 曾只剩 1 处裸值（就是那个 hero），现已归零——别让它重新长出来。
 - **一页只有一个"大数字"**：统计页的总学分（`displaySmall` 34）是本页唯一的超大字号。
   区块级的数字不得向它靠拢——实测教训是"节次空档数"曾用 `headlineMedium`（28），
@@ -353,7 +354,7 @@ M3 这一档**只加动效、不换组件**：确认框与弹层的进出场由 
 
 - **`SettingsGroup(title) { item { … } }`**：组内每条设置是**独立的玻璃片**，
   首尾 `cornerPanel`(18dp)、中间 6dp 圆角 + 2dp 间隙；组标题在卡片**外面**（`SectionHeader`）。
-- **`SettingsRow` / `SettingsSwitchRow` / `SettingsValueRow`**：行内容器透明，
+- **`SettingsRow` / `SettingsSwitchRow`**：行内容器透明，
   背景由外层玻璃片提供；`SettingsSwitchRow` 整行可点（Role.Switch），Switch 的
   `onCheckedChange` 必须传 null，避免双重触发。
 - 选型规则：
@@ -459,7 +460,7 @@ M3 这一档**只加动效、不换组件**：确认框与弹层的进出场由 
 - **`error` 只留给真错误与破坏性确认**：常态的"这条路有代价/可能被 ROM 拦/会重复通知"属于中间严重度，
   用 `LocalSemanticColors.current.warning`。R8 把三处一直被染红的说明改成 `warning`
   （设置页 Android 14 壁纸、日历同步「双重通知」，挂件配置页精确闹钟），
-  全站现有六处 `warning`。症状是：说明性文案长期挂红，用户真的出错时那一屏看起来和平时一样——
+  全站现有七处 `warning`。症状是：说明性文案长期挂红，用户真的出错时那一屏看起来和平时一样——
   告警色一旦通胀就没有告警可读了。
   `warning` 一族（`warning`/`onWarning`/`warningContainer`/`onWarningContainer`）是补进 `SemanticColors` 的正式槽位，
   **不要**再借用 `tertiary` 或 `error.copy(alpha)` 凑。
