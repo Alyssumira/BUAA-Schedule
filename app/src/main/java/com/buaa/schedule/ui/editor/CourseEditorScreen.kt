@@ -568,7 +568,12 @@ fun CourseEditorScreen(
             if (initialCourse != null) {
                 OutlinedButton(
                     onClick = { showDeleteDialog = true },
-                    modifier = Modifier.fillMaxWidth(),
+                    // 页内次动作同样是 M3 的 40 基准（§8，与上方「保存」那颗同一口径）。
+                    // 它自己就在滚动流里整宽独占一行，确认对话框是点下去之后才开的，
+                    // 不算"对话框内的按钮行"那条例外。
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                     enabled = !saving,
                 ) {
                     Text("删除课程", color = MaterialTheme.colorScheme.error)

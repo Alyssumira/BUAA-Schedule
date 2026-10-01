@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -468,7 +469,13 @@ fun SettingsScreen(
                     )
                     if (monday != parsed) viewModel.showMessage("开学日期已按周一对齐为 $monday")
                 },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // §8：M3 按钮基准高只有 40，页内按钮要自己撑到 48。这一轮把本文件的
+                    // 余量清单逐处判过，三条例外一条没沾——九颗全在页滚动流里整宽独占一行
+                    // （不在对话框按钮行、不是 SettingsRow 尾部那颗小按钮、
+                    // 也不是链接式小号 TextButton），所以逐颗补下限，不是一把套。
+                    .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                 enabled = startDateValid && totalWeeksValid,
             ) {
                 Text("保存学期设置")
@@ -631,7 +638,9 @@ fun SettingsScreen(
                         }
                     }
                 },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                 enabled = smartParams != null,
             ) { Text("按参数推算节次时间（推算后可再微调）") }
             }
@@ -691,14 +700,18 @@ fun SettingsScreen(
             Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
             Button(
                 onClick = { viewModel.saveTimeSlots(slotDraft) },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                 enabled = slotsDirty && !hasInvalidSlot,
             ) {
                 Text("保存节次时间")
             }
             OutlinedButton(
                 onClick = { viewModel.saveDefaultTimeSlots() },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
             ) {
                 Text("恢复北航默认节次")
             }
@@ -818,7 +831,9 @@ fun SettingsScreen(
             item(key = "refresh") {
                 Button(
                     onClick = { viewModel.refreshWidgetsNow() },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                 ) { Text("立即刷新全部组件") }
             }
             item(key = "policy") {
@@ -1151,7 +1166,9 @@ fun SettingsScreen(
             Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS)) {
             OutlinedButton(
                 onClick = { wallpaperLauncher.launch(arrayOf("image/*")) },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
             ) {
                 Text("选择壁纸图片")
             }
@@ -1161,7 +1178,9 @@ fun SettingsScreen(
                         Personalization.wallpaperUri = null
                         Personalization.save(context)
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                 ) {
                     Text("清除壁纸")
                 }
@@ -1222,7 +1241,9 @@ fun SettingsScreen(
                         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     }
                 },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
             ) {
                 Text("开启/更新课程提醒")
             }
@@ -1641,7 +1662,9 @@ fun SettingsScreen(
             item(key = "sync") {
             Button(
                 onClick = { startCalendarSync() },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                 enabled = !calendarSync.syncing,
             ) {
                 Text(if (calendarSync.syncing) "同步中..." else "同步到系统日历")

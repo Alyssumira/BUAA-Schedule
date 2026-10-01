@@ -965,11 +965,19 @@ private fun FirstRunEmptyState(
         ) {
             Button(
                 onClick = onImportBuaa,
-                modifier = Modifier.fillMaxWidth(),
+                // 同一块空态卡、同一个动作槽，导入历史页那颗已经按 §8 撑到 48 了，
+                // 这两颗是余量清单里剩下的：M3 基准只有 40，页内主按钮得自己补。
+                // 三条例外都不沾——这不是对话框按钮行（整块是内容区叠层，不是 AlertDialog），
+                // 也不在 SettingsRow 里，更不是链接式小号 TextButton。
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
             ) { Text("从北航教务导入") }
             OutlinedButton(
                 onClick = onAddCourse,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
             ) { Text("手动添加课程") }
         }
     }
