@@ -670,8 +670,8 @@ fun CourseWeekGantt(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 // 刻度行：省得用户自己数第几格是第几周
-                Text("第 1 周", style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant)
-                Text("第 $totalWeeks 周", style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant)
+                Text("第 1 周", style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant)
+                Text("第 $totalWeeks 周", style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant)
             }
         }
         Box(modifier = Modifier.fillMaxWidth()) {
@@ -885,7 +885,7 @@ fun WeekFreeHeatGrid(
         // （列 = 节次、行 = 周几），表头自己说不清，就在它上面把两根轴点名
         Text(
             text = "列 = 节次（数字是第几节）· 行 = 周几",
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelMedium,
             color = scheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = DesignTokens.spaceXS),
         )
@@ -897,7 +897,7 @@ fun WeekFreeHeatGrid(
         ) {
             Text(
                 text = if (currentWeek == null) "全学期" else "第 ${currentWeek}周",
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelMedium,
                 color = scheme.onSurfaceVariant,
                 maxLines = 1,
             )
@@ -905,7 +905,7 @@ fun WeekFreeHeatGrid(
                 Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
                     Text(
                         text = label,
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelMedium,
                         color = scheme.onSurfaceVariant,
                         maxLines = 1,
                     )
@@ -970,13 +970,13 @@ fun WeekFreeHeatGrid(
                     .size(HeatCellSize / 2)
                     .background(color = occupiedColor, shape = cellShape),
             )
-            Text("有课", style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant)
+            Text("有课", style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant)
             Box(
                 modifier = Modifier
                     .size(HeatCellSize / 2)
                     .background(color = freeColor, shape = cellShape),
             )
-            Text("空", style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant)
+            Text("空", style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant)
         }
     }
 }
@@ -1101,13 +1101,13 @@ fun WeeklyLoadTrendChart(
                 .padding(top = DesignTokens.spaceXS),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text("第 1 周", style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant)
+            Text("第 1 周", style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant)
             Text(
                 text = peakWeek?.let { "最忙：第 $it 周" } ?: "没有有课的周",
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelMedium,
                 color = scheme.primary,
             )
-            Text("第 $totalWeeks 周", style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant)
+            Text("第 $totalWeeks 周", style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant)
         }
     }
 }
