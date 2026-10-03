@@ -4570,3 +4570,94 @@ T122 当时判 deferred 的理由是"这一判今天在压栈点算不出来"（
 - A-3（玻璃卡内衬 16 vs 12）与 A-1b（跨档字号）并排图已备在 `.tmp/dev-2026-10-03/`
   （`e11-stats.png` 对 `e12-import.png`、`e06-appearance.png`），方向仍是他判。
 - **T154** 仍在册。`app/build.gradle.kts` 那两处"1,695 枚"照旧一字未动（在册决定）。
+
+
+## 10-03 傍晚（模拟器第二轮：撤销链在装机上兑现，动画仪表给出负结果）
+
+承上一节「设备批停在'机上得先有课'」——那一格当场作废：buaa36 上装的是 debug 包、库里有种子课，
+撤销链不需要教务会话、不需要真机。这一轮全程在 emulator-5554（1080×2400 / 420dpi，与真机同一套
+dp↔px 换算）上跑，包是 master `a708f2f` 之前那一次装上去的 debug 包，没有重新编译。
+
+### 撤销链：两枚 UI 入口都走通了
+
+全仓只有两枚「撤销」入口（`grep -rn '\.undo()\|undoDeleteCourse()' app/src/main` ⇒ 两处调用点 +
+`ScheduleViewModel.kt:703` 那行 `fun undoDeleteCourse() = undo()`），这一轮两枚都按了真手指：
+
+1. **课表管理页 · 组删除**（`CourseManagementScreen.kt:220` `deleteCourseGroupAndAwait` →
+   `:227` `undoDeleteCourse()`）。靶子是唯一那枚两行组 `sourceGroupKey='grp-prog'`
+   （id=3 周一 6-7 节 + id=9003 周六 6-7 节），列表页合并成一张卡、meta 行念「周一 6-7 周六 6-7 · 2 段」。
+   删掉 ⇒ `select count(*) from courses` 19→17；按撤销 ⇒ **17→19，两行逐字段与删前一字不差**。
+2. **首页长按菜单删除**（`HomeScreen.kt:501` `deleteCourseAndAwait` → `:507` `viewModel.undo()`）。
+   靶子 id=1 高等数学A(上)。删前那一行带着提醒 `1|1|10`（courseId|enabled|advanceMinutes），
+   删 ⇒ 课与提醒一起没；按撤销 ⇒ 课与提醒**都回到删前那一版**，`select * from courses where id=1`
+   与 `select * from reminders where courseId=1` 两串逐字节相同。
+   `insertWithReminders` 那一手在装机上第一次被看见——JVM 侧只有判据单测，证不了提醒真的跟着回来。
+
+提示条本体：深色横带 y[2179..2304] x[32..1047]（管理页，页底无导航栏）/ y[1727..1852] x[48..1015]
+（首页，坐在底栏上方那条带子里，与 FAB 同一个抬升口径），动作文字「撤销」亮蓝、按得中。
+从按下确认到提示条画出来是 **1.2–1.9 s**（`deleteCourseAndAwait` 要等写库回来），
+不是上一节我猜的「截图太慢」——上一节那条撤销没抓到，根因是**编辑器那条删除路径本来就没有撤销入口**
+（`CourseEditorScreen` 那支只 `onBack()`，提示条只挂在首页与管理页）。
+
+### 组写那一支：装机上没有任何入口能 pop 它（未验到，且不是测不准）
+
+T137 补的 `groupBeforeRows` + `undoUpdate` 按 id 复原，在**这台机器上按不到**：两枚 UI 撤销入口都只挂在
+删除上，改时间（`handleCourseMove`）、组外观换色（`CourseManagementScreen.kt:186` 那颗
+`applyToGroup = true`）都只压栈、不给提示条。所以这一支仍然只有
+`UndoUpdateEntryGuardTest` 第 ⑦⑧ 层那份源码核对在钉，装机档位是空的。
+要给它补入口是一张**新卡**，不是下一轮测试。
+
+### 动画：这一轮拿到的是负结果，#90 的帧级那一档没证成
+
+- **承重的一条**：起跑时 `settings get global window_animation_scale / transition_animation_scale /
+  animator_duration_scale` 三枚全是 **0**。这台 AVD 的动画是系统级关着的，
+  `.tmp/animenv.sh` 那句「测动画前先把三颗 scale 设成 1.0」不是可选步骤而是前置。
+  本轮已把三颗设成 1.0 **并留在 1.0**（要退回：`adb -s emulator-5554 shell settings put global <k> 0.0`）。
+  这条对 #90 之前所有「装机看过动画」的说法是承重的——在 scale=0 的机器上看到的本来就该是硬切。
+- 核数 6 枚（`-cores 8` 起出来实测 6），`cores<=4` 那道治理闸没合上，动画不是被 governance 抹掉的。
+- `dumpsys gfxinfo com.buaa.schedule reset` + 0.6s 窗口读数：静止对照 **42 帧**，页签切换 50/75，
+  FAB 展开 48、收起 58，长按出菜单 72。**静止那一格就有 42 帧 ⇒ 帧数这把尺在这台机器上不区分
+  「在插值」和「没动」**，所以它不能当 #90 的判据。
+- `framestats` 的 `---PROFILEDATA---` 表是有的：59 帧里 IntendedVsync 间隔落在
+  16.7ms×16、33.3ms×10、66.7ms×14、83.3ms×6、其余更长，整窗平均 60.6 ms/帧 ⇒ **有效 ~16.5 fps**，
+  50th percentile 帧耗时 125 ms、jank 69.49%、Missed Vsync 34/59。也就是说这台 AVD 连不连得上
+  60Hz 都成问题，滑不滑得动更判不了。
+- `screenrecord` + `ffmpeg tblend=difference` 那把帧包络尺：录到的有效帧率不规则（同一个差值
+  3.7037 连着重复 9 帧、6.1728 连着重复 18 帧），~200 ms 的滑动在它里面分辨不出来。
+- 结论：**#90 的「帧级动画在插值」这一档在模拟器上证不了**，要么真机（还堵在「USB 安全设置」那枚开关上），
+  要么换一把按 vsync 对齐内容差的尺（perfetto `gfx` + `view` 类别）。本轮不给它打勾。
+
+### 这一轮顺手量到的三件界面事实
+
+- **冷启动首帧到数据到位之间有一块「未设置学期」窗口**：`am start` 之后第 6.1 s 抓的那一帧，
+  页头念「未设置学期」、周行也念「未设置学期」、网格空、右上角那颗胶囊念「统计」而不是「学期统计」
+  ——库里 `semesters` 那一行（2026-2027-1 / 2026-08-31 / 19 周）与 19 行课**都在**，
+  是 `uiState.loading` 那一档把首页渲染成了空态。与 T74（统计页首帧「还没有课程可统计」）同族，
+  这一档发生在首页页头 + 页签标签两处。
+- **一次编辑器删课返回之后整屏空白**：上一节末了那两帧只有状态栏和手势条、应用内容一个字没有，
+  `mCurrentFocus` 仍是 `com.buaa.schedule/.MainActivity`、进程活着、`dumpsys` 无 FATAL，
+  `am start` 回前台仍是空白，`am force-stop` 冷启动才恢复。**本轮没有再复现到第二次**，
+  所以只登记形状、不写成结论。
+- **冲突横幅按下去是「课程冲突处理」那张卡**（T82）：标题 + 「周三 · 第 1..12 周」+ 两行明细 +
+  蓝色「建议：概率论与数理统计 移到 第1-2节（前挪 2 节）」+「只改这些周」+ 右下「完成」。
+  按「完成」不改数据（前后 `count(*)` 都是 19）。
+
+### 我这一轮的手上账（设备侧，全在 AVD，没碰真机）
+
+- 种子库被我这轮删过又放回去的行：id=14 人工智能导论、id=11 编译原理、id=9001 高等数学A(上)(周六)，
+  以及组那两行 id=3 / id=9003（那两行是撤销自己回来的，逐字节对得上）。
+  前三行是我按 `undo2-before-rows.txt` 里的原文 `insert into courses` 放回去的，
+  **手工 INSERT 不带提醒**——`select id from courses where id not in (select courseId from reminders)`
+  当场指出 3 与 9003 缺提醒（撤销路径会连提醒一起接回来，我这双手工不会），已按 `1/10` 补齐。
+  现在 22 门课 / 22 条提醒，回到本轮起跑前的形状。
+- 三枚 animation_scale 现值 1.0（起跑时是 0），退回命令在上面。
+
+### 未验到（在册）
+
+- #90 帧级动画：模拟器这把尺分辨不出，见上。
+- T137 组写那一支的撤销：装机零入口，不是测不准，是没有入口。
+- 编辑器删课返回后的整屏空白：只抓到一次，没跑重复复现。
+- 锚点普查那把尺（文档里写的 `.kt` 589 / 本档 268 / 本档 `-c` 146 / `.md:行号` 24）
+  **本轮没在手边复现出口径**：我能复现的是
+  `grep -rE '[A-Za-z]+\.kt:[0-9]+' --include='*.kt' --include='*.md' app docs | wc -l` ⇒ **540**（行口径），
+  与 589 不是同一把尺。所以本档那几格枚数本轮一律不动、也不背书，下一轮要动先复现口径。
