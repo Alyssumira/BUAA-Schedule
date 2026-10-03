@@ -4411,7 +4411,7 @@ T122 当时判 deferred 的理由是"这一判今天在压栈点算不出来"（
   从 T161 起改成只数 Gradle 自己打的三枚签名（`^BUILD FAILED` / `^FAILURE: Build failed` /
   `^> Task .* FAILED`），三枚各自 0。
   **凡是替我宣布结论的计数，先问它读的是不是自己的输出。**
-- ⚠️ `docs/DESIGN_SYSTEM.md` 是 **LF**（531/531 行无 ``），`docs/STATUS.md` 才是 **CRLF**
+- ⚠️ `docs/DESIGN_SYSTEM.md` 是 **LF**（531/531 行无 `\r`），`docs/STATUS.md` 才是 **CRLF**
   （4,346/4,346）。"这份仓是 CRLF 工作树"那句话按文件成立、不按目录成立，
   拿它当目录级前提去写追加脚本会把 LF 文件改成混合行尾。
 
@@ -4581,13 +4581,13 @@ dp↔px 换算）上跑，包是 master `a708f2f` 之前那一次装上去的 de
 ### 撤销链：两枚 UI 入口都走通了
 
 全仓只有两枚「撤销」入口（`grep -rn '\.undo()\|undoDeleteCourse()' app/src/main` ⇒ 两处调用点 +
-`ScheduleViewModel.kt:703` 那行 `fun undoDeleteCourse() = undo()`），这一轮两枚都按了真手指：
+`ScheduleViewModel` 的 `:703` 那行 `fun undoDeleteCourse() = undo()`），这一轮两枚都按了真手指：
 
-1. **课表管理页 · 组删除**（`CourseManagementScreen.kt:220` `deleteCourseGroupAndAwait` →
+1. **课表管理页 · 组删除**（`CourseManagementScreen` 的 `:220` `deleteCourseGroupAndAwait` →
    `:227` `undoDeleteCourse()`）。靶子是唯一那枚两行组 `sourceGroupKey='grp-prog'`
    （id=3 周一 6-7 节 + id=9003 周六 6-7 节），列表页合并成一张卡、meta 行念「周一 6-7 周六 6-7 · 2 段」。
    删掉 ⇒ `select count(*) from courses` 19→17；按撤销 ⇒ **17→19，两行逐字段与删前一字不差**。
-2. **首页长按菜单删除**（`HomeScreen.kt:501` `deleteCourseAndAwait` → `:507` `viewModel.undo()`）。
+2. **首页长按菜单删除**（`HomeScreen` 的 `:501` `deleteCourseAndAwait` → `:507` `viewModel.undo()`）。
    靶子 id=1 高等数学A(上)。删前那一行带着提醒 `1|1|10`（courseId|enabled|advanceMinutes），
    删 ⇒ 课与提醒一起没；按撤销 ⇒ 课与提醒**都回到删前那一版**，`select * from courses where id=1`
    与 `select * from reminders where courseId=1` 两串逐字节相同。
@@ -4602,7 +4602,7 @@ dp↔px 换算）上跑，包是 master `a708f2f` 之前那一次装上去的 de
 ### 组写那一支：装机上没有任何入口能 pop 它（未验到，且不是测不准）
 
 T137 补的 `groupBeforeRows` + `undoUpdate` 按 id 复原，在**这台机器上按不到**：两枚 UI 撤销入口都只挂在
-删除上，改时间（`handleCourseMove`）、组外观换色（`CourseManagementScreen.kt:186` 那颗
+删除上，改时间（`handleCourseMove`）、组外观换色（`CourseManagementScreen` 的 `:186` 那颗
 `applyToGroup = true`）都只压栈、不给提示条。所以这一支仍然只有
 `UndoUpdateEntryGuardTest` 第 ⑦⑧ 层那份源码核对在钉，装机档位是空的。
 要给它补入口是一张**新卡**，不是下一轮测试。
@@ -4657,7 +4657,17 @@ T137 补的 `groupBeforeRows` + `undoUpdate` 按 id 复原，在**这台机器�
 - #90 帧级动画：模拟器这把尺分辨不出，见上。
 - T137 组写那一支的撤销：装机零入口，不是测不准，是没有入口。
 - 编辑器删课返回后的整屏空白：只抓到一次，没跑重复复现。
-- 锚点普查那把尺（文档里写的 `.kt` 589 / 本档 268 / 本档 `-c` 146 / `.md:行号` 24）
-  **本轮没在手边复现出口径**：我能复现的是
-  `grep -rE '[A-Za-z]+\.kt:[0-9]+' --include='*.kt' --include='*.md' app docs | wc -l` ⇒ **540**（行口径），
-  与 589 不是同一把尺。所以本档那几格枚数本轮一律不动、也不背书，下一轮要动先复现口径。
+- 锚点普查那把尺**已复现出口径，且它当场驳掉了我自己**：四条命令原文一直就在本档 `:3699` 那一格，
+  照抄即可（我上一轮没去读它，反而断言"口径没复现出来"）。在 `a32106a` 上量到 `.kt` 连写 **593** 而非 589
+  ⇒ 涨的 4 枚全是本轮台账那节写出的「文件名紧接冒号加行号」连写（`:4584` / `:4586` / `:4590` / `:4605`
+  四处），已拆成裸 `:NNN` + 符号名同框 ⇒ 四把尺回到 **268 / 589 / 146 / 24**，行数 4663 未动。
+  **这是同一枚错误第四次犯**（T139 / T147 / T150 / 本轮），而「写完任何 docs 立刻复跑 589」这条规矩
+  我连着两轮没执行 ⇒ 记在这里：动过台账就只跑 `:3699` 那四条，别自造尺。
+- **本轮另外三把"对不上"也全是读数口径，盘面一枚没漂**：① 静态 `@Test` 地板 **1,818** 属于
+  `^[[:space:]]*@Test` 那一口径，裸 occurrences 是 **1,823**（5 枚落在注释/内联里），androidTest 另有 **66** 枚；
+  ② 上一轮我在回执里报的「CR 4573⇒4664」是 **CR 字节总数**（本档从来没有这句，别把它当文档原文），那时行数是
+  4663——差的那一枚是 `:4414` 那行把「行无 `\r`」里的 `\r` **写成了真回车字节**，已改回两字符字面量
+  ⇒ 现在 CR 字节 == 行数、裸 LF 0；③ 那枚孤立 CR 一修掉，`git ls-files --eol` 就把本档从 `i/-text`
+  挪进走 autocrlf 的那一档 ⇒ **裸 `git diff` 从此把整篇报成改动**（本次实测 4669/4663），真实内容差只有
+  带 `--ignore-cr-at-eol` 才出得来（本次 **15/9**）⇒ 本档的改动核对一律带那枚 flag，或直接拿
+  `git show HEAD:` 的字节逐行比（这轮 6 处 hunk 就是后者定死的）。
