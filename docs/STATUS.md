@@ -4746,3 +4746,83 @@ id 清单与跑前逐位相同。脚手架在 `.tmp/dev-2026-10-04/`（`t209-run
 - 空白在**正常路径**（首页点课程卡进编辑器再删）是否同样出现：本轮只走了深链那一档。
 - ~~空白时那「剩下一层」到底是编辑器还是别的目的地~~ **已结**：底栏归属那格读数就足够定它——栈顶仍是编辑器（见上）。运行期读回退栈这一格不再需要。
 - 真机上是否复现：HyperOS 那三条触摸路还堵着，本轮零真机 adb。
+
+## 10-05 第四轮：T166 落地（删课后退栈不再挂在组合期 scope 上）+ 装机重放
+
+顶端从 `9597881` 走到 **`db6c71b`**（`8e77b84` 主修 + `db6c71b` 守卫，ff-only 合入，工作树干净）。
+修的就是上一轮定性的那一条：`CourseEditorScreen` 的 `rememberCoroutineScope()` 在删成之后随整棵子树被
+摘掉，挂在它上面的 `onBack()` 一行都没执行。
+
+### 改法（两档分开认领，不合并那两枚 effect）
+
+- **目的地层立旗**：`MainActivity` 递给编辑器的 `onDelete` lambda 里，`deleteRequestedByThisEntry = true`
+  排在 `deleteCourseAndAwait` **之前**（等结论再立就晚了），旗是 `remember(backStackEntry)` 的本地状态。
+- **第二条协程**长在 NavHost 那一层 entry 上（`LaunchedEffect(deleteRequestedByThisEntry, courseMissing,
+  uiState.loading)`），不在 `CourseEditorScreen` 子树里 ⇒ 闸门摘子树时它照样活着，点火一次 `popBackStack()`。
+- 上一轮那枚 `LaunchedEffect(courseId, uiState.loading)` **逐字未动**（它管"这门课从来没读到"那一档，
+  键不许改，改了会把 R5 F-41 的原意丢掉）。
+- 页面侧：删除链体内不再有退栈（`val deleted = onDelete(target); if (!deleted) { saveError = ... }`），
+  删失败那一档留在页上念红条，不退化成静默。
+- 新守卫 `CourseEditorDeleteExitReceiverGuardTest`（3 枚 `@Test`）里最硬的一格是**次序断言**
+  （`lambda.indexOf(FLAG_SET) in 0 until lambda.indexOf(AWAIT_DELETE)`）——旗立到 await 之后就是绿的、
+  行为是死的，只有这条能抓住。另三格：删除链体内 `popBackStack`/`onBack(` 必须 0 处、新协程不许被挪进
+  闸门块体、`saving` 互斥那格。两枚既有守卫（`CourseDeletionWiringGuardTest` /
+  `WriteChainReceiverWiringGuardTest`）被同步重钉，否则 `8e77b84` 单独 checkout 会 3 枚红。
+
+### 门禁（我在合并对象 `db6c71b` 上独占冷跑，六步全过）
+
+`--stop` → `clean`（自证 `XML_AFTER_CLEAN=0`）→ `assembleRelease` → `testDebugUnitTest --rerun-tasks` →
+lint → 第二遍 test → `:benchmark:compileNonMinifiedReleaseKotlin`。
+
+- **1,821 tests · 219 testsuites · 0 failures · 0 skipped**，两遍独立复现（XML 目录 mtime 04:28:41 / 04:31:38）。
+- lint **0 error / 14 warning**。
+- 签名包 `app-release.apk` **7,253,742 B**（对 10-01 那档 7,253,921 是 **−179 B**）。⚠️ **这一档不立地板**：
+  本轮往 release dex 真加了东西（一枚 `LaunchedEffect` + 旗标），按 09-23 定的口径要**两次独立全量一致**才记，
+  我只有一趟 ⇒ 记成"单次全量读数，−179 B 在带内但带不适用"。
+- 第 6 步第一次 FAILED 是我把模块写成 `:app:benchmark`（真值是顶层 `include(":benchmark")`），补跑正确任务
+  后 `BUILD SUCCESSFUL in 6s`。
+- ⚠️ 代理第一版交回来的包是 **`app-release-unsigned.apk`**：worktree 里没有 `local.properties`（子代理禁读，
+  而我在 `worktree add` 那一刻没 `cp`）。这是我的漏项，不是它的。
+
+### 装机重放（emulator-5554，debug 包）
+
+产物层对账：`adb install -r` 后把机上 `base.apk` 拉回来比 md5，与本地构建**逐字节相同**
+（`3ae2d3071c36b98f74822eede8df47d5`，52,335,506 B），树 == `db6c71b`。
+
+判据沿用上一轮那条（区 x[20..1060] y[300..2150]、luma 众数当底色、`|Δ|>40` 计墨像素、<500 记空白），
+另外加一枚**独立判据**：编辑器独有的底部蓝色「保存」大条（y[2000..2300]、宽 >600 px）在不在——
+只有墨像素会分不清"退到首页"与"停在空白页"，蓝条消失才算真 popped。
+
+| 档 | 改前（10-04） | 改后（本轮，2/2 次读数逐字相同） |
+|---|---|---|
+| 删完 0.45 s | **0** | **1,236**（蓝条已消失，bg=175） |
+| 删完 2.0 s | **0** | **229,388**（蓝条已消失，首页） |
+| 退到桌面要按几次 BACK | **2** | **1** |
+| 探针行 | app 自己删掉 | app 自己删掉（`id=9501` = 0） |
+
+⚠️ **0.45 s 那一档不许当稳态读数用**：1,236 距阈值只有 736，且 `bg=175` 既不是首页的 180 也不是编辑器的 253
+⇒ 拍到的是 pop 过渡的中间帧。判"没空白"靠的是 2.0 s 那档 + 蓝条消失 + 一次 BACK 退桌面这三枚，不是那枚 1,236。
+收尾：全库回到 **22 课 / 22 提醒 / 1 学期**，`reminders` 无孤儿（`courseId not in (select id from courses)` = 0）。
+脚手架 `.tmp/dev-2026-10-04/t210-run.py`（`prep` / `accept` / `oneshot` / `cleanup`）与 `t210-sql.py`，不入库。
+
+### 残窗（代理自报、我回核代码确认成立）
+
+删除**进行中**转屏：`deleteRequestedByThisEntry` 是 `remember(backStackEntry)` 的普通状态，配置变更会随
+entry 重建而复位 ⇒ 旗没了、第二条协程不点火 ⇒ 仍会空白一次，用户按一次 BACK 自救（比改前少按一次）。
+它**故意没有**改用 `rememberSaveable`：那样一来转屏后两条 effect 会同时为真（`courseMissing` 已成立、
+`loading` 不再翻），连 pop 两格，比残窗更糟。⇒ 真要收这一档得给"这一 entry 删过课"找一个跨配置变更
+但不进 NavHost 栈语义的落点，另立卡。
+
+### 未验到（本轮新增）
+
+- **正常路径（首页点课程卡进编辑器再删）本轮没测成**，而且不是"测了没通过"：今日页那张探针卡，
+  六种注入档位共 10 次（`input tap` ×2、`motionevent` 持按 0.10 / 0.28 / 0.30 / 0.45 / 0.60 s ×8，
+  落在卡片三个不同坐标）全部没打开编辑器——
+  y[2150..2340] 内最宽的蓝行始终是 52 px（那是底栏「课表」图标），不是编辑器的 1,015 px 保存条。
+  ⇒ 这一档在模拟器上**进不去**，改前/改后都无从对比。候选解释两条：卡片外层那枚手写横滑容器（T70）吃掉了
+  点击，或进场动画的 `graphicsLayer` 让命中框与像素错位——**都没证**，别在下面任何一条结论里引用它。
+- 深链那一档之外还有 `course_management` 的 `onEditCourse`（`:856`）与引导最后一步的 `editor/-1`（`:829`）
+  两条入口零装机验证。
+- 真机：HyperOS 三条触摸路仍堵着（要他开「USB 安全设置」），本轮零真机 adb。
+- 同族普查那 11 行里另外两枚正牌（`performSave` 保存链、`IClassLoginScreen.submit`）今天**没改**，
+  只有守卫把"编辑器这一支"钉住了；`BuaaLoginScreen` 的 `:108` 那枚死变量也原样留着。
