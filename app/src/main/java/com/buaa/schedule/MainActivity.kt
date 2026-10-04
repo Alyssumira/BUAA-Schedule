@@ -868,8 +868,32 @@ private fun AppNavHost(
             // 目标行还没到（首帧课程列表为空 / 刚切学期）：编辑器会以 initialCourse=null
             // 组合并恢复草稿，保存时用 id=0L 插出一条重复课程（R5 F-41）—— 这种帧直接不渲染
             val courseMissing = courseId >= 0 && course == null
+            // T166：「这门课从来没读到」与「这门课刚被这一页删掉」是两档，分开认领退栈。
+            // 这一枚旗在**发起删除那一刻**立起（MainActivity 递给编辑器的 onDelete lambda 里、
+            // 排在 await 之前）：等结论再立就晚了 —— 结论那一手跑在编辑器的
+            // `rememberCoroutineScope()` 上，而删成之后新的 uiState 一落地，下面那道闸门就把
+            // 编辑器整棵摘出组合、同一刻取消那枚 scope（装机复现 2/2 的整屏空白就是这么来的：
+            // 挂在它上面的 `onBack()` 一行都没执行，栈顶还站着一页渲染成空的编辑器）。
+            var deleteRequestedByThisEntry by remember(backStackEntry) { mutableStateOf(false) }
+            // 从来读不到那一档：键是 (courseId, uiState.loading)。`loading` 全 VM 只在 uiState
+            // 那一处翻 false，删课不会再翻 ⇒ 这条协程只在「首帧/切学期后数据第一次到位」那一刻
+            // 点火。⚠️ 不许把它改成按 courseMissing 重启（那会把这一档变成「数据还没到就误弹」，
+            // R5 F-41 的原意就丢了），删掉那一档由下面第二条认领。
             androidx.compose.runtime.LaunchedEffect(courseId, uiState.loading) {
                 if (!uiState.loading && courseMissing) {
+                    navController.popBackStack()
+                }
+            }
+            // 本页自己删掉了这门课 ⇒ 退栈由**目的地层**执行。这条协程长在 NavHost 的那一条
+            // back stack entry 上，不在 `CourseEditorScreen` 的子树里：闸门摘掉子树时它照样活着。
+            // 三个条件缺一条都不弹：旗标（本 entry 发起过）+ 行确实不在屏上了 + 数据已到位。
+            // 删失败那一档 `courseMissing` 不成立 ⇒ 页面留着、由编辑器念那句红条，不退化成静默。
+            // 次序上它只可能点火一次：三条键在点火之后都不再变（loading 不再翻、行不会自己回来），
+            // 而保存链与删除链被 `saving` 那枚旗互斥（两颗按钮分别 `enabled = canSave` /
+            // `enabled = !saving`），于是与 performSave 那一支 `onBack()` 撞成连 pop 两格的那条路
+            // 今天组不出来 —— ③ 的普查里那一支按红线原样保留。
+            LaunchedEffect(deleteRequestedByThisEntry, courseMissing, uiState.loading) {
+                if (deleteRequestedByThisEntry && courseMissing && !uiState.loading) {
                     navController.popBackStack()
                 }
             }
@@ -889,7 +913,13 @@ private fun AppNavHost(
                             if (savedId != null) pendingPulseCourseId = savedId
                             savedId
                         },
-                        onDelete = { viewModel.deleteCourseAndAwait(it) },
+                        onDelete = { target ->
+                            // 立旗排在 await **之前**（T166，理由见上面那枚 `deleteRequestedByThisEntry`）：
+                            // 这一整支跑在编辑器的组合期 scope 上，删成之后它多半活不到返回那一刻。
+                            // 这里只登记「本 entry 发起过删除」，退栈那一手归目的地层的那条协程。
+                            deleteRequestedByThisEntry = true
+                            viewModel.deleteCourseAndAwait(target)
+                        },
                         onBack = { navController.popBackStack() },
                         onSaveReminder = { id, enabled, minutes ->
                             viewModel.saveReminder(

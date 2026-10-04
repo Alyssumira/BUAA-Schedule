@@ -23,7 +23,10 @@ import org.junit.Test
  * 3. [调用点册子 仓储层一处 裸删课与AndAwait各一处 枚数与落点都要对得上] —— 全仓 main 扫，枚数 + 落在哪几份文件
  *    （T124b 把首页那一支换成了 `...AndAwait`，于是裸的那一枚只剩编辑器）。
  * 4. [首页那一支…]/[编辑器那一支…] —— 一枚布尔两张嘴：一处管提示条文案与那颗「撤销」按钮，
- *    一处管**要不要退出编辑页**。这两处源码本卡一字未改，改了要回来重判。
+ *    一处管**删不到时留不留在这页念红条**。第 4 层那两支在 T121 当日本卡一字未改；
+ *    **T166 把编辑页那一支的「退栈」那一手搬走了**（它原来长在编辑器的 `rememberCoroutineScope()`
+ *    上，删成之后被同一道闸门取消 ⇒ 整屏空白），现在退栈归 MainActivity 编辑器目的地的协程认领 ——
+ *    那一族的完整形状判据在 `ui/editor/CourseEditorDeleteExitReceiverGuardTest`，本层只重钉自己那两格。
  * 5. [判据内核零android零时钟 结论只有内核一处能造] —— 内核纯度与"唯一构造点"。
  *
  * 只做**源码核对**（JVM，无 Robolectric、无设备、不读时钟）。
@@ -187,7 +190,7 @@ class CourseDeletionWiringGuardTest {
         assertEquals(
             "`viewModel.deleteCourse(`（裸的那一枚 suspend 函数）的调用点全仓**零处**：T124b 收了首页" +
                 "长按菜单那一支、T124c 收了 MainActivity 的编辑器入口那一支（`onDelete` 现在写 " +
-                "`viewModel.deleteCourseAndAwait(it)`）⇒ 盘上不该再有裸调用点。**长出任何一枚都红** —— " +
+                "`viewModel.deleteCourseAndAwait(target)`）⇒ 盘上不该再有裸调用点。**长出任何一枚都红** —— " +
                 "那意味着又有一条链把「删库 → 压撤销条目 → 重排课前铃与桌面组件」挂回了组合期：" +
                 filesHint(byFile, VM_CALL_SITE),
             emptyList<String>(),
@@ -273,44 +276,100 @@ class CourseDeletionWiringGuardTest {
         )
     }
 
+    /**
+     * 编辑器那一支读这枚布尔 —— **T166 之后它只决定"删不到时留不留在这页念红条"**。
+     *
+     * 卡面原本这一格钉的是 `if (onDelete(target)) { onBack() }`：那枚布尔的第二张嘴是"要不要退出
+     * 编辑页"。装机复现（10-04 第三轮，2/2 整屏空白）证的正是这一支：`onBack()` 长在
+     * `rememberCoroutineScope()` 那一枚协程里，而删成之后新的 `uiState` 一落地，`MainActivity`
+     * 编辑器目的地那道 `if (!uiState.loading && !courseMissing)` 闸门就把 `CourseEditorScreen`
+     * 整棵摘出组合 —— 同一刻那枚 scope 被取消，`onBack()` 一行都没执行，栈顶站着一页渲染成空的
+     * 编辑器（栈顶不是 topLevel ⇒ 连底栏都没有）。
+     *
+     * 于是这一格判**两侧**：读侧（红条那一支）一字未动、仍由同一枚布尔分档；写侧（退栈那一手）
+     * 从这一枚协程体里**搬干净**（`onBack()` 0 处），落到目的地层那条以 `deleteRequestedByThisEntry`
+     * 为键的 `LaunchedEffect` 上 —— 那一枚协程长在 NavHost 的 back stack entry 上，不在被摘的子树里。
+     * 完整的形状判据（含"旗标必须排在 await 之前"与"退栈不许搬进 lambda"）在
+     * `ui/editor/CourseEditorDeleteExitReceiverGuardTest`，本卡按 T121 红线只重钉自己那两格。
+     */
     @Test
-    fun `编辑器那一支拿同一枚布尔决定要不要退出编辑页 那条 else 从此走得通`() {
+    fun `编辑器那一支读同一枚布尔决定留不留这页 而退栈那一手已经不在这枚 scope 上`() {
         val raw = readMainSource(COURSE_EDITOR_SCREEN)
         val code = blankCommentsKeepingLiterals(raw)
         assertEquals(
-            "编辑器入口的签名 `onDelete: suspend (Course) -> Boolean,` 必须还在：MainActivity 那个" +
-                "`$MAIN_ACTIVITY_ON_DELETE` 就是按它接的（T124c 把这一手换成了 `...AndAwait`，" +
+            "编辑器入口的签名 `onDelete: suspend (Course) -> Boolean,` 必须还在：MainActivity 那一枚 " +
+                "`onDelete` lambda 就是按它接的（T124c 把写库那一手换成 `...AndAwait`、T166 只搬退栈那一手，" +
                 "签名与返回语义一个字没动）。改成 Unit 就等于把“删没删到”这条真相从编辑页拿掉",
             1,
             occurrences(code, EDITOR_PARAM_TYPE),
         )
-        val gates = indexOfAll(code, EDITOR_IF_ON_DELETE)
+        val gates = indexOfAll(code, EDITOR_READS_DELETE_VERDICT)
         assertEquals(
-            "`if (onDelete(target)) {` 恰好一处（删除确认框那颗按钮）：它决定的是**要不要退出编辑页**，" +
-                "不是提示条文案 —— 这就是卡面问的“有没有别处拿返回值当“这课存在过”的证据去做别的决定”，" +
-                "答案是“有，两处”，本枚是第二处",
+            "`val deleted = onDelete(target)` 恰好一处（删除确认框那颗按钮那一枚 `scope.launch`）：" +
+                "这枚布尔仍然被读 —— 它决定的是「删不到时留不留在这页念红条」。" +
+                "T166 之前这里是 `if (onDelete(target)) { onBack() }`：那一档读的是同一枚布尔、" +
+                "做的是**退栈**那一手，而正是那一手把整条链撞死（见本格 KDoc）。" +
+                "换成不读结论（`onDelete(target)` 单飞 / 改成 `Unit`）= 删不到也一言不发：" +
+                "实到 " + gates.size + " 处，首处在 L" + lineOf(raw, gates.firstOrNull() ?: -1),
             1,
             gates.size,
         )
         val launch = scopeLaunchBody(code, gates.first())
         assertEquals(
-            "那条 else 支路（`saveError = \"删除失败，请重试\"`）**改形状以前从来没走过**（不抛异常就是 true），" +
-                "修完以后它会走：删不到 ⇒ 留在编辑页亮既有那句红条，随后 MainActivity 的 courseMissing " +
-                "闸门把目标行已不在屏上的编辑页弹出栈。这句话术本卡没改；要改成别的口径（或直接 onBack）" +
-                "都得回来重判这一格",
+            "那条失败支路（`saveError = \"删除失败，请重试\"`）**改形状以前从来没走过**（不抛异常就是 true），" +
+                "修完以后它会走：删不到 ⇒ 课程还在 ⇒ 那道闸门不摘页 ⇒ 这一支活着、留在编辑页亮红条。" +
+                "这句话术本卡没改；要改成别的口径都得回来重判这一格",
             1,
             occurrences(launch, EDITOR_ERROR_COPY),
         )
-        assertTrue(
-            "`onBack()` 必须仍被那道 `if` 闸着（无条件退出 = 编辑器不再读这枚布尔）",
-            launch.contains(EDITOR_ON_BACK),
+        assertEquals(
+            "`if (!deleted) {` 恰好一处：红条那一支必须仍然**由这枚布尔闸着**（无条件念 = 删成功了也报失败）",
+            1,
+            occurrences(launch, EDITOR_IF_NOT_DELETED),
         )
         assertEquals(
-            "MainActivity 那处 `$MAIN_ACTIVITY_ON_DELETE` 也应当恰好一处（T124c 之后它写的是 " +
-                "`...AndAwait` 那一枚，编辑器删除链的写库接收者已经不在页 scope 上；" +
-                "换回裸名会同时红掉 WriteChainReceiverWiringGuardTest 的档 ⑬ 与上面那一格枚数册子）",
+            "**T166 翻掉的那一格**：删除链那一枚 `scope.launch { … }` 体里 `onBack()` 必须 **0 处**（实到 " +
+                occurrences(launch, EDITOR_ON_BACK) + " 处）。退栈挂回这枚 composition 期 scope，" +
+                "装机那条「删完课整屏空白且不自愈」就原样回来了 —— 这一处不许以「补回来才对称」的名义复活。" +
+                "保存链那一支（`performSave()`）今天仍挂在同一枚 scope 上，那是 ③ 的普查账、按红线没动：" +
+                "它写完之后课程还在、闸门不摘页，所以那一支今天撞不到同一枚病",
+            0,
+            occurrences(launch, EDITOR_ON_BACK),
+        )
+        val activity = blankCommentsKeepingLiterals(readMainSource(MAIN_ACTIVITY))
+        val lambdaOpen = indexOfAll(activity, MAIN_ACTIVITY_ON_DELETE_ANCHOR)
+        assertEquals(
+            "MainActivity 递给编辑器的 `onDelete` lambda 锚点 `$MAIN_ACTIVITY_ON_DELETE_ANCHOR` 恰好一处" +
+                "（T166 之前它是单行 `onDelete = { viewModel.deleteCourseAndAwait(it) }`，" +
+                "现在要多立一枚旗，实到 " + lambdaOpen.size + " 处）",
             1,
-            occurrences(blankCommentsKeepingLiterals(readMainSource(MAIN_ACTIVITY)), MAIN_ACTIVITY_ON_DELETE),
+            lambdaOpen.size,
+        )
+        val lambda = braceBodyFrom(activity, activity.indexOf('{', lambdaOpen.first())).body
+        assertEquals(
+            "那一枚 lambda 体内 `$MAIN_ACTIVITY_AWAIT_CALL` 恰好一处：编辑器删除链的写库接收者仍然不在页 " +
+                "scope 上（T124c 那半）。换回裸名会同时红掉 WriteChainReceiverWiringGuardTest 的档 ⑬ " +
+                "与上面那一格枚数册子",
+            1,
+            occurrences(lambda, MAIN_ACTIVITY_AWAIT_CALL),
+        )
+        assertEquals(
+            "那一枚 lambda 体内 `$MAIN_ACTIVITY_DELETE_FLAG_SET` 恰好一处 —— 它就是「这门课刚被这一页删掉」" +
+                "与「这门课从来没读到」这两档唯一的凭据。摘掉它（或改名）= 目的地那条退栈协程永远不点火，" +
+                "整屏空白回来了；把它挪到 await **之后** = 结论回不来时旗标也立不成，同样不点火（次序由 " +
+                "CourseEditorDeleteExitReceiverGuardTest 钉）",
+            1,
+            occurrences(lambda, MAIN_ACTIVITY_DELETE_FLAG_SET),
+        )
+        assertTrue(
+            "立旗必须排在 await **之前**（同一枚 lambda 体内）：删成之后 uiState 落地、闸门摘页，" +
+                "这一支多半活不到返回那一刻",
+            lambda.indexOf(MAIN_ACTIVITY_DELETE_FLAG_SET) < lambda.indexOf(MAIN_ACTIVITY_AWAIT_CALL),
+        )
+        assertEquals(
+            "MainActivity 全文 `$MAIN_ACTIVITY_AWAIT_CALL` 也应当恰好一处（只有编辑器那一枚 lambda 用它）",
+            1,
+            occurrences(activity, MAIN_ACTIVITY_AWAIT_CALL),
         )
     }
 
@@ -605,10 +664,13 @@ class CourseDeletionWiringGuardTest {
         const val HOME_UNDO_CALL = "viewModel.undo()"
         const val LAUNCH_ANCHOR = "scope.launch {"
         const val EDITOR_PARAM_TYPE = "onDelete: suspend (Course) -> Boolean,"
-        const val EDITOR_IF_ON_DELETE = "if (onDelete(target)) {"
+        const val EDITOR_READS_DELETE_VERDICT = "val deleted = onDelete(target)"
+        const val EDITOR_IF_NOT_DELETED = "if (!deleted) {"
         const val EDITOR_ERROR_COPY = "saveError = \"删除失败，请重试\""
         const val EDITOR_ON_BACK = "onBack()"
-        const val MAIN_ACTIVITY_ON_DELETE = "onDelete = { viewModel.deleteCourseAndAwait(it) }"
+        const val MAIN_ACTIVITY_ON_DELETE_ANCHOR = "onDelete = { target ->"
+        const val MAIN_ACTIVITY_AWAIT_CALL = "viewModel.deleteCourseAndAwait(target)"
+        const val MAIN_ACTIVITY_DELETE_FLAG_SET = "deleteRequestedByThisEntry = true"
 
         // ⑤ 内核
         const val KERNEL_PREDICATE = "internal fun deletionRemovedSomething("

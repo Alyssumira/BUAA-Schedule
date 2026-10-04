@@ -250,7 +250,8 @@ fun CourseEditorScreen(
     }
 
     // 中途返回不再静默丢草稿（P2）：顶部箭头与系统返回键都过这道闸。
-    // 保存成功/删除成功走的是 onBack() 本身，不经过这里。
+    // 保存成功走的是 onBack() 本身，不经过这里；删除成功现在压根不在这页退栈 ——
+    // 那一档由 MainActivity 编辑器目的地那一侧认领（见删除确认框里那句 ⚠️ 注释，T166）。
     fun requestBack() {
         if (isDraftDirty) showDiscardDialog = true else onBack()
     }
@@ -623,9 +624,16 @@ fun CourseEditorScreen(
                             // 底栏那条红条常驻、读者不在删除弹窗里，漏清这一半就会在删课途中
                             // 继续念着上一次保存的失败。形状钉在 CourseEditorSaveErrorClearPairingGuardTest。
                             saveError = null
-                            if (onDelete(target)) {
-                                onBack()
-                            } else {
+                            // ⚠️ 删成那一档**故意不在这里退栈**（T166）：这一枚 `scope` 是 `:129` 的
+                            // `rememberCoroutineScope()`，绑在这次组合上。删除事务 commit 之后 VM 还要跑
+                            // `afterDataChangedInternal()` 才交回结论，这期间新的 `uiState` 一落地，
+                            // MainActivity 编辑器目的地那道 `if (!uiState.loading && !courseMissing)` 闸门
+                            // 就把这一整棵摘出组合 —— 同一刻这枚 scope 被取消，挂在它后面的 `onBack()`
+                            // 一行都不会执行，于是栈顶留着一页渲染成空的编辑器（整屏空白、且因为栈顶不是
+                            // topLevel 连底栏都没有）。退栈现在由那条闸门所在的**目的地层**认领。
+                            val deleted = onDelete(target)
+                            if (!deleted) {
+                                // 删不到 ⇒ 课程还在 ⇒ 那道闸门不摘页，这一支活着，红条念得出来
                                 saveError = "删除失败，请重试"
                             }
                             saving = false

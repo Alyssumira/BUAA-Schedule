@@ -75,15 +75,22 @@ import org.junit.Test
  *     `savedId = updateCourse(course, options)` 逐字落在那一枚协程体里、`job.join()` 在体外、
  *     `return savedId` 排在 join 之后、`var savedId: Long? = null` 是体内局部捕获、
  *     透传那一型 0 处 ⇒ 朝宽扭（把入口退成 `return saveCourse(course)`）红。
- * 12. **C 档编辑器 body 侧（T124c）**：编辑器页 scope 名下恰好两枚协程，按**写库那一手**的字面身份
+ * 12. **C 档编辑器 body 侧（T124c · T166 重钉）**：编辑器页 scope 名下恰好两枚协程，按**写库那一手**的字面身份
  *     （`saveCourseDraft(` / `onDelete(target)`）分档后，每枚体内 `saving = true` / `saving = false` /
- *     `saveError = null` / 那句失败文案 / `onBack()` 各恰好一处且次序是 立旗标 → 清场 → 写库 →
- *     退出 → 落旗标；体内 `viewModel.` 0 处；那颗 `BackHandler(enabled = isDraftDirty && !saving)`
- *     与三枚注入 lambda 的签名逐字仍在 ⇒ 朝窄扭（把 `saving = true` 挪出那一块）红。
- * 13. **C 档 lambda 侧（T124c）**：MainActivity 的 `onSave` lambda 体内两扇门都调 `...AndAwait(`、
+ *     `saveError = null` / 那句失败文案各恰好一处，节拍次序逐枚登记；体内 `viewModel.` 0 处；那颗
+ *     `BackHandler(enabled = isDraftDirty && !saving)` 与三枚注入 lambda 的签名逐字仍在 ⇒ 朝窄扭
+ *     （把 `saving = true` 挪出那一块）红。
+ *     ⚠️ **`onBack()` 那一格 T166 起了分档**：保存链体内恰好 1 处（普查 ③ 那一支，红线没动）、
+ *     **删除链体内恰好 0 处** —— 那枚 scope 绑在组合上，删成之后 MainActivity 的渲染闸门
+ *     （`if (!uiState.loading && !courseMissing)`）把编辑器整棵摘出组合、同一刻取消它，挂在它后面的
+ *     `onBack()` 一行都不会执行（装机 2/2 读到整屏空白、栈顶还站着编辑器所以连底栏都没有）。
+ *     退栈那一手现在归目的地层，形状判据在 `ui/editor/CourseEditorDeleteExitReceiverGuardTest`。
+ * 13. **C 档 lambda 侧（T124c · T166 重钉）**：MainActivity 的 `onSave` lambda 体内两扇门都调 `...AndAwait(`、
  *     裸的 `viewModel.saveCourse(` / `viewModel.updateCourse(` 0 处、`pendingPulseCourseId` 那一行与
- *     端出的 `savedId` 逐字仍在（返回语义不变）；`onDelete` 整行逐字是
- *     `onDelete = { viewModel.deleteCourseAndAwait(it) },` 且全文裸 `viewModel.deleteCourse(` 0 处；
+ *     端出的 `savedId` 逐字仍在（返回语义不变）；`onDelete` 那一枚按 `$C_ON_DELETE_ANCHOR` 取块，体内
+ *     `viewModel.deleteCourseAndAwait(target)` 与 `deleteRequestedByThisEntry = true` 各恰好一处、
+ *     后者排前者**之前**，而体内 `popBackStack(` 0 处（**朝宽扭就在这一格红**：把退栈写进这枚 lambda
+ *     = 写进调用者的组合期 scope，同一枚病换了个接收者）；全文裸 `viewModel.deleteCourse(` 0 处；
  *     `onSaveReminder` 那一手仍写 `viewModel.saveReminder(` 且 VM 里 `fun saveReminder` 体内自己就起在
  *     `viewModelScope`（盘面事实：它的接收者早就不在页 scope 上 ⇒ 本卡不为它造 AndAwait，造它要改签名）；
  *     VM 全文 `onBack(` 0 处 ⇒ 那一支没被搬进协程。
@@ -280,6 +287,22 @@ class WriteChainReceiverWiringGuardTest {
             val passthrough: String,
         )
 
+        /**
+         * 档 ⑫ 一枚页 scope 协程的登记形状：写库那一手（身份证）/ 那句失败文案 / 报错点名 /
+         * **这一枚体里 `onBack()` 应当有几处** / 体内节拍的逐字次序。
+         *
+         * `onBackSites` 分成 1 与 0 两档就是 T166 那一笔账：保存链那一支的退栈今天还挂在页 scope 上
+         * （写完课程还在、闸门不摘页 ⇒ 那一枚 scope 活着，普查 ③ 按红线没动它）；删除链那一支不活着，
+         * 所以它必须 0 处。两档合起来才钉得住「同一枚 scope 上、两种后果」。
+         */
+        data class CChain(
+            val hand: String,
+            val errorCopy: String,
+            val label: String,
+            val onBackSites: Int,
+            val beats: List<String>,
+        )
+
         /** 编辑器那一块 body 里**一枚都不许跟着写库搬走**的三样 composition 本地回灌 */
         const val C_SAVING_RAISED = "saving = true"
         const val C_SAVING_LOWERED = "saving = false"
@@ -302,7 +325,9 @@ class WriteChainReceiverWiringGuardTest {
         const val C_ON_SAVE_ANCHOR = "onSave = { edited, options ->"
         const val C_ON_SAVE_BRANCH = "val savedId = if (edited.id == 0L) {"
         const val C_PULSE_LINE = "if (savedId != null) pendingPulseCourseId = savedId"
-        const val C_ON_DELETE_LAMBDA = "onDelete = { viewModel.deleteCourseAndAwait(it) },"
+        const val C_ON_DELETE_ANCHOR = "onDelete = { target ->"
+        const val C_ON_DELETE_AWAIT_CALL = "viewModel.deleteCourseAndAwait(target)"
+        const val C_ON_DELETE_FLAG_SET = "deleteRequestedByThisEntry = true"
         const val C_ON_BACK_LAMBDA = "onBack = { navController.popBackStack() },"
         const val C_ON_SAVE_REMINDER_ANCHOR = "onSaveReminder = { id, enabled, minutes ->"
         const val C_RAW_SAVE_CALL = "viewModel.saveCourse("
@@ -819,20 +844,22 @@ class WriteChainReceiverWiringGuardTest {
     // ─────────────── ⑫ C 档：编辑器那两枚 body 里 composition 本地那三样 ───────────────
 
     /**
-     * 这一档钉的是「半搬」的另一半：**编排版面全部留在页 scope**。
+     * 这一档钉的是「半搬」的另一半：**编排版面全部留在页 scope**（T166 之后要加一句限定：
+     * 版面留在页 scope，**退栈那一手不许留在删除链那一枚 scope 上**）。
      *
-     * 取法（读形状，不是行号也不是文件级计数）：编辑器里 `:128` 那枚 `val scope =
+     * 取法（读形状，不是行号也不是文件级计数）：编辑器里 `:129` 那枚 `val scope =
      * rememberCoroutineScope()` 名下恰好两枚 `scope.launch {`，各自花括号配平取体，再按**写库那一手**
      * 的字面身份（`saveCourseDraft(` / `onDelete(target)`）分档 —— 哪一枚 body 里含哪一手，那一手就是
      * 它的身份证（含 0 处或含 2 处都直接红，因为分档本身就要求恰好一处）。
-     * 在每一枚体内判：`saving = true` / `saving = false` / `saveError = null` / 那句错误文案 /
-     * `onBack()` 各恰好一处，次序是 立旗标 → 清场 → 写库那一手 → `onBack()` → 落旗标，
-     * 且体内 `viewModel.` 恰好 0 处（编辑器的写库只经注入的 lambda，不直达 VM）。
+     * 在每一枚体内判：`saving = true` / `saving = false` / `saveError = null` / 那句错误文案各恰好一处，
+     * 节拍次序按 `CChain.beats` 逐枚登记，且体内 `viewModel.` 恰好 0 处（编辑器的写库只经注入的 lambda，
+     * 不直达 VM）。`onBack()` 那一格按 `CChain.onBackSites` **分档**：保存链 1 处（普查 ③ 那一支，
+     * 按红线原样保留 —— 它写完课程还在、闸门不摘页，所以今天撞不到这一族），删除链 **0 处**（T166）。
      * 另在文件里逐字钉住那颗 `BackHandler(enabled = isDraftDirty && !saving)` —— 它就是 `saving`
      * 必须留在组合本地的硬理由，也是**朝窄扭（把 `saving = true` 挪出那一块）红的那一格**。
      */
     @Test
-    fun `编辑器两枚页scope协程体里 saving与saveError与onBack三样一字未搬 写库那一手仍在同一块体内`() {
+    fun `编辑器两枚页scope协程体里 saving与saveError两样一字未搬 而删除链不再自己退栈`() {
         val code = blankComments(source(EDITOR))
         assertEquals(
             "`val scope = rememberCoroutineScope()` 的声明恰好一处（本卡不动声明，那两枚落点还要挂在它上面）",
@@ -849,10 +876,30 @@ class WriteChainReceiverWiringGuardTest {
         val bodies = braces.map { bodyOf(code, it, "$EDITOR 的那一枚页 scope 协程体") }
 
         val chains = listOf(
-            Triple(C_SAVE_HAND, C_SAVE_ERROR_SAVE_COPY, "保存链（performSave 那一枚 scope.launch）"),
-            Triple(C_DELETE_HAND, C_SAVE_ERROR_DELETE_COPY, "删除链（删除确认框那颗按钮那一枚 scope.launch）"),
+            CChain(
+                hand = C_SAVE_HAND,
+                errorCopy = C_SAVE_ERROR_SAVE_COPY,
+                label = "保存链（performSave 那一枚 scope.launch）",
+                // T166 的普查账：这一支今天仍带着 onBack()，因为保存之后课程还在、闸门不摘页 ⇒ 这一枚
+                // scope 活着。谁哪天让「保存之后那一行不再在屏上」，这一格必须跟着变成 0 处 ——
+                // 那时它就和删除链同病（详见删除链那一档的报错话术与新守卫）。
+                onBackSites = 1,
+                beats = listOf(C_SAVING_RAISED, C_SAVE_ERROR_CLEARED, C_SAVE_HAND, C_ON_BACK_CALL, C_SAVING_LOWERED),
+            ),
+            CChain(
+                hand = C_DELETE_HAND,
+                errorCopy = C_SAVE_ERROR_DELETE_COPY,
+                label = "删除链（删除确认框那颗按钮那一枚 scope.launch）",
+                // **T166 从这一格翻成 0**：删成 ⇒ 新 uiState 落地 ⇒ 那道闸门摘掉整棵编辑器子树 ⇒
+                // 这枚 scope 同一刻被取消 ⇒ 挂在它后面的 onBack() 一行都不执行（装机 2/2 整屏空白）。
+                onBackSites = 0,
+                beats = listOf(C_SAVING_RAISED, C_SAVE_ERROR_CLEARED, C_DELETE_HAND, C_SAVING_LOWERED),
+            ),
         )
-        for ((hand, errorCopy, label) in chains) {
+        for (chain in chains) {
+            val hand = chain.hand
+            val errorCopy = chain.errorCopy
+            val label = chain.label
             val hosts = bodies.filter { occurrences(it, hand) == 1 }
             assertEquals(
                 "$label：写库那一手 `$hand` 必须在**恰好一枚**页 scope 协程体里（实到 ${hosts.size} 枚宿主，" +
@@ -889,10 +936,16 @@ class WriteChainReceiverWiringGuardTest {
                 occurrences(body, errorCopy),
             )
             assertEquals(
-                "$label：`$C_ON_BACK_CALL` 必须**仍在这同一块体内**且恰好一处（实到 " +
-                    occurrences(body, C_ON_BACK_CALL) + " 处）。它对应 MainActivity 的 " +
-                    "`$C_ON_BACK_LAMBDA`，搬进 VM 或搬进那一枚 job 就是多 pop 一格（档 ⑬ 反向钉 VM 里 0 处）",
-                1,
+                "$label：这一枚协程体里 `$C_ON_BACK_CALL` 应当恰好 ${chain.onBackSites} 处（实到 " +
+                    occurrences(body, C_ON_BACK_CALL) + " 处）。**这一枚数是分档的**：" +
+                    "保存链那一支今天还在页 scope 上自己退栈（普查账 ③，红线没动它）；" +
+                    "删除链那一支由 T166 改成 **0 处** —— 那枚 scope 绑在这次组合上，" +
+                    "删成之后 MainActivity 的 `if (!uiState.loading && !courseMissing)` 闸门把编辑器整棵" +
+                    "摘出组合、同一刻取消它，挂在它后面的 `onBack()` 根本执行不到（装机读到的整屏空白、" +
+                    "且因为栈顶不是 topLevel 连底栏都没有）。**把它补回删除链这一格就是让那一族复活**；" +
+                    "退栈那一手现在长在目的地层，完整形状判据见 " +
+                    "ui/editor/CourseEditorDeleteExitReceiverGuardTest",
+                chain.onBackSites,
                 occurrences(body, C_ON_BACK_CALL),
             )
             assertEquals(
@@ -901,17 +954,14 @@ class WriteChainReceiverWiringGuardTest {
                 0,
                 occurrences(body, C_VM_DIRECT),
             )
-            val raisedAt = body.indexOf(C_SAVING_RAISED)
-            val clearAt = body.indexOf(C_SAVE_ERROR_CLEARED)
-            val handAt = body.indexOf(hand)
-            val backAt = body.indexOf(C_ON_BACK_CALL)
-            val loweredAt = body.indexOf(C_SAVING_LOWERED)
+            val beats = chain.beats.map { it to body.indexOf(it) }
             assertTrue(
-                "$label：五拍次序应当是 立旗标 → 收回上一句错 → 写库那一手 → 成功才退出 → 落旗标：" +
-                    "\n  $C_SAVING_RAISED@$raisedAt / $C_SAVE_ERROR_CLEARED@$clearAt / $hand@$handAt / " +
-                    "$C_ON_BACK_CALL@$backAt / $C_SAVING_LOWERED@$loweredAt（-1 表示那一处没找着）",
-                raisedAt in 0 until clearAt && clearAt in 0 until handAt &&
-                    handAt in 0 until backAt && backAt in 0 until loweredAt,
+                "$label：次序应当是 ${chain.beats.joinToString(" → ")}：" +
+                    "\n  " + beats.joinToString(" / ") { (b, at) -> "$b@$at" } +
+                    "（-1 表示那一处压根没找着）" +
+                    "\n任何一环倒过来（先落旗标再写库、或退出排在写库之前）读到的都是上一次的值",
+                beats.all { it.second >= 0 } &&
+                    beats.withIndex().all { (i, pair) -> i == 0 || pair.second > beats[i - 1].second },
             )
         }
 
@@ -1014,11 +1064,36 @@ class WriteChainReceiverWiringGuardTest {
             occurrences(saveBlock, C_PULSE_LINE),
         )
 
+        val deleteLambda = blockOf(code, C_ON_DELETE_ANCHOR, "$MAIN_ACTIVITY 的 onDelete lambda").text
         assertEquals(
-            "删除那一枚 lambda 整行逐字是 `$C_ON_DELETE_LAMBDA`（实到 " +
-                occurrences(code, C_ON_DELETE_LAMBDA) + " 处）：走的是 T124b 已经建好的那条 AndAwait 路",
+            "删除那一枚 lambda 体内 `$C_ON_DELETE_AWAIT_CALL` 恰好一处（实到 " +
+                occurrences(deleteLambda, C_ON_DELETE_AWAIT_CALL) + " 处）：走的是 T124b 已经建好的那条 " +
+                "AndAwait 路。**T166 把这枚 lambda 从单行 `onDelete = { viewModel.deleteCourseAndAwait(it) }` " +
+                "长成了两拍**（先立「本 entry 发起过删除」那枚旗、再 await），锚点因此从整行逐字换成" +
+                "`$C_ON_DELETE_ANCHOR` 取块",
             1,
-            occurrences(code, C_ON_DELETE_LAMBDA),
+            occurrences(deleteLambda, C_ON_DELETE_AWAIT_CALL),
+        )
+        assertEquals(
+            "那一枚 lambda 体内 `$C_ON_DELETE_FLAG_SET` 恰好一处（实到 " +
+                occurrences(deleteLambda, C_ON_DELETE_FLAG_SET) + " 处），且排在 await **之前**：" +
+                "它是「这门课刚被这一页删掉」与「这门课从来没读到」两档的唯一凭据，" +
+                "而 await 之后那一手多半执行不到（编辑器子树被摘 = 这一枚 lambda 所在的协程一起取消）。" +
+                "整条退栈链的形状由 ui/editor/CourseEditorDeleteExitReceiverGuardTest 逐档钉",
+            1,
+            occurrences(deleteLambda, C_ON_DELETE_FLAG_SET),
+        )
+        assertTrue(
+            "立旗必须排在 await 之前（同一枚 lambda 体内）",
+            deleteLambda.indexOf(C_ON_DELETE_FLAG_SET) in 0 until deleteLambda.indexOf(C_ON_DELETE_AWAIT_CALL),
+        )
+        assertEquals(
+            "**退栈那一手不许搬进这枚 lambda**：`$C_ON_DELETE_ANCHOR` 体内 `popBackStack(` 必须 0 处（实到 " +
+                occurrences(deleteLambda, "popBackStack(") + " 处）。它跑在调用者（编辑器的页 scope）的" +
+                "上下文里 —— 写在这里和写在 `scope.launch` 里是同一枚病（await 完一次写库再自己退栈），" +
+                "只是换了个更好看的接收者而已：朝宽那一扭就在这一格红",
+            0,
+            occurrences(deleteLambda, "popBackStack("),
         )
         assertEquals(
             "MainActivity 全文不许再出现裸的 `$C_RAW_DELETE_CALL`（实到 " +

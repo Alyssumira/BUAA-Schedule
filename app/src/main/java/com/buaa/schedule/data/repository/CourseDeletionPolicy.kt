@@ -59,17 +59,19 @@ import com.buaa.schedule.domain.model.ReminderSetting
  * `repository.deleteCourse` 的调用点**全仓恰好一处**（逐处复算过，不是数出现次数）：
  * `ScheduleViewModel` 的 `deleteCourse` 体内那一行 `val … = repository.deleteCourse(course)`。
  * 另有两处页面调用点今天是**另一枚函数** `deleteCourseAndAwait`（T124b；`deleteCourse` 今天唯一的调用点就在它体内 :634）——
- * `MainActivity` 的编辑器入口 `onDelete = { viewModel.deleteCourseAndAwait(it) }` :892，
+ * `MainActivity` 的编辑器入口（`onDelete` lambda：先立「本 entry 发起过删除」那枚旗、再 `viewModel.deleteCourseAndAwait(target)`），
  * 以及 `HomeScreen` 的 `val deleted = viewModel.deleteCourseAndAwait(course)` :501。
  *
  * 有没有哪一处拿返回值当"这课存在过"的证据去做**不止提示条文案**的决定？有，两处，都在 VM 那一层：
  * 1. `HomeScreen` 的 `handleCourseDelete` —— 同一枚布尔同时决定文案
  *    （「已删除「…」」/「删除失败：… 还在课表里」）和 `actionLabel = "撤销".takeIf { deleted }` :504；
- * 2. `CourseEditorScreen` 的 `if (onDelete(target)) { onBack() } else { saveError = … }` :619
- *    —— 它决定的是**要不要退出编辑页**，与提示条无关。改形状之前那条 else 支路从来没走过
- *    （不抛异常就是 true）；修完以后它会走：删不到 ⇒ 留在编辑页亮既有那句红条，
- *    随后 `MainActivity` 那枚 `val courseMissing = courseId >= 0 && course == null` :870
- *    闸门把目标行已不在屏上的编辑页弹出栈。
+ * 2. `CourseEditorScreen` 的删除链 —— 它读这枚布尔决定的是**删不到时留不留在这页念红条**
+ *    （`val deleted = onDelete(target)` / `if (!deleted) saveError = "删除失败，请重试"`）。
+ *    改形状之前那条支路从来没走过（不抛异常就是 true）；修完以后它会走：删不到 ⇒ 留在编辑页亮红条。
+ *    ⚠️ **T166 改掉的一句话术**：这里曾写"随后 MainActivity 那枚 `courseMissing` 闸门把编辑页弹出栈"——
+ *    那是句假话，闸门只拦渲染、不弹栈，而那枚协程本来就挂在编辑器的 `rememberCoroutineScope()` 上，
+ *    闸门摘页的同一刻就被取消（装机读到的整屏空白）。今天退栈那一手长在编辑器目的地的**外层**
+ *    （`MainActivity` 里那条以 `deleteRequestedByThisEntry` 为键的 `LaunchedEffect`），删成才真的弹得动。
  *
  * 这三处源码一字未改（红线：不许顺手改文案、不许加动画），全部由源码核对守卫
  * `CourseDeletionWiringGuardTest` 逐处、按位置钉住。
