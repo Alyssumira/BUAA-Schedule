@@ -4709,16 +4709,30 @@ GMT）、`signatures=[c1674983]` 仍是 debug、`firstInstallTime=2026-09-20` �
 
 ### 盘上读到的代码事实（本轮只读没改）
 
-- 删除确认弹窗的 confirmButton 里就是 `showDeleteDialog = false` → `saving = true` / `saveError = null` →
-  `if (onDelete(target)) { onBack() }`（`CourseEditorScreen` 那支，`:616` 起）；`onBack` 在 `MainActivity` 侧
-  接的是 `navController.popBackStack()`（`:892`）。**所以 `onBack()` 确实被调了**，空白不是"忘了退栈"。
-- 同一路由的渲染闸门是 `if (!uiState.loading && !courseMissing)`（`:869` 附近），`courseMissing` 的定义是
-  `courseId >= 0 && course == null`。删掉之后那一行的课程自然从 `uiState.courses` 里消失 ⇒ 这一层被闸门判成
-  "什么都不画"，而它自己那枚退栈 effect 又不会再跑 —— 这两件合起来就是"空白且不自愈"的形状。
-- ⚠️ **没证到的是**：`onBack()` 已经 pop 了一次，为什么栈里还剩一层。候选是深链那条路径把编辑器叠了两遍
-  （`MainActivity` 里 `:505` 那段注释正是为这件事写的："不加 launchSingleTop 编辑器就会叠在编辑器自己身上，
-  返回键要按两下才出得去"——**装机量到的就是两下**）。但同一份 extra 只经 `launchRequestsOf` 出 `courseId`
-  一枚结论（内核本轮读过，不出 route），所以"谁发起了第二次 navigate"我没拿到证据，不在台账里下结论。
+- ⚠️ **我上一格写错的那句话**：这里曾写"底栏由 HomeScreen 自己画"与"所以 `onBack()` 确实被调了，空白不是
+  忘了退栈"。两句都被 T165 评估卡驳掉、我回核代码确认它驳得对，就地改掉（见下）。
+- **底栏不是首页画的**：`MainActivity` 在 `:627`–`:656` 是 `Box { AppNavHost(...); if (showBottomBar) {
+  FloatingGlassBottomBar(...) } }` —— 底栏是 NavHost 的**兄弟节点**，`showBottomBar` 在 `:525` 由
+  `currentDestination?.hierarchy?.any { it.route in topLevelRoutes }` 算出；传进 `HomeScreen` 的那枚
+  `bottomBarVisible` 只用于 FAB 让位。⇒ **"空白那一屏连底栏都没有"这枚读数的正确读法是：当前目的地
+  不是 topLevel ⇒ 栈顶还站着编辑器**，而不是"首页画不出来"。方向从这一格整个掉头。
+- **退栈那支协程根本没活到 `onBack()`**：`CourseEditorScreen` 的 `scope` 是 `:129` 的
+  `rememberCoroutineScope()`（组合期 scope），confirmButton 里 `scope.launch { ... if (onDelete(target))
+  { onBack() } }`（`:626`–`:628`），而 `deleteCourseAndAwait`（VM `:632`–`:637`）是
+  `viewModelScope.launch { ... }` + `job.join()`。事务 commit 之后 VM 还要跑 `afterDataChangedInternal()`
+  才返回，这期间新的 `uiState` 落地 ⇒ 下一帧 `MainActivity:877` 那道 `if (!uiState.loading && !courseMissing)`
+  闸门把 `CourseEditorScreen` 整棵摘出组合 ⇒ 挂在它上面的 scope 取消 ⇒ **`onBack()` 一行都没执行**。
+  同页 `:257` 那枚 `BackHandler` 也随页面一起不在组合里，所以用户按下的 BACK 直达 nav 层 pop，一次就回首页。
+  ⇒ **这一条同时解释"0 墨像素"与"BACK 一次就救回来"，不需要第二种解释。**
+- **渲染闸门与那枚自我退栈 effect 的真实行号**（我上一格写的 `:869` 是量的时候就漂了）：`courseMissing`
+  定义在 `:870`，`LaunchedEffect(courseId, uiState.loading)` 在 `:871`，闸门在 `:877`。
+- **"深链把编辑器叠了两遍"这条候选结案：静态叠不出来。** `navigate("editor/...")` 字面量 4 处（`:504`、
+  `:829`、`:841`、`:856`），`:504` 与 `:668` 两处都带 `launchSingleTop`，另三处是单次手势；
+  `ROUTABLE_FROM_INTENT` 只放 `spoc_scan`，Intent 带不进 `editor/...`。`:500`–`:503` 那段"不加
+  launchSingleTop 就会叠两遍、返回要按两下"的注释防的是另一条路径，本次装机量到的"两下"由上一条解释。
+- ⚠️ 顺带一枚**过期承诺**：`CourseDeletionPolicy` 里写着"随后 `courseMissing` 闸门把编辑页弹出栈"——
+  闸门只拦渲染、不弹栈，而那枚 effect 的键是 `(courseId, uiState.loading)`、`loading = false` 全 VM 只有
+  `:484` 一处 ⇒ 删课永不点火。这句要随修复卡一起收。
 
 ### 设备侧收尾
 
@@ -4730,5 +4744,5 @@ id 清单与跑前逐位相同。脚手架在 `.tmp/dev-2026-10-04/`（`t209-run
 ### 未验到（本轮新增）
 
 - 空白在**正常路径**（首页点课程卡进编辑器再删）是否同样出现：本轮只走了深链那一档。
-- 空白时那"剩下一层"到底是编辑器还是别的目的地：需要运行期读回退栈，装机侧目前没有可打的孔。
+- ~~空白时那「剩下一层」到底是编辑器还是别的目的地~~ **已结**：底栏归属那格读数就足够定它——栈顶仍是编辑器（见上）。运行期读回退栈这一格不再需要。
 - 真机上是否复现：HyperOS 那三条触摸路还堵着，本轮零真机 adb。
