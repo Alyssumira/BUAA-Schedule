@@ -4674,3 +4674,61 @@ T137 补的 `groupBeforeRows` + `undoUpdate` 按 id 复原，在**这台机器�
   ⇒ 整篇 diff 是「工作树已改、index 还是旧判定」那一档的**暂态**，不是本档的永久属性。
   ⇒ 操作结论照旧、理由换了：核对 STATUS 一律带 `--ignore-cr-at-eol`（代价为零），提交纯文档改动带
   `-c core.autocrlf=false`（本次提交后 blob 与工作树逐字节相同，没发生行尾迁移）。
+
+## 10-04 模拟器第三轮：那枚"整屏空白"复现了，而且是按脚本抓的
+
+包的身份先自证：`app-debug.apk` 52,335,506 B，`assembleDebug` 跑一遍 **60 枚任务全 UP-TO-DATE** ⇒ 这枚包就是
+当前树（`c8995a0` 之后代码零改动）的产物，没重编；装机后 `lastUpdateTime=2026-10-04 18:50:20`（这台 guest 是
+GMT）、`signatures=[c1674983]` 仍是 debug、`firstInstallTime=2026-09-20` 未动。三枚 animation_scale 本轮从
+冷起的 0 设成 1.0（退回：逐颗 `settings put global <k> 0.0`）。全程只打在 emulator-5554 上，真机没进 adb。
+
+判据（跑之前定的）：内容区 x[20..1060] y[300..2150]，取该区 luma 众数当底色，数差值 >40 的像素 = 墨像素；
+**<500 记作"整屏空白"**。靶子是一枚我自己插的探针课 id=9501（`探针课T209`，周二 3-4 节，带一条提醒），
+种子那 22 行全程没动。
+
+### 复现结果：2/2，且与动画档位无关
+
+| 档 | 墨像素 | 读数 |
+|---|---|---|
+| 首页基线 | 5,812 | 正常（今日那一档，稀疏） |
+| 编辑器（探针课） | 194,012 | 正常，「删除课程」描边在 y[2037..2070] x[469..611] |
+| 删完 0.45 s | **0** | 整屏空白（bg=191 纯灰渐变，页头/底栏/内容全没） |
+| 删完 2.0 s | **0** | 还是空白 ⇒ 不是瞬时空帧 |
+| 第 1 次 BACK | 214,768 | 内容回来了，焦点仍在 MainActivity（周课表那一档） |
+| 第 2 次 BACK | — | 焦点变 launcher ⇒ 退到桌面 |
+
+**"两次 BACK 才退出"是这一轮最硬的一枚读数**：空白那一刻，栈里还压着一层渲染成空的目的地。
+
+### 三条被我当场证伪的解释
+
+1. **动画档位**：三枚 scale 冷起是 0（overlay 回滚），我先把它们设成 1.0 再跑同一条链 —— 照样 0 墨像素。
+2. **`uiState.loading` 翻面重启那枚自我退栈的 `LaunchedEffect`**：全 VM 只有 `:484` 一处 `loading = false`，
+   删课不会再翻 ⇒ 键 `(courseId, loading)` 不变 ⇒ 那条 effect 不会再跑（这也正好解释了"空白为什么不自愈"）。
+3. **"从深链编辑器 pop 回首页"本身有问题**：切了一刀——深链进真课 id=1 的编辑器，**只按页头「返回」不删除**
+   ⇒ 0.5 s 与 2 s 两档墨像素 194,000 / 214,768，不空白，数据未动（22/22，id=1 还在）。所以病灶特定在删除那一支。
+
+### 盘上读到的代码事实（本轮只读没改）
+
+- 删除确认弹窗的 confirmButton 里就是 `showDeleteDialog = false` → `saving = true` / `saveError = null` →
+  `if (onDelete(target)) { onBack() }`（`CourseEditorScreen` 那支，`:616` 起）；`onBack` 在 `MainActivity` 侧
+  接的是 `navController.popBackStack()`（`:892`）。**所以 `onBack()` 确实被调了**，空白不是"忘了退栈"。
+- 同一路由的渲染闸门是 `if (!uiState.loading && !courseMissing)`（`:869` 附近），`courseMissing` 的定义是
+  `courseId >= 0 && course == null`。删掉之后那一行的课程自然从 `uiState.courses` 里消失 ⇒ 这一层被闸门判成
+  "什么都不画"，而它自己那枚退栈 effect 又不会再跑 —— 这两件合起来就是"空白且不自愈"的形状。
+- ⚠️ **没证到的是**：`onBack()` 已经 pop 了一次，为什么栈里还剩一层。候选是深链那条路径把编辑器叠了两遍
+  （`MainActivity` 里 `:505` 那段注释正是为这件事写的："不加 launchSingleTop 编辑器就会叠在编辑器自己身上，
+  返回键要按两下才出得去"——**装机量到的就是两下**）。但同一份 extra 只经 `launchRequestsOf` 出 `courseId`
+  一枚结论（内核本轮读过，不出 route），所以"谁发起了第二次 navigate"我没拿到证据，不在台账里下结论。
+
+### 设备侧收尾
+
+探针行是 app 自己删的：`select count(*) from courses where id=9501` = 0、`reminders where courseId=9501` = 0，
+全库回到 **22 课 / 22 提醒 / 1 学期**，`reminders` 里无孤儿（`courseId not in (select id from courses)` = 0），
+id 清单与跑前逐位相同。脚手架在 `.tmp/dev-2026-10-04/`（`t209-run.py` 的 prep / editor / del / backtest / depth
+五个动作可整条重放），不入库。
+
+### 未验到（本轮新增）
+
+- 空白在**正常路径**（首页点课程卡进编辑器再删）是否同样出现：本轮只走了深链那一档。
+- 空白时那"剩下一层"到底是编辑器还是别的目的地：需要运行期读回退栈，装机侧目前没有可打的孔。
+- 真机上是否复现：HyperOS 那三条触摸路还堵着，本轮零真机 adb。
