@@ -4907,3 +4907,28 @@ entry 重建而复位 ⇒ 旗没了、第二条协程不点火 ⇒ 仍会空白�
 - 真机：HyperOS 三条触摸路仍堵着（要他开「USB 安全设置」），本轮零真机 adb。
 - 同族普查那 11 行里另外两枚正牌（`performSave` 保存链、`IClassLoginScreen.submit`）今天**没改**，
   只有守卫把"编辑器这一支"钉住了；`BuaaLoginScreen:108` 那枚死变量也原样留着。
+
+## 10-06 第一批推平：`5b78d68..765db0f`，32 枚，钩子零拒
+
+用户那句「把这些还没推送的代码推上去」＝只授权 push。发版是另一件事，**没做**：tag 仍停在 `v0.1.1`、
+`VERSION_NAME` 仍停在 0.1.1 ⇒ 已装机的老包收不到"有更新"。
+
+推送前四步（照 09-22 那一条做，一次过）：
+
+1. `git fetch origin`
+2. `git rev-list --left-right --count origin/master...master` ⇒ **`0 32`**（0 behind ⇒ 可 ff，不需要 rebase，更没 `--force`）
+3. `git log --format='%ae|%ce' origin/master..master | sort -u` ⇒ 只出现 **`chidanta_suki@qq.com|chidanta_suki@qq.com`** 一种
+   （这一格同时查两类拒绝：author≠committer 与"作者邮箱不是注册邮箱"；只查 `%ae` 或只查 A==C 都查不出第二类）；
+   `%an|%cn` 那把给 `Alyssumira|Alyssumira`
+4. 走仓库令牌的内联 helper 推（口令不落 argv、不落我的输出）⇒ `5b78d68..765db0f  master -> master`，
+   远端只回 `Powered by GITEE.COM` 与 trace flag，**零条 hook declined**
+
+推完复核：再 fetch 一次 ⇒ `0 0`；`git ls-remote origin refs/heads/master` = **`765db0f35d23c364a658410e328c7f8cafc0900d`**
+= 本地 `git rev-parse HEAD`（逐位相同，判"推没推上"只看 tip，不看命令回显）。
+
+推上去的内容里值得单列的三族：**T166 一族**（`8e77b84` 主修 + `db6c71b` 守卫，删课后退栈不再挂组合期 scope）、
+**A 档视觉统一那一族**（层级不靠字号差 / 中性灰单来源 / 触控余量 / `labelSmall`→`labelMedium` / 区块标题墨色）、
+以及 10-03 起这几天的设备轮台账（`docs/STATUS.md` 在上一档远端 tip `5b78d68` 上是 **4,291** 行，现在 **4,909** 行）。
+
+⚠️ 这一节本身是推平之后新起的一枚，所以远端 tip 会再往前挪一格；引用"推平在哪一枚"时以
+`git ls-remote origin refs/heads/master` 现值为准，别引这一节写的哈希。
