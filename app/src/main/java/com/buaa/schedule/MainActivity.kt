@@ -715,6 +715,23 @@ private fun UpdateDialogHost(context: Context) {
     )
 }
 
+/**
+ * 「这门课刚被这一页删掉」那面旗在**本条 back stack entry 的 `savedStateHandle`** 里的键（T177）。
+ *
+ * 载体换成 savedStateHandle 换的就是这两件事：
+ * - **转屏存活**：`remember(backStackEntry) { mutableStateOf(false) }` 的那枚 `MutableState` 长在
+ *   composition 上，配置变化会整棵重建 composition、把值丢回初始的 false ⇒「删除已在途」这一刻转屏，
+ *   编辑器目的地上那枚退栈协程三条条件里少掉旗标这一条 ⇒ 不弹栈 ⇒ 用户停在一页渲染成空的编辑器上。
+ *   `NavBackStackEntry` 这一侧：`NavController.saveState()` 给**栈里还在的**每一枚 entry 造一枚
+ *   `NavBackStackEntryState`（它的构造里逐枚调 `entry.saveState(bundle)`），那份 Bundle 随
+ *   `rememberSaveable` 落进实例状态；转屏后新 controller `restoreState` 时按同一枚 entry id 回灌 ⇒
+ *   旗还在。
+ * - **按 entry 隔离**：`navigate("editor/{courseId}")` 每次都新建一枚 entry + 新建一份 handle ⇒
+ *   不会把「上一 entry 删过课」这面旗带到下一 entry（换到 `rememberSaveable` 之外另立一枚全局旗
+ *   就会犯这个错）。
+ */
+private const val DELETE_REQUESTED_BY_THIS_ENTRY = "com.buaa.schedule.editor.DELETE_REQUESTED_BY_THIS_ENTRY"
+
 @Composable
 private fun AppNavHost(
     navController: androidx.navigation.NavHostController,
@@ -877,7 +894,14 @@ private fun AppNavHost(
             // `rememberCoroutineScope()` 上，而删成之后新的 uiState 一落地，下面那道闸门就把
             // 编辑器整棵摘出组合、同一刻取消那枚 scope（装机复现 2/2 的整屏空白就是这么来的：
             // 挂在它上面的 `onBack()` 一行都没执行，栈顶还站着一页渲染成空的编辑器）。
-            var deleteRequestedByThisEntry by remember(backStackEntry) { mutableStateOf(false) }
+            // T177：这面旗的载体从 `remember(backStackEntry)` 换成本条 entry 的 `savedStateHandle`。
+            // `remember` 的那枚 MutableState 长在 composition 上、**不跨配置变化**：「删除已在途」这
+            // 一刻转屏 ⇒ 值丢回 false ⇒ 下面那枚协程三条条件里少掉旗标这一条 ⇒ 不弹栈 ⇒ 用户停在
+            // 一页渲染成空的编辑器上、要再按一次返回。换到 savedStateHandle 之后同一面旗转屏存活，
+            // 而它仍然只属于这一条 entry（每次 navigate("editor/{id}") 新建一枚 entry + 一份 handle）。
+            val deleteRequestedByThisEntry by backStackEntry.savedStateHandle
+                .getStateFlow(DELETE_REQUESTED_BY_THIS_ENTRY, false)
+                .collectAsState()
             // 从来读不到那一档：键是 (courseId, uiState.loading)。`loading` 全 VM 只在 uiState
             // 那一处翻 false，删课不会再翻 ⇒ 这条协程只在「首帧/切学期后数据第一次到位」那一刻
             // 点火。⚠️ 不许把它改成按 courseMissing 重启（那会把这一档变成「数据还没到就误弹」，
@@ -891,12 +915,19 @@ private fun AppNavHost(
             // back stack entry 上，不在 `CourseEditorScreen` 的子树里：闸门摘掉子树时它照样活着。
             // 三个条件缺一条都不弹：旗标（本 entry 发起过）+ 行确实不在屏上了 + 数据已到位。
             // 删失败那一档 `courseMissing` 不成立 ⇒ 页面留着、由编辑器念那句红条，不退化成静默。
-            // 次序上它只可能点火一次：三条键在点火之后都不再变（loading 不再翻、行不会自己回来），
-            // 而保存链与删除链被 `saving` 那枚旗互斥（两颗按钮分别 `enabled = canSave` /
+            // 次序上它只可能点火一次。旧那条「三条键在点火之后都不再变」的论证在换载体之后**不再成立**
+            // （loading 确实不再翻、被删的那行也确实不会自己回来，但旗标如今跨转屏存活，而转屏会把这枚
+            // 协程整个重建 —— 三条键一个都没变也要重跑一遍体），所以它改成靠**点火即消费**成立：
+            // 写回 false 排在退栈那一手**之前**，两句之间没有挂起点 ⇒ 这一趟一定弹得出去；消费之后三条
+            // 条件少一条 ⇒ 任何重启（转屏、键变化）都点不动第二次，不会把用户从首页再往后多弹一格。
+            // 消费也不破坏「删除在途时转屏」那一档：那次转屏时没人写过 false，旗仍然立着 ⇒ 新的
+            // composition 里三条一齐照样弹（本卡修的就是这一档）。
+            // 保存链与删除链被 `saving` 那枚旗互斥（两颗按钮分别 `enabled = canSave` /
             // `enabled = !saving`），于是与 performSave 那一支 `onBack()` 撞成连 pop 两格的那条路
             // 今天组不出来 —— ③ 的普查里那一支按红线原样保留。
             LaunchedEffect(deleteRequestedByThisEntry, courseMissing, uiState.loading) {
                 if (deleteRequestedByThisEntry && courseMissing && !uiState.loading) {
+                    backStackEntry.savedStateHandle[DELETE_REQUESTED_BY_THIS_ENTRY] = false
                     navController.popBackStack()
                 }
             }
@@ -920,7 +951,10 @@ private fun AppNavHost(
                             // 立旗排在 await **之前**（T166，理由见上面那枚 `deleteRequestedByThisEntry`）：
                             // 这一整支跑在编辑器的组合期 scope 上，删成之后它多半活不到返回那一刻。
                             // 这里只登记「本 entry 发起过删除」，退栈那一手归目的地层的那条协程。
-                            deleteRequestedByThisEntry = true
+                            // 写的是本条 entry 的 savedStateHandle（T177）而不是 composition 里的
+                            // 一枚 MutableState：这一支跑在编辑器的组合期 scope 上、随时可能被摘页取消，
+                            // 而「转屏之后还要认得出这页删过课」要的是比 composition 更长的寿命。
+                            backStackEntry.savedStateHandle[DELETE_REQUESTED_BY_THIS_ENTRY] = true
                             viewModel.deleteCourseAndAwait(target)
                         },
                         onBack = { navController.popBackStack() },
