@@ -686,6 +686,25 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
      * 落库由 [com.buaa.schedule.data.repository.ScheduleRepository.applyUndo] 在
      * 单个事务里完成：这里的逐步执行曾让"删除拆出来的行"和"重新插入原行"
      * 之间存在一个可被导入插队的窗口（R5 F-34）。
+     *
+     * ## 落库失败时条目还得回来（T183）
+     *
+     * [UndoManager.pop] 是**消费**，而它跑在落库**之前** —— 改前那一版失败只念一句「撤销失败」，
+     * 快照却已经从栈里摘走（那枚栈是它在进程内的唯一副本），这条撤销永远点不回来了。
+     * 现在的形状：**条目仍先 pop**（消费点不动），但失败那一支经 [UndoManager.restoreTop] 放回栈顶，
+     * 放回哪一档由 `undoFailureKindOf` 判（认不出原因 / 锁 / 环境写不下 ⇒ 留；快照本身写不进去 ⇒ 不留，
+     * 一枚永远失败的条目压在顶上会把下面所有条目一起钉死），文案由**回推的返回值**决定，
+     * 所以那句「还留着」不可能念在条目其实没回来的那一档上。
+     *
+     * 为什么不是"先 peek、落成才 pop"那一版：那样条目在这趟写库期间**还躺在栈顶**，
+     * 双点那颗「撤销」会 peek 到同一枚、把 `applyUndo` 跑两遍 —— Delete 的撤销是 insert，
+     * 于是同一门课插回库里两遍（数据坏，比顺序偏一格严重）；而且挂起之后才 pop 就得按身份摘那一条
+     * （期间任何 push 都会把 `removeLastOrNull` 变成"吃掉一条没落过库的新条目"），那是 T123
+     * 的账，本卡按红线不提前收。这一版只剩一条窄残余：回推期间若有别的 push，票据作废 ⇒
+     * 那一档退回改前的行为（丢条目），不会更坏。
+     *
+     * 取消不在这支里：[suspendCatching] 把 `CancellationException` 原样抛出（P2-1），
+     * VM 被清时整栈随进程语义作废，那时回推一条撤销没有意义。
      */
     fun undo() {
         val last = UndoManager.pop() ?: run {
@@ -693,11 +712,28 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             return
         }
         viewModelScope.launch {
+            // 这一枚局部旗标只问一件事：applyUndo 那一步落成了没有。它闸住回推 ——
+            // 库已经改成那一版之后（刷 UI / 文案那两拍）再抛，把条目放回栈顶就等于
+            // 允许同一条撤销点两回，而撤销条目不幂等（Delete 的撤销是 insert）。
+            var writtenToDb = false
             suspendCatching {
                 repository.applyUndo(last.action)
+                writtenToDb = true
                 afterDataChangedInternal()
                 _importMessage.value = AppMessage("已撤销：${last.label}")
-            }.onFailure { _importMessage.value = AppMessage("撤销失败：${it.message}", isError = true) }
+            }.onFailure {
+                val kind = undoFailureKindOf(exceptionClassNamesOf(it))
+                val held = !writtenToDb && kind.restoreEntry && UndoManager.restoreTop(last)
+                _importMessage.value = if (held) {
+                    AppMessage(kind.copyForRestored(it.message), isError = true)
+                } else {
+                    // 两种"没回推"共用改前那一句（不宣称条目留着，所以不算谎）：
+                    // 快照本身写不进去 / 票据作废的那一档，以及库已经改成那一版、
+                    // 而刷 UI 或文案那一拍抛了 —— 后者那句「撤销失败」其实撤销已经落库，
+                    // 那是改前就有的账，本卡按红线只把文案与前缀对齐、不改这一族的分档。
+                    AppMessage("撤销失败：${it.message}", isError = true)
+                }
+            }
         }
     }
 

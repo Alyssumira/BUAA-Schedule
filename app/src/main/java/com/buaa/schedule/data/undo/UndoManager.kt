@@ -18,6 +18,16 @@ import com.buaa.schedule.domain.model.ReminderSetting
  * 快照存的是**整个 [Course] 值对象**，不是逐字段拷贝：Course 新增字段（如 credit）
  * 会自动跟着撤销往返，这里不需要同步改（对比 `WidgetSnapshotModels` / `BackupModels`
  * 那两处逐字段镜像，它们才需要跟）。
+ *
+ * ## 失败那一支：条目是 [pop] 掉的，得还得回来（T183）
+ *
+ * [pop] 是**消费**：摘走之后栈里就没有它了。而落库（`ScheduleRepository.applyUndo`）在
+ * `undo()` 里跑在 pop **之后**，它抛（库被锁 / 磁盘满 / 撞约束 / 事务里任一步失败）时
+ * DB 回滚、快照却已经没了 —— 进程内这枚栈是那份快照的**唯一副本**
+ * （编辑器删掉一整组时 `UndoAction.Update.groupBeforeRows` 那一族行尤其贵），
+ * 用户只得到一句「撤销失败」，而这条撤销再也点不回来。
+ * 于是失败那一支经 [restoreTop] 把刚摘走的那一条放回栈顶（放回哪一档、文案怎么说，
+ * 判据在 `ui/UndoFailureRecovery.kt`，本文件只管栈自己的闸门）。
  */
 object UndoManager {
 
@@ -82,8 +92,23 @@ object UndoManager {
     private const val CAPACITY = 10
     private val stack = ArrayDeque<UndoEntry>()
 
+    /**
+     * 最近一次 [pop] 摘走的那一条（**同一枚实例**，按引用比），是 [restoreTop] 唯一的凭据。
+     *
+     * 为什么不另设「身份 / 代数」字段：这一判要问的从来不是"它是第几号条目"，而是
+     * "它被摘走之后这枚栈还**没被动过吗**"——push 与 clear 都把票据作废，答案就等价了，
+     * 而它不需要给 [UndoEntry] 添一枚跨表派生字段（那条规矩见本仓收单口径：值不是
+     * f(同表参数) 就得给每个 copy 站点配一枚守卫；这里连站点都不必长）。
+     *
+     * 代价：这一枚引用会把刚摘走的快照**多留一会儿**（直到下一次 push / clear / 回推成功），
+     * 上界是一栈里最大那一条的容量 —— 换回来的是「失败不丢条目」，值。
+     */
+    private var lastPopped: UndoEntry? = null
+
     @Synchronized
     fun push(action: UndoAction, label: String) {
+        // 新条目进栈 ⇒ 作废回推票据：此刻栈顶归这一条，旧条目回不来（账在 restoreTop）
+        lastPopped = null
         stack.addLast(UndoEntry(action, label))
         while (stack.size > CAPACITY) stack.removeFirst()
     }
@@ -110,8 +135,40 @@ object UndoManager {
     ) = push(UndoAction.Update(before, after, afterId, removed, reminders, groupBeforeRows), "编辑课程")
 
     @Synchronized
-    fun pop(): UndoEntry? = stack.removeLastOrNull()
+    fun pop(): UndoEntry? = stack.removeLastOrNull().also { lastPopped = it }
+
+    /**
+     * 撤销**落库失败**之后，把刚从栈顶摘走的那一条放回栈顶（T183 的修法本体）。
+     *
+     * ## 为什么放回顶上
+     *
+     * [pop] 摘走的就是栈顶 = 最近一次操作，原样放回去就是它被摘走时的位置；
+     * 顺序在这里唯一会变的根据是"这趟写库期间又有新条目进栈"，而那种情况下**不回推**（见下），
+     * 所以不存在"插错格子"的第三种结果。
+     *
+     * ## 票据闸门：三种情况回不来，都是故意的
+     *
+     * - 期间又 push 了一条（用户在写库这一趟里删了另一门课）⇒ 栈顶现在归那条新操作，
+     *   把旧条目按到它上面 = 把 LIFO 的顺序改乱，而新那一条才是用户下一步要撤的；
+     * - 期间被 [clear]（`ScheduleRepository` 里那四枚：换学期 / 整学期替换 / 备份恢复）⇒
+     *   那些落点清栈的理由就是"快照指向的行已经不属于当前这张表"，回推等于把旧数据插回新盘面；
+     * - 同一枚条目回推第二回 ⇒ 栈里躺着两份同一份快照，点两次撤销就把同一门课插回库里两遍。
+     *
+     * 三种都返回 `false`，调用点的文案因此**由返回值定**（`ui/UndoFailureRecovery.kt`），
+     * 不会念出一句"还留着"而条目其实不在。
+     */
+    @Synchronized
+    fun restoreTop(entry: UndoEntry): Boolean {
+        if (lastPopped !== entry) return false
+        lastPopped = null
+        stack.addLast(entry)
+        return true
+    }
 
     @Synchronized
-    fun clear() = stack.clear()
+    fun clear() {
+        stack.clear()
+        // 整栈作废 ⇒ 那枚票据也作废（回推会把旧表面的快照插回新表面，见 restoreTop）
+        lastPopped = null
+    }
 }
