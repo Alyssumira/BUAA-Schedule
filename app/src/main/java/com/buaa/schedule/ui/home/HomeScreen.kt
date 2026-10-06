@@ -784,6 +784,12 @@ fun HomeScreen(
                             onCourseResize = handleCourseResize,
                             onCourseDelete = handleCourseDelete,
                             pulseCourseId = pulseCourseId,
+                            // 这一档到底有没有栏体不由这里判：旗的唯一主人是 MainActivity 的
+                            // showBottomBar（宽屏导航栏分支不递 ⇒ 恒 false ⇒ 零留白，不白留一段空）。
+                            // 不许在这里按 isWideScreen 自己再算一遍：那两把尺量的不是同一个宽度
+                            // （一个是 BoxWithConstraints 的 maxWidth、一个是 screenWidthDp），
+                            // 各判各的迟早走岔——#214 就是"该让位的地方没人让"。
+                            bottomBarVisible = bottomBarVisible,
                             modifier = Modifier.weight(3f),
                         )
                         DayView(
@@ -795,6 +801,7 @@ fun HomeScreen(
                             onDateChange = { setBrowseDate(it) },
                             onCourseClick = onCourseClick,
                             specialDays = specialDays,
+                            bottomBarVisible = bottomBarVisible,
                             modifier = Modifier.weight(2f),
                         )
                     }
@@ -823,6 +830,7 @@ fun HomeScreen(
                                 onCourseResize = handleCourseResize,
                                 onCourseDelete = handleCourseDelete,
                                 pulseCourseId = pulseCourseId,
+                                bottomBarVisible = bottomBarVisible,
                             )
                             1 -> DayView(
                                 courses = visibleCourses,
@@ -833,6 +841,7 @@ fun HomeScreen(
                                 onDateChange = { setBrowseDate(it) },
                                 onCourseClick = onCourseClick,
                                 specialDays = specialDays,
+                                bottomBarVisible = bottomBarVisible,
                             )
                         }
                     }

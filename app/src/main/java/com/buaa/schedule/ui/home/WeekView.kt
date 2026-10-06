@@ -203,6 +203,16 @@ fun WeekView(
     onCourseMove: ((course: Course, newDayIndex: Int, newStartPeriod: Int, thisWeekOnly: Boolean) -> Unit)? = null,
     onCourseResize: ((course: Course, newPeriods: List<Int>) -> Unit)? = null,
     onCourseDelete: ((course: Course) -> Unit)? = null,
+    /**
+     * 手机端悬浮玻璃底栏此刻在不在屏上（#214）。
+     *
+     * ⚠️ **不许给默认值**：底栏用 overlay Box 而不是 Scaffold 排布，内容延伸到栏体背后滚动
+     * 是这种玻璃的视觉来源，因此本页那枚纵向滚动网格要自己让出
+     * [com.buaa.schedule.core.designsystem.floatingBottomBarClearance]。默认 `false` 买到的
+     * 就是本卡在修的缺陷形状（晚间节次被栏体切在屏底），默认 `true` 则在宽屏导航栏那一档
+     * 白留一段空——那一档根本没有栏体。旗的唯一主人是 MainActivity 的 `showBottomBar`。
+     */
+    bottomBarVisible: Boolean,
 ) {
     // 整块网格把「列表下标」当可视名次用：行序、时间线、拖拽取整、纵向度量都依赖
     // 节次自上而下的顺序，而教务数据与用户自定义作息都不保证有序。在唯一入口处排好，
@@ -362,6 +372,7 @@ fun WeekView(
                         onCourseResize = onCourseResize,
                         onCourseDelete = onCourseDelete,
                         pulseCourseId = pulseCourseId,
+                        bottomBarVisible = bottomBarVisible,
                     )
                 }
             } else {
@@ -386,6 +397,7 @@ fun WeekView(
                     onCourseResize = onCourseResize,
                     onCourseDelete = onCourseDelete,
                     pulseCourseId = pulseCourseId,
+                    bottomBarVisible = bottomBarVisible,
                 )
             }
         }
@@ -425,6 +437,8 @@ private fun WeekGrid(
     /** 空态里的「回到本周」：翻到别的周看到空白时，光靠一句提示找不到回家的路 */
     onReturnToThisWeek: () -> Unit = {},
     showAllCoursesWithoutWeek: Boolean = true,
+    /** 悬浮玻璃底栏在不在屏上：与 [WeekView] 同一枚旗，它决定这枚网格要不要让出 clearance（#214） */
+    bottomBarVisible: Boolean,
 ) {
     val coursesForContent = remember(courses, weekForContent, showAllCoursesWithoutWeek) {
         when {
@@ -693,7 +707,18 @@ private fun WeekGrid(
         modifier = Modifier
             .fillMaxWidth()
             .overscroll(overscrollEffect)
-            .verticalScroll(gridScrollState),
+            .verticalScroll(gridScrollState)
+            // #214：悬浮玻璃底栏 overlay 在网格之上（overlay 是这种玻璃的视觉来源，不改排布方式），
+            // 所以滚动内容的尾部要自己让出栏体高度，晚间节次才滚得出来。
+            // padding 只能挂在 verticalScroll **之后**：挂之前只是把视口缩短，滚动范围一点没变，
+            // 症状与今天一样。值与形状都照 ImportScreen / SettingsScreen 已有的两枚落点。
+            // 上面那层视口 Box（gridViewportPx 与长按菜单的锚点）不带这段留白，
+            // 所以菜单取整与滚动补偿那套算式一个字节都不用改。
+            .padding(
+                bottom = if (bottomBarVisible) {
+                    com.buaa.schedule.core.designsystem.floatingBottomBarClearance()
+                } else 0.dp,
+            ),
     ) {
         Box(
             modifier = Modifier

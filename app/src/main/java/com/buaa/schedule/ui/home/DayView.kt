@@ -151,6 +151,18 @@ fun DayView(
     onDateChange: (LocalDate) -> Unit = {},
     onCourseClick: (Course) -> Unit = {},
     specialDays: List<com.buaa.schedule.domain.model.SpecialDay> = emptyList(),
+    /**
+     * 手机端悬浮玻璃底栏此刻在不在屏上（#214）。
+     *
+     * ⚠️ **不许给默认值**。底栏是 overlay Box 而不是 Scaffold 排布（口径见
+     * [com.buaa.schedule.core.designsystem.floatingBottomBarClearance] 的注释）：内容延伸到
+     * 栏体背后滚动才是这种玻璃的视觉来源，所以本页的**每一枚纵向滚动容器**要自己让出那段
+     * clearance。`= false` 买到的正是本卡在修的那个缺陷 —— 编译通过、装机才发现：
+     * 今日页 3 节课时最后一张卡（19:50 体育）被栏体切在屏底、列表根本滚不出去。
+     * 而 `= true` 也不许：宽屏走导航栏分支、那一档根本没有栏体，硬留白就是白留一段空。
+     * 旗的唯一主人是 MainActivity 的 `showBottomBar`，由 HomeScreen 原样递下来。
+     */
+    bottomBarVisible: Boolean,
 ) {
     // Hero 与倒计时每分钟刷新；后台（低于 STARTED）自动停表，避免不可见时继续跑协程。
     // **醒来第一件事是发布、第二件事才是等下一次边界**：顺序反过来（旧写法先 delay
@@ -388,6 +400,9 @@ fun DayView(
                 timelineMode = timelineMode,
                 onDateChange = onDateChange,
                 onCourseClick = onCourseClick,
+                // 滚动容器住在 DayScreen 里（列表那枚 LazyColumn 与时间轴那枚 verticalScroll），
+                // 旗必须跟着下来：DayView 自己拿到的话什么都没让（#214 就是这么漏的）
+                bottomBarVisible = bottomBarVisible,
             )
         }
     }
@@ -569,6 +584,11 @@ private fun DayScreen(
     timelineMode: Boolean,
     onDateChange: (LocalDate) -> Unit,
     onCourseClick: (Course) -> Unit,
+    /**
+     * 悬浮玻璃底栏在不在屏上：本页**两枚**纵向滚动容器（列表模式的 LazyColumn、
+     * 时间轴模式的 verticalScroll）都吃这一枚旗，口径与理由见 [DayView] 的同名参数（#214）。
+     */
+    bottomBarVisible: Boolean,
 ) {
     val isToday = date == today
     // 转场 lambda 不在组合期求值，读不到 LocalProvide，开关在这里读一次传进去（§2.7）
@@ -660,6 +680,9 @@ private fun DayScreen(
                             isToday = isToday,
                             now = now,
                             onClick = onCourseClick,
+                            // 时间轴那支也要接旗：它与列表那支是同一个页面的两种画法，
+                            // 栏体在不在与画法无关（#214 的漏法正是"只补了看得见的那一支"）
+                            bottomBarVisible = bottomBarVisible,
                         )
                     } else {
                         // 卡片进场（T52②）：一条驱动按行次切窗口，第一次进入今日列表播一遍
@@ -667,6 +690,15 @@ private fun DayScreen(
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
                             verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceS),
+                            // 悬浮玻璃底栏 overlay 在这张列表之上，列表本身要延伸到栏体背后滚动，
+                            // 但**最后一张卡必须能滚出栏体区域**才读得到（#214）。
+                            // 形状照抄 ImportScreen / SettingsScreen 里已有的两枚落点（lazy 容器那两枚）：
+                            // lazy 容器走 contentPadding，值只认 floatingBottomBarClearance() 这一枚口径。
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                bottom = if (bottomBarVisible) {
+                                    com.buaa.schedule.core.designsystem.floatingBottomBarClearance()
+                                } else 0.dp,
+                            ),
                         ) {
                             itemsIndexed(
                                 items = rows,
@@ -762,6 +794,8 @@ private fun DayTimelineCourseList(
     isToday: Boolean,
     now: LocalTime,
     onClick: (Course) -> Unit,
+    /** 悬浮玻璃底栏在不在屏上：与 [DayView] 同一枚旗，理由见那枚参数的注释（#214） */
+    bottomBarVisible: Boolean,
     modifier: Modifier = Modifier,
 ) {
     if (periodTimes.isEmpty()) {
@@ -886,7 +920,16 @@ private fun DayTimelineCourseList(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .verticalScroll(scrollState),
+                .verticalScroll(scrollState)
+                // 与列表模式那枚 LazyColumn 同一件事：底栏 overlay 在内容之上，滚动内容的尾部
+                // 要让出栏体高度，最后一节课的色块才滚得出来（#214）。
+                // padding 挂在 verticalScroll **之后**才进滚动范围（挂之前只是缩小视口、
+                // 内容照样被栏体压住），形状照 ImportScreen / SettingsScreen 那两枚已有落点。
+                .padding(
+                    bottom = if (bottomBarVisible) {
+                        com.buaa.schedule.core.designsystem.floatingBottomBarClearance()
+                    } else 0.dp,
+                ),
         ) {
             // 左侧小时刻度列：与周视图 24h 模式同一件控件（TimelineAxis.kt，T49 提取）。
             // LineTop 档把每枚文字顶边贴到自己那枚整点的网格线上（错位实测与两档口径见
