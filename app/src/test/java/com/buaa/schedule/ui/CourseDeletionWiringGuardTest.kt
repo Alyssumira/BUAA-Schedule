@@ -670,7 +670,8 @@ class CourseDeletionWiringGuardTest {
         const val EDITOR_ON_BACK = "onBack()"
         const val MAIN_ACTIVITY_ON_DELETE_ANCHOR = "onDelete = { target ->"
         const val MAIN_ACTIVITY_AWAIT_CALL = "viewModel.deleteCourseAndAwait(target)"
-        const val MAIN_ACTIVITY_DELETE_FLAG_SET = "deleteRequestedByThisEntry = true"
+        const val MAIN_ACTIVITY_DELETE_FLAG_SET =
+            "backStackEntry.savedStateHandle[DELETE_REQUESTED_BY_THIS_ENTRY] = true"
 
         // ⑤ 内核
         const val KERNEL_PREDICATE = "internal fun deletionRemovedSomething("

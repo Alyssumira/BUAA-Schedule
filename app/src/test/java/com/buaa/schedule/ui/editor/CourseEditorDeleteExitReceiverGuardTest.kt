@@ -75,9 +75,9 @@ class CourseEditorDeleteExitReceiverGuardTest {
         assertEquals(
             "`$FLAG_DECL` 恰好一处：它就是「这门课刚被这一页删掉」与「这门课从来没读到」两档之间" +
                 "唯一的凭据。**摘掉它** ⇒ 删完课没人退栈（整屏空白原样回来）；**改名** ⇒ 下面那枚" +
-                "键表跟不上了，同样不点火。它必须 `remember(backStackEntry)` 而不是 `rememberSaveable` —— " +
-                "这枚旗的寿命就是这一条 back stack entry 的寿命，转屏/进程恢复之后没有任何理由" +
-                "替一次早就结束的删除再弹一次栈：" + hint(rawActivity, indexOfAll(activity, FLAG_DECL)),
+                "键表跟不上了，同样不点火。载体那一等（为什么必须是本条 entry 的 savedStateHandle、" +
+                "为什么点火要把它消费掉）逐形钉在 ui/editor/DeleteFlagConfigSurvivalGuardTest：" +
+                hint(rawActivity, indexOfAll(activity, FLAG_DECL)),
             1,
             occurrences(activity, FLAG_DECL),
         )
@@ -589,9 +589,16 @@ class CourseEditorDeleteExitReceiverGuardTest {
         const val SCHEDULE_VIEW_MODEL = "com/buaa/schedule/ui/ScheduleViewModel.kt"
 
         // ── ① 目的地层那一手退栈的形状 ──
+        // T177 重登（只改期望值，判据语义没动：仍是「这一枚凭据逐字恰好一处」）：旗标的载体从
+        // `remember(backStackEntry)` 换成本条 entry 的 savedStateHandle —— 前者不跨配置变化，
+        // 「删除已在途」这一刻转屏会把旗丢回 false，于是删成了也没人弹栈（#211 那一档）。
+        // 现在这枚凭据的寿命 = 这一条 back stack entry 的寿命（转屏存活、换 entry 就换一份 handle），
+        // 而「转屏之后不许替一次早就结束的删除再弹一次栈」那一半改由**点火即消费**兜（协程体内写回
+        // false 排在退栈之前）—— 那一族逐形钉在 ui/editor/DeleteFlagConfigSurvivalGuardTest。
         const val FLAG_DECL =
-            "var deleteRequestedByThisEntry by remember(backStackEntry) { mutableStateOf(false) }"
-        const val FLAG_SET = "deleteRequestedByThisEntry = true"
+            "val deleteRequestedByThisEntry by backStackEntry.savedStateHandle"
+        const val FLAG_SET =
+            "backStackEntry.savedStateHandle[DELETE_REQUESTED_BY_THIS_ENTRY] = true"
         const val EXIT_EFFECT = "LaunchedEffect(deleteRequestedByThisEntry, courseMissing, uiState.loading)"
         const val EXIT_CONDITION = "if (deleteRequestedByThisEntry && courseMissing && !uiState.loading) {"
         const val RENDER_GATE = "if (!uiState.loading && !courseMissing) {"

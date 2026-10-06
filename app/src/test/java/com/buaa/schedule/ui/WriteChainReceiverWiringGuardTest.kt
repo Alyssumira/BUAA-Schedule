@@ -88,7 +88,7 @@ import org.junit.Test
  * 13. **C 档 lambda 侧（T124c · T166 重钉）**：MainActivity 的 `onSave` lambda 体内两扇门都调 `...AndAwait(`、
  *     裸的 `viewModel.saveCourse(` / `viewModel.updateCourse(` 0 处、`pendingPulseCourseId` 那一行与
  *     端出的 `savedId` 逐字仍在（返回语义不变）；`onDelete` 那一枚按 `$C_ON_DELETE_ANCHOR` 取块，体内
- *     `viewModel.deleteCourseAndAwait(target)` 与 `deleteRequestedByThisEntry = true` 各恰好一处、
+ *     `viewModel.deleteCourseAndAwait(target)` 与立旗那一手（T177 之后是"写本条 entry 的 savedStateHandle"）各恰好一处、
  *     后者排前者**之前**，而体内 `popBackStack(` 0 处（**朝宽扭就在这一格红**：把退栈写进这枚 lambda
  *     = 写进调用者的组合期 scope，同一枚病换了个接收者）；全文裸 `viewModel.deleteCourse(` 0 处；
  *     `onSaveReminder` 那一手仍写 `viewModel.saveReminder(` 且 VM 里 `fun saveReminder` 体内自己就起在
@@ -327,7 +327,7 @@ class WriteChainReceiverWiringGuardTest {
         const val C_PULSE_LINE = "if (savedId != null) pendingPulseCourseId = savedId"
         const val C_ON_DELETE_ANCHOR = "onDelete = { target ->"
         const val C_ON_DELETE_AWAIT_CALL = "viewModel.deleteCourseAndAwait(target)"
-        const val C_ON_DELETE_FLAG_SET = "deleteRequestedByThisEntry = true"
+        const val C_ON_DELETE_FLAG_SET = "backStackEntry.savedStateHandle[DELETE_REQUESTED_BY_THIS_ENTRY] = true"
         const val C_ON_BACK_LAMBDA = "onBack = { navController.popBackStack() },"
         const val C_ON_SAVE_REMINDER_ANCHOR = "onSaveReminder = { id, enabled, minutes ->"
         const val C_RAW_SAVE_CALL = "viewModel.saveCourse("
