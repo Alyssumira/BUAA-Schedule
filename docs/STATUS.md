@@ -5104,3 +5104,43 @@ entry 重建而复位 ⇒ 旗没了、第二条协程不点火 ⇒ 仍会空白�
 - #211 的"删除在途转屏"重叠窗口在模拟器上抓不到（见第 3 节）。
 - `SemesterStats.courseGroupKey` 在 `sourceGroupKey == null` 时退化成"名字即身份"（两门同名课并成 1 门）：T179 沿用既有裁定并把它钉成现状档，**没有顺手修**，要修得先定"同名不同老师算不算两门"。
 - 旧账未动：**push**（本轮之后未推枚数见下）、**发版**（tag 仍 `v0.1.1`）、#193、#143、真机 #14 / #90 / #98（押在「USB 安全设置」那道闸上）、#213 与 #219 那两枚 docs 现值卡（本轮之后现值又变了）。
+
+### 10 第七轮下半：第二张普查网 → T182 / T183（同一晚接着盘）
+
+三张卡合完之后没有停手：把普查里剩下的两枚"改得起、钉得住、后果说得清"的候选立刻拆成卡派出去（起点 `f5cf281`，两枚**零文件重叠**所以并行）。
+
+- **T182 · C-2**（`c5e37a9`/`073c4a6`/`0e7db8a`）：周课表**表头**那枚"今天"胶囊的判据抽成 `WeekHeaderTodayPolicy.kt` 纯内核（`shouldHighlightToday(displayWeek, currentWeek, hasSemester)`），调用点从 `isBrowsingCurrentWeek || currentWeek == null` 改成 `!hasSemester || (currentWeek != null && displayWeek == currentWeek)`。方向按本仓那条规矩走的是**摘掉析取支里的一枚参照物**（`currentWeek == null` 那一支），不是翻分支；`semester == null` 那一档刻意留着（那时 `cellDate` 本来就是 null，表头只印星期名，胶囊断言的是"今天星期几"，不构成谎）。⚠️ 它把 `WeekView.kt` 的**行数配平成 2445 不变**（两行换两行），全仓指向该文件的行号锚点一枚不漂 —— 这类"只改语义不改行数"的写法值得抄。
+- **T183 · C-5**（`8a1c0e1`/`ee7224f`/`de6d9c4`）：`undo()` 的"消费"不再等于"永久丢失"。选的是**失败回推**那一支（`UndoManager.pop()` 立一枚按引用比的 `lastPopped` 票据 + 新增 `restoreTop(entry)`，push/clear/回推成功三处作废票据），不选 peek→落库→commit-pop，理由是后者让条目在整趟写库期间仍躺栈顶 ⇒ 双点「撤销」会把同一门课插回库里两遍，比顺序偏一格严重得多。失败分档表在 `UndoFailureRecovery.kt`（零 import）：库忙→回推+邀请再点／磁盘满·IO·OOM→留条目**不许诺**／撞约束·越界·bug→不回推（一枚永远失败的条目压在栈顶会把下面所有条目一起钉死）／认不出→留条目不许诺。三道闸 `!writtenToDb && kind.restoreEntry && UndoManager.restoreTop(last)`（刷 UI 那一拍抛了不回推，撤销条目不幂等）。**T123 没被顺手动**（加的是引用票据不是条目身份），它自己把这条写进回执交回来了。
+
+### 11 合并态门禁（`.worktrees/T183`，验的就是将来的 master）
+
+链 `f5cf281 → T182 三枚 → T183 三枚`（`ai/T183` rebase 到 `ai/T182`）。起跑前静态尺 `@Test`（仓内那把 `^    @Test`）**1,929** = 1,891 + 13 + 25，`*Guard*` 文件 62 枚。八步全绿：`clean` / `assembleRelease`（**7,254,865 B**）/ `testDebugUnitTest --rerun-tasks` ×2（两遍都是 **239 suites · 1,929 tests · 0 failures · 0 errors · 0 skipped**）/ `lintDebug`（**0 errors · 14 warnings**）/ `:benchmark:compileNonMinifiedReleaseKotlin` / `assembleDebug`。master `--ff-only` 到 **`31c0dca`**。
+
+包体这一档要单独记：T183 自己跑了**两次独立全量都是 7,254,935 B**（它那棵树），合并态这趟是 7,254,865 B —— 三枚数字互不相同而每枚都是"往 dex 真加了类"的结果，所以按 [[buaa-apk-size-floor]] 的口径**这次仍然不立地板**：不同树的读数不能当同一档的第二次复验，要立得在同一枚 commit 上再跑一次独立全量。
+
+### 12 装机兑现：T182 的假期态 A/B（本轮唯一一枚真拍到运行期的表现）
+
+造态是**可逆的一格 DB 改动**（记下原值再改回去）：`select id,termCode,startDate,totalWeeks from semesters` 先读回 `1|2026-2027-1|2026-08-31|19`，再 `update semesters set startDate='2026-12-01'` ⇒ 今天（10/6）落在学期开始**之前**，`WeekCalculator.currentWeekOrNull` 给 null，正是寒暑假那一档。测完逐值还原，装机复验读回 `2026-08-31`。
+
+| | 表头那一行（y 540–720 的蓝像素） | 屏上读到什么 |
+|---|---|---|
+| 改前 `712011b` | **有**蓝块 x 290–386 y 587–684（n=3,265）＝"今天"胶囊亮在**周二**那一格 | 同一行印的日期是 11/30–12/6，顶栏第一行写「假期中」 |
+| 改后 `31c0dca` | **零蓝像素** | 表头七格全不亮，网格是「假期中」空状态卡，那句文案说实话："今天不在本学期的教学周里，所以这一屏没有课；开学后会自动回到课表。" |
+
+⇒ C-2 从"读代码推出的组合结果"升级为**装机兑现**。顺带把这枚残账拍成了证据：改前改后**表头都仍印学期第 1 周的日期**（11/30–12/6），这正是 T182 自己在回执里点名的那一格 ⇒ 登记 **#232**。
+
+装机坐标这轮又是程序量的：分段控件那颗蓝胶囊量到 x 708–868（`周课表` 被选中时），第一次我按上一轮的旧坐标估了个 (603, 220) 结果点进了「学期统计」——**同一枚控件在不同页面上的位置不一样，跨页复用坐标必错**。
+
+### 13 编排侧自己这一晚新增的两把尺与一枚新病
+
+- **`?: 1` 造出不存在的坐标**这一族（T27 的形）重扫一遍：`domain`/`data`/`ui` 里 20 处命中，逐枚读完判成三档 —— **活的**只有一枚：`IcsParser.kt` 的 `sectionOf`（`:177-181`）在"时间早于第一节节次"时 `previous?.number ?: 1` 把活动静默安成第 1 节（07:30 的课被印成 08:00 且不告诉你）⇒ 登记 **#234**。**判死**的 19 处含：`Course.startPeriod/endPeriod`（T27 已收口、下游不再拿它造位置）、`CourseConflictResolution` 的 `dayByKey[key] ?: 1`（每个 `parent` 里的 root 都在同一趟循环里被 `putIfAbsent` 过，联合之后仍拿得到 ⇒ 那枚兜底不可达）、`SemesterStats.weekAxisLength` 的 `?: 1`（除数守卫，空表时横轴本来就没内容）、`HomeScreen` 翻周那两枚（两侧都有 `coerceAtLeast/AtMost`，#231 那族已核过）。
+- **注释与代码自相矛盾**这一族（C-6 的形）今天连中两枚（C-6 与 C-2 都是"上一行写着 A、这一行做着 B"）⇒ 下一轮普查把"同段注释里带『只』『都』『必须』『不许』的句子"当锚点专门扫，比扫判据本体便宜。
+- 台账自身：本轮又差点把 `BuaaLoginScreen` 那枚文件名与行号连写抄进新章节（写完之后 grep 到自己，拆掉才 append）——四把尺在 append **之后**复跑仍是 **268 / 589 / 146 / 24**，`STATUS.md` 5,026 → 5,106 → 本节后继续，bareLF 恒 0。
+
+### 14 第七轮下半的未验到 / 残余
+
+- T183 全部只有 JVM + 静态证据：`SQLiteBusyException`/`SQLiteFullException`/`SQLiteConstraintException` 真机是否按这些类名抛出（android.* 那几枚 JVM 造不出实例，只有字符串查表证据）；「失败 → 再点一次 → 课真撤回来」整条闭环；写库期间 push/clear 的协程交错无并发压测；取消那一支不回推是按 `suspendCatching` 语义推的。
+- T182 的假期态已经装机兑现（见上），但**无学期那一档**（`semester == null` 时仍亮星期名列）没有像素读数。
+- `ScheduleViewModel.kt` 现在 1,834 行（T181 + T183 先后改它）⇒ 全仓指向该文件的裸 `:NNN` 锚点自 `undo()` 起 **+36**，登记 **#233**（含 `docs/TESTING.md` 与 README 现值跟到 1,929 / 239 / 62）。
+- 本轮注入：T182 / T183 各自报 **0 枚**。
+- 旧账未动：**push**（现在 29 枚）、**发版**（tag 仍 `v0.1.1`）、#193、#143、真机 #14 / #90 / #98、#217、#218、#219、#220。
