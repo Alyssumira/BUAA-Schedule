@@ -83,6 +83,28 @@ data class Course(
     /** 显示名：别名优先，空别名回退教务原名 */
     val displayName: String
         get() = alias?.trim()?.takeIf { it.isNotEmpty() } ?: name
+
+    /**
+     * 「手动课程」的全仓唯一口径：**这一行不挂在任何学期下**（[semesterCode] 为 null）。
+     *
+     * 为什么需要一枚属性而不是各处现写：备份那两句数（预览句「其中手动课程 N 条」、
+     * 恢复句「新增手动课程 M 条」）此前一边写 `isManualOverride`、一边写
+     * `semesterCode == null`，同一个词两套定义，同一份备份的两句数因此对不上（T184）。
+     * 值 = f(同表参数)，按本仓派生字段口径只有类体属性这一条合法落点（与
+     * [firstPeriodOrNull] 同样是 `minOrNull()` 的一层薄壳），两侧各自读它。
+     *
+     * ⚠️ **别与 [isManualOverride] 混成一件东西**：那一枚说的是「这行被用户手改过，
+     * 从此退出教务刷新的匹配与覆盖」（写点见 `ui/home/HomeScreen` 的拖课与
+     * `ui/home/ConflictWizardDialog` 的挪时间，判据供给在 `ui/home/ManualTimeOverridePolicy`），
+     * 而 `isManualOverride = true` 的教务课 [semesterCode] 照样非空 ——
+     * 拿它数手动课程会把「拖过的教务课」念成「手动课程」，两集合天生不重合。
+     *
+     * 同一判据在 SQL 里有一枚**读不到这枚属性的孪生落点**：`data/local/CourseDao` 的
+     * `getManualCourses()` 用 `WHERE semesterCode IS NULL`（恢复流程按它取本地手动课）。
+     * 两边由 `domain/model/ManualCourseDefinitionGuardTest` 一起钉住：属性体改写字面、
+     * 那条 `@Query` 换谓词，都会红。
+     */
+    val isManualCourse: Boolean get() = semesterCode == null
 }
 
 /**

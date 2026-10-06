@@ -1387,7 +1387,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 startDate = data.semester?.startDate,
                 totalWeeks = data.semester?.totalWeeks,
                 courseCount = data.courses.size,
-                manualCourseCount = data.courses.count { it.isManualOverride },
+                manualCourseCount = data.courses.count { it.toDomain().isManualCourse },
                 timeSlotCount = data.timeSlots.size,
                 reminderCount = data.reminders.size,
             )

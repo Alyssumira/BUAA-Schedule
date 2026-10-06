@@ -665,7 +665,7 @@ class ScheduleRepository(
         val safeSlots = timeSlots.filter { com.buaa.schedule.domain.schedule.isValidTimeSlot(it) }
 
         val mainCode = backupSemester?.termCode ?: normalized.firstNotNullOfOrNull { it.semesterCode }
-        val manual = normalized.filter { it.semesterCode == null }
+        val manual = normalized.filter { it.isManualCourse }
         val semesterGroups = normalized
             .mapNotNull { course -> course.semesterCode?.let { code -> code to course } }
             .groupBy({ it.first }, { it.second })
