@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -82,20 +83,34 @@ fun GlassSurface(
     // 实际染哪支、上面写哪支，一次定（[semanticGlassPlateOf]）。
     // 夹 alpha 的参照文字色也必须用它——恒传 onSurfaceVariant 等于按一块并不存在的板算下限，
     // 那块板压不压得实、压到多实，全跟着错的配对走（ai/T23 的 0.96 实心粉底就是这么来的）。
-    val rawAlpha = glassRawAlpha(variant, material, semanticTint, alphaScale)
-    val semanticPlate = semanticTint?.let {
-        semanticGlassPlateOf(it, rawAlpha, darkTheme, colorScheme)
-    }
-    val baseTint = semanticPlate?.tint ?: if (darkTheme) DarkGlassTint else LightGlassTint
-    val surfaceAlpha = glassSurfaceAlpha(
-        variant = variant,
-        material = material,
-        semanticTint = semanticTint,
-        alphaScale = alphaScale,
-        baseTint = baseTint,
-        text = semanticPlate?.foreground ?: colorScheme.onSurfaceVariant,
-        darkTheme = darkTheme,
-    )
+    // 这五行（rawAlpha → semanticPlate → baseTint → surfaceAlpha）是下面那句
+    // 「全部输入 remember 化」原先漏掉的一段：每次重组裸跑一遍 glassRawAlpha +
+    // semanticGlassPlateOf（内含 listOf/map/maxByOrNull）+ glassSurfaceAlpha →
+    // legibilityAlphaFloor → worstGlassSceneLuma → DesignTokens.glassAlphaFloor。
+    //
+    // 落点选 derivedStateOf 而不是「把手头的输入全列进键」：链上要读 [SceneLuma.wallpaper]
+    // （worstGlassSceneLuma 读它，本链经 legibilityAlphaFloor 与 legibleSemanticPlate 共三次
+    // 触到），而带键的 remember 会把这次读丢在键表上——块内 State 读记的是**外层组合作用域**，
+    // 换壁纸重组外层但键没变，就直接回缓存值：板子的透明度从此不再跟壁纸走，
+    // 不报错、不红、门禁全绿。derivedStateOf 由 snapshot 自己记依赖，链上将来再加 State
+    // 也不会漏失效。外层键只列**非 State 的普通输入**：少一位就是另一族陈旧（alphaScale 这类）。
+    val alphaChain = remember(
+        variant, material, semanticTint, alphaScale, darkTheme, colorScheme,
+    ) {
+        derivedStateOf {
+            glassAlphaChain(
+                variant = variant,
+                material = material,
+                semanticTint = semanticTint,
+                alphaScale = alphaScale,
+                darkTheme = darkTheme,
+                colorScheme = colorScheme,
+            )
+        }
+    }.value
+    val semanticPlate = alphaChain.plate
+    val baseTint = alphaChain.baseTint
+    val surfaceAlpha = alphaChain.surfaceAlpha
     val wantsGlass = DesignTokens.surfaceUsesGlass(tier, variant)
     var acquired by remember { mutableStateOf(false) }
     DisposableEffect(wantsGlass) {
@@ -151,6 +166,62 @@ fun GlassSurface(
             }
         }
     }
+}
+
+/**
+ * [glassAlphaChain] 的三件产出：成对的语义板、这块板实际染的 tint、最终 tint alpha。
+ *
+ * 三个字段必须**一起**换：它们同源于一次反解（[semanticGlassPlateOf] 要 raw alpha，
+ * surfaceAlpha 又要按 plate 的前景取下限）。把它们拆成两次 remember 就是"一块板两个口径"
+ * 那个老同族——换壁纸时一半跟着变、一半留在缓存里。
+ */
+@Immutable
+data class GlassAlphaChain(
+    val plate: SemanticPlate?,
+    val baseTint: Color,
+    val surfaceAlpha: Float,
+)
+
+/**
+ * [GlassSurface] 的 alpha 反解链：逐枚原样搬自组合期（改前 `GlassSurface.kt` 的 85–98 行），
+ * **一个数字的口径都没改**——数值仍由 [glassRawAlpha] / [semanticGlassPlateOf] /
+ * [glassSurfaceAlpha] 这三家说了算，各自的表驱动单测（`GlassSurfaceAlphaTest`、
+ * `SemanticGlassPlateTest`）继续按原样钉它们。
+ *
+ * 抽出来的唯一理由：这段纯表达式原先每次重组裸跑一遍，而同文件里 `material`（按
+ * variant/darkTheme/panelBlurDp 记）与 `glassModifier`（按 backdrop/…/surfaceAlpha 记）
+ * 都已 remember 化，它是那句「全部输入 remember 化」漏掉的一段。
+ * 抽成非组合期的函数后，[GlassSurface] 能把整条链包进
+ * `remember(非 State 输入) { derivedStateOf { … } }`——链上对 [SceneLuma.wallpaper] 的读
+ * 由 snapshot 记账，换壁纸必然重算（带键的 remember 会把这次读丢在键表上，
+ * 于是"壁纸换了、板的透明度不动"，静默画错）。
+ *
+ * internal + 纯函数：本模块的 JVM 单测没有 Compose 运行时，抽出来才测得到"链与调用点
+ * 逐格等值"（`GlassAlphaChainCacheGuardTest`）。
+ */
+internal fun glassAlphaChain(
+    variant: GlassVariant,
+    material: LiquidGlassMaterial,
+    semanticTint: Color?,
+    alphaScale: Float,
+    darkTheme: Boolean,
+    colorScheme: ColorScheme,
+): GlassAlphaChain {
+    val rawAlpha = glassRawAlpha(variant, material, semanticTint, alphaScale)
+    val semanticPlate = semanticTint?.let {
+        semanticGlassPlateOf(it, rawAlpha, darkTheme, colorScheme)
+    }
+    val baseTint = semanticPlate?.tint ?: if (darkTheme) DarkGlassTint else LightGlassTint
+    val surfaceAlpha = glassSurfaceAlpha(
+        variant = variant,
+        material = material,
+        semanticTint = semanticTint,
+        alphaScale = alphaScale,
+        baseTint = baseTint,
+        text = semanticPlate?.foreground ?: colorScheme.onSurfaceVariant,
+        darkTheme = darkTheme,
+    )
+    return GlassAlphaChain(semanticPlate, baseTint, surfaceAlpha)
 }
 
 /**
@@ -237,6 +308,13 @@ internal fun glassRawAlpha(
  *
  * 不是 `@Composable`：调用方需要在 `remember { }` 里算它。
  * 组合期内读 [SceneLuma] 照样会被记录，换壁纸仍然会触发重算。
+ *
+ * ⚠️ 上面那两句只对**无键的 `remember { }`** 成立。换成 `remember(k1, k2) { }` 之后，
+ * 块内那次 [SceneLuma] 读仍然记在**外层组合作用域**上（换壁纸会重组外层），但键没变就
+ * 直接回缓存值——结果是"壁纸换了、这块板的透明度不再跟着变"，不报错也不红。
+ * 调用方两条合法落点：用 `derivedStateOf` 让 snapshot 自己记依赖（[GlassSurface] 的
+ * [glassAlphaChain] 走这条），或把 [SceneLuma.wallpaper] 先显式读成一枚局部 val 再列进键
+ * （`GlassSegmentedControl` 的 `wallpaperStats` 走这条）。只改一半就是静默画错。
  *
  * @see legibleTintPlate 前景色**也还没定**（课程色底板这类）时用那个，它会连文字色一起解出来
  * @see DesignTokens.glassAlphaFloor 两个入口共同的数值口径
