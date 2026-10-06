@@ -5024,3 +5024,83 @@ entry 重建而复位 ⇒ 旗没了、第二条协程不点火 ⇒ 仍会空白�
 - **#213/#216 那枚文档现值卡现在欠的数变了**：`docs/TESTING.md` 该走 **1,839 tests · 224 suites · 218 test 文件 · 54 枚 `*Guard*` · 94 枚读主源码**，基点 `0ad3c4c`。
 - **#214** 装机实证已补进本轮 §5；**#211** 残窗、**#193**、**#143**、真机那三条（#14/#90/#98）照旧。
 
+
+## 10-06/10-07 第七轮：继续找 bug（撤销链残窗 + 底栏遮挡 + 正确性普查第三域 → 三张落地卡）
+
+用户话：**「继续直到找不出bug」**（登记成目标，20 轮预算）。上一轮收尾时手上挂着两枚已定性未修的缺陷（#214 底栏遮挡、#211 撤销链残窗），这一轮先把它们修掉并装机兑现，再把只读普查扩到第三个域（正确性），一次盘出十枚候选。
+
+### 1 两枚在册缺陷的修法（各一张卡，起点 `712011b`）
+
+- **T176 · #214**（`054d1b0` + `81dc57e`）：课表两页**三枚纵向滚动容器**补上悬浮底栏 clearance —— 今日页列表用 `contentPadding`，时间轴那一行与周网格的 `Box` 走链尾 `.padding(bottom = …)`，全部由 `bottomBarVisible` 闸住（底栏收起时给 0，不留一段空走马）。新增 `FloatingBarScrollClearanceGuardTest`（7 枚 `@Test`）钉"这一族每一枚容器都带着它"，报错消息点名漏的是哪一页。
+- **T177 · #211**（`66ab992` + `04a90e2`）：编辑器删课那面"我要退栈"的旗从 `remember(backStackEntry){mutableStateOf}` 换载体到**本条 entry 的 `savedStateHandle`**（`getStateFlow(...).collectAsState()`），消费点在 `popBackStack()` **之前**写回 `false`（不是 `remove()` —— `remove()` 会丢掉 `flows` 里的缓存，之后写入不再通知正在 collect 的那一枚协程）。新增 `DeleteFlagConfigSurvivalGuardTest`（526 行 / 5 枚 `@Test`）。
+
+### 2 合并态门禁（在 `.worktrees/T177`，验的就是将来的 master）
+
+`712011b → 054d1b0 → 81dc57e → 66ab992 → 04a90e2`，静态尺先自证：`@Test`（仓内那把 `^    @Test`）1,851 = 1,839 + 7 + 5。八步全绿：`clean` / `assembleRelease` / `testDebugUnitTest --rerun-tasks` ×2 / `lintDebug` / `:benchmark:compileNonMinifiedReleaseKotlin` / `assembleDebug`。
+
+### 3 装机兑现（模拟器 `emulator-5554`，坐标全程序量，零手估）
+
+**#214 改前/改后**（同一台、同一天、同一列像素）：
+
+| | 今日页（周二 3 张卡） | 周五 5 张卡 · 滚到真到底 |
+|---|---|---|
+| 改前 `712011b` | 亮带 1500–1767 / 1791–2061，底栏 2148–2313 | 最后一张卡（取底栏遮不到的 x 980–1030 那一列）1908–**2180** ⇒ 卡底 **32 px 压在底栏带（2148–2313）底下** |
+| 改后 `04a90e2` | 亮带逐带相同 ⇒ 短列表零回归 | 卡底 **2102**，与底栏带之间空出 46 px 灰带 |
+
+两档都验过"真到底"：连推两次 `input swipe` 帧差分为 0（改前那次推不动＝滚不动了，正是这枚缺陷的形状；改后那次同样推不动，但卡已经整枚露出来）。**所以 #214 的准确说法是"最后一张卡滚不出底栏"，不是"这一帧像素重叠"** —— 短列表那一档本来就不重叠。
+
+**#211 正常路径回归 + 转屏**：深链 `--el com.buaa.schedule.widget.EXTRA_COURSE_ID <id>` 直接进编辑器（绕开点击），删除按钮 (540, 2053)、确认弹窗那颗 (793, 1393) 都是量出来的；`motionevent DOWN` + 0.35 s + `UP` 五发全中。
+
+- 删完落回今日页：ink **239,276**（同一天健康基线 239,236；判据是 ≫500 的空白阈）⇒ 换载体没把 T166 的修法换坏。
+- 「pop 之后立刻转屏」：确认键 `UP` 与 `settings put system user_rotation 1` 写在**同一枚 shell 调用**里 ⇒ 横屏落在今日页、ink 120,449 非空白，**一次 BACK 回桌面**（不是两次）⇒ 不多弹一格这条兑现。DB 侧 `count(1) where id in (9502,9503)` = 0 证真删；两枚探针课是 `run-as sqlite3` 现插的，种子那 22 行没动。
+- ⚠️ **「删除在途那一瞬转屏」仍未验到**：Room 删除几十毫秒就完，`user_rotation` 生效要到几百毫秒之后，模拟器上抓不到重叠窗口。这一档只有守卫的形状钉 + 上面那条运行期旁证。
+- ⚠️ 装机仪表又应验一次：`force-stop` 之后冷启动到"能点"要 20–30 s（`InputDispatcher … spent 4794ms processing FocusEvent`）。我中途把一张"周课表空网格"的帧当候选读过 —— 那是导航未加载的帧，三秒后同一页亮带 18 条。**等页面到位要轮询那一页独有的像素特征**（编辑器＝底部那枚蓝保存条，本轮实测蓝行 2244–2360），"有东西在画"不算。
+
+### 4 第三域只读普查（正确性：日期/周次/学期算术 · 导入/备份往返 · 撤销链）
+
+交回 **10 枚候选 + 1 枚判未决 + 一节「明确不是 bug」（10 族）**。十枚的锚点我逐枚 `sed` 回读过盘面原文，全对得上：
+
+| 枚 | 一句话 | 落点（文件 + 符号） |
+|---|---|---|
+| C-1 | 「导入完成：新增 N」念的是归一化**之前**的数，被 `normalize` 判死的行静默消失 | `ScheduleViewModel.kt` 的 `:880-884`（`confirmPendingImport`）+ `ScheduleRepository.kt` 的 `:532`（返回 Unit） |
+| C-2 | 寒暑假里周课表**表头**把"今天"胶囊扣在学期第 1 周那一格，而同一屏顶栏写着「假期中」 | `WeekView.kt` 的 `:243` / `:285`（`highlightToday = isBrowsingCurrentWeek \|\| currentWeek == null`） |
+| C-3 | 首次教务导入的开学日兜底**正是那枚 parse 失败的原串** ⇒ 坏日期原样进库 | `BuaaLoginScreen.kt` 的 `:174-179`（`getOrDefault(rawStart)`） |
+| C-4 | WakeUp 导出把不连续周次压平成 `startWeek..endWeek` ⇒ 对方 App 里多出根本没上的周 | `ScheduleExporters.kt` 的 `toWakeUpJson`（`:60-67`） |
+| C-5 | `undo()` 先 `pop()` 再落库，抛异常 ⇒ 快照已被消费、撤销永久消失 | `ScheduleViewModel.kt` 的 `:688-699` + `UndoManager.kt` 的 `:113` |
+| C-6 | 周次异动摘要按 `it.id` 数"门"，而它自己上一行注释写着「两段课只算一门」 | `HomeScreen.kt` 的 `:377-388` |
+| C-7 | 备份的"手动课程"有两套定义：预览按 `isManualOverride`、恢复按 `semesterCode == null` | `ScheduleViewModel.kt` 的 `:1344` vs `ScheduleRepository.kt` 的 `:652` |
+| C-8 | WakeUp 导出成功那句缺右括号（同函数另一支带着） | `ScheduleViewModel.kt` 的 `:1737-1739` |
+| C-9 | 备份只带**一枚**学期行，跨学期恢复用「今天周一 + 20 周」补建 ⇒ 旧学期那一档全错 | `BackupModels.kt` 的 `:20` + `ScheduleRepository.kt` 的 `:575-586` |
+| C-10 | 判未决：ICS 往返把跨午休的一门课拆成两行（合不回一行，因为 `courseKey` 含 periods）—— 缺的是"用户是否把 [5,6] 当一门课"这条口径 | `ScheduleOccurrences.kt` 的 `:79` → `IcsExporter.kt` 的 `:63` → `IcsParser.kt` 的 `:133` |
+
+「明确不是 bug」那一节里值得复记的三族：`WidgetNavigation` 的 `coerceIn` 区间恒不空（两侧都先 `coerceAtLeast(1)`）、`IcsParser` 的 `INTERVAL`/`maxIterations`/`unescape` 对称、`SpecialDayCache` 的 `padStart` 与跨年月份文件。**别再盘第四遍。**
+
+### 5 三张落地卡（起点都是 `04a90e2`，零文件重叠 ⇒ 并行）
+
+- **T179 · C-6**（4 枚 commit）：判据抽成 `WeekChangeSummary.kt` 纯内核（零 android import、零时钟），比对键换成 `SemesterStats.courseGroupKey`，表驱动 10 档 + 接线守卫 5 档。它额外补了一枚 commit 把表驱动与守卫从"第一档红就短路"改成**累计交出所有红档** —— 变异自证要报得全，这条我认。
+- **T180 · C-3**（3 枚）：抽 `resolveBuaaSemesterStart`（纯 JVM、零时钟，`Resolved` / `Undetermined` 两态），调用点换成"认不出来就报错 + 返回，不建 `Semester`"。它逐字核过写库链才动手：`replaceSemesterCoursesInTx` 对 `startDate` 一字不判，唯一那道 parse 闸门长在备份恢复链上 ⇒ 坏串确实一路读到 `startLocalDate` 恒 null。**行为收紧面已登记成 #230**（`fetchSemesterInfo` 那四档 `SemesterInfo(weeks.size, null)` 过去靠猜还能导入，现在一律拒）。
+- **T181 · C-1 + C-8**（2 枚，同文件合卡）：`ImportWriteTally` 纯内核 + `ImportCompletionCopy` / `WakeUpExportCopy` 两枚纯文案件，`replaceSemesterCoursesWithHistory` 返回类型 `Unit` ⇒ `ImportWriteOutcome`，dropped>0 时那句补"（跳过 M 条无效）"，缺的右括号补上；外加全仓**按句配平**的括号守卫（实测 178 句 / 51 链，下限钉 150 / 20）。它顺手扫出的六处"逐枚字面量看着不平、按句其实闭合"的链**只列不改**，判未决交回。残账（同族第三处 `replaceSemesterCourses` 盖着的两条 UI 调用）登记成 **#229**。
+
+三张卡各自门禁全绿；合并态（`04a90e2` + 9 枚）静态尺 `@Test` **1,891** = 1,851 + 8 + 15 + 17、`*Guard*` 文件 60 枚（原 56）。
+
+### 6 编排侧自己那三把新尺（只读，零构建）
+
+- **带键 `remember` 读状态**普查：`app/src/main` 里 `remember(…) {` 同形状 113 处，体内出现 `Personalization.*` / `Local*.current` / `uiState.*` 的只有 2 处，两处都合法（一枚键里就带着那枚状态、一枚是 `rememberLauncherForActivityResult` 的回调）⇒ 上一轮那枚陷阱全仓没有第二处。⚠️ 这把尺只覆盖"键与体在同一行"的形状，跨行写的键它看不见。
+- **PendingIntent 可变性**普查：20 处调用点，18 处带 `FLAG_IMMUTABLE`，2 处 `FLAG_MUTABLE` 在 `WidgetCommon` 的集合点击模板里、注释明写"必须 MUTABLE 否则系统合不进行 extras"⇒ 负读数。`registerReceiver` 全仓 0 处。
+- **Room `IN (:x)` 空列表**普查：5 处，3 处 KDoc 明写"调用方必须先判空"，`deleteByIds` 走 `chunked().forEach`（空集合不进循环），`deleteKeysNotIn` 由"keys 恒含 `current`"这条不变量挡着（`WidgetDataSynchronizer` 类注释第 1 条自己把这颗地雷写全了）。组合期内联派生 flow 再 `collectAsState()`：0 处。
+
+### 7 台账自身的一枚缺陷（本轮发现，未动盘）
+
+`docs/STATUS.md` 里「10-05 第四轮：T166 落地」那一节**整节重复了两份**（第 4750 行与第 4831 行，各约 80 行），差异只有两处：前一份带「本条已被下一节当场作废」的订正标记、并把 `BuaaLoginScreen` 里那枚文件名与行号连写的锚点拆开，后一份是这两处改动之前的旧文。登记成 **#231**，删哪一份、相对指代怎么改、连写少了之后 589 那把尺要不要复算，都写在那一格。**这一轮我没动它** —— 台账是共享历史，删 80 行不是可逆动作。
+
+### 8 注入登记
+
+三张代码卡自报 **0 枚**（T179 / T180 / T181 全票：工具输出里没出现冒充用户改口或门禁结论的文字）。P-C 普查卡自报 **15 枚**，共同形状是"三条已验到的假缺陷 + 一句催我收尾或催我别收尾"，其中伪造的假缺陷（`dateToWeek` 偏一周、`toDomain` 的 `credit` 没走 normalize、`clampWeekOffset` 上下界反了、`currentWeek` 回负数、`mergeSameSlotOccurrences` 未定义谁赢）我逐枚回读盘面全部证伪，它按自己写的调用序号也没被采信进报告。**注意它的一条**：注入推销的三条取材点与它自己独立读到的三条重合（C-1 / C-3 / C-7），所以收单时不能拿"它报了我才找到"当证据 —— 判据是我自己 `sed` 回读过原文。
+
+### 9 未验到 / 残余
+
+- C-1 / C-3 / C-6 / C-8 的**运行期后果**一律只有 JVM 证据：真教务页面返回非 ISO 首周、真含星期 8 的导入批次、真带 `sourceGroupKey` 的理论/实验两行 —— 全都要装机或真数据。
+- C-2 / C-4 / C-5 / C-7 / C-9 / C-10 已拆成 #224–#230 排队，其中两枚是评估卡（#227 拆条 vs 说实话、#230 坏页面占比）。
+- #211 的"删除在途转屏"重叠窗口在模拟器上抓不到（见第 3 节）。
+- `SemesterStats.courseGroupKey` 在 `sourceGroupKey == null` 时退化成"名字即身份"（两门同名课并成 1 门）：T179 沿用既有裁定并把它钉成现状档，**没有顺手修**，要修得先定"同名不同老师算不算两门"。
+- 旧账未动：**push**（本轮之后未推枚数见下）、**发版**（tag 仍 `v0.1.1`）、#193、#143、真机 #14 / #90 / #98（押在「USB 安全设置」那道闸上）、#213 与 #219 那两枚 docs 现值卡（本轮之后现值又变了）。
