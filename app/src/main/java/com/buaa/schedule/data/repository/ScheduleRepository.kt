@@ -13,6 +13,8 @@ import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.schedule.CourseConstraints
 import com.buaa.schedule.domain.schedule.ImportPlanner
+import com.buaa.schedule.domain.schedule.ImportWriteOutcome
+import com.buaa.schedule.domain.schedule.ImportWriteTally
 import com.buaa.schedule.domain.schedule.WeekCalculator
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -528,19 +530,33 @@ class ScheduleRepository(
      * 两者各自独立事务，中间失败（进程被杀、磁盘满）会留下
      * "课表已经换掉、历史里却查不到这次导入" 的不一致状态，
      * 用户看到的是「导入记录失踪但课表变了」。
+     *
+     * **T181①：返回值是这本账，不是 Unit。**
+     * 入库前那一刀 [CourseConstraints.normalize] 会判死若干条（星期几越界、周次全越界、
+     * 没有节次、名称空白），此前这些行只在事务里蒸发、调用方连"少了"都不知道 ——
+     * 而确认卡那句「导入完成：新增 N」念的是预览条数，于是屏幕上的数比课表里的多。
+     * 现在由 [ImportWriteTally] 在同一趟里数清留下的行与判死的条数并交回，
+     * 那句文案才有"跳过 M 条无效"这一格可念（判据与措辞见
+     * [com.buaa.schedule.ui.importing.importCompletionMessage]）。
+     *
+     * 同一条账也顺手补进**导入历史那一行**：`courseCount` 在导入记录页是当"N 条课程"念给
+     * 用户听的，写进去的必须是真进了库的条数，否则修好一句、留下另一句同源的不实话。
      */
     suspend fun replaceSemesterCoursesWithHistory(
         semester: Semester,
         importedCourses: List<Course>,
         history: ImportHistory,
-    ) {
+    ): ImportWriteOutcome {
+        // normalize 是纯判据：先在锁外数好这本账，事务里写的就是数过的同一份（不许各跑一遍）
+        val outcome = ImportWriteTally.tally(importedCourses)
         writeMutex.withLock {
             db.withTransaction {
-                replaceSemesterCoursesInTx(semester, importedCourses.mapNotNull(CourseConstraints::normalize))
-                importHistoryDao.insert(history.toEntity())
+                replaceSemesterCoursesInTx(semester, outcome.writtenCourses)
+                importHistoryDao.insert(history.copy(courseCount = outcome.writtenCount).toEntity())
             }
             UndoManager.clear()
         }
+        return outcome
     }
 
     private suspend fun replaceSemesterCoursesInTx(semester: Semester, importedCourses: List<Course>) {

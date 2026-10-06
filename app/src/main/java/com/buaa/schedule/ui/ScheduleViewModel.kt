@@ -35,7 +35,9 @@ import com.buaa.schedule.domain.schedule.CourseFilter
 import com.buaa.schedule.domain.schedule.ImportPlanner
 import com.buaa.schedule.domain.schedule.WeekCalculator
 import com.buaa.schedule.ui.home.nextDayTickDelayMillis
+import com.buaa.schedule.ui.importing.importCompletionMessage
 import com.buaa.schedule.ui.importing.importParseSummary
+import com.buaa.schedule.ui.settings.wakeUpExportMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -862,14 +864,18 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     return@withImportLock
                 }
                 // 课程替换与导入历史必须同事务落库，否则中途失败会出现
-                // 「课表已换、历史无记录」的错位
-                repository.replaceSemesterCoursesWithHistory(
+                // 「课表已换、历史无记录」的错位。
+                // 返回值是这本账（T181①）：normalize 会判死若干条，此前那些行只在事务里蒸发，
+                // 而下面那句「导入完成：新增 N」念的是预览条数 ⇒ 屏幕上的数比课表里的多。
+                val written = repository.replaceSemesterCoursesWithHistory(
                     semester = pending.semester,
                     importedCourses = selection.toWrite,
                     history = ImportHistory(
                         source = pending.source,
                         importedAt = System.currentTimeMillis(),
                         termCode = pending.semester.termCode,
+                        // 这里的 toWrite.size 只是占位：仓储在同一趟事务里把它覆盖成
+                        // **真进了库的条数**（导入记录页那一句"· N 条课程"念的就是它）
                         courseCount = selection.toWrite.size,
                         message = "导入成功",
                     ),
@@ -877,11 +883,15 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 // 导入可能复用/生成新 id，从数据库重读后再重排提醒
                 afterDataChangedInternal()
                 _pendingImport.value = null
-                _importMessage.value = AppMessage(buildString {
-                    append("导入完成：新增 ${selection.addedCount}、更新 ${selection.changedCount}")
-                    if (selection.keptCount > 0) append("、保留 ${selection.keptCount}")
-                    append("（含拆行片段）")
-                }, isSuccess = true)
+                _importMessage.value = AppMessage(
+                    importCompletionMessage(
+                        addedCount = selection.addedCount,
+                        changedCount = selection.changedCount,
+                        keptCount = selection.keptCount,
+                        droppedCount = written.droppedCount,
+                    ),
+                    isSuccess = true,
+                )
             }
         }
     }
@@ -1733,11 +1743,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             val unplaceable = courses.count { it.periods.isEmpty() }
             val written = withContext(Dispatchers.IO) { writeTextToUri(uriString, json) }
             showMessage(
-                if (written) {
-                    if (unplaceable == 0) "WakeUp JSON 已导出（${courses.size} 门课）"
-                    else "WakeUp JSON 已导出（${courses.size - unplaceable} 门课；" +
-                        "另有 $unplaceable 门没有节次、无法定位，未写入"
-                } else "导出失败：无法写入所选位置",
+                if (written) wakeUpExportMessage(courses.size, unplaceable) else "导出失败：无法写入所选位置",
                 isError = !written,
             )
         }
