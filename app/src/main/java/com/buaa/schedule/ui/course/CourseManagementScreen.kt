@@ -169,7 +169,15 @@ fun CourseManagementScreen(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM),
                     ) {
-                        items(groups, key = { it.key }) { group ->
+                        items(
+                            groups,
+                            key = { it.key },
+                            // 这一枚容器混排两种形状：组卡（N 枚）与最末那枚垫高的 Spacer（1 枚）。
+                            // 不给 contentType 时两者共用一桶，滚出视口的 Spacer 槽位可能被派去渲染
+                            // 组卡（结构不符，这次复用当场作废）。组卡自身仍旧只占一桶——按内容
+                            // 分细（比如按展开态）会让行在桶之间搬，是纯亏。
+                            contentType = { "course-group-card" },
+                        ) { group ->
                             CourseGroupCard(
                                 group = group,
                                 timeSlots = state.timeSlots,
@@ -196,7 +204,11 @@ fun CourseManagementScreen(
                                 modifier = Modifier.animateItem(),
                             )
                         }
-                        item { Spacer(modifier = Modifier.height(DesignTokens.spaceXL)) }
+                        // 第二枚形状：整列最末的垫高（滚到底才出场，总共就一枚），
+                        // 单独占一桶，别让它去顶掉一张组卡的槽位。
+                        item(contentType = "course-group-list-footer") {
+                            Spacer(modifier = Modifier.height(DesignTokens.spaceXL))
+                        }
                     }
                 }
             }

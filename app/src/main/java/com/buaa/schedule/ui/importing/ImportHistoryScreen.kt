@@ -95,12 +95,21 @@ fun ImportHistoryScreen(
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceM),
                 ) {
-                    items(history, key = { it.id }) { entry ->
+                    items(
+                        history,
+                        key = { it.id },
+                        // 这一枚容器混排两种形状：导入记录卡（N 枚，GlassSurface{Column{2~3 Text}}）
+                        // 与最末那枚「清空全部历史记录」按钮（1 枚）。不给 contentType 时两者共用
+                        // 一桶，滚出视口的按钮槽位可能被派去渲染记录卡（结构不符，这次复用作废）。
+                        // 记录卡自身只占一桶——行内 `entry.message?.let` 那枚可选 Text 不是第二种
+                        // 行形状，按它分桶会把同一种卡劈成两桶，纯亏。
+                        contentType = { "import-history-row" },
+                    ) { entry ->
                         // 卡与卡之间只留间距：以前还叠一条 HorizontalDivider，
                         // 加上 divider 自己的上下内衬就是三重分隔，读起来像表格线（M14）
                         ImportHistoryRow(entry)
                     }
-                    item {
+                    item(contentType = "import-history-clear") {
                         TextButton(
                             onClick = { showClearConfirm = true },
                             modifier = Modifier

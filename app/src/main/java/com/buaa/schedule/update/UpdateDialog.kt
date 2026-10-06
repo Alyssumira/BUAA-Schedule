@@ -193,8 +193,35 @@ private fun ChangelogList(lines: List<ChangelogLine>) {
             .heightIn(max = ChangelogMaxHeight),
         verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceXS),
     ) {
-        items(lines.size) { index -> ChangelogRow(lines[index]) }
+        items(
+            lines.size,
+            // key 必须同时带位置与内容：只带 index 等于没带（同一格里换了另一行文本会被当成
+            // 同一项继续复用），而只带内容又不唯一——changelog 里合法地会出现两个一模一样的
+            // 项目符号行、多个空行，撞 key 是直接抛 IllegalArgumentException。
+            key = { index -> "$index|${lines[index]}" },
+            // 这一枚容器真的混排两种**结构形状**（见 [changelogContentType]），按形状分桶；
+            // 不写的话两型行共用一桶，滚出视口的 Row 槽位可能被派去渲染 Text，复用当场作废。
+            contentType = { index -> changelogContentType(lines[index]) },
+        ) { index -> ChangelogRow(lines[index]) }
     }
+}
+
+/**
+ * changelog 行的回收桶归属：按**结构形状**分，不按文本、也不按位置。
+ *
+ * [ChangelogLine] 四档里只有 [ChangelogLine.Bullet] 是 `Row { Text; Text }`；
+ * Heading / Paragraph / Blank 都是单枚 `Text`，Heading 那句 `Modifier.padding(top = 6.dp)`
+ * 只是修饰符链、不新增节点，所以三档结构相同，共享一桶（分开会把回收池切成更多桶，
+ * 每桶都要各自攒槽位，纯亏）。`when` 不带 `else`：以后新增一型行时必须在这里
+ * 交代它归哪一桶，不许悄悄并进文本桶。
+ */
+internal fun changelogContentType(line: ChangelogLine): String = when (line) {
+    ChangelogLine.Blank,
+    is ChangelogLine.Heading,
+    is ChangelogLine.Paragraph,
+    -> "changelog-text"
+
+    is ChangelogLine.Bullet -> "changelog-bullet"
 }
 
 @Composable
