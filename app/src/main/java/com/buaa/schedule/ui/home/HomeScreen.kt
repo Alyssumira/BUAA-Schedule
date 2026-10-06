@@ -375,25 +375,13 @@ fun HomeScreen(
     }
 
     // 周次异动摘要（③C-02）：周次此前在课表界面完全不可见，单周课、只上到第 8 周的课
-    // 看起来都像"课没了"。按课程 id 集合比对本周与上周，两段课只算一门。
+    // 看起来都像"课没了"。按**门**（SemesterStats.courseGroupKey）比对本周与上周，
+    // 两段课（理论 1-8 + 实验 9-16）只算一门 —— 判据本体在 WeekChangeSummary.kt，这里只递参数。
+    // 键表三枚就是内核的全部输入（visibleCourses / browseWeek / state.currentWeek）：
+    // 漏一枚就是翻周或换校区后摘要停在旧缓存（T41/T43/T68 同族坑）。
     val weekChangeSummary = remember(visibleCourses, browseWeek, state.currentWeek) {
         val week = browseWeek ?: state.currentWeek
-        if (week == null || week <= 1) {
-            null
-        } else {
-            val thisWeek = visibleCourses.filter { it.weeks.contains(week) }
-                .mapTo(mutableSetOf()) { it.id }
-            val lastWeek = visibleCourses.filter { it.weeks.contains(week - 1) }
-                .mapTo(mutableSetOf()) { it.id }
-            val added = (thisWeek - lastWeek).size
-            val removed = (lastWeek - thisWeek).size
-            when {
-                added == 0 && removed == 0 -> null
-                added > 0 && removed > 0 -> "比上周多 $added 门、少 $removed 门"
-                added > 0 -> "比上周多 $added 门"
-                else -> "比上周少 $removed 门"
-            }
-        }
+        WeekChangeSummary.summaryText(visibleCourses, thisWeek = week, lastWeek = week?.minus(1))
     }
 
     // 首次导入前的空状态：没有课程时在内容区叠一张引导卡，告诉新用户从哪开始。
