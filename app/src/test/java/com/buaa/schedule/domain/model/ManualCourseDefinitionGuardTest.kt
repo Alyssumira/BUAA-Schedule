@@ -166,7 +166,8 @@ class ManualCourseDefinitionGuardTest {
         assertEquals(
             "全仓 main 的裸 `semesterCode == null` 应当恰好 3 处（判据本体 1 + 两枚不同含义的既有写法）：" +
                 "期望 " + ledger.values.sum() + " 枚，实到 " + actual.values.sum() + " 枚。" +
-                "第 4 枚就是「留了两份表达式」的那一枚。\n" + filesHint(actual),
+                "多出来的一枚就是「留了两份表达式」的那一枚；少一枚说明判据本体被改写字面、" +
+                "或上面两枚既有写法被并进了这一判（那是另一件事，见段首）。\n" + filesHint(actual),
             ledger.values.sum(),
             actual.values.sum(),
         )
