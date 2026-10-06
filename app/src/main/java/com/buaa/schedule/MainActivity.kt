@@ -453,7 +453,10 @@ private fun BUAAScheduleApp(
     startRoute: String? = null,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val prefs = context.getSharedPreferences("schedule_settings", Context.MODE_PRIVATE)
+    // 组合期不重复取 SharedPreferences 句柄（口径与形状同 ui/settings/SettingsScreen.kt:264 那处规矩）。
+    val prefs = remember(context) {
+        context.getSharedPreferences("schedule_settings", Context.MODE_PRIVATE)
+    }
     var darkModePref by remember {
         mutableStateOf(DarkModePreference.load(prefs))
     }
