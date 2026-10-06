@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.room.withTransaction
 import com.buaa.schedule.data.local.AppDatabase
 import com.buaa.schedule.data.local.WidgetSnapshotEntity
-import com.buaa.schedule.data.repository.ScheduleRepository
+import com.buaa.schedule.data.repository.scheduleRepository
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
@@ -120,8 +120,9 @@ object WidgetDataSynchronizer {
      */
     suspend fun sync(context: Context) = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext
-        val repository = (appContext as? com.buaa.schedule.BUAAApplication)?.repository
-            ?: ScheduleRepository(AppDatabase.getInstance(appContext))
+        // 与兜底函数逐字等价（scheduleRepository 内部同样取 applicationContext 再 as? BUAAApplication），
+        // 这里只是把已经摊开写过一遍的那份兜底换成统一入口，省掉每轮 sync 一枚 DAO 包装与第二把写锁。
+        val repository = appContext.scheduleRepository()
         val db = AppDatabase.getInstance(appContext)
         val dao = db.widgetSnapshotDao()
         val semesters = repository.getAllSemesters()

@@ -8,8 +8,7 @@ import android.content.Intent
 import android.os.Build
 import android.util.Log
 import com.buaa.schedule.R
-import com.buaa.schedule.data.local.AppDatabase
-import com.buaa.schedule.data.repository.ScheduleRepository
+import com.buaa.schedule.data.repository.scheduleRepository
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.startLocalDate
@@ -61,7 +60,7 @@ class TomorrowPreviewReceiver : BroadcastReceiver() {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         if (!prefs.getBoolean(PREF_ENABLED, true)) return
 
-        val repository = ScheduleRepository(AppDatabase.getInstance(context))
+        val repository = context.scheduleRepository()
         val semester = repository.getCurrentSemester()
         val courses = repository.getDisplayCourses(semester)
         val timeSlots = repository.getTimeSlots()

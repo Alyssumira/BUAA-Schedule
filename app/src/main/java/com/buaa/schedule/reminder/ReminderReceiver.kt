@@ -8,8 +8,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.buaa.schedule.R
 import com.buaa.schedule.data.import.IClassSession
-import com.buaa.schedule.data.local.AppDatabase
-import com.buaa.schedule.data.repository.ScheduleRepository
+import com.buaa.schedule.data.repository.scheduleRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -54,7 +53,7 @@ class ReminderReceiver : BroadcastReceiver() {
                     // 闹钟触发后链式调度下一次提醒；goAsync 保证广播进程存活到调度完成，
                     // 唤醒锁保证 Doze 下 CPU 不会在 DB 查询/重排中途再度入睡（进程活着 ≠ CPU 醒着）
                     runCatching {
-                        val repository = ScheduleRepository(AppDatabase.getInstance(context))
+                        val repository = context.scheduleRepository()
                         val semester = repository.getCurrentSemester()
                         val courses = repository.getDisplayCourses(semester)
                         val timeSlots = repository.getTimeSlots()
