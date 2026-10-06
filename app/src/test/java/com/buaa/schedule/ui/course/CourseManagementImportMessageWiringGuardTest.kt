@@ -14,14 +14,14 @@ import org.junit.Test
  * 1. **VM 的组删除链不是「只写不回的失败档」**：`deleteCourseGroup` 返回 `Boolean`，两条早退都回
  *    `false`（`if (courses.isEmpty()) return false` / `if (snapshot.courses.isEmpty())
  *    return@suspendCatching false`），`.fold({ it }, { e -> … })` 把结论原样端出去，异常那一档才顺手写
- *    `AppMessage("删除课程失败：…")`。而 `:222` 的两支文案与 `:223` 那颗 `actionLabel` 闸**都读的是同一枚
+ *    `AppMessage("删除课程失败：…")`。而 `:234` 的两支文案与 `:235` 那颗 `actionLabel` 闸**都读的是同一枚
  *    `deleted`** ⇒ 删组这一族在 UI 上根本没有「用户点了、却一句反馈都没有」的档。T127 类头残账写的是
  *    **归因**（「还在课表里」这句没说清原因），不是「无人念」。
  * 2. **真正没人念的是另外两族**：换色那一族（`viewModel.updateCourse(` 的返回值 `Long?` 被丢掉）与撤销
  *    那一族（`fun undoDeleteCourse() = undo()` 返回 `Unit`，`没有可撤销的操作` / `已撤销：…` /
  *    `撤销失败：…` 三句只写进 `importMessage`）。撤销那一族按返回值**压根分不出文案** —— 这笔账在
  *    VM 的对外形状上，本卡红线明令不改 VM，所以只能登记。
- * 3. **接桥会付三笔账**：① `deleteCourseGroup` 异常那一档与 `:221` 那一条双念；② 同一条
+ * 3. **接桥会付三笔账**：① `deleteCourseGroup` 异常那一档与 `:233` 那一条双念；② 同一条
  *    `SnackbarHostState` 上后 show 的取消先 show 的 ⇒ 「已删除 + 那颗撤销」会被随后任何一句
  *    `importMessage` 提前收掉（T127 §6 与 UndoUpdateEntry 第 ④ 层钉的就是那颗按钮的窗口）；
  *    ③ `HomeScreen :515-520` 那枚桥吃掉的是**整个** `StateFlow`：用户从首页带着一句未完成的话跳进
@@ -34,7 +34,7 @@ import org.junit.Test
  * `importMessage` 的话，而这一页一处也不读」——这是**病**，只是本卡判下来不由"在这一页补渲染"来收。
  * 谁要收，必须先让这三层红一次、并把第 ③ 层那十八枚锚点与第 ⑤ 层那格画得出的位置一起重钉：
  * - 在这一页补上任何 `importMessage` 渲染接线 ⇒ 第 ①②⑦ 层与第 ③ 层红（不许悄悄落地）；
- * - 把这一页唯一的渲染接线（`:221` 那一条）**摘掉** ⇒ 第 ③④⑤ 层红；
+ * - 把这一页唯一的渲染接线（`:233` 那一条）**摘掉** ⇒ 第 ③④⑤ 层红；
  * - 把它**挪到根本画不出来的位置**（例如 `if (isEmpty)` 那一支——有课的时候那个分支压根不组合）
  *   ⇒ 第 ③⑤ 层红，落点与次序全数对也不许放行。
  *
@@ -150,12 +150,14 @@ class CourseManagementImportMessageWiringGuardTest {
         }
         assertEquals(
             "锚点漂移 $drifted 处。复算单枚：awk 'NR==行号' app/src/main/java/$PAGE\n" +
-                "每一枚都写在 docs/derived-field-audit.md 的账里（`:186`/`:188` 是 §9.1 #6 那两处起手块、" +
-                "`:218`–`:225` 与 `:227` 是 §9.2 #5 那两道间接闸与那颗撤销）。\n" +
-                "⚠️ 上面这几枚是 **T124a 之后的现值**：那一张卡把换色那一枚协程的接收者从页 scope 搬到 " +
-                "`viewModel.viewModelScope`（import +1 行、落点上方 +4 行注释 ⇒ 181 起整体 +5），而 " +
-                "docs/derived-field-audit.md §9.1 #6 / §9.2 #5 里仍写着 `:181`/`:183`/`:213`–`:220`/`:222` " +
-                "那一套旧行号 ⇒ 文档那一侧留给文档卡重钉，本格先按盘面把锚钉住。谁再插一行、删一行、" +
+                "每一枚都写在 docs/derived-field-audit.md 的账里（`:194`/`:196` 是 §9.1 #6 那两处起手块、" +
+                "`:230`–`:237` 与 `:239` 是 §9.2 #5 那两道间接闸与那颗撤销）。\n" +
+                "⚠️ 上面这几枚是 **T170 之后的现值**：T124a 把换色那一枚协程的接收者从页 scope 搬到 " +
+                "`viewModel.viewModelScope`（import +1 行、落点上方 +4 行注释 ⇒ 当时 181 起整体 +5），T170 又给" +
+                "这一页的组卡 `items(…)` 与最末那枚 `item { Spacer }` 各补了一枚 contentType（+8 行起在 :172、" +
+                "+4 行起在它下面 ⇒ 协程那三枚现读 194/195/196、删组弹窗那十二枚现读 219–239）。" +
+                "docs/derived-field-audit.md 那一侧的锚点被这两轮插行又推过一次 ⇒ 文档那一侧留给文档卡重钉，" +
+                "本格先按盘面把锚钉住。谁再插一行、删一行、" +
                 "把某句挪一位，都会在这儿露出来。" +
                 "漂移的读法有两种，都得回来重判：① 有人在这一页改了文案/接线（那就是本卡判下来不该由它改）；" +
                 "② 有人在这一页**之前**插了行（那会把全仓指向这一页的锚点一起顶穿）",
@@ -164,7 +166,7 @@ class CourseManagementImportMessageWiringGuardTest {
         )
     }
 
-    // ─────────────── ④ 反向格：:221 那一支的文案与那颗动作 label 不许被顺手改掉 ───────────────
+    // ─────────────── ④ 反向格：:233 那一支的文案与那颗动作 label 不许被顺手改掉 ───────────────
 
     @Test
     fun `删组那一支的文案与那颗动作 label 一字未动 提示条不许整条删掉`() {
@@ -194,7 +196,7 @@ class CourseManagementImportMessageWiringGuardTest {
             occurrences(code, UNGATED_LABEL),
         )
         assertEquals(
-            "这一页的渲染接线今天恰好一处 `showSnackbar`（`:221` 那一条）。" +
+            "这一页的渲染接线今天恰好一处 `showSnackbar`（`:233` 那一条）。" +
                 "**朝宽扭这里红**：整条删掉 = 0 处（删掉的是唯一画得出来的那句）；" +
                 "在这一页补一枚 bespoke 提示 = 2 处。\n" +
                 "复算：grep -n 'showSnackbar(' app/src/main/java/$PAGE",
@@ -258,7 +260,7 @@ class CourseManagementImportMessageWiringGuardTest {
             it in (confirm.openBrace + 1) until confirm.closeBrace
         }
         assertEquals(
-            "`confirmButton` 之内那趟 `scope.launch {` 恰好一处（`:219`）—— 它是那一句唯一的宿主",
+            "`confirmButton` 之内那趟 `scope.launch {` 恰好一处（`:231`）—— 它是那一句唯一的宿主",
             1,
             launchHits.size,
         )
@@ -272,7 +274,7 @@ class CourseManagementImportMessageWiringGuardTest {
             1,
             depthWithin(code, launchOpen, showAt),
         )
-        // 次序：起协程 → 读删除结论 → 才念那一句（同一趟 scope.launch 之内，`:219`–`:229`）
+        // 次序：起协程 → 读删除结论 → 才念那一句（同一趟 scope.launch 之内，`:231`–`:241`）
         val verdictAt = code.indexOf(GROUP_READ_VERDICT)
         val launchAt = code.lastIndexOf(LAUNCH_ANCHOR, verdictAt)
         val undoAt = code.indexOf(GROUP_UNDO)
@@ -292,7 +294,7 @@ class CourseManagementImportMessageWiringGuardTest {
      *   `e.message` 只长在 VM 那一枚 `AppMessage("更新课程失败：…")` 里；照返回值分文案 = 把
      *   T127 §9.2 #5 那把尺（两支读**同一枚结论**）搬到一枚**没有闸的对象**上（返回值今天被丢掉、
      *   也没有第二句「为什么」），收的是「有没有 id」而不是「用户看不看得见那句原因」。
-     * - **这一页哪几族真的没人念**：换色（`:187`）与撤销（`:227`）两族，逐枚原文写在第 ① 层那五枚写点里。
+     * - **这一页哪几族真的没人念**：换色（`:195`）与撤销（`:239`）两族，逐枚原文写在第 ① 层那五枚写点里。
      */
     @Test
     fun `撤销那一族在 UI 侧没有可分文案的信号 这笔账在 VM 的对外形状上`() {
@@ -325,7 +327,7 @@ class CourseManagementImportMessageWiringGuardTest {
         assertEquals(
             "这一页那两枚**裸语句**调用各恰好一处（整行以它开头、没有接收者）：" +
                 "`viewModel.undoDeleteCourse()` 与 `viewModel.updateCourse(` —— 这就是「只写 importMessage、" +
-                "不返回给调用点」那一族在这一页的两枚入口（换色 `:187` / 撤销 `:227`）。\n" +
+                "不返回给调用点」那一族在这一页的两枚入口（换色 `:195` / 撤销 `:239`）。\n" +
                 "复算：grep -n 'viewModel.updateCourse(\\|viewModel.undoDeleteCourse()' app/src/main/java/$PAGE\n" +
                 "**这格红了要回来重判的是本卡的判词**：谁把它们改成 UI 当场可读（接返回值自念一句、" +
                 "或 VM 分档回话），这一页就不再需要渲染 `importMessage`，第 ①② 层那两层要跟着翻面",
@@ -567,7 +569,8 @@ class CourseManagementImportMessageWiringGuardTest {
             "suspend fun updateCourse(course: Course, options: CourseSaveOptions = CourseSaveOptions()): Long? ="
 
         // ④ T127 那一支（本卡一字不许动）
-        // T124b（B 档）：调用名换成 ...AndAwait，**仍在 :220 那一行**（改名不插行 ⇒ 十八枚锚点的行号没漂）
+        // T124b（B 档）：调用名换成 ...AndAwait，**仍在 :220 那一行**（改名不插行 ⇒ 十八枚锚点的行号没漂；
+        // 那一句是 T124b 当时的账，T170 给这一页插了 12 行之后这一枚落在下面册子写的 :232）
         const val GROUP_READ_VERDICT = "val deleted = viewModel.deleteCourseGroupAndAwait(target.fragments)"
         const val GROUP_MESSAGE_EXPRESSION =
             "message = if (deleted) \"已删除「\${target.displayName}」\" " +
@@ -580,26 +583,30 @@ class CourseManagementImportMessageWiringGuardTest {
         // ③ 这一页的锚点册子（行号 → 逐字，docs §9.1 #6 / §9.2 #5 钉的就是这几枚）
         // T124a 在这一页搬走了一枚协程的接收者：import +1 行、那一枚落点上方 +4 行注释、
         // `:181` 那一行由 `scope.launch {` 改成 `viewModel.viewModelScope.launch {` ⇒ 181 起整体 +5。
-        const val PAGE_LINES = 456
+        // T170 又在这一页的 `items(groups, …)` 那一枚调用点上给组卡与尾部垫高各加了一枚
+        // contentType（+8 行落在 :172 那一处、+4 行落在尾部 `item { Spacer }` 那一处）
+        // ⇒ 组卡那一枚协程起整体 +8、ModalTransition 起整体 +12；逐字原文一字未动，
+        // 下面这十八枚行号按现盘重钉（复算：wc -l = 468，逐枚 awk 'NR==行号'）。
+        const val PAGE_LINES = 468
         val ANCHORS = listOf(
             99 to "val state by viewModel.uiState.collectAsState()",
             105 to "val snackbarHostState = remember { SnackbarHostState() }",
             109 to "Scaffold(",
             110 to "snackbarHost = { SnackbarHost(snackbarHostState) },",
-            186 to "viewModel.viewModelScope.launch {",
-            187 to "viewModel.updateCourse(",
-            188 to "primary.copy(colorIndex = index, customColorArgb = null),",
-            207 to "ModalTransition(payload = pendingDelete) { group, modal ->",
-            215 to "confirmButton = {",
-            218 to "pendingDelete = null",
-            219 to "scope.launch {",
-            220 to GROUP_READ_VERDICT,
-            221 to "val result = snackbarHostState.showSnackbar(",
-            222 to GROUP_MESSAGE_EXPRESSION,
-            223 to GROUP_GATED_LABEL,
-            224 to GROUP_DURATION,
-            226 to GROUP_PERFORMED,
-            227 to GROUP_UNDO,
+            194 to "viewModel.viewModelScope.launch {",
+            195 to "viewModel.updateCourse(",
+            196 to "primary.copy(colorIndex = index, customColorArgb = null),",
+            219 to "ModalTransition(payload = pendingDelete) { group, modal ->",
+            227 to "confirmButton = {",
+            230 to "pendingDelete = null",
+            231 to "scope.launch {",
+            232 to GROUP_READ_VERDICT,
+            233 to "val result = snackbarHostState.showSnackbar(",
+            234 to GROUP_MESSAGE_EXPRESSION,
+            235 to GROUP_GATED_LABEL,
+            236 to GROUP_DURATION,
+            238 to GROUP_PERFORMED,
+            239 to GROUP_UNDO,
         )
     }
 }
