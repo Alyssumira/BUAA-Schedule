@@ -240,7 +240,7 @@ fun WeekView(
             }
         }
     }
-    val isBrowsingCurrentWeek = displayWeek == currentWeek
+    // 表头「今天」胶囊该不该亮整条交给 shouldHighlightToday（WeekHeaderTodayPolicy.kt，T182）
 
     // 假期/调休标注：整张表只剩一份「折算后的标注」，按日期键现问现答（T62②）。
     // 以前这里自己按浏览周算出 7 个日期、再 `firstOrNull { it.date == date }` 压成
@@ -282,7 +282,7 @@ fun WeekView(
             // 周次导航 / 学期 / 校区 / 时间模式这一行由 HomeScreen 统一渲染
             // （放在页面级而不是周视图里，切到「今日」页签时这些入口也要在）
             DayHeader(
-                highlightToday = isBrowsingCurrentWeek || currentWeek == null,
+                highlightToday = shouldHighlightToday(displayWeek, currentWeek, hasSemester = semester != null),
                 today = today,
                 compactScroll = compactScroll,
                 compactDayWidth = compactDayWidth,
