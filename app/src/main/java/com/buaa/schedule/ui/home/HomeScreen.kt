@@ -1163,8 +1163,14 @@ private fun ScheduleToolbarRow(
                         },
                     )
                     Spacer(modifier = Modifier.height(DesignTokens.spaceS))
+                    // 这枚清单的**来源**要记住：写在 items(...) 实参里的话，这一格每重组一次就
+                    // 新建一份 List（重组的来源不少：周号、密度条数据、弹窗开关本身），而下面
+                    // 那枚 key 判的是"这一行还是不是原来那一行"，两者配成一对才不白干活。
+                    val weekChoices = remember(totalWeeks) { (1..totalWeeks).toList() }
                     LazyColumn(modifier = Modifier.height(DesignTokens.dialogListMaxHeight)) {
-                        items((1..totalWeeks).toList()) { week ->
+                        // key 用周号本身：它在 1..totalWeeks 里唯一，且"第 3 周"永远是第 3 周，
+                        // 与内容摘要无关（这条列表没有会被就地编辑的输入框，滚出视口也不带状态）。
+                        items(weekChoices, key = { it }) { week ->
                             Text(
                                 text = if (week == currentWeek) "第 $week 周（本周）" else "第 $week 周",
                                 style = MaterialTheme.typography.bodyLarge,
