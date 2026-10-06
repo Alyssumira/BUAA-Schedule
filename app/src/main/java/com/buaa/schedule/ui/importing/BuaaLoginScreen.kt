@@ -60,7 +60,9 @@ import com.buaa.schedule.core.designsystem.LocalSemanticColors
 import com.buaa.schedule.core.designsystem.LocalSemanticPlate
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.data.import.BuaaInPageFetcher
+import com.buaa.schedule.data.import.BuaaSemesterStart
 import com.buaa.schedule.data.import.redactUrl
+import com.buaa.schedule.data.import.resolveBuaaSemesterStart
 import com.buaa.schedule.ui.ScheduleViewModel
 import java.net.URLEncoder
 
@@ -168,37 +170,51 @@ fun BuaaLoginScreen(
                 }
                 else -> {
                     val termName = terms.firstOrNull { it.code == selectedTerm }?.name ?: selectedTerm
-                    // 开学日取 getTermWeeks 第1周 startDate；缺失则用今日所在周一兜底。
-                    // 与静默刷新路径（BuaaWebSession）同口径过 mondayOf：教务首周可能
-                    // 返回报到日（周日/周六），不归一会让首次导入整表偏移、下次刷新又挪回来
-                    val rawStart = info.firstWeekMonday
-                        ?: java.time.LocalDate.now().minusDays((java.time.LocalDate.now().dayOfWeek.value - 1).toLong()).toString()
-                    val startDate = runCatching {
-                        com.buaa.schedule.domain.schedule.WeekCalculator
-                            .mondayOf(java.time.LocalDate.parse(rawStart)).toString()
-                    }.getOrDefault(rawStart)
-                    val semester = com.buaa.schedule.domain.model.Semester(
-                        termCode = selectedTerm,
-                        termName = termName,
-                        startDate = startDate,
-                        totalWeeks = totalWeeks,
-                    )
-                    // 进入导入预览（不直接落库），随后跳到导入页让用户确认。
-                    // 用 Outcome 版解析：缺教师/按整学期兜底的条数要作为警告带进预览，
-                    // 此前走 parseArrangedList 把警告整个丢掉了
-                    val parsed = com.buaa.schedule.data.import.BuaaScheduleParser
-                        .parseArrangedListOutcome(outcome.courses, selectedTerm, totalWeeks)
-                    val parseWarnings = buildList {
-                        if (parsed.fallbackWeekCourses > 0) {
-                            add("${parsed.fallbackWeekCourses} 条课程缺少教师/周次信息，已按整学期展示，请核对")
+                    // 开学日只认 getTermWeeks 第 1 周的 startDate（过 mondayOf 归一成周一）。
+                    // **认不出来就不动学期**，口径对齐静默刷新那一路（BuaaWebSession.refreshSchedule
+                    // 的 `?: existingStartDate ?: return Result.failure(...)`；首次导入手里没有
+                    // existingStartDate，所以那一等落到"报错 + 返回"）。
+                    // 旧形状是 `runCatching { mondayOf(LocalDate.parse(rawStart)) }.getOrDefault(rawStart)`
+                    // —— 兜底值正是 parse 失败的那枚原串，坏日期因此原样进 Semester.startDate 并落库，
+                    // 此后 Semester.startLocalDate 恒 null（周课表空网格、提醒链 cancelAll、
+                    // 组件停在"假期中"、设置页念出并回写这串垃圾）。也不许换成"今天所在周的周一"：
+                    // 提前导入下一学期时那是一枚猜出来的日期，整表日期与周次编号一起偏。
+                    // 判据本体在 resolveBuaaSemesterStart（纯 JVM、零时钟），这里只取它的结论。
+                    when (val start = resolveBuaaSemesterStart(info.firstWeekMonday)) {
+                        is BuaaSemesterStart.Undetermined -> {
+                            viewModel.showMessage(
+                                "教务系统没有给出可识别的开学日期" +
+                                    "（第 1 周 startDate = ${if (start.raw.isNullOrBlank()) "缺失" else "「${start.raw}」"}），" +
+                                    "已保留原课表未做改动，请稍后重试",
+                                isError = true,
+                            )
+                            onBack()
                         }
-                        if (parsed.unknownTeacherCourses > 0 && parsed.fallbackWeekCourses == 0) {
-                            add("${parsed.unknownTeacherCourses} 条课程缺少教师信息")
+                        is BuaaSemesterStart.Resolved -> {
+                            val semester = com.buaa.schedule.domain.model.Semester(
+                                termCode = selectedTerm,
+                                termName = termName,
+                                startDate = start.monday.toString(),
+                                totalWeeks = totalWeeks,
+                            )
+                            // 进入导入预览（不直接落库），随后跳到导入页让用户确认。
+                            // 用 Outcome 版解析：缺教师/按整学期兜底的条数要作为警告带进预览，
+                            // 此前走 parseArrangedList 把警告整个丢掉了
+                            val parsed = com.buaa.schedule.data.import.BuaaScheduleParser
+                                .parseArrangedListOutcome(outcome.courses, selectedTerm, totalWeeks)
+                            val parseWarnings = buildList {
+                                if (parsed.fallbackWeekCourses > 0) {
+                                    add("${parsed.fallbackWeekCourses} 条课程缺少教师/周次信息，已按整学期展示，请核对")
+                                }
+                                if (parsed.unknownTeacherCourses > 0 && parsed.fallbackWeekCourses == 0) {
+                                    add("${parsed.unknownTeacherCourses} 条课程缺少教师信息")
+                                }
+                            }
+                            viewModel.previewBuaaCourses(semester, parsed.courses, parseWarnings)
+                            importPrepared = true
+                            onImportPrepared()
                         }
                     }
-                    viewModel.previewBuaaCourses(semester, parsed.courses, parseWarnings)
-                    importPrepared = true
-                    onImportPrepared()
                 }
             }
         }
