@@ -267,9 +267,31 @@ object BuaaInPageFetcher {
             val resp = json.decodeFromString<BuaaTermWeeksResponse>(raw)
             val weeks = resp.datas.orEmpty()
             if (weeks.isEmpty()) return SemesterInfo(20, null)
-            // 第1周（serialNumber 最小 / startDate 最早）的 startDate 即开学日
-            val first = weeks.minByOrNull { it.serialNumber ?: Int.MAX_VALUE } ?: weeks.first()
-            SemesterInfo(weeks.size, first.startDate?.substringBefore(" "))
+            // 第 1 周只认两条判据：serialNumber 最小、startDate 最早（判据本体 resolveBuaaFirstWeek）。
+            // 两条判据分家、或各自被两行并列占着时判不出 ⇒ Undetermined，这一格把 firstWeekMonday
+            // 回成 null，让下游两路各自的诚实失败链去拦（BuaaLoginScreen:183 / BuaaWebSession:400-404）。
+            // 旧写法 `minByOrNull { it.serialNumber ?: Int.MAX_VALUE } ?: weeks.first()` 只实现了第一条，
+            // 而第二枚兜底是**不可达支**（上一行已保证 weeks 非空）；真正会走到的退化是 serialNumber
+            // 全为 null 时键全体并列，minByOrNull 于是回**列表首行** —— 教务只是没给序号，
+            // 旧代码却把首行当第 1 周用，而首行那枚串合法可 parse，下游拦不住「合法但错周」（T193）。
+            val firstWeek = resolveBuaaFirstWeek(weeks.map { BuaaWeekRow(it.serialNumber, it.startDate) })
+            when (firstWeek) {
+                is BuaaFirstWeek.Resolved -> {
+                    Log.i(
+                        TAG,
+                        "getTermWeeks 共 ${weeks.size} 周，第 1 周按 ${firstWeek.via} 定为「${firstWeek.startDate}」",
+                    )
+                    SemesterInfo(weeks.size, firstWeek.startDate)
+                }
+                is BuaaFirstWeek.Undetermined -> {
+                    Log.w(
+                        TAG,
+                        "getTermWeeks 共 ${weeks.size} 周，判不出第 1 周（${firstWeek.reason}：${firstWeek.detail}），" +
+                            "firstWeekMonday 回 null，未猜任何日期",
+                    )
+                    SemesterInfo(weeks.size, null)
+                }
+            }
         }.getOrDefault(SemesterInfo(20, null))
     }
 
