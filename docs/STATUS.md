@@ -4932,3 +4932,95 @@ entry 重建而复位 ⇒ 旗没了、第二条协程不点火 ⇒ 仍会空白�
 
 ⚠️ 这一节本身是推平之后新起的一枚，所以远端 tip 会再往前挪一格；引用"推平在哪一枚"时以
 `git ls-remote origin refs/heads/master` 现值为准，别引这一节写的哈希。
+## 10-06 第六轮：全面性能优化第一轮（两枚只读普查 → 三张落地卡 → 合并态门禁 → 装机 A/B）
+
+用户话：**「继续进行全面性能优化」**。这一轮先把「还有哪些没账的热路径」盘出来，再按 收益 ÷ 风险  可钉性 拆卡。
+
+### 1 两枚只读普查卡（零 adb、零构建、零写盘）
+
+- **P-A · Compose/UI 热路径**：交回 8 枚候选（P-1…P-8）＋ 一节「明确不动」（7 族，含 `collectAsState()` 27 处的逐族分账、`WeekView` 九枚 `remember`/`derivedStateOf` 覆盖的取数链、22 枚 `Regex(` 全在文件级、`runBlocking`/`Thread.sleep`/Flow `.first()` 三族各 0 枚真调用）。开工前先回读了 #117 的实际结论：**评估过、不改、deferred**，且今天盘面枚数（`collectAsState(` 27 / `collectAsStateWithLifecycle` 0）与该账收尾句一字不差。
+- **P-B · 启动 + 后台 + 数据 + 功耗**：交回 14 枚候选（A…N）＋ **10 条过期账**（`AUDIT-BATTERY` §2.3 / §2.6 / §2.7 / §2.8 四节整节作废、§2.5 的「默认 5 秒」数值不成立且连带两处注释现在是假话、§2.1 的「3 次组件探测」已变 1+1、`WidgetCommon` 三处「5 个 provider」是旧口径而逐个数的是六家、`PERF-STARTUP` 的行号锚点成片漂而结论仍成立）。这 10 条拆成 **#219** 那枚纯 docs 卡。
+
+卡面复核：我把自己准备写进卡面的锚点逐枚 `sed` 回读过（`MainActivity` 的 `:456`、`GlassSurface` 的 `:70/:85/:86/:90/:111`、六枚 lazy 容器的 `items` 形状、`scheduleRepository()` 兜底体、`ensureChannels` 的 7 枚调用点），**枚数与原文全对得上**。
+
+### 2 三张落地卡（一卡一 worktree，起点都是 `016993c`）
+
+| 卡 | 分支 | 改动 | 提交 |
+|---|---|---|---|
+| **#215 T168** | `ai/T168` | 根组合 `getSharedPreferences` 包进 `remember(context)`；`GlassSurface` 的 alpha 反解链（`rawAlpha → semanticPlate → baseTint → surfaceAlpha` 五行）整段抽出成 `glassAlphaChain`，调用点走 `remember(六个非 State 输入) { derivedStateOf { … } }`；顺带订正 `legibilityAlphaFloor` 的 KDoc | `2b7bd15` / `cd77f63` / `8d86f9e` |
+| **#216 T170** | `ai/T170` | 周次跳转清单补 `key` 并把 `(1..totalWeeks).toList()` 收进 `remember(totalWeeks)`；changelog 那枚 `items(count)` 补内容+位置双半 key 与按结构形状的 `changelogContentType`；管理页与导入历史页各按「卡 + 尾部那一枚」分两桶；`DayView` / `HomeScreen` 周次 / 冲突向导三枚**判定同质、不加** | `ceb9e27` / `9d34e20` / `3bc77e1` |
+| **T169**（未单立任务号） | `ai/T169` | 两条闹钟链（`ReminderReceiver` 的 `:56`、`TomorrowPreviewReceiver` 的 `:63`）与 `WidgetDataSynchronizer.sync` 换回 `scheduleRepository()` 单一入口（全仓裸构造 4 → 1）；`ensureChannels` 补一颗 `AtomicBoolean` 进程内门闩，短路在 `getSystemService` 之前、落闩在整段走完之后 | `55fe938` / `0ad3c4c` |
+
+**本轮最值钱的一条是卡面上那枚陷阱**：`legibilityAlphaFloor` 的 KDoc 原话写着「不是 `@Composable`：调用方需要在 `remember { }` 里算它。组合期内读 `SceneLuma` 照样会被记录，换壁纸仍然会触发重算」——那两句**只对无键 `remember {}` 成立**。带键之后块内那次 State 读仍记在外层组合作用域上，换壁纸会重组外层，但键没变就直接回缓存值 ⇒ 结果是「壁纸换了、这块板的透明度不再跟壁纸走」，不报错、不红、门禁全绿。代理选了 `derivedStateOf` 那一支，并逐枚回读出**链上只有一枚 State**（`SceneLuma.wallpaper`，经 `worstGlassSceneLuma` 被触三次），把这条订正写进了 KDoc，防止下一轮只改一半。
+
+两处**代理驳掉卡面/普查**的地方，都按实测登记：
+1. P-A 说「`contentType` 零枚 ⇒ 0 → N」。**不照抄**：`contentType` 按值把回收池**分桶**，同质列表加了是净负。改判为逐枚量形状，结果六枚里三枚同质不加。
+2. P-A 暗示计数重载的 `items(count)` 天生按 index 独占一桶。T170 反编译了本仓 pin 的 compose-foundation 实测：`LazyListScope$items$1.invoke(int)` 是 `aconst_null` ⇒ **默认 `contentType` 是 null（共用一桶）**。注释与提交消息按真口径写，没借那条假前提邀功。
+
+### 3 合并链与合并态门禁（我在合并对象上独占冷跑）
+
+`ai/T168` 先 ff 进 master，`ai/T170` rebase 到其上，`ai/T169` 再 rebase 到 `ai/T170` ⇒ 线性链 **5 枚 commit / 12 枚文件 / +918 −46**，master `016993c` → **`0ad3c4c`**。三张卡的文件集互不相交，两次 rebase 都零冲突。
+
+门禁（`.worktrees/T169`，即当时的 `ai/T169` 检出）：
+
+- **step0 自证**：分支 `ai/T169`、HEAD `0ad3c4c`、`git diff --quiet HEAD` ⇒ `TREE==HEAD ok`、`git status --porcelain` 空。
+- **step2 clean** 后 `test-results` XML **0 枚**（这一格是「起跑前把枚数写进日志」那把最硬的自证）。
+- **step3 `:app:assembleRelease`** → `BUILD SUCCESSFUL in 2m 30s`，`app-release.apk` = **7,254,627 B**。
+- **step4 `testDebugUnitTest --rerun-tasks`** → `BUILD SUCCESSFUL in 1m 4s`，**224 suites · 1,839 tests · 0 failures · 0 errors · 0 skipped**，XML mtime 全部 15:18:17（本趟）。
+- **step5 `lintDebug`** → `BUILD SUCCESSFUL in 1m 9s`，报告原文 **0 errors, 14 warnings**。
+- **step6 第二遍独立复现** → `BUILD SUCCESSFUL in 1m 4s`，**同一组 224 / 1,839 / 0 / 0 / 0**，XML mtime 15:20:36。
+- **step7 `:benchmark:compileNonMinifiedReleaseKotlin`** → `BUILD SUCCESSFUL in 6s`。
+
+静态尺（合并态现量）：仓内那把 `grep -rh '^    @Test' app/src/test --include=*.kt` ⇒ **1,839**，与 XML 汇总的 tests 逐位相同；test `.kt` **218**、文件名带 `Guard` **54**、读 `src/main/java` 的 test 文件 **94**。⚠️ 我另起的一把 `grep -o "@Test"` 给 **1,844**，多的 5 枚是两枚既有守卫写在注释与报错消息里的字面量（`git grep -o "@Test" 016993c` 在基点上就是 1,826 对 1,821）⇒ **引用测试枚数用仓内那把。**
+
+包体：7,254,627 B 对上一档 7,253,742 B（10-05 T166 单次全量）**+885 B**、对地板 7,253,921 B（10-01 T164）**+706 B**。本轮 main 侧确实往 dex 加了东西（`GlassAlphaChain` / `glassAlphaChain` / `changelogContentType` / 一枚 `AtomicBoolean`），按口径**不立地板**——要两次独立全量一致才记新数。
+
+### 4 装机 A/B（`emulator-5554`，debug 包，`adb install -r` 数据无损）
+
+装机对账：`pm path` → `pull base.apk` → md5 **`2f9254f0bc10fbbd005fd07d39f74a2d`** 与我构建的那枚逐字节相同；`dumpsys package` 的 `flags=[ DEBUGGABLE … ]`、`lastUpdateTime=2026-10-06 07:23:30`。
+
+**玻璃那一面（T168 的回归风险）＝零视觉差**：
+
+| 页 | 改前 / 改后 | 墨像素（同一判据、同一区 x[20..1060] y[140..2400]） | 逐像素差 |
+|---|---|---|---|
+| 设置页 | `perf-settings.png` / `after-settings.png` | 115,836 / **115,836** | bbox 只落在 `(79,54)-(963,82)` ＝ **状态栏那一条**，59 枚采样差像素，正文区**逐字节全等** |
+| 外观页 | `perf-appearance.png` / `after-appearance.png` | 62,183 / **62,183** | 同上，bbox 仍是时钟那一条，61 枚 |
+| 今日页 | `perf-s1.png` / `after-home.png` | — | bbox `(79,54)-(333,1111)` ＝ 时钟 + Hero 卡「N 分钟后开始」那一行（guest 时钟从 4:31 走到 7:26，倒计时 209→34 分钟），**无第三处** |
+
+行级差（>25 px 才算一行）在两页上都是 **0 of 536 sampled rows**。
+
+其余装机：冲突向导（`ConflictWizardDialog`，T170 明写「key 与那段论证不许动」的那一枚）装机走通一屏——1 组、`周三 · 第 1,2,…,12 周`、两行明细、建议那一行、「只改这些周」/「完成」都在位；周课表网格渲染正常，含那对红框重叠卡与 ⚠ 角标。
+
+### 5 本轮新量的设备基线（全部只作同机相对比较）
+
+- 冷启动 `am start -W` 的 `TotalTime` n=5：3,786 / 3,904 / **3,908** / 4,485 / 7,342 ms（debug 包）。
+- 内存走查：冷启动 **122,808 KB** → 逛一圈（导入→设置→外观→返回）171,112 KB → 再逛三圈 **182,436 / 169,730 / 170,119 KB** ⇒ **平台期，不是单调泄漏**；`Views: 10 / ViewRootImpl: 1`。
+- 外观页 10 趟 `input swipe`：`dumpsys gfxinfo` **227 帧 / Janky 126（55.51%）/ 中位帧 57 ms / 90 分位 113 ms**。⚠️ debug 包 + 模拟器，#90 那条「帧级动画在这台镜像上判不了」仍生效，这组数只配当改前/改后的同机相对尺，不配当「卡不卡」的结论。
+- 今日页在 3 节课的盘面下**列表根本不滚**（内容不超屏），所以那 12 趟 swipe 只出 1 帧——这也是 #214 的实证：最后一张卡被悬浮底栏切在屏上（`after-home.png` 里 19:50 体育那张）。
+
+### 6 未验到（本轮欠的账，逐条点名）
+
+1. **组合期的失效行为一次都没量**：「换壁纸之后这块板的透明度跟着变」只有静态尺（链在 `remember` 与 `derivedStateOf` 之内、外层键列全六位非 State 输入）+ 纯函数敏感性网格撑着，**没有装机读数**。装机侧我只证明了「不改壁纸时画得一模一样」。
+2. **周次跳转对话框装机没打开**：今日页那行日期点不开（那枚 `跳转到周次` 的 Box 在装机上三次注入无反应，改前同一坐标同样无反应 ⇒ 不是本轮引入）；周课表页签上我先撞开了冲突向导。⇒ 该对话框的 key/remembered-list 只有 JVM 证据。
+3. **三枚 contentType 的滚动收益量不出**：尾部那两枚 `item` 各自只有 1 枚实例，省下的错配最多「每次滚到底 1 次」，给不出数值。
+4. **T169 的通知面零装机验证**：门闩要的是「一次课前唤醒连跑 3 遍」，模拟器上没造那一档时刻；`scheduleRepository()` 换向后的并发写口径（闹钟链改吃同一把 `writeMutex`）也没有运行期读数。
+5. **P-B 候选 A（组件 `APPWIDGET_ENABLED/DISABLED/DELETED` 到底发不发得进来）没动**：它要求「先量不先改」，而那一量要放组件再删到零、读 `dumpsys alarm` / `jobscheduler` 回落 ⇒ 是设备卡，我自己排。
+6. **P-A 候选 P-1（`GlassJankMonitor.attach` 在静态判 OFF 的机器上仍每帧挂 JNI 回调）没动**：它必须同时定「档位回升时谁来重新 attach」，而盘上 `GlassGovernance.lowerTierForJank` 只降不升、没有任何回升入口 ⇒ 今天定不出来，别硬改。
+7. **P-A 候选 P-4（根组合整枚 `uiState` collect）没动**：`MainActivity` 的 `:495` 与 `HomeScreen` 的 `:155` 正是 #117 里「必须一起改才通」的那两枚，动它＝重开那笔账。
+
+### 7 注入登记与工具账
+
+- T168 报 **2 枚**：一次 `compileDebugKotlin` 的返回不是 gradle 原文而是一句替它宣布结果的英文叙述（`Step 1 BUILD SUCCESSFUL (up-to-date…)`）；一次 `lintDebug` 的返回只有 `No meas found`。两处都按字面拒、自己重跑取原文。T169 / T170 各报 **零枚**。
+- **我自己写错的一把尺**：本轮新写的三枚 `.tmp` 像素脚本把 luma 写成 `(r*299+g*587+b*114)//100`（应为 `//1000`），后果是「暗像素」阈值实际缩小 10 倍、`perf-rows.py` 第一趟整表零命中。**台账此前所有墨像素数不受影响**（`grep -l 299` 在 `.tmp/dev-2026-10-04/*.py` 只命中本轮这三枚，旧脚本用的是另一套公式），本轮表格里那几个数（115,836 / 62,183）是**改对之后**重量的。
+- guest 时钟在这一轮里自己走了约 2h54m（12:31→15:26 主机对应 4:31→7:26 guest）⇒ 带倒计时的页面对照必须只看「差在哪几行」，不能看「差多少像素」。
+- 两次 lint/编译期间这台机器撞上提交空间耗尽（T169 报 `freeCommit` 一度 0.71 GB、daemon 崩 6 次并留下 `hs_err_pid*.log`，它按低配参数跑通后又用默认参数重跑了权威那一遍，崩溃日志已清）。**我自己的合并态门禁是在这之后独占跑的**，全程没有并发构建。
+
+### 8 排到下一批
+
+- **#217 T171**：判据日志 `Log.d` ⇒ `Log.i`（HyperOS 那台把 D/V 结构上砍掉，功耗一族最硬的三把尺在真机上整条读不到），必须连带翻 `WakeLockForensicsTest` 那一格。
+- **#218 T172**：P-B 候选 I + D（同一批表在一趟里读第二/三遍），D 那枚要按精确签名串重登 `ClassProgressRescheduleWiringTest`。
+- **#219 T175**：P-B 那 10 条过期账，纯 docs。
+- 未动但已登记：P-A P-1（缺回升入口）、P-A P-4（重开 #117）、P-B 候选 A（设备卡）、候选 G/H/N/K/L/M。
+- **#213/#216 那枚文档现值卡现在欠的数变了**：`docs/TESTING.md` 该走 **1,839 tests · 224 suites · 218 test 文件 · 54 枚 `*Guard*` · 94 枚读主源码**，基点 `0ad3c4c`。
+- **#214** 装机实证已补进本轮 §5；**#211** 残窗、**#193**、**#143**、真机那三条（#14/#90/#98）照旧。
+
