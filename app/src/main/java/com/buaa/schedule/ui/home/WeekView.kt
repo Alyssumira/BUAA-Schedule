@@ -240,15 +240,15 @@ fun WeekView(
             }
         }
     }
-    // 表头「今天」胶囊该不该亮整条交给 shouldHighlightToday（WeekHeaderTodayPolicy.kt，T182）
+    // 表头那两半整条交给 WeekHeaderTodayPolicy.kt：哪一格是今天 = shouldHighlightToday（T182），那一行印第几周的日期 = headerWeekNumberOrNull（T190）
 
     // 假期/调休标注：整张表只剩一份「折算后的标注」，按日期键现问现答（T62②）。
     // 以前这里自己按浏览周算出 7 个日期、再 `firstOrNull { it.date == date }` 压成
     // `Map<列下标, SpecialDay>` 交给表头 —— 那是判据的一份**局部复制**：同一天的重复条目
     // 谁赢、周末上那枚「班」算不算数，两处界面各答一遍就会各错一遍。
     // 折算只做形态（LocalDate → 整数键），决定权在 `SpecialDayBadgePolicy`。
-    val displayWeekNumber = displayWeek ?: currentWeek ?: 1
-    val weekStartDate = semester?.startLocalDate?.plusDays((displayWeekNumber - 1).toLong() * 7L)
+    val displayWeekNumber = headerWeekNumberOrNull(displayWeek, currentWeek)
+    val weekStartDate = displayWeekNumber?.let { semester?.startLocalDate?.plusDays((it - 1).toLong() * 7L) }
     val specialDayMarks: List<com.buaa.schedule.ui.SpecialDayMark> = remember(specialDays) {
         specialDayMarksOf(specialDays)
     }
@@ -307,7 +307,7 @@ fun WeekView(
                 // 现在：手势没停就先把目标记下，等这一次自己落定立刻续上（见下面的 settle 监听）。
                 var pendingSyncTarget by remember(pagerState) { mutableIntStateOf(-1) }
                 LaunchedEffect(displayWeek, currentWeek) {
-                    val target = ((displayWeek ?: currentWeek ?: 1) - 1).coerceIn(0, totalWeeks - 1)
+                    val target = (pagerWeek - 1).coerceIn(0, totalWeeks - 1) // 这一支的 pagerWeek 已由上面的 if 保证非 null，不再另造一枚周次派生
                     if (pagerState.isScrollInProgress) {
                         pendingSyncTarget = target
                         return@LaunchedEffect
