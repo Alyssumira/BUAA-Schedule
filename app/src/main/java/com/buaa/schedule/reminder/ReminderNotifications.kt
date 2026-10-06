@@ -20,6 +20,7 @@ import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.model.weekdayLabel
 import com.buaa.schedule.domain.schedule.minutesCeil
 import java.time.LocalDate
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 通知渠道与通知发布的统一入口。
@@ -69,8 +70,27 @@ object ReminderNotifications {
     /** 上面那条迁移只做一次用的标志位（与开关设置同一份 prefs） */
     private const val KEY_LEGACY_CHANNEL_DELETED = "legacy_class_progress_channel_deleted"
 
+    /**
+     * 「渠道已经建过」的进程内门闩（写法同 `ScanChainWarmUp.claim`）。
+     *
+     * [ensureChannels] 全仓有 7 枚调用点，其中三枚串在同一条通知下发链上
+     * （课前提醒的 `notifyCourse` → `startLiveWindow` → `postClassOngoing`），
+     * 于是**一次课前闹钟唤醒**改前要连跑 3 遍：9 趟 `createNotificationChannel` binder
+     * + 3 趟 prefs 读，而闹钟叫醒的往往正是冷进程。
+     *
+     * 渠道是**进程级全局状态**，同一进程里跑第二遍不可能得出新结果：重要性一旦创建
+     * 就只能由用户在系统设置里改（见下方注释），重复下发修不动任何东西。
+     *
+     * 门闩只在**整段走完**之后落下：`getSystemService` 拿不到时直接返回、不置位，
+     * 下一次通知下发仍会再试一遍——「建过一半」不等于「建好了」。
+     * 极端情况下两个线程同时进来会各跑一遍，而 `createNotificationChannel` 本身幂等，
+     * 代价只是那几趟 binder，不会漏建渠道。
+     */
+    private val channelsEnsured = AtomicBoolean(false)
+
     /** 幂等创建全部渠道（渠道一旦创建，重要性只能由用户在系统设置里改） */
     fun ensureChannels(context: Context) {
+        if (channelsEnsured.get()) return
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         val prefs = context.getSharedPreferences(ClassProgressReceiver.PREFS_NAME, Context.MODE_PRIVATE)
         // 旧版「课程进行中」渠道为 IMPORTANCE_LOW，重要性无法程序修改，直接删除。
@@ -89,6 +109,8 @@ object ReminderNotifications {
             }
             manager.createNotificationChannel(channel)
         }
+        // 整段走完才落闩：同一进程内后续 6 枚调用点（含那条下发链的第二、三遍）全部短路。
+        channelsEnsured.set(true)
     }
 
     /**
