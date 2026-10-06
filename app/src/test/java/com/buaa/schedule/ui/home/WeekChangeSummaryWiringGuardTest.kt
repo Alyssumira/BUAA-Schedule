@@ -65,36 +65,36 @@ class WeekChangeSummaryWiringGuardTest {
     @Test
     fun homeScreenHandsTheWholeComparisonToTheKernel() {
         val block = weekChangeBlock()
+        // 三枚读数一起交出去（不是第一枚不对就短路）：回退成旧写法时，
+        // "没调内核 + 块内数了 id + 块内自己按周筛课"三件事要一次报全，枚数都在消息里
+        val red = mutableListOf<String>()
         val calls = occurrences(block, "WeekChangeSummary.summaryText(").size
-        assertEquals(
-            "HomeScreen 的 weekChangeSummary 块里 `WeekChangeSummary.summaryText(` 有 $calls 处，" +
-                "期望恰好 1 处：少了就是摘要不再由内核派生（回到就地数集合），" +
-                "多了就是两处各判一次，两页能各念各的门数",
-            1,
-            calls,
-        )
+        if (calls != 1) {
+            red += "`WeekChangeSummary.summaryText(` 有 $calls 处，期望恰好 1 处 —— " +
+                "少了就是摘要不再由内核派生（回到就地数集合），多了就是两处各判一次，" +
+                "两条横幅能各念各的门数"
+        }
         val ids = Regex("""\.id\b""").findAll(block).toList().size
-        assertEquals(
-            "weekChangeSummary 块里 `.id` 有 $ids 处，期望 0 处 —— 这就是病灶本体：`Course.id` 是" +
-                "**一条排课片段**的主键，理论 1-8 周与实验 9-16 周各有各的 id，拿它当「门」就会在" +
-                "每一个交接周同时念「多 1 门、少 1 门」。\n" +
-                "复算：grep -n \"mapTo(mutableSetOf()) { it.id }\" " +
-                "app/src/main/java/com/buaa/schedule/ui/home/HomeScreen.kt",
-            0,
-            ids,
-        )
+        if (ids != 0) {
+            red += "`.id` 有 $ids 处，期望 0 处 —— 这就是病灶本体：`Course.id` 是**一条排课片段**" +
+                "的主键，理论 1-8 周与实验 9-16 周各有各的 id，拿它当「门」就会在每一个交接周" +
+                "同时念「多 1 门、少 1 门」"
+        }
         val weekFilters = occurrences(block, "weeks.contains(").size
-        assertEquals(
-            "weekChangeSummary 块里自己按周筛课（`weeks.contains(`）有 $weekFilters 处，期望 0 处：" +
-                "比对已经交给内核了，留在 UI 层就是第二套能各自写错的账",
-            0,
-            weekFilters,
-        )
-        // 递进去的第二串必须是本周退一格（不是常量、不是本周自己）
+        if (weekFilters != 0) {
+            red += "自己按周筛课（`weeks.contains(`）有 $weekFilters 处，期望 0 处 —— " +
+                "比对已经交给内核了，留在 UI 层就是第二套能各自写错的账"
+        }
+        if (!Regex("""summaryText\([^)]*lastWeek\s*=\s*week\?\.minus\(1\)""").containsMatchIn(block)) {
+            red += "递进去的 lastWeek 不再是「本周退一格」（`lastWeek = week?.minus(1)`）—— " +
+                "摘要会在某个周号上跟错上周，或者干脆不再显示"
+        }
         assertTrue(
-            "summaryText 的 lastWeek 实参不再是「本周退一格」（week?.minus(1)）：摘要会在某个周号上" +
-                "跟错了上周，或者干脆不再显示",
-            Regex("""summaryText\([^)]*lastWeek\s*=\s*week\?\.minus\(1\)""").containsMatchIn(block),
+            "HomeScreen 的 weekChangeSummary 块有 ${red.size} 项不合规，期望 0 项：\n" +
+                red.joinToString("\n") +
+                "\n复算：grep -n \"mapTo(mutableSetOf()) { it.id }\" " +
+                "app/src/main/java/com/buaa/schedule/ui/home/HomeScreen.kt",
+            red.isEmpty(),
         )
     }
 

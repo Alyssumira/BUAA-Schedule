@@ -3,6 +3,7 @@ package com.buaa.schedule.ui.home
 import com.buaa.schedule.domain.model.Course
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -23,10 +24,12 @@ import org.junit.Test
  * "HomeScreen 那一句有没有真的用上本判据"由 [WeekChangeSummaryWiringGuardTest] 钉；
  * 本文件只跑判据本身，复跑的是**结论**，不是装机：**未验到换周后那条横幅真的出现/消失**。
  *
- * 两侧都有格子（这一族的规矩，扭法与红在哪一档记在本卡回执里）：
- * - 朝**严**扭（门键换回 `course.id`，片段即身份）⇒ ①⑤⑦ 三档红：段数被数成门数；
+ * 两侧都有格子（这一族的规矩，实测红档见本卡回执的变异自证表）：
+ * - 朝**严**扭（门键换回 `course.id`，片段即身份）⇒ ①②④⑤⑦ 五档一起红：段数被数成门数，
+ *   连"多 1 门"那种真异动也被翻倍报；
  * - 朝**松**扭（门键换成 `course.name.trim()`，名字即身份）⇒ ⑥⑧ 两档红：
  *   同名不同教学班、同名不同学期的课被并掉，真多出来的门念不出来。
+ * 表格因此一次跑完、把所有红档一起交出去，不在第一档红时短路。
  */
 class WeekChangeSummaryTest {
 
@@ -42,37 +45,45 @@ class WeekChangeSummaryTest {
         val why: String,
     )
 
+    /**
+     * 表格一次跑完、把**所有**红档一起交出去（不是第一档红就短路）：
+     * 变异自证要看清"哪几档红"，fail-fast 只会露出第一档，把同一支上的其余档藏起来。
+     */
     @Test
     fun `每一档都按门数对异动 段数与名字都不许当尺`() {
+        val red = mutableListOf<String>()
         for (cell in table) {
             val actual = WeekChangeSummary.counts(cell.courses, cell.thisWeek, cell.lastWeek)
-            assertEquals(
-                "档位「${cell.name}」门数异动：期望 added=${cell.added} removed=${cell.removed}，" +
-                    "实际 added=${actual.added} removed=${actual.removed} —— ${cell.why}",
-                cell.added to cell.removed,
-                actual.added to actual.removed,
-            )
+            if (actual.added != cell.added || actual.removed != cell.removed) {
+                red += "档位「${cell.name}」门数异动：期望 added=${cell.added} removed=${cell.removed}，" +
+                    "实际 added=${actual.added} removed=${actual.removed} —— ${cell.why}"
+            }
             val text = WeekChangeSummary.summaryText(cell.courses, cell.thisWeek, cell.lastWeek)
-            assertEquals(
-                "档位「${cell.name}」文案：期望「${cell.text}」，实际「${text}」 —— ${cell.why}",
-                cell.text,
-                text,
-            )
+            if (text != cell.text) {
+                red += "档位「${cell.name}」文案：期望「${cell.text}」，实际「${text}」 —— ${cell.why}"
+            }
         }
+        assertTrue(
+            "十档表格里红了多少：期望 0 档，实际 ${red.size} 档\n" + red.joinToString("\n"),
+            red.isEmpty(),
+        )
     }
 
     /** [WeekChangeSummary.Counts] 那枚 `unchanged` 与文案的 null 档必须同真同假 */
     @Test
     fun `没动那一档文案与判据同时闭嘴`() {
+        val red = mutableListOf<String>()
         for (cell in table) {
             val unchanged = WeekChangeSummary.counts(cell.courses, cell.thisWeek, cell.lastWeek).unchanged
-            assertEquals(
-                "档位「${cell.name}」：unchanged=$unchanged 却配了文案「${cell.text}」——" +
-                    "界面那条横幅的显隐与判据各说各话了",
-                cell.text == null,
-                unchanged,
-            )
+            if (unchanged != (cell.text == null)) {
+                red += "档位「${cell.name}」：unchanged=$unchanged 却配了文案「${cell.text}」——" +
+                    "界面那条横幅的显隐与判据各说各话了"
+            }
         }
+        assertTrue(
+            "显隐与文案配对的十档里有 ${red.size} 档不配对，期望 0 档\n" + red.joinToString("\n"),
+            red.isEmpty(),
+        )
     }
 
     /** 没有"上一周"可比的那几档一律不下结论：第 1 周之前不许念成"整学期都是新课" */
