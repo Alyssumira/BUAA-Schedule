@@ -453,7 +453,7 @@ private fun BUAAScheduleApp(
     startRoute: String? = null,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    // 组合期不重复取 SharedPreferences 句柄（口径与形状同 ui/settings/SettingsScreen.kt:264 那处规矩）。
+    // 组合期不重复取 SharedPreferences 句柄（口径同 SettingsScreen 里 prefs 那枚 remember(context)）。
     val prefs = remember(context) {
         context.getSharedPreferences("schedule_settings", Context.MODE_PRIVATE)
     }
