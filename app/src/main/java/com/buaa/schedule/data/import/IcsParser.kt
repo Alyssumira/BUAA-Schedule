@@ -14,12 +14,21 @@ import java.time.temporal.ChronoUnit
  * 由于 App 使用“教学周”而不是绝对日期，需要传入学期开学日期（周一）来换算周次。
  * 时间到节次的映射用调用方传入的节次表（导出/导入同一份表才幂等），未传时退回默认 14 节。
  *
+ * 落不进节次表的事件**整条跳过**（T192）：DTSTART/DTEND 换算出的钟点要能落成节次号才成课，
+ * 早于第一节课开始的活动（早自习、晨训、7:00 的实验室开放）过去被 `?: 1` 安成「第 1 节」，
+ * 于是假节次真的写库、真的上课表。判据本体在 `IcsSectionPolicy.resolveIcsPeriod`。
+ * 跳过的那几条今天**没有**用户可见的报数落点（`ui/ScheduleViewModel.importIcs` 只念
+ * 新增/更新/冲突三数），只在 Logcat 留痕，见 [parse] 的 `onSkippedEvent`。
+ *
  * 学分不在这条链路上往返（导出侧 `IcsExporter` 同样不带）：RFC 5545 没有"学分"这个属性，
  * 而 ICS 里唯一能塞事的 DESCRIPTION 是给人读、且与所有第三方日历共用的文本 blob。
  * 更主要的是，走到这里的文件多半来自别家课表 App，本来就没有学分可带 —— 为它加一个
  * `X-BUAA-CREDIT` 私有属性只会让"解析失败"多一种新写法，收益为零。
  */
 object IcsParser {
+
+    /** 跳过事件的留痕标签（与 `BuaaInPageFetcher` / `BuaaWebSession` 同一写法：常量而非魔法字符串） */
+    private const val TAG = "IcsParser"
 
     // Locale 钉死为 US：ICS 走的是 ASCII 数字，`yyyyMMdd` 在部分 locale 下
     // 会用非 ASCII 数字解析/输出，导致导入的课表日期整体错位。
@@ -51,6 +60,14 @@ object IcsParser {
                 }.getOrNull()
             }
 
+    /**
+     * @param onSkippedEvent 落不进节次表而被整条跳过时的那一句留痕。默认写 Logcat（`Log.w`），
+     *   调用点没有一处需要认它 —— `ui/ScheduleViewModel.importIcs` 的实参表一个字没动。
+     *   为什么它是参数而不是直接在体内调 `Log.w`：`:app` 的 JVM 单测面只有 `junit`
+     *   （无 Robolectric、未开 `returnDefaultValues`），`android.util.Log` 在那里是一枚会抛
+     *   "not mocked" 的桩 —— 留痕要能被单测断言（`IcsParserSectionWiringTest` 就在断它），
+     *   不能只写在注释里。设备侧默认值仍然是一枚 `Log.w(TAG, …)`。
+     */
     fun parse(
         content: String,
         semesterStart: LocalDate,
@@ -58,8 +75,10 @@ object IcsParser {
         maxWeeks: Int = 25,
         zone: java.time.ZoneId = java.time.ZoneId.systemDefault(),
         timeSlots: List<TimeSlot> = emptyList(),
+        onSkippedEvent: (String) -> Unit = { message -> android.util.Log.w(TAG, message) },
     ): List<Course> {
-        val slots = slotTable(timeSlots)
+        // 节次表 → 内核的 IcsSlot：转换只在这一处（policy 文件不认识 TimeSlot / DefaultSlot）
+        val slots = slotTable(timeSlots).map { IcsSlot(number = it.number, start = it.start, end = it.end) }
         val weekUpperBound = maxWeeks.coerceIn(1, com.buaa.schedule.domain.schedule.CourseConstraints.MAX_WEEK)
         val unfolded = unfold(content)
         val blocks = unfolded.split("BEGIN:VEVENT")
@@ -70,6 +89,11 @@ object IcsParser {
             }
 
         val courses = mutableListOf<Course>()
+        // 落不进节次表而被整条跳过的事件数。今天这条链上**没有**「跳过 N 条」的用户可见落点
+        // （`importIcs` 那句 `importParseSummary` 只有新增/更新/冲突三数，
+        //  `PendingImport.warnings` 只有教务抓取那一路在喂），所以这一档只留 Logcat 痕迹，
+        // 报数归后续卡（要动的是 ScheduleViewModel，本卡红线不许碰）。
+        var skippedEvents = 0
         blocks.forEach { block ->
             val summary = extractLine(block, "SUMMARY") ?: return@forEach
             val location = extractLine(block, "LOCATION")
@@ -90,8 +114,23 @@ object IcsParser {
             val teacher = extractTeacher(description)
             val exDates = extractExDates(block)
 
-            val startSection = sectionOf(startTime, slots)
-            val endSection = sectionOf(endTime, slots)
+            val startResolution = resolveIcsPeriod(startTime, slots)
+            val endResolution = resolveIcsPeriod(endTime, slots)
+            // 只有**两侧都落得进节次表**才成课：任一侧是 BeforeFirstSlot / NoSlots 就整条事件跳过。
+            // 旧形状是 `sectionOf(…)` 里的 `return previous?.number ?: 1` —— 早于第一节课的活动
+            // 被凭空安成第 1 节，然后真的进 courses、真的写库、真的上课表（连 colorIndex 都按它算）。
+            // 这道 null 闸必须长在下面 `startSection..endSection` **之前**：可空的节次号顺着 `..`
+            // 走下去要么编译不过、要么被一枚 `!!` 折成运行期崩溃，两者都不是「如实跳过」那一条路。
+            val startSection = (startResolution as? IcsPeriodResolution.Resolved)?.number
+            val endSection = (endResolution as? IcsPeriodResolution.Resolved)?.number
+            if (startSection == null || endSection == null) {
+                skippedEvents++
+                onSkippedEvent(
+                    "ICS 事件整条跳过（累计 $skippedEvents 条）：「$summary」$startTime–$endTime " +
+                        "落不进节次表（开始=$startResolution，结束=$endResolution）⇒ 不猜节次、不入库",
+                )
+                return@forEach
+            }
 
             // RRULE 的 BYDAY=MO,WE：一周在多个星期几重复。此前一律按 DTSTART 的
             // 星期几 plusWeeks，另一半星期的课整门静默丢失（Google Calendar 导出常见写法）。
@@ -128,8 +167,11 @@ object IcsParser {
                     if (week > weekUpperBound && until == null && count == null) break
                 }
 
-                // DTEND 早于 DTSTART 的畸形事件会让 endSection < startSection，
-                // 展开成空 periods 的行：管理页看得见、课表上永远看不见，还占课程名额。
+                // 诚实格（T 族前作留下的一格）：DTEND 早于 DTSTART 的畸形事件会让
+                // endSection < startSection，此时**不展开成倒序区间**，整条不入库（下面的
+                // `periods.isNotEmpty()` 那一闸）。内核改成可空之后这一格照样成立：走到这里的
+                // 两枚节次号已经被上面那道 null 闸收成全非空的 `Int`，
+                // null 从来没有机会顺着 `..` 变成新的假课。
                 val periods = if (endSection < startSection) emptyList()
                 else (startSection..endSection).toList()
                 if (weeks.isNotEmpty() && periods.isNotEmpty()) {
@@ -171,13 +213,6 @@ object IcsParser {
                 else -> null
             }
         }
-    }
-
-    private fun sectionOf(time: LocalTime, slots: List<DefaultSlot>): Int {
-        slots.firstOrNull { !time.isBefore(it.start) && time.isBefore(it.end) }?.let { return it.number }
-        // 如果跨节次，按开始时间落入的节次处理；找不到则用最近的前一个节次
-        val previous = slots.lastOrNull { !time.isBefore(it.start) }
-        return previous?.number ?: 1
     }
 
     private fun dateToWeek(date: LocalDate, semesterStart: LocalDate): Int {
