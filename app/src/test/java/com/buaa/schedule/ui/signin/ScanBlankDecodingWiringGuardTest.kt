@@ -192,8 +192,12 @@ class ScanBlankDecodingWiringGuardTest {
     fun filesThisCardMustNotTouchAreByteIdenticalToBaseline() {
         for (relative in listOf(REJECT_FILE, VIEW_MODEL_FILE, GATE_FILE, RECOVERY_FILE)) {
             val path = "$MAIN_PREFIX/$relative"
-            val baseline = gitShow(T87_BASELINE, path)
-            check(baseline != null) { "git 跑不动或基线取不到（$path@$T87_BASELINE），反向钉无从核对" }
+            // T245② 被授权改过 ScanSubmissionGate.kt 的**措辞**（占位的语义 + awaitingUserAction
+            // 有两个写者那两句），所以这一枚的基点前移到 T245②；其余三枚仍按 6a27324 逐字节核对。
+            // 反向钉一枚没删、没放宽：闸门文件从今往后照样"不许顺手改"。
+            val rev = if (relative == GATE_FILE) T245_GATE_BASELINE else T87_BASELINE
+            val baseline = gitShow(rev, path)
+            check(baseline != null) { "git 跑不动或基线取不到（$path@$rev），反向钉无从核对" }
             assertEquals(
                 "$relative 相对基点被改过了：本卡只该在解码与递交之间加一道准入，" +
                     "七档文案、状态机漏斗、闸门与棘轮都不许动",
@@ -201,6 +205,12 @@ class ScanBlankDecodingWiringGuardTest {
                 normalizeNewlines(File(findMainJavaDir(), relative).readText()),
             )
         }
+        // 靶子：这一枚的基点前移是有实物的（新旧两份闸门文件逐字节不同才允许不同源），
+        // 否则"换个 sha"就等于把反向钉空转掉
+        assertTrue(
+            "ScanSubmissionGate.kt 在 6a27324 与 T245 基点上逐字节相同 ⇒ 基点前移是白给的，这一枚反向钉已经空转",
+            gitShow(T87_BASELINE, "$MAIN_PREFIX/$GATE_FILE") != gitShow(T245_GATE_BASELINE, "$MAIN_PREFIX/$GATE_FILE"),
+        )
         val statusPath = "$MAIN_PREFIX/$STATUS_FILE"
         val statusBaseline = gitShow(T87_BASELINE, statusPath)
         check(statusBaseline != null) { "git 跑不动或基线取不到（$statusPath@$T87_BASELINE），反向钉无从核对" }
@@ -427,6 +437,9 @@ class ScanBlankDecodingWiringGuardTest {
 
         /** 本卡的起点（master）：⑤b 那几份"本卡不许碰"的文件按这一枚哈希逐字节核对 */
         const val T87_BASELINE = "6a27324"
+
+        /** T245② 授权改过 ScanSubmissionGate.kt 的措辞，这一枚反向钉的基点因此前移到这里 */
+        const val T245_GATE_BASELINE = "ddf493f"
 
         /** 真码形状（值本身是假的，滚动码的真值永远不该出现在这里） */
         val realCode =

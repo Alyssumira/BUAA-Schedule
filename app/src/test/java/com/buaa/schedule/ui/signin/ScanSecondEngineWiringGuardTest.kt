@@ -415,14 +415,25 @@ class ScanSecondEngineWiringGuardTest {
     fun filesThisCardMustNotTouchAreByteIdenticalToBaseline() {
         for (relative in listOf(PROBE_FILE, WARM_UP_FILE, RECOVERY_FILE, GATE_FILE)) {
             val path = "$MAIN_PREFIX/$relative"
-            val baseline = gitShow("$T66_BASELINE", path)
-            check(baseline != null) { "git 跑不动或基线取不到（$path@$T66_BASELINE），反向钉无从核对" }
+            // T245② 被授权改过 ScanSubmissionGate.kt 的**措辞**（DecodeFailurePayload 的语义 +
+            // awaitingUserAction 有两个写者那两句），所以这一枚的反向钉基点前移到 T245②；
+            // 其余三枚仍按 003bbdc 逐字节核对。守卫一枚没删、也没放宽：闸门文件从今往后照样
+            // "不许顺手改"，要改必须像这样把基点与授权一起钉走。
+            val rev = if (relative == GATE_FILE) T245_GATE_BASELINE else T66_BASELINE
+            val baseline = gitShow(rev, path)
+            check(baseline != null) { "git 跑不动或基线取不到（$path@$rev），反向钉无从核对" }
             assertEquals(
                 "$relative 相对基点被改过了：本卡只该加第二引擎，不该动文案/探针/预热那三条链",
                 normalizeNewlines(baseline),
                 normalizeNewlines(File(findMainJavaDir(), relative).readText()),
             )
         }
+        // 靶子：这一枚的基点前移是有实物的（新旧两份闸门文件逐字节不同的话才允许不同源），
+        // 否则"换个 sha"就等于把反向钉空转掉
+        assertTrue(
+            "ScanSubmissionGate.kt 在 003bbdc 与 T245 基点上逐字节相同 ⇒ 基点前移是白给的，这一枚反向钉已经空转",
+            gitShow(T66_BASELINE, "$MAIN_PREFIX/$GATE_FILE") != gitShow(T245_GATE_BASELINE, "$MAIN_PREFIX/$GATE_FILE"),
+        )
         val statusPath = "$MAIN_PREFIX/$STATUS_FILE"
         val statusBaseline = gitShow(T66_BASELINE, statusPath)
         check(statusBaseline != null) { "git 跑不动或基线取不到（$statusPath@$T66_BASELINE），反向钉无从核对" }
@@ -957,6 +968,9 @@ class ScanSecondEngineWiringGuardTest {
 
         /** 本分支的基点（master）：T66 不许改动上面那五份文件的比较基线 */
         const val T66_BASELINE = "003bbdc"
+
+        /** T245② 授权改过 ScanSubmissionGate.kt 的措辞，这一枚反向钉的基点因此前移到这里 */
+        const val T245_GATE_BASELINE = "ddf493f"
 
         /**
          * T90（#134）被授权改动的那一段（帧观测措辞）的锚点：它的 KDoc 第一行。

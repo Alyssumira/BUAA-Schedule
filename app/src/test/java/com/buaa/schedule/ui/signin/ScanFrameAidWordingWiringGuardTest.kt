@@ -201,8 +201,12 @@ class ScanFrameAidWordingWiringGuardTest {
     fun theJudgingSideWasNotTouchedByThisCard() {
         for (relative in listOf(ADMISSION_FILE, RECOVERY_FILE, GATE_FILE, VIEW_MODEL_FILE)) {
             val path = "$MAIN_PREFIX/$relative"
-            val baseline = gitShow(T90_BASELINE, path)
-            check(baseline != null) { "git 跑不动或基线取不到（$path@$T90_BASELINE），反向钉无从核对" }
+            // T245② 被授权改过 ScanSubmissionGate.kt 的**措辞**（占位的语义 + awaitingUserAction
+            // 有两个写者那两句），所以这一枚的基点前移到 T245②；其余三枚仍按 d7af6f8 逐字节核对。
+            // 反向钉一枚没删、没放宽：闸门文件从今往后照样"不许顺手改"。
+            val rev = if (relative == GATE_FILE) T245_GATE_BASELINE else T90_BASELINE
+            val baseline = gitShow(rev, path)
+            check(baseline != null) { "git 跑不动或基线取不到（$path@$rev），反向钉无从核对" }
             assertEquals(
                 "$relative 相对本卡起点被改过了：① 的结论是「分不清」，所以判据侧一个字都不许动 —— " +
                     "把误检当成新档去判，就是给全仓添第二把空白尺子",
@@ -210,6 +214,12 @@ class ScanFrameAidWordingWiringGuardTest {
                 normalizeNewlines(File(findMainJavaDir(), relative).readText()),
             )
         }
+        // 靶子：这一枚的基点前移是有实物的（新旧两份闸门文件逐字节不同才允许不同源），
+        // 否则"换个 sha"就等于把反向钉空转掉
+        assertTrue(
+            "ScanSubmissionGate.kt 在 d7af6f8 与 T245 基点上逐字节相同 ⇒ 基点前移是白给的，这一枚反向钉已经空转",
+            gitShow(T90_BASELINE, "$MAIN_PREFIX/$GATE_FILE") != gitShow(T245_GATE_BASELINE, "$MAIN_PREFIX/$GATE_FILE"),
+        )
         // 帧观测那颗内核的头部：挖掉 T92 的「空转速率」一段之外逐字节（同一把尺子，另一枚文件）
         val flowPath = "$MAIN_PREFIX/$FRAME_FLOW_FILE"
         val flowBaseline = gitShow(T90_BASELINE, flowPath)
@@ -240,14 +250,17 @@ class ScanFrameAidWordingWiringGuardTest {
         assertEquals(
             "$SECOND_ENGINE_FILE 在 T91 被授权的那几段之外被改过了：这一卡只许改「三次失手之后还许不许再试」，" +
                 "节流常数（额度/间隔/连击）、准入那把唯一的空白尺子与其余三档停法都不许顺手改",
-            cutT91Spans(normalizeNewlines(kernelBaseline), "$kernelPath@$T90_BASELINE", T91Side.Baseline),
-            cutT91Spans(kernelCurrent, SECOND_ENGINE_FILE, T91Side.Current),
+            cutT91Spans(cutT245Spans(normalizeNewlines(kernelBaseline), "$kernelPath@$T90_BASELINE", T91Side.Baseline), "$kernelPath@$T90_BASELINE", T91Side.Baseline),
+            cutT91Spans(cutT245Spans(kernelCurrent, SECOND_ENGINE_FILE, T91Side.Current), SECOND_ENGINE_FILE, T91Side.Current),
         )
         // 靶子：被挖掉的确实是本卡那件事（整段删掉判据、或把复探写成无限重试都会红在这里）
         assertTrue("靶子丢了：复探那颗常数没了（挖掉它就等于把这一卡撤了）：", kernelCurrent.contains("internal const val SecondEngineReprobeFrameGap = 120L"))
         assertTrue("靶子丢了：复探判据本体没了：", kernelCurrent.contains("internal fun afterMissesReprobeAllowsReprobe("))
         assertTrue("靶子丢了：复探没有吃同一份额度（封顶那一道闸门不在）：", kernelCurrent.contains("ledger.fires < SecondEngineMaxFiresPerBind &&"))
         assertTrue("靶子丢了：判死那一档还是旧的「本轮不再请它补解」那句谎：", !kernelCurrent.contains("本轮绑定不再请它补解"))
+        // 靶子（T245）：挖掉的确实是被授权的那几段本身 —— 锚点对不上就等于把整份内核放行
+        assertTrue("靶子丢了：工作树里没有 T245 的三档内核（挖错了地方）：", kernelCurrent.contains("internal enum class SecondEngineHandState {"))
+        assertTrue("靶子丢了：工作树里 FailureTrace 那一档不是「不算手里有码」：", kernelCurrent.contains("SecondEngineHandState.FailureTrace -> false"))
         // 帧观测的数法与判档树：整段逐字节（本卡没加计数、没改阈值、没改阶梯）
         val ledger = "$MAIN_PREFIX/$FRAME_LEDGER_FILE"
         val ledgerBaseline = gitShow(T90_BASELINE, ledger)
@@ -422,6 +435,81 @@ class ScanFrameAidWordingWiringGuardTest {
         return rest
     }
 
+    // ---- T245（#434 / T242-C1）的挖段重钉：被授权改的是「闸门留痕算不算手里有码」那一颗派生判据与它的措辞 ----
+
+    /**
+     * @param addedByThisCard true = 这一段是 T245 新增的（基线侧必须**找不到**它），
+     *                        false = 这一段 T245 被授权改动（两侧按同一对锚点挖掉，剩下的字节照比）
+     */
+    private data class T245Span(
+        val start: String,
+        val end: String,
+        val addedByThisCard: Boolean,
+        val what: String,
+        val minChars: Int,
+        val maxChars: Int,
+    )
+
+    private val t245KernelSpans = listOf(
+        T245Span(
+            start = "/**\n * 闸门那份留痕的三种处境（T245）",
+            end = "/**\n * 这一帧要不要交给第二引擎补解。",
+            addedByThisCard = true,
+            what = "SecondEngineHandState 三档与 secondEngineCodeInHand 派生判据",
+            minChars = 800, maxChars = 12_000,
+        ),
+        T245Span(
+            start = "    /** 闸门里",
+            end = "    internal object CodeInHand",
+            addedByThisCard = false,
+            what = "CodeInHand 那一档的一句话文档",
+            minChars = 10, maxChars = 900,
+        ),
+        T245Span(
+            start = "    is SecondEngineDecision.CodeInHand ->",
+            end = "    is SecondEngineDecision.OutOfBudget ->",
+            addedByThisCard = false,
+            what = "CodeInHand 的停痕措辞",
+            minChars = 20, maxChars = 900,
+        ),
+        T245Span(
+            start = " * @param codeInHand",
+            end = " * @param engineUsable",
+            addedByThisCard = false,
+            what = "secondEngineDecision 的 @param codeInHand",
+            minChars = 20, maxChars = 1_200,
+        ),
+        // 复探五道闸门里 `!codeInHand` 那一条 KDoc 不单列：它在 afterMissesReprobeAllowsReprobe
+        // 的头上，而那颗函数是 T91 新增的（t91KernelSpans 第三段 addedByThisCard），T90 基线侧
+        // 整段都不存在 —— 本卡在这一段里动的字由 T91 那一段一并挖掉，两侧同形。
+    )
+
+    /**
+     * 挖掉 [t245KernelSpans] 那几段（T245）。纪律与 [cutT91Spans] 同源：锚点找不到就抛、
+     * 段长越界就抛、「本卡新增」那一段在基线侧必须找不到。
+     *
+     * 先挖 T245 再挖 T91：T91 的第三段（复探常数与判据本体）把 afterMissesReprobeAllowsReprobe
+     * 整颗函数连同它的 KDoc 一起盖住了，反过来的话 T245 那条 KDoc 锚点会先被挖没。
+     */
+    private fun cutT245Spans(text: String, label: String, side: T91Side): String {
+        var rest = text
+        for (span in t245KernelSpans) {
+            val at = rest.indexOf(span.start)
+            if (side == T91Side.Baseline && span.addedByThisCard) {
+                check(at < 0) { "$label 里已经带着 T245 新增的「${span.what}」：基线取错了，这么比量不出任何东西" }
+                continue
+            }
+            check(at >= 0) { "$label 里找不到 T245 段的锚点「${span.what}」（「${span.start.take(20)}」）：那段挪过家了，钉法要跟着重看" }
+            val stop = rest.indexOf(span.end, at + span.start.length)
+            check(stop > at) { "$label 里「${span.what}」的收尾锚点找不到：段边界漂了" }
+            check(stop - at in span.minChars..span.maxChars) {
+                "$label 里「${span.what}」长 ${stop - at} 字符，越出 [${span.minChars},${span.maxChars}]：钉法本身漂了"
+            }
+            rest = rest.removeRange(at, stop)
+        }
+        return rest
+    }
+
     private fun findMainJavaDir(): File {
         var dir: File? = File("").absoluteFile
         repeat(5) {
@@ -486,6 +574,9 @@ class ScanFrameAidWordingWiringGuardTest {
 
         /** 本卡的起点（master d7af6f8）：④ 那几处反向钉按这一枚逐字节核对 */
         const val T90_BASELINE = "d7af6f8"
+
+        /** T245② 授权改过 ScanSubmissionGate.kt 的措辞，这一枚反向钉的基点因此前移到这里 */
+        const val T245_GATE_BASELINE = "ddf493f"
 
         /**
          * T92（#133）被授权改动的那一段（[FRAME_FLOW_FILE] 头部"空转有多少帧"的读数）的两个锚点，
