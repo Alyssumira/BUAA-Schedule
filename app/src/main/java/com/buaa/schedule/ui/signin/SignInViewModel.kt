@@ -87,21 +87,78 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
      * 比"这次没吃进去"更糟，而排队只会把同一张码再投一次。
      * 现在它是单一来源的一颗 [StateFlow]，界面 collect 它来决定 `enabled`，
      * 这三个守卫读的还是同一个值。
+     *
+     * ③′（T257）这一枚之上又长了一档**不按按钮**的：相机按帧递进来的滚动码。按钮在忙的时候
+     * 点不动，可它管不到"投影上那枚码自己换了脸"这一手 —— 闸门看见 payload 变了就放行并记账，
+     * 这一颗再把它丢掉，用户扫到了、系统记下了、屏幕上一个字都没有。按用户决定，丙档：
+     * **丢仍然丢**（不发第二发，也绝不自动补投），但这一手必须有名字 —— 见 [signIn] 走的
+     * [scanFlightAdmission]。排队那一条被 T59③ 钉死过（重复提交比这次没吃进去更糟），这里不翻案。
      */
     private val flight = MutableStateFlow(false)
 
     /** 有一次签到请求正在飞（界面用它把那颗会丢动作的按钮按灭） */
     val inFlight: StateFlow<Boolean> = flight.asStateFlow()
 
-    /** @param raw 扫码得到的原文 —— 相机实时解码与相册识图两条路共用这一个入口（手输入口已删除） */
-    fun signIn(raw: String) {
-        if (flight.value) return
+    /**
+     * 这一次在飞之间，已经念过一句"这一手没投出去"了没有。
+     *
+     * 它只管按帧那一路的**重复念**：同一枚码在冷却账上每 1500ms 会再被放行一次，
+     * 少了这一位，一次慢请求就把同一句话按 1.5 秒一遍地写进 logcat。
+     * ⚠️ 与 [flight] 同生同灭 —— 置位在发那一发之前，清场在那颗 `finally` 里，
+     * 两边都要动，漏一边的话"上一次在飞念过"会永久按住下一次在飞的这句话。
+     */
+    private var dropNoticed = false
+
+    /**
+     * 正在飞的那一发的原文，**只**用来回答"这一手是不是同一枚码"。
+     *
+     * 一个字都不许进日志、进卡面、进 [SignInState]：iClass 那张码带时间戳，是滚动码，
+     * 把完整原文留在任何读得到的地方等于把"还能再签一次"的凭证交出去
+     *（口径同 `ScanRejectClassifier` 那一条"只有形状，没有原文"）。
+     * 与 [flight] 同生同灭，写它的两条入口（相机回调 / 相册回调）都在这颗 VM 的主线程上，
+     * `@Volatile` 只是把"分析线程哪天也来读一次"这一档的账先付掉。
+     */
+    @Volatile private var dispatchingPayload: String? = null
+
+    /**
+     * 扫码得到的原文递进状态机 —— 相机实时解码与相册识图两条路共用这一个入口（手输入口已删除）。
+     *
+     * 这一手投不投、投不成时念哪一句，全在 [scanFlightAdmission] 那一颗纯判据里（表驱动单测
+     * `ScanFlightAdmissionTest` 逐格钉着），这里一个字都不解释、也不拼第二份真相。
+     *
+     * @param raw 扫码得到的原文
+     * @param cooldownRemainingMillis 这一枚在提交闸门冷却账上的剩余毫秒。取数是闸门那侧的事：
+     *   相机那条刚把这一枚记进账，剩余就是整个 [RescanCooldownMillis]；相册那条根本没有账，
+     *   传 [NoLedgerCooldownRemainingMillis]。状态机自己不读墙钟、也不自己算冷却。
+     * @param isRetryHand 这一手是不是用户主动递进来的再一次动作（相册那张图 = true；相机按帧 = false）
+     */
+    fun signIn(raw: String, cooldownRemainingMillis: Long, isRetryHand: Boolean) {
+        when (val admission = scanFlightAdmission(
+            dispatching = flight.value,
+            isRetryHand = isRetryHand,
+            samePayloadAsDispatching = raw == dispatchingPayload,
+            alreadyNoticedForThisDispatch = dropNoticed,
+            cooldownRemainingMillis = cooldownRemainingMillis,
+        )) {
+            ScanFlightAdmission.Dispatch -> dispatchNow(raw)
+            is ScanFlightAdmission.Dropped -> tellDroppedArrival(admission)
+            // 不念也不写日志：屏幕上那一句说的就是这件事（口径同 noteReadableCodeSeenOnce ——
+            // 这一档既没失败也没新东西，而它唯一的听众是界面）。它不是静默支路：
+            // 走到这里的前提正是"那一句还挂着"，由 [dropNoticed] 与 [flight] 同生同灭保证。
+            ScanFlightAdmission.DropAlreadyNoticed -> Unit
+        }
+    }
+
+    /** 真的发那一发：解析 → 置在飞 → 一次 GET。解析落空那一档走 [rejectScan]，一句人话加一行取证。 */
+    private fun dispatchNow(raw: String) {
         val target = ScanTargetParser.parse(raw)
         if (target == null) {
             rejectScan(raw)
             return
         }
         flight.value = true
+        dispatchingPayload = raw
+        dropNoticed = false
         viewModelScope.launch {
             try {
                 // 只留 iClass 一族之后这里没有"分岔"可分了，但 `when` 留着：
@@ -110,9 +167,33 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
                     is ScanTarget.IClass -> submitToIClass(target)
                 }
             } finally {
+                // 三样一起清：在飞旗、原文、"念过没有"。漏任何一样都是从这一头复活旧病 ——
+                // 漏旗标就是永久 in-flight（按钮再也不亮），漏原文就是把上一发的 payload
+                // 当成这一发的比较基准，漏旗标位就是把下一次在飞的那一句话永久按住不念。
                 flight.value = false
+                dispatchingPayload = null
+                dropNoticed = false
             }
         }
+    }
+
+    /**
+     * 丢掉这一手，并且说实话：一句进结果卡，一行进 logcat（`Log.w`，HyperOS 把 logcat 截在
+     * Info 级以下，`Log.d` 等于没写），两句话同档同源，都由 [ScanFlightAdmission] 给。
+     *
+     * 落的是 [SignInState.Failed] 那张卡：它是这一页唯一"回答我刚点的那一下去哪了"的出口
+     *（口径同 [reportGalleryBlocked]），界面一个字都不必改 —— 呈现层不是本卡的战场。
+     * ⚠️ 已知残账（交回编排者，属 #291 的第二半）：卡片会被在飞那一发的最终结果覆盖，
+     * 而"签到完成"那句说的是**上一枚**码；把它拆成两句要动 `SpocScanScreen` 的呈现层，
+     * 本卡不许动，所以这里只把它写在这一句上。
+     */
+    private fun tellDroppedArrival(dropped: ScanFlightAdmission.Dropped) {
+        dropNoticed = true
+        Log.w(TAG, droppedArrivalTraceText(dropped))
+        _state.value = SignInState.Failed(
+            reason = droppedArrivalCardText(dropped),
+            relogin = false,
+        )
     }
 
     /**

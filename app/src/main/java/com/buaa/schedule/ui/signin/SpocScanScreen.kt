@@ -241,7 +241,11 @@ fun SpocScanScreen(
         scanner?.let {
             QrCodeAnalyzer(
                 it,
-                onCode = { text -> viewModel.signIn(text) },
+                onCode = { text, cooldownRemainingMillis ->
+                    // T257③：相机那一路 = 按帧重投的那一手（isRetryHand = false），
+                    // 冷却剩余由闸门算好递过来（本页不读墙钟，也不自己再拼一份冷却的账）。
+                    viewModel.signIn(text, cooldownRemainingMillis, isRetryHand = false)
+                },
                 // ① 双向：内核说停就停、说活就活。旧写法这颗回调只写 false，
                 // 一次抖动就把相机扫码判死到整页结束（用户报的「扫码没反应」第二条）
                 onWorkingChanged = { working -> scannerWorking = working },
@@ -524,7 +528,13 @@ fun SpocScanScreen(
                                 decodingAdmissionTraceText(admission, SingleActionOrdinal, NoDecodingFrame),
                             )
                         }
-                        if (!admission.admitted || raw == null) viewModel.reportNoQrCode() else viewModel.signIn(raw)
+                        if (!admission.admitted || raw == null) {
+                            viewModel.reportNoQrCode()
+                        } else {
+                            // T257③：相册那一路是"用户主动递进来的再一次动作"（isRetryHand = true），
+                            // 而且它根本没有闸门账 ⇒ 冷却剩余传"没有账"那一档，不许给它充一份。
+                            viewModel.signIn(raw, NoLedgerCooldownRemainingMillis, isRetryHand = true)
+                        }
                     }
                     .addOnFailureListener { viewModel.reportNoQrCode() }
             }
@@ -864,7 +874,14 @@ private val analysisExecutor = Executors.newSingleThreadExecutor()
  */
 private class QrCodeAnalyzer(
     private val scanner: BarcodeScanner,
-    private val onCode: (String) -> Unit,
+    /**
+     * 把闸门放行的那一手递给状态机。
+     *
+     * T257③：第二个参数是这一枚刚记进冷却账之后的**剩余毫秒**，取数口径属于闸门那一侧
+     *（本仓规矩：设备与账本的既成事实由调用点算好，判据本体只吃参数，同 [shouldSubmitScan]）。
+     * 状态机拿它去决定"丢掉这一手时那句实话怎么说"，不拿它判投不投 —— 投不投是 [shouldSubmitScan] 的事。
+     */
+    private val onCode: (raw: String, cooldownRemainingMillis: Long) -> Unit,
     /**
      * 解码这一档"还活着吗"推进来（T59①）。旧写法这颗回调只写 false，所以一帧抖动就把
      * 相机扫码判死到整页结束；现在取值由 [ScanRecoveryPolicy] 的内核判，两边都会写。
@@ -1371,7 +1388,11 @@ private class QrCodeAnalyzer(
         // 先置位再回调：回调里就会开始发请求，这期间新帧可能已经进来了
         // （这一句次序钉在 ScanSubmissionGateTest 的形状守卫里）
         handled = ScanHandled(raw, now)
-        onCode(raw)
+        // T257③：剩余毫秒在这里算，不在状态机里算 —— 这一枚**刚**记进账，所以剩余就是整个冷却期。
+        // 记账仍然排在递交之前（那一句是钉子：晚一步置位就是同一发被两帧各投一遍），
+        // 而状态机如果因为"有一发在飞"丢掉这一手，它丢掉的是已经进了账的那一枚 ——
+        // 这件事从此由 [ScanFlightAdmission] 分档念出来，不再静默。
+        onCode(raw, RescanCooldownMillis)
         return DecodingSubmission.Submitted
     }
 
