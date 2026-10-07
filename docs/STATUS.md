@@ -5460,7 +5460,7 @@ T215 / T216 / T218 / T219 四枚代理自报**零枚**卡面点名的话术。�
 **第六批 → 第七批之间的候选入账（#425–#442，共 18 枚，六项齐全，守卫说法一律带族别）**
 - T239 臂（补漏，10 枚）：#425 已由 T243 收口 · #426–#430 归 `ui/settings/SettingsScreen.kt` 与两枚纯内核（与第八批 C3 卡同文件面 ⇒ 必须并入 C3，不许另开卡）· #431 归 `ui/importing/SemesterStartFailureCopy.kt`（C6 地盘）· #432/#433 归 `ui/stats/StatsScreen.kt` 与 `WeekFreeGrid.kt`（并集档那一族，与 #398 同判据）· #442 新格（统计页冲突卡把组内配对周次的**并集**印成「第 1-16 周」，代理自报「薄」：两枚冲突测试未逐行读完 ⇒ 它没写「四家零格」）。
 - T242 臂（`ui/signin/**` 首扫，8 枚）：#434 已由 T245 收口（并把 `awaitingUserAction` 那半截新账挂回 #435 邻位）· #435（相册 `InputImage.fromFilePath` 在主线程同步读+解大图，**与 #290 同块不同病灶，代理已点名不是重报**）· #436/#437/#439/#440/#441 是注释与读数账（#438 是 CI 那族的第二证：产物层守卫 `assumeTrue(apk!=null)` 在 workflow 里因任务顺序**恒跳**，与 #343 同族）。
-- #403 **撤销候选**：`ImportScreen.kt:249` 横幅吃 `pending.conflictGroupCount`（`ScheduleViewModel` 类体派生），`:263` 明细行吃 `pairCount = conflicts.size`，两枚读数各带自己的量词（组 / 两两相撞）⇒ 不是「两处 UI 各取一种」。反向的新格另立 #442。
+- #403 **撤销候选**：`ImportScreen.kt` 的 `:249` 横幅吃 `pending.conflictGroupCount`（`ScheduleViewModel` 类体派生），`:263` 明细行吃 `pairCount = conflicts.size`，两枚读数各带自己的量词（组 / 两两相撞）⇒ 不是「两处 UI 各取一种」。反向的新格另立 #442。
 
 **T229（崩点回收，与本批同段落地）**：四枚提交在 `.worktrees/T229` rebase 到 `9a7b363` 后 cherry-pick 进来（工作树干净、无 stash、`find app/src -newermt '-3 minutes'` = 0 枚 ⇒ 判死成立），净面 12 枚文件、与本批 T244/T245 文件面零交集。落的是 **#301**（教务缺节次不再折成第 1 节：与星期同一把尺整条丢，丢的条数进 `ParseOutcome.missingSectionCourses`；注释里点名同族先例 T27/T192/T28 与 `TextScheduleParser.parse` 那句 `?: return@forEachIndexed`）与 **#303**（备份提醒不再按 `courseKey` 归并：新增 205 行纯 JVM 配对内核 `BackupReminderPairing.kt`，两侧各自排定序后再配、每一枚结论自带 `Assignment.basis` 出处，"谁活下来"不再由两张无 ORDER BY 查询的行序决定）。**它的变异自证一律是「未验到」**（崩时没留下任何日志文件）⇒ 由我在合并对象上冷跑门禁 + **自己补一刀代表性变异**（#301 那一手：把"整条丢弃"摘回 `?: 1` 必须让 `BuaaMissingSectionGuardTest` 红），台账里这一档记成「编排者代证」，不写成代理已证。
 
