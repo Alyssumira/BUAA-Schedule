@@ -1,10 +1,14 @@
 package com.buaa.schedule.reminder
 
 import java.io.File
+import java.security.MessageDigest
+import java.util.Properties
 import java.util.zip.ZipFile
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.fail
 import org.junit.Assert.assertTrue
 
 /**
@@ -28,16 +32,23 @@ import org.junit.Assert.assertTrue
  * 设计如此 —— 而它们恰好充当本文件所有产物层断言的**反向对照**：R8 确实会重建常量池，
  * 所以"字面量在 dex 里"不是恒真。
  *
- * 三层断言，强度与可跑性不同，别混着读：
+ * 四层断言，强度与可跑性不同，别混着读：
  * 1. [noRuleFileStripsAndroidUtilLog] / [releaseStillUsesTheAuditedShrinkingConfig] —— 恒跑，
  *    钉规则层与构建脚本形状，只证明"没人写过删 Log 的规则"，**不证明产物里真的有**；
  * 2. [forensicSitesAreStillLogCalls] —— 恒跑，钉的是**源码层**：那几行还在、级别没变、
  *    消息字面量还是同一句、而且不是资源条目。这条同样**不证明产物**；
  * 3. [minifiedDexStillCarriesEveryForensicLine] / [effectiveR8ConfigCarriesNoLogStrippingRule] ——
  *    读 `:app:assembleRelease` 的产物（APK 里的 classes\*.dex、R8 dump 出的 configuration.txt），
- *    **没有产物时用 assumeTrue 跳过**（`testDebugUnitTest` 不依赖 `assembleRelease`，产物在不在
+ *    **日常门禁里没有产物就跳过**（`testDebugUnitTest` 不依赖 `assembleRelease`，产物在不在
  *    取决于谁最后跑过什么）。跳过不等于没事：要连着跑
  *    `:app:assembleRelease :app:testDebugUnitTest` 才吃到第 3 层。
+ * 4. [releaseScriptRunsTheArtifactLayerGuardsAfterTheArtifact] /
+ *    [artifactLayerHasExactlyOneSkipExitAndBothSidesAreWired] —— 恒跑，钉的是**发版路径本身**
+ *    （台账 #340）：`release.ps1` 把第 3 层那两枚排在 `:app:releasePackage` 之后重跑一遍、
+ *    带 `-PbuaaRequireReleaseArtifacts` 与本轮的 `-PreleaseRunId`；命中那个开关时第 3 层
+ *    **不许跳过**（[missingArtifact] 是唯一出口，跳过即红），且产物必须过
+ *    `:app:releasePackage` 写下的自证条（SHA-256 复算 + runId + 包内版本对 gradle.properties）。
+ *    第 3 层"能不能读到产物"从此不再是一句口头纪律：它有一枚读文本的守卫在下面盯着。
  *
  * 还有最后一层谁都在 JVM 里给不出：release 装机后 `logcat -s WakeLocks` 真吐得出那一行。
  * 产物里有常量、有 invoke 指令 ≠ 运行时那一路径被走到过 —— 这一条交回编排者真机验收。
@@ -263,13 +274,11 @@ class ReleaseForensicLogSurvivalTest {
      */
     @Test
     fun minifiedDexStillCarriesEveryForensicLine() {
-        val apk = releaseApk()
-        assumeTrue(
-            "没有 :app:assembleRelease 的产物（app/build/outputs/apk/release/\u002a.apk），产物层无从判断" +
-                "—— 恒跑的那两条（规则层 + 源码层）才是这条链的下限",
-            apk != null,
+        val apk = releaseApkForArtifactLayer(
+            "取证那几行的 dex",
+            "恒跑的那两条（规则层 + 源码层）才是这条链的下限",
         )
-        val dex = dexBytes(apk!!)
+        val dex = dexBytes(apk)
         val absent = ArrayList<String>()
         val present = ArrayList<String>()
 
@@ -318,10 +327,8 @@ class ReleaseForensicLogSurvivalTest {
     /** R8 dump 出的**生效**规则集里没有针对 android.util.Log 的 assume 规则（含依赖自带的 consumer rules） */
     @Test
     fun effectiveR8ConfigCarriesNoLogStrippingRule() {
-        val file = File(projectDir(), "app/build/outputs/mapping/release/configuration.txt")
-        assumeTrue(
-            "没有 R8 的 configuration.txt 产物（跑过 :app:assembleRelease 才有），生效规则集读不到",
-            file.isFile,
+        val file = r8ConfigurationForArtifactLayer(
+            "恒跑的第 1 层（仓库里的规则文件）才是这条链的下限",
         )
         val text = file.readText()
         val offenders = logStrippingRules(text)
@@ -339,6 +346,341 @@ class ReleaseForensicLogSurvivalTest {
             assumeRuleBlocks(text).isNotEmpty(),
         )
     }
+
+    // ---- 4. 发版路径：产物层不许跳过 + 产物自证本轮（#340）-------------------------------------------
+
+    /**
+     * `release.ps1` 必须把这两枚产物层守卫排在 `:app:releasePackage` **之后**再跑一遍，
+     * 并带上 `-PbuaaRequireReleaseArtifacts`（桥成测试 JVM 的 `buaa.requireReleaseArtifacts`）。
+     *
+     * 为什么这一层值得单独钉：脚本里的那一步顺序是"这三格在发版路径上真被读到"的**唯一**保证，
+     * 而 `release.ps1` 原先不在任何一枚测试的输入面里 —— 台账 #340 原样复发（把产物层那一支删回
+     * 产物之前、或删掉那个开关）时，全量单测一枚都不会红，红的是用户手机上的包。
+     * 手法是**读形状 + 数出现次数**，判据全落在文本上，不跑构建； needle 一律带引号取，
+     * 免得撞上脚本自己那几行解释性注释（注释里也写着这些任务名）。
+     */
+    @Test
+    fun releaseScriptRunsTheArtifactLayerGuardsAfterTheArtifact() {
+        val script = workingTreeText(RELEASE_SCRIPT)
+        val packageAt = script.indexOf(TASK_RELEASE_PACKAGE)
+        check(packageAt >= 0) { "$RELEASE_SCRIPT 里已经没有 $TASK_RELEASE_PACKAGE 了：发版入口换了写法，本层要重钉" }
+
+        val forensicAt = onlyAt(script, "'" + FORENSIC_CLASS + "'", "产物层守卫 $FORENSIC_CLASS 的点名")
+        val scanAt = onlyAt(script, "'" + SCAN_GUARD_CLASS + "'", "产物层守卫 $SCAN_GUARD_CLASS 的点名")
+        assertTrue(
+            "两枚产物层守卫被排在 :app:releasePackage **之前**（取证 log 存活 / 兜底 .so 是否 DEFLATED / " +
+                "zxingcpp/BarcodeReader 是否还在 release dex 这三格会回到\"每一轮必跳\"，" +
+                "也就是台账 #340 那一格原样复发）：releasePackage 在 $packageAt，两枚类在 $forensicAt / $scanAt",
+            forensicAt > packageAt && scanAt > packageAt,
+        )
+
+        // 打包之前那一趟单测不许点名产物层：那时本轮产物根本不存在，点了也只是跳
+        assertFalse(
+            "产物还没打出来就在 --tests 里点名产物层守卫：那种跑法必然 assumeTrue 跳过，" +
+                "把\"跑过了\"当成\"读到了\"正是本层要拦的形状",
+            script.substring(0, packageAt).contains("--tests"),
+        )
+        val testTaskCount = countOf(script, TASK_TEST_DEBUG)
+        assertEquals(
+            "$TASK_TEST_DEBUG 应出现 3 次（传号那一支、不传号那一支各一次，加上产物之后的那一趟），" +
+                "实到 $testTaskCount 次：少掉第三趟就是 #340 没落地，" +
+                "把两枚守卫挪进前面那两趟里同样算错（那时本轮产物还不存在）",
+            3,
+            testTaskCount,
+        )
+        assertTrue(
+            "第二趟 $TASK_TEST_DEBUG 排在 :app:releasePackage 之前 ⇒ 产物层读的仍是 build/ 里的残留",
+            script.lastIndexOf(TASK_TEST_DEBUG) > packageAt,
+        )
+
+        // 缓存：这两枚类读的是产物，而产物**故意不在**测试输入面里，不强制重跑就会端住上一轮的绿
+        assertEquals(
+            "产物层那一步必须 --rerun-tasks（只许一次），实到 ${countOf(script, "'--rerun-tasks'")} 次",
+            1,
+            countOf(script, "'--rerun-tasks'"),
+        )
+
+        // 两个开关都得真的传下去
+        assertEquals(
+            "-PbuaaRequireReleaseArtifacts 只许在产物层那一步传一次，实到 ${countOf(script, FLAG_REQUIRE_ARTIFACTS)} 次" +
+                "：传 0 次就是让守卫继续\"没产物也绿\"，传两次就是把恒跑的门禁也变成\"必须先打包\"",
+            1,
+            countOf(script, FLAG_REQUIRE_ARTIFACTS),
+        )
+        assertEquals(
+            "-PreleaseRunId 要在打包与守卫两步各传一次（同一个号），实到 ${countOf(script, FLAG_RUN_ID)} 次：" +
+                "只传给守卫 ⇒ 侧车里没号可比；只传给打包 ⇒ 本轮暗号这一格静默失效",
+            2,
+            countOf(script, FLAG_RUN_ID),
+        )
+    }
+
+    /**
+     * "不许报 skipped"这句话本身也得有尺：跳过出口只许一枚，而且开关的两侧都要有人接。
+     *
+     * 数出现次数那一档，读的是这两枚守卫**自己**的源码文本 —— 谁图省事在本文件里再补一枚
+     * 裸的 assume 出口（绕过 [missingArtifact]），发版路径上那三格就又回到"绿着跳过"了。
+     * needle 用拼接取（`"assumeTrue" + "("`），否则这枚针会数到它自己那行代码；
+     * 相应地，本文件的注释与报错文案里都不许出现"needle 原样 + 左括号"那个形状。
+     */
+    @Test
+    fun artifactLayerHasExactlyOneSkipExitAndBothSidesAreWired() {
+        for (relative in listOf(THIS_TEST_FILE, SCAN_GUARD_FILE)) {
+            val text = workingTreeText(relative)
+            val skips = countOf(text, SKIP_EXIT_NEEDLE)
+            assertEquals(
+                "$relative 里那枚唯一的跳过出口应当是 missingArtifact 内部那一处（多一处就是有人绕过 #340 的" +
+                    "纪律、把产物层重新接回静默跳过；少一处说明日常门禁没路可跳了）：实到 $skips 处",
+                1,
+                skips,
+            )
+            assertTrue(
+                "$relative 不再读 $PROPERTY_REQUIRE_ARTIFACTS：那个开关一旦改名，发版路径会退化成\"永远跳\"",
+                text.contains(PROPERTY_REQUIRE_ARTIFACTS),
+            )
+            assertTrue(
+                "$relative 里 missingArtifact 这一枚出口被改名或删掉了（跳过只该有一个地方能发生）：",
+                text.contains("missingArtifact"),
+            )
+        }
+        // 开关的两侧：脚本传、构建脚本桥、守卫读 —— 三环都在盘上才算这条链没断（接收者链同族）
+        val build = workingTreeText(BUILD_SCRIPT)
+        assertTrue(
+            "app/build.gradle.kts 没把 ${PROPERTY_REQUIRE_ARTIFACTS} 桥进测试 JVM（project property 到不了" +
+                "单测进程，脚本那一侧改了等于没改）：",
+            build.contains("buaaRequireReleaseArtifacts") && build.contains("\"$PROPERTY_REQUIRE_ARTIFACTS\""),
+        )
+        assertTrue(
+            "app/build.gradle.kts 里没有写自证条的那一步（读侧再怎么改也只是读空气）：",
+            build.contains("writeReleaseProvenance") && build.contains(PROVENANCE_FILE.substringAfterLast('/')),
+        )
+        val script = workingTreeText(RELEASE_SCRIPT)
+        assertTrue(
+            "release.ps1 里没人传 buaaRequireReleaseArtifacts 这个开关（同上：单侧接线等于没接）：",
+            script.contains("buaaRequireReleaseArtifacts"),
+        )
+    }
+
+    // ---- 产物层唯一的"拿产物"出口 -------------------------------------------------------------------
+
+    /** 发版路径（`-PbuaaRequireReleaseArtifacts` 命中）时缺产物 / 产物不是本轮的都当场红 */
+    private val releaseArtifactsRequired: Boolean
+        get() = System.getProperty(PROPERTY_REQUIRE_ARTIFACTS) == "true"
+
+    /**
+     * 产物层"读不到证据"的唯一出口（本文件的跳过只发生在这里，别处一律不许自己跳过）。
+     *
+     * 日常门禁：跳过，与 #340 之前一字不差 —— 单测不该去拉起 release 构建。
+     * 发版路径：跳过就是红。这一句是整枚卡的核心，因为"跳了算绿"正是那三格从没被读过的原因。
+     */
+    private fun missingArtifact(reason: String, floor: String): Nothing {
+        if (releaseArtifactsRequired) {
+            fail(
+                "$reason\n—— 发版路径上这一格**不许跳过**（$PROPERTY_REQUIRE_ARTIFACTS 已命中）：" +
+                    "跳过了就等于把\"keep 规则改坏也带绿灯发出\"这笔账交回给没人读过的状态。$floor"
+            )
+        }
+        assumeTrue("$reason —— $floor", false)
+        throw IllegalStateException("unreachable")
+    }
+
+    /**
+     * 产物层该读的那一枚 release APK。
+     *
+     * 有自证条时**只认自证条指的那一枚**：旧读法是 `sortedBy { it.name }.firstOrNull()`，
+     * 而 `app-release-unsigned.apk` 按字典序排在 `app-release.apk` 前面（`-` 是 0x2D、`.` 是 0x2E），
+     * signed 与 unsigned 同时躺在产物目录里时它拿的永远是没签过的那一枚 —— 真要发出去的那份包
+     * 从来没被产物层读过。没有自证条（手工连跑）时才退回旧读法，且只在非发版路径上。
+     */
+    private fun releaseApkForArtifactLayer(what: String, floor: String): File {
+        val root = projectDir()
+        val provenance = readProvenance(root)
+        if (provenance == null) {
+            if (releaseArtifactsRequired) {
+                missingArtifact(
+                    "本轮没有 :app:releasePackage 写的自证条（$PROVENANCE_FILE）：也就是说这一趟根本没打出产物，" +
+                        "而 $what 只能去读 build/ 里剩着的那一枚 —— 分不清它是本轮的还是上一轮的",
+                    floor,
+                )
+            }
+            val legacy = releaseApk()
+                ?: missingArtifact("没有 :app:assembleRelease 的产物（app/build/outputs/apk/release 下的 .apk）", floor)
+            return legacy
+        }
+        val relative = provenance.getProperty(KEY_APK)?.trim().orEmpty()
+        if (relative.isEmpty()) {
+            missingArtifact("自证条里没有 $KEY_APK 这一项（$PROVENANCE_FILE）", floor)
+        }
+        val apk = File(root, relative)
+        if (!apk.isFile) {
+            missingArtifact("自证条指着 $relative，可它不在盘上（$PROVENANCE_FILE 是旧的？）", floor)
+        }
+        assertProvenanceMatches(provenance, KEY_APK_SHA, apk, "APK", root, floor)
+        return apk
+    }
+
+    /** R8 生效规则集那份产物：同样要过自证条（keep 规则改坏最直接的证据就在这枚文件里） */
+    private fun r8ConfigurationForArtifactLayer(floor: String): File {
+        val root = projectDir()
+        val provenance = readProvenance(root)
+        if (provenance == null) {
+            if (releaseArtifactsRequired) {
+                missingArtifact(
+                    "本轮没有 :app:releasePackage 写的自证条（$PROVENANCE_FILE），R8 生效规则集读不到",
+                    floor,
+                )
+            }
+            val legacy = File(root, "app/build/outputs/mapping/release/configuration.txt")
+            if (!legacy.isFile) missingArtifact("没有 R8 的 configuration.txt 产物（跑过 :app:assembleRelease 才有）", floor)
+            return legacy
+        }
+        val relative = provenance.getProperty(KEY_CONFIGURATION)?.trim().orEmpty()
+        if (relative.isEmpty()) missingArtifact("自证条里没有 $KEY_CONFIGURATION 这一项", floor)
+        val file = File(root, relative)
+        if (!file.isFile) {
+            missingArtifact(
+                "自证条指着 $relative，可它不在盘上：那是 R8 的 mapping 产物，" +
+                    "isMinifyEnabled 被关掉时不会生成，而发版路径上它必须生成",
+                floor,
+            )
+        }
+        assertProvenanceMatches(provenance, KEY_CONFIGURATION_SHA, file, "configuration.txt", root, floor)
+        return file
+    }
+
+    /**
+     * 把"本轮"这两个字算出来，而不是相信它。四格各拦一种"看着对"的残留：
+     * 1. **字节**：复算 SHA-256 与侧车对表 ⇒ 文件被覆盖过 / 是别的轮次留下的，一眼穿。
+     * 2. **暗号**：`-PreleaseRunId` 本轮由 `release.ps1` 当场生成，同时递给打包与守卫两步；
+     *    侧车记的号与守卫拿的号不一致 ⇒ 读到的是别的轮次的产物。为什么不用 mtime：
+     *    复制、解压、杀毒软件扫一遍都会改它，而"同一个版本号发两次"时 mtime 还挺像话。
+     * 3. **包内版本**：侧车里的 `versionName/versionCode` 是 `assertArtifactVersion` 拿 aapt2
+     *    **从包里读出来**的那对，与 `gradle.properties` 现值对表；`aapt2=skipped`（本机没 build-tools）
+     *    单独算红 —— 不许把"这一格没读"混进"读过并且对上了"。
+     * 4. **出处**：`builtBy` 必须是 `:app:releasePackage`，防止有人手工造一份侧车哄过前三格。
+     */
+    private fun assertProvenanceMatches(
+        provenance: Properties,
+        shaKey: String,
+        artifact: File,
+        label: String,
+        root: File,
+        floor: String,
+    ) {
+        val problems = ArrayList<String>()
+        val recorded = provenance.getProperty(shaKey)?.trim().orEmpty()
+        if (recorded.isEmpty()) {
+            problems += "自证条里没有 $shaKey"
+        } else {
+            val actual = sha256Of(artifact)
+            if (!recorded.equals(actual, ignoreCase = true)) {
+                problems += "$label 字节与自证条不符（侧车 ${recorded.take(16)}… / 复算 ${actual.take(16)}…）" +
+                    "⇒ 手里这枚不是 :app:releasePackage 当时交出来的那一枚"
+            }
+        }
+        val expectedRun = System.getProperty(PROPERTY_RUN_ID).orEmpty()
+        val recordedRun = provenance.getProperty(KEY_RUN_ID)?.trim().orEmpty()
+        if (expectedRun.isNotEmpty() && recordedRun != expectedRun) {
+            problems += "$label 出自另一轮（自证条 runId=\"$recordedRun\" / 本轮=\"$expectedRun\"）"
+        }
+        if (provenance.getProperty(KEY_BUILT_BY)?.trim() != BUILT_BY) {
+            problems += "自证条不是 $BUILT_BY 写的（builtBy=${provenance.getProperty(KEY_BUILT_BY)}）"
+        }
+        if (provenance.getProperty(KEY_AAPT2)?.trim() != "ok") {
+            problems += "包内版本这一格根本没读过（aapt2=${provenance.getProperty(KEY_AAPT2)}）：" +
+                "本机没有 build-tools 时 :app:releasePackage 会跳过 aapt2 核对，发版路径不许在这种前提下签绿"
+        }
+        for ((key, gradleKey) in listOf(KEY_VERSION_NAME to "VERSION_NAME", KEY_VERSION_CODE to "VERSION_CODE")) {
+            val recordedValue = provenance.getProperty(key)?.trim().orEmpty()
+            val inTree = gradleProperty(root, gradleKey)
+            if (recordedValue.isEmpty() || recordedValue != inTree) {
+                problems += "$label 里的 $key=\"$recordedValue\" 与 gradle.properties 的 $gradleKey=\"$inTree\" 对不上" +
+                    "⇒ 要么改号那步没生效，要么这枚产物不是这一号的构建"
+            }
+        }
+        if (problems.isNotEmpty()) {
+            missingArtifact("本轮产物自证不成立（$label）：\n" + problems.joinToString("\n"), floor)
+        }
+    }
+
+    /** 侧车不存在 = 这一轮没跑过 :app:releasePackage（或 build 被清过），交回调用方分档处理 */
+    private fun readProvenance(root: File): Properties? {
+        val file = File(root, PROVENANCE_FILE)
+        if (!file.isFile) return null
+        // 逐行取 = 之前的键值，不用 Properties.load：那把 ISO-8859-1 解释注释里的中文，
+        // 值虽然不受影响，但文件头那行注释一旦含 = 就会多出一个怪键，手工读没这个坑
+        val props = Properties()
+        for (line in file.readLines()) {
+            val at = line.indexOf('=')
+            if (at <= 0 || line.startsWith("#")) continue
+            props.setProperty(line.substring(0, at).trim(), line.substring(at + 1).trim())
+        }
+        return props
+    }
+
+    private fun gradleProperty(root: File, key: String): String =
+        File(root, "gradle.properties").takeIf { it.isFile }?.readLines()
+            ?.firstOrNull { it.startsWith("$key=") }
+            ?.substringAfter('=')?.trim().orEmpty()
+
+    private fun sha256Of(file: File): String =
+        MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { byte -> "%02x".format(byte) }
+
+    // ---- 第 4 层用的小工具 ------------------------------------------------------------------------------
+
+    private fun workingTreeText(relativeFromRoot: String): String {
+        val file = File(projectDir(), relativeFromRoot)
+        assertTrue("找不到 ${file.path}：这一层的判据依赖它，路径挪过家要回来改这里", file.isFile)
+        return file.readText()
+    }
+
+    /** [needle] 必须恰好出现一次，返回它的位置；0 次或多次都抛（扫空气与扫错方向都不算读到） */
+    private fun onlyAt(text: String, needle: String, what: String): Int {
+        val times = countOf(text, needle)
+        check(times == 1) { "$what 在 $RELEASE_SCRIPT 里出现 $times 次（只许 1 次）：$needle" }
+        return text.indexOf(needle)
+    }
+
+    private fun countOf(text: String, needle: String): Int {
+        var n = 0
+        var from = 0
+        while (true) {
+            val at = text.indexOf(needle, from)
+            if (at < 0) return n
+            n++
+            from = at + needle.length
+        }
+    }
+
+    private val RELEASE_SCRIPT = "release.ps1"
+    private val BUILD_SCRIPT = "app/build.gradle.kts"
+    private val THIS_TEST_FILE = "app/src/test/java/com/buaa/schedule/reminder/ReleaseForensicLogSurvivalTest.kt"
+    private val SCAN_GUARD_FILE = "app/src/test/java/com/buaa/schedule/ui/signin/ScanSecondEngineWiringGuardTest.kt"
+    private val FORENSIC_CLASS = "com.buaa.schedule.reminder.ReleaseForensicLogSurvivalTest"
+    private val SCAN_GUARD_CLASS = "com.buaa.schedule.ui.signin.ScanSecondEngineWiringGuardTest"
+    private val PROVENANCE_FILE = "app/build/release-provenance/release-artifact.properties"
+
+    // 带引号取：脚本自己的注释里也写着这些任务名，不带引号就会把注释数进去
+    private val TASK_RELEASE_PACKAGE = "':app:releasePackage'"
+    private val TASK_TEST_DEBUG = "':app:testDebugUnitTest'"
+    private val FLAG_REQUIRE_ARTIFACTS = "'-PbuaaRequireReleaseArtifacts'"
+    private val FLAG_RUN_ID = "\"-PreleaseRunId="
+
+    private val PROPERTY_REQUIRE_ARTIFACTS = "buaa.requireReleaseArtifacts"
+    private val PROPERTY_RUN_ID = "buaa.releaseRunId"
+
+    /** 拼接取，理由见 [artifactLayerHasExactlyOneSkipExitAndBothSidesAreWired]：这枚针不许数到自己 */
+    private val SKIP_EXIT_NEEDLE = "assumeTrue" + "("
+    private val KEY_APK = "apk"
+    private val KEY_APK_SHA = "apkSha256"
+    private val KEY_CONFIGURATION = "configuration"
+    private val KEY_CONFIGURATION_SHA = "configurationSha256"
+    private val KEY_RUN_ID = "runId"
+    private val KEY_BUILT_BY = "builtBy"
+    private val KEY_AAPT2 = "aapt2"
+    private val KEY_VERSION_NAME = "versionName"
+    private val KEY_VERSION_CODE = "versionCode"
+    private val BUILT_BY = ":app:releasePackage"
 
     // ---- 词法与文件小工具 --------------------------------------------------------------------------
 

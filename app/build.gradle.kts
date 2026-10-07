@@ -421,22 +421,36 @@ dependencies {
 // 账，改注释是常态操作）、XML、清单、proguard 规则、构建脚本。所以输入面必须连 `src/main/java`
 // 一起给，只补 res/xml 会留下一半的洞。
 //
-// 为什么不铺到整个仓库：那等于"改 README 也重跑 1,695 枚测试"，是拿一种错换另一种。
+// 为什么不铺到整个仓库：那等于"改 README 也重跑全量单测"（枚数只是量级，别把它当合同：
+// 本卡落盘时按行首锚那把尺现量 2,266 枚 —— `grep -rh "^    @Test" app/src/test --include=*.kt | wc -l`，
+// 下一枚卡加测试它就会变；要的是"重跑一整趟"这个代价，不是那个数），是拿一种错换另一种。
 // 这里逐项列的都是**上面点过名的守卫真读到的路径**。漏一项的后果写在该项注释里。
 //
 // 加了会怎样：注释/资源/清单/脚本一改动，增量跑也会重跑测试（实测代价见 docs/STATUS.md 的 T92 段：
-// 指纹 ~3.6 MB、测试段本身 1,695 枚的墙钟不变）。代码类改动本来就会重跑（class 字节变了），
+// 指纹 ~3.6 MB、测试段本身的墙钟不变 —— 那一趟跑的是多少枚以上面那把尺现量，别把这行当读数）。
+// 代码类改动本来就会重跑（class 字节变了），
 // 所以这条只补"字节没变而字变了"那一档 —— 正是守卫最管用的那一档。
 //
 // 明确**不进**输入面的两类，理由与"怕慢"无关：
 // - `app/build/outputs/apk/release/*.apk`、`app/build/outputs/mapping/release/configuration.txt`：
 //   那是**另一枚任务（:app:assembleRelease）的产物**。把它们声明成输入而又不加 dependsOn，就是
 //   给 Gradle 造一条"没有依赖声明的产物消费边"（验证期会报 implicit dependency），加了 dependsOn
-//   又等于让单测去拉起 release 构建。这两枚守卫自己有"没有产物就 assumeTrue 跳过"的口径，
-//   而门禁把跳过数记在册（跳了就不算绿）—— 那笔账归门禁顺序，不归输入面。
+//   又等于让单测去拉起 release 构建。这两枚守卫自己有"没有产物就 assumeTrue 跳过"的口径。
+//   ⚠️ 这句口径原先到这里就断了 —— 它把"跳了就不算绿"那笔账推给"门禁顺序"，而唯一的发版入口
+//   `release.ps1` 恰恰是"单测在前、产物在后"，于是这三格在发版路径上从没被读过（台账 #340）。
+//   现在那笔账有两个落脚点，都在**下面第 ⑨⑩ 项**里被钉住，不再是口头纪律：
+//   ① `release.ps1` 把这两枚产物层守卫排在 `:app:releasePackage` **之后**再跑一遍，
+//      并带上 `-PbuaaRequireReleaseArtifacts` —— 命中这一开关时守卫**不许跳过**，缺产物当场红；
+//   ② `:app:releasePackage` 写的 provenance 侧车（`build/release-provenance/`）把"该读哪一枚文件、
+//      它的 SHA-256 应该是多少、这一轮的 runId 是什么"记下来，守卫复算字节对表 ⇒
+//      `build/` 里躺着上一轮残留时读的是**上一轮**那一档也一起红（旧读法按名字排序取第一枚，
+//      unsigned 永远排在 signed 前面，等于从没读过真要发出去的那份包）。
 // - `app/src/test/**`：测试自己的源码，编译产物本来就在输入面里，改它一定重跑。
 val guardReadWorkingTreeFiles = files(
-    // ① 接线守卫的本体：73 枚读 main 源码文本（逐字节对基线 / 抹注释后找锚点 / 数出现次数）。
+    // ① 接线守卫的本体：127 枚读 main 源码文本（逐字节对基线 / 抹注释后找锚点 / 数出现次数）。
+    //    枚数的尺：`grep -rlE "src/main/java|findMainJavaDir|readMainSource" app/src/test --include=*.kt | wc -l`
+    //    （本卡落盘时现量 127；这是"有多少枚测试真读这份工作树文本"的量级，不是合同数，
+    //    下一枚卡新写一枚读 main 的守卫它就会涨）。
     //    实验 B 证明编译产物盖不住它：改一行注释 class 字节不变。
     "src/main/java",
     // ② `BackupRulesCoverCredentialStoresTest` 读两份 res/xml 的排除名单；`LiveFgsDegradeWiringGuardTest`
@@ -465,6 +479,13 @@ val guardReadWorkingTreeFiles = files(
     //    这条找不着目录时是 assumeTrue **跳过**（不是抛），路径漂了只表现为"永远绿"——
     //    所以更要把它放进输入面：至少让"改了 json 没重跑"这一档不再有。
     "schemas",
+    // ⑨ `ReleaseForensicLogSurvivalTest` 的第 4 层（#340）按文本读发版脚本，钉的是
+    //    "两枚产物层守卫排在 :app:releasePackage 之后"＋"带 -PbuaaRequireReleaseArtifacts"。
+    //    不登记的话，把那一支删回产物之前 —— 也就是把 #340 原样复发 —— 单测一个都不红。
+    "../release.ps1",
+    // ⑩ 同一层还要拿 gradle.properties 的 VERSION_NAME/VERSION_CODE 对 provenance 侧车里
+    //    "从包里读出来的那对"。改号那一步静默失效（本仓踩过 `if ($Bump)`）时这一格要说得出话。
+    "../gradle.properties",
 )
 
 tasks.withType<Test>().configureEach {
@@ -475,6 +496,19 @@ tasks.withType<Test>().configureEach {
         // 上面有几项在项目目录之外（../gradle/…、../kyant-backdrop/…），RELATIVE 下它们按
         // ".."+相对段参与指纹，仍是可复现的，且不引入本机盘符。
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // #340：把"这一轮必须读到 release 产物"从脚本里的一个参数变成测试 JVM 里的一个判据。
+    // 只有 `release.ps1` 的最后一步会带上它；日常门禁不带 ⇒ 产物层照旧 assumeTrue 跳过。
+    // 走 systemProperty 而不是让守卫去读 gradle 的属性：单测进程看不到 project properties。
+    if (project.hasProperty("buaaRequireReleaseArtifacts")) {
+        systemProperty("buaa.requireReleaseArtifacts", "true")
+    }
+    // 这里就地读而不是引用下面的 releaseRunId：构建脚本的顶层 val 不许前向引用，
+    // 而这一段（tasks.withType<Test>）在"发布"那一节之前。两处读的是同一枚 -PreleaseRunId，
+    // 值必然一致（配置期同一次求值），发版路径上打包与守卫拿的是同一个号。
+    val runIdForTests = (project.findProperty("releaseRunId") as String?)?.trim().orEmpty()
+    if (runIdForTests.isNotEmpty()) {
+        systemProperty("buaa.releaseRunId", runIdForTests)
+    }
 }
 
 // ---------- 发布 ----------
@@ -502,6 +536,26 @@ val releaseWorkDir = File(releaseBuildDir, "release-work")
 val releaseDistDir = File(rootProject.projectDir, "dist")
 val releaseDebugSign = project.findProperty("debugSign") != null
 val releaseStampVersion = (project.findProperty("releaseVersion") as String?)?.trim().orEmpty()
+
+/**
+ * #340：这一轮发版的**运行号**（由 `release.ps1` 用 `-PreleaseRunId=` 传进来）。
+ *
+ * 为什么需要它：产物层守卫读的是 `app/build/outputs/apk/release/*.apk` 与
+ * `app/build/outputs/mapping/release/configuration.txt`，这两样都可能在 `build/` 里
+ * 躺着**上一轮**的残留。"文件的 mtime 够新"不是判据（复制、解压、杀软扫一遍都会改它），
+ * 所以要一枚只有本轮能凑出来的暗号：脚本把 `$runId` 同时给
+ * `:app:releasePackage`（写进侧车）和给守卫（比侧车），对不上就是拿到了别的轮次的产物。
+ * 不传（日常门禁、手工连跑）时侧车里是空串，守卫侧也不传 ⇒ 那一格退化成"不比"，
+ * 由 `-PbuaaRequireReleaseArtifacts` 决定要不要因此红 —— 见下面的 systemProperty 桥。
+ */
+val releaseRunId = (project.findProperty("releaseRunId") as String?)?.trim().orEmpty()
+
+/**
+ * 产物自证条（provenance 侧车）。写进 `build/release-provenance/` —— 这是我们自己的目录，
+ * 不是 `outputs/apk/release/`：AGP 对它里面文件的处理不由我们决定（`signWithDebugKey` 的
+ * 注释记的就是一个手工残留被静默清掉的先例），把侧车放那儿等于让"文件还在不在"当判据。
+ */
+val releaseProvenanceFile = File(releaseBuildDir, "release-provenance/release-artifact.properties")
 
 /** build-tools 根目录；本机没有 SDK 时为 null（发布脚本会降级跳过 aapt2 核对） */
 val releaseBuildToolsDir: File? = run {
@@ -607,8 +661,9 @@ tasks.register("releasePackage") {
             }
         source.copyTo(artifact, overwrite = true)
         releaseLog.lifecycle("📦 ${artifact.path}（${artifact.length() / 1024} KB）")
-        assertArtifactVersion(artifact)
+        val readFromApk = assertArtifactVersion(artifact)
         reportSigners(artifact)
+        writeReleaseProvenance(artifact, readFromApk)
         printPublishSteps(artifact)
     }
 }
@@ -682,12 +737,18 @@ fun runChecked(command: List<String>, what: String): String {
  * 于是产物路径不存在，`copyTo` 抛 `NoSuchFileException`。这暴露了一个更普遍的问题 ——
  * 整条链路都在按"文件名对不对"判断成败，而文件名匹配不代表内容来自本轮构建。
  * APK 自己带的 `versionName` / `versionCode` 是唯一算数的证据，所以复制完立刻读它。
+ *
+ * #340 起它还要把**读到的那对值**交回给 provenance 侧车（`writeReleaseProvenance`）：
+ * 侧车里的版本必须是"包内实际读出来的"，不能是"gradle.properties 里写的"，
+ * 否则守卫拿侧车对 gradle.properties 就成了自己对自己。
+ * 返回 null = 本机没有 aapt2、这一格根本没读过，侧车会如实写 `aapt2=skipped`，
+ * 发版路径的守卫见到 skipped 当场红（不许把"没读"混进"读过且对上了"）。
  */
-fun assertArtifactVersion(apk: File) {
+fun assertArtifactVersion(apk: File): Pair<String, Int>? {
     val aapt2 = aapt2Tool()
     if (aapt2 == null) {
         releaseLog.warn("   未找到 aapt2，跳过包内版本核对（本机没有 build-tools 时才会这样）")
-        return
+        return null
     }
     val badging = runChecked(
         listOf(aapt2.absolutePath, "dump", "badging", apk.absolutePath),
@@ -703,6 +764,48 @@ fun assertArtifactVersion(apk: File) {
         )
     }
     releaseLog.lifecycle("   包内版本核对通过：$inApk (code $codeInApk)")
+    return requireNotNull(inApk) to requireNotNull(codeInApk)
+}
+
+/** 文件的 SHA-256（小写十六进制）；守卫侧用同一把尺复算，所以这里不能换成别的摘要 */
+fun sha256Of(file: File): String =
+    MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { byte -> "%02x".format(byte) }
+
+/**
+ * 写下这一轮产物的**自证条**（#340 的"产物自证本轮版本"那一格）。
+ *
+ * 侧车回答的是"守卫待会儿该读哪一枚文件、它的字节应该是多少"，每行各管一件事：
+ * - `apk=` 从仓库根算起的相对路径：把 signed / unsigned 那笔歧义消掉。原先守卫里的
+ *   `releaseApk()` 是 `sortedBy { it.name }.firstOrNull()`，而 `"app-release-unsigned.apk"`
+ *   按字典序排在 `"app-release.apk"` **前面**（`-` 是 0x2D、`.` 是 0x2E），两枚都在的时候
+ *   它拿的永远是没签过的那一枚 —— 也就是"真要发出去的那份包"从来没被产物层读过。
+ * - `apkSha256=` 由守卫复算：字节对不上就是残留、就是被别的什么覆盖过，不解释。
+ * - `runId=` 本轮由 `release.ps1` 起的那个暗号（见 [releaseRunId]）；对不上就是别的轮次
+ *   留下的产物，哪怕它字节自洽、版本也相符。
+ * - `configuration=` 与 `configurationSha256=` R8 生效规则集那一份：keep 规则改坏最直接的
+ *   证据就在这枚文件里，它同样得绑到本轮。
+ * `versionName` / `versionCode` 写的是 [assertArtifactVersion] **从包里读出来**的那对，
+ * `aapt2=` 如实记录它到底读没读过。
+ */
+fun writeReleaseProvenance(artifact: File, readFromApk: Pair<String, Int>?) {
+    val configuration = File(releaseBuildDir, "outputs/mapping/release/configuration.txt")
+    val props = Properties().apply {
+        setProperty("builtBy", ":app:releasePackage")
+        setProperty("apk", artifact.relativeTo(rootProject.projectDir).path.replace('\\', '/'))
+        setProperty("apkSha256", sha256Of(artifact))
+        setProperty("runId", releaseRunId)
+        setProperty("aapt2", if (readFromApk == null) "skipped" else "ok")
+        setProperty("versionName", readFromApk?.first ?: releaseVersionName)
+        setProperty("versionCode", (readFromApk?.second ?: releaseVersionCode).toString())
+        setProperty("configuration", configuration.relativeTo(rootProject.projectDir).path.replace('\\', '/'))
+        setProperty("configurationSha256", if (configuration.isFile) sha256Of(configuration) else "")
+        setProperty("configurationExists", configuration.isFile.toString())
+    }
+    releaseProvenanceFile.parentFile.mkdirs()
+    // 先删再写：Properties.store 保留文件里没有的旧键会串轮（上一轮写过、这一轮没有的留在原地）
+    releaseProvenanceFile.delete()
+    releaseProvenanceFile.outputStream().use { props.store(it, "340: provenance written by :app:releasePackage") }
+    releaseLog.lifecycle("   已写产物自证条 ${releaseProvenanceFile.path}（runId=${releaseRunId.ifEmpty { "(未传)" }}）")
 }
 
 /**

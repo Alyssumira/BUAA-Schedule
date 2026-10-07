@@ -8,8 +8,9 @@
     为什么要有这个脚本：版本号原先靠"记得传 -PversionName"来保证。漏一次就会发出一个
     自称旧版本的包 —— Gitee 的 tag 已经指到新版本，于是所有用户被提示"有更新"、装完
     号还是没变、每次冷启动重新弹一遍。而更新是唯一还能修好其他 bug 的通道。
-    这里把「改号 → 跑门禁 → R8 打包 → 收产物 → 打印发布步骤」钉成一条不可拆的序列，
-    tag 与包内版本号就不可能对不上。
+    这里把「改号 → 跑门禁 → R8 打包 → 收产物 → 产物层守卫 → 打印发布步骤」钉成一条不可拆的序列，
+    tag 与包内版本号就不可能对不上。最后那一步是 #340 补的：两枚只在读到 release 产物时才有内容
+    的守卫必须排在产物**之后**，否则它们每一轮都静默跳过，等于发版路径上没人读过那三格。
 
     改号与打包之间是**独立的 Gradle 调用**：stampVersion 写进 gradle.properties 的值，
     同一趟配置阶段读不到，必须新起一次构建。
@@ -88,7 +89,13 @@ function Invoke-Build {
     }
 }
 
-$total = if ($bump) { 3 } else { 2 }
+$total = if ($bump) { 4 } else { 3 }
+
+# 本轮的运行号（台账 #340）：它是"这一轮的产物"唯一的暗号。同一个号发两次、build/ 里留着
+# 上一轮的 APK 时，文件名字面与包内版本号都对得上，只有这个当场生成的号对不上。
+# 用 GUID 不用时间戳：同一秒内重跑会撞号，撞了就等于没有。
+$runId = [guid]::NewGuid().ToString('N').Substring(0, 12)
+
 if ($bump) {
     Invoke-Build @(':app:stampVersion', "-PreleaseVersion=$Version") "1/$total 写入版本号（VERSION_CODE 自动 +1）"
     Invoke-Build @(':app:testDebugUnitTest', ':app:lintDebug') "2/$total 单测 + lint"
@@ -96,9 +103,9 @@ if ($bump) {
     Invoke-Build @(':app:testDebugUnitTest', ':app:lintDebug') "1/$total 单测 + lint"
 }
 
-$package = @(':app:releasePackage')
+$package = @(':app:releasePackage', "-PreleaseRunId=$runId")
 if ($DebugSign) { $package += '-PdebugSign' }
-Invoke-Build $package "$total/$total R8 打包 + 收产物"
+Invoke-Build $package "$($total - 1)/$total R8 打包 + 收产物"
 
 # 两道"意图核对"。`releasePackage` 已经核过"包内版本 == gradle.properties"，但它核不了
 # "gradle.properties == 你这次要发的那个号"——改号那一步静默失效时（本项目就踩过：
@@ -116,6 +123,25 @@ if (-not (Test-Path $artifact)) {
     exit 1
 }
 Write-Host "意图核对通过：$Version / $(Split-Path -Leaf $artifact)（$([math]::Round((Get-Item $artifact).Length / 1MB, 2)) MB）" -ForegroundColor DarkGray
+
+# 产物层守卫排在产物**之后**（台账 #340）。原先这两枚（`ReleaseForensicLogSurvivalTest`、
+# `ScanSecondEngineWiringGuardTest`）只跟着第 1 步的 testDebugUnitTest 跑，那时 release 产物
+# 还不存在，它们里的产物层断言每一轮都 assumeTrue 跳过 ⇒ "取证 logcat 还在不在 dex、兜底那颗
+# .so 是不是 DEFLATED、zxingcpp/BarcodeReader 还在不在 release dex"这三格在发版路径上从没被
+# 读过，keep 规则改坏也带绿灯发出。现在它们在 :app:releasePackage 之后重跑一遍，并且：
+#   -PbuaaRequireReleaseArtifacts —— 命中即不许跳过：缺产物 / 产物不是本轮的都当场红；
+#   -PreleaseRunId               —— 与上面 :app:releasePackage 拿的是同一个号，守卫拿它核对
+#                                   build/release-provenance/ 里的自证条（含 APK 的 SHA-256）。
+# --rerun-tasks 是必需的：这两枚类读的是 build/ 下的产物，而产物**故意不在**测试的输入面里
+# （见 app/build.gradle.kts 的 guardReadWorkingTreeFiles 上一段），不强制重跑就会端住上一轮的缓存绿。
+Invoke-Build @(
+    ':app:testDebugUnitTest',
+    '--rerun-tasks',
+    '--tests', 'com.buaa.schedule.reminder.ReleaseForensicLogSurvivalTest',
+    '--tests', 'com.buaa.schedule.ui.signin.ScanSecondEngineWiringGuardTest',
+    '-PbuaaRequireReleaseArtifacts',
+    "-PreleaseRunId=$runId"
+) "$total/$total 产物层守卫（读本轮 release 产物，跳过即红）"
 
 Write-Host ''
 if ($DebugSign) {
