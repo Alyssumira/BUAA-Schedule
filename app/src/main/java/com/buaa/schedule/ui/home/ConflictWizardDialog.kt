@@ -35,6 +35,7 @@ import com.buaa.schedule.domain.model.joinMeta
 import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.model.weekdayLabel
 import com.buaa.schedule.domain.schedule.CourseConflictResolution
+import com.buaa.schedule.domain.schedule.CourseWeekSpans
 import com.buaa.schedule.ui.ScheduleViewModel
 import kotlinx.coroutines.launch
 
@@ -96,7 +97,8 @@ private fun requireActivityStoreOwner(context: Context): ViewModelStoreOwner =
  *   只保证「库里落了」，不保证「界面知道落了」：行一滚出 LazyColumn 视口就被 dispose，挂在它上面的
  *   那一手连同 `job.join()` 那个等待点一起被取消，`onShiftEnd` 一行都不执行 ⇒ 按钮永久「写入中…」、
  *   [ConflictWizardDialog] 那本「已应用过位移」的账永远记不上 ⇒ 连点把同一门课越挪越远
- *   （就是 `:135-139` 那段注释自己承认过、却只把**状态**抬到弹窗层而没把**协程**抬上去的那笔账）。
+ *   （就是本文件那两段「挂在 ConflictGroupRow 里的 remember(group) 会随 group 换实例而复位…行滚出
+ *   LazyColumn 视口时同样会丢标记（R5 F-54）」的注释自己承认过、却只把**状态**抬到弹窗层而没把**协程**抬上去的那笔账）。
  *   现在这一手与本条同一枚接收者（`viewModel.viewModelScope`），协程的寿命不再等于一行的组合寿命。
  * - 写的是 [CourseSaveOptions.partialWeeks]，而作用域由 [ConflictShiftWeekScope.weeksToShift]
  *   算：**组周 ∩ target.weeks** 一起进 `copy`。只带 `periods` 的那一版（T131 之前）不动 `weeks`，
@@ -176,7 +178,7 @@ fun ConflictWizardDialog(
      */
     viewModel: ScheduleViewModel = viewModel(
         viewModelStoreOwner = requireActivityStoreOwner(LocalContext.current),
-        // factory 与 MainActivity:556 同一枚：store 里已缓存时它压根不会被调用，
+        // factory 与 MainActivity 建那枚 Activity 作用域 VM 时用的是同一枚：store 里已缓存时它压根不会被调用，
         // 这一档只是"万一没缓存"（冷进程直进统计页那一支）的兜底
         factory = ScheduleViewModel.Factory(
             LocalContext.current.applicationContext as android.app.Application,
@@ -258,8 +260,7 @@ private fun ConflictGroupRow(
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = "${weekdayLabel(group.dayOfWeek) ?: "周?"} · " +
-                "第 ${group.weeks.joinToString(",")} 周",
+            text = conflictGroupHeaderLabel(group.dayOfWeek, group.weeks),
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -326,6 +327,29 @@ private fun ConflictGroupRow(
             }
         }
     }
+}
+
+/**
+ * 向导每一组那一行的行头：`周三 · 第 1-8、10 周`（纯函数，可单测，#458）。
+ *
+ * 周次折段走 [CourseWeekSpans.spansOf] —— 与「周次覆盖」那张图、也与统计页那张冲突卡
+ * (`com.buaa.schedule.ui.stats.conflictGroupTitle`) **同一件内核**：`1,2,…,8,10` 折成 `1-8、10`。
+ *
+ * 原先这一行直接 `group.weeks.joinToString(",")`，于是：
+ * - 同一组冲突在向导里念 `1,2,3,4,5,6,7,8,10`、在统计页冲突卡念 `1-8、10`，两串字面分家；
+ * - 而它下面紧挨着的明细行里节次一直是折好的「第1-2,9-10节」（[periodLabelOf]）——
+ *   同一行话里两种口径，用户要读的恰恰是"这组冲突跨了哪几周"。
+ * 脏星期序号（教务给过 0 / 8）与统计页同一档：退回 `周?`，不抛也不编一个周一出来。
+ * 周次为空（组里连一段都没有）那一档整句只剩星期，不留一句「第  周」—— 也与统计页同一判。
+ */
+internal fun conflictGroupHeaderLabel(dayOfWeek: Int, weeks: List<Int>): String {
+    val day = weekdayLabel(dayOfWeek) ?: "周?"
+    val spans = CourseWeekSpans.spansOf(weeks)
+    if (spans.isEmpty()) return day
+    val label = spans.joinToString("、") {
+        if (it.first == it.last) "${it.first}" else "${it.first}-${it.last}"
+    }
+    return "$day · 第 $label 周"
 }
 
 /**

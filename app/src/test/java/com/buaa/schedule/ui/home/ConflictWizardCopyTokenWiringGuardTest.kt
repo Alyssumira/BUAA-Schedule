@@ -1,13 +1,16 @@
 package com.buaa.schedule.ui.home
 
+import com.buaa.schedule.domain.schedule.CourseConflictResolution
+import com.buaa.schedule.ui.stats.conflictGroupTitle
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * T250③（#457 那一格的两半）：钉「冲突向导正文里的间距/高度**按在册 token 取**，裸 dp 字面量
- * 只许减不许增」—— 纯源码核对（JVM，无 Robolectric、无设备）。
+ * T250③（#457 与 #458 那一族措辞/尺寸）：钉「冲突向导正文里的间距/高度**按在册 token 取**，裸 dp
+ * 字面量只许减不许增」与「行头那一句周次走**在册折段内核**，不许再自己裸串」——
+ * 纯源码核对 + 真调用（JVM，无 Robolectric、无设备、不读时钟）。
  *
  * 台账 #457 记的是本文件里两枚手写 dp：`Modifier.height(360.dp)` 那一枚（全树弹窗正文高度唯一一枚
  * 裸 dp）与明细行那句 `padding(top = 2.dp)`（与在册 token `spaceMicro = 2.dp` **同值不同源**）。
@@ -15,15 +18,27 @@ import org.junit.Test
  * 在册那一档 `dialogListMaxHeight` 是 240.dp，换上去就是 -120.dp 的可见高度改动，而复量归编排者；
  * 另立一档要改 `core/designsystem/DesignTokens.kt`，越出本卡 §4 的文件界。
  *
- * 钉法（四档，两侧都有格子）：
+ * 台账 #458 记的是同一行话里的两种口径：明细行的节次一直是折好的「第1-2,9-10节」（`periodLabelOf`），
+ * 行头的周次却直接 `group.weeks.joinToString(",")` 裸串 —— 同一组冲突在统计页冲突卡念 `1-8、10`、
+ * 在向导念 `1,2,3,4,5,6,7,8,10`。收法：折段走 [CourseWeekSpans.spansOf]（那张「周次覆盖」图与
+ * 统计页冲突卡共用的同一件内核），显示侧不再自己折。
+ *
+ * 钉法（七档，两侧都有格子）：
  * 1. 明细行那句间距逐字取 `DesignTokens.spaceMicro`，而 `padding(top = 2.dp)` 0 处；
  * 2. 裸 dp 棘轮：本文件里 `\d+(\.\d+)?\.dp` 只许 **1 枚**，且逐枚点名 行号 + 原文（只许减不许增）；
- * 3. 那一枚在册例外逐字登记成 `modifier = Modifier.height(360.dp),`：它要是被换成别的数（= 有人改了可见高度
- *    却没换 token），本格与第 ② 档一起红；
- * 4. 靶子：同一把尺喂一枚"多长出一枚裸 dp"的片段，必须量到 2 枚 —— 证明第 ②③ 档不是按
- *    `360.dp` 这串字面量匹配的（换个数就绕过去了，那正是本卡②档修掉的那类洞）。
+ * 3. 那一枚在册例外逐字登记成 `modifier = Modifier.height(360.dp),`：它要是被换成别的数（= 有人改了
+ *    可见高度却没换 token），本格与第 ② 档一起红；
+ * 4. 靶子：同一把尺喂一枚"多长出一枚裸 dp"的片段，必须量到 2 枚 —— 证明第 ②③ 档不是按 `360.dp`
+ *    这串字面量匹配的（换个数就绕过去了，那正是本卡②档堵掉的那类洞）；
+ * 5. 行头那句逐字取 `conflictGroupHeaderLabel(group.dayOfWeek, group.weeks)`，`group.weeks.joinToString(`
+ *    0 处，而那枚内核体内 `CourseWeekSpans.spansOf(` 恰好一枚（读形状 + 签名两把尺）；
+ * 6. 真调用表驱动：整段/断周/乱序重复/脏星期序号/空周次各档念成什么；
+ * 7. 与统计页冲突卡**同串**：同一组冲突在两页那句行头逐字相等（分家就是 #458 复发）。
  */
 class ConflictWizardCopyTokenWiringGuardTest {
+
+    /** ⑥ 那一档表驱动的一行：星期序号 + 周次 → 行头那一句应当念成的样子 */
+    private class Row(val label: String, val dayOfWeek: Int, val weeks: List<Int>, val want: String)
 
     // ---- ① 明细行那句间距走在册 token ----
 
@@ -93,11 +108,105 @@ class ConflictWizardCopyTokenWiringGuardTest {
         )
     }
 
+    // ---- ⑤ 行头那一句走折段内核（#458：节次折了、周次不许再裸串） ----
+
+    @Test
+    fun 行头那句周次走折段内核而不再自己裸串() {
+        val code = blankComments(source(WIZARD))
+        assertEquals(
+            "$WIZARD 里行头那一句必须逐字取 `conflictGroupHeaderLabel(group.dayOfWeek, group.weeks)`" +
+                "（恰好一枚；实到 " + occurrences(code, HEADER_CALL) + " 枚）：",
+            1,
+            occurrences(code, HEADER_CALL),
+        )
+        assertEquals(
+            "$WIZARD 里 `group.weeks.joinToString(` 必须 0 处（实到 " + occurrences(code, RAW_WEEKS_NEEDLE) +
+                " 处）：显示侧再自己裸串一次，就是与统计页冲突卡两张嘴（台账 #458 那一格）",
+            0,
+            occurrences(code, RAW_WEEKS_NEEDLE),
+        )
+        val helper = functionBody(code, HEADER_SIGNATURE, "conflictGroupHeaderLabel")
+        assertEquals(
+            "折段那一判必须走 CourseWeekSpans.spansOf（与「周次覆盖」那张图、统计页冲突卡同一件内核；" +
+                "实到 " + occurrences(helper, SPANS_OF) + " 枚）：自己再写一遍怎么折段，" +
+                "两张图上「第 8 周结束」就会一个折成 1-8、一个念成 1,2,3,4,5,6,7,8",
+            1,
+            occurrences(helper, SPANS_OF),
+        )
+        assertTrue(
+            "内核签名必须把星期序号与周次当参数收（不许自己去课表里嗅、不许读钟）：实到 " +
+                Regex(HEADER_SIGNATURE_SHAPE).containsMatchIn(helper),
+            Regex(HEADER_SIGNATURE_SHAPE).containsMatchIn(helper),
+        )
+    }
+
+    // ---- ⑥ 真调用：行头那一句到底念成什么 ----
+
+    @Test
+    fun 行头那一句按在册折段内核念周次() {
+        val rows = listOf(
+            Row("整段之后断开一周", 3, (1..8).toList() + 10, "周三 · 第 1-8、10 周"),
+            Row("单周", 1, listOf(5), "周一 · 第 5 周"),
+            Row("全断的周次不许并成一整段", 3, listOf(1, 3, 5), "周三 · 第 1、3、5 周"),
+            Row("乱序与重复由内核收拢", 2, listOf(12, 10, 11, 10), "周二 · 第 10-12 周"),
+            Row("整学期", 2, (1..18).toList(), "周二 · 第 1-18 周"),
+            Row("脏星期序号退回周?（与统计页同一档）", 0, listOf(2), "周? · 第 2 周"),
+            Row("脏星期序号 8", 8, listOf(2), "周? · 第 2 周"),
+            Row("周次为空那一档不留「第  周」这句悬空的话", 4, emptyList(), "周四"),
+        )
+        for (row in rows) {
+            assertEquals(
+                row.label + "：conflictGroupHeaderLabel(" + row.dayOfWeek + ", " + row.weeks + ")",
+                row.want,
+                conflictGroupHeaderLabel(row.dayOfWeek, row.weeks),
+            )
+        }
+    }
+
+    // ---- ⑦ 两页同串：同一组冲突在向导与统计页冲突卡念同一句话 ----
+
+    @Test
+    fun 同一组冲突在向导与统计页冲突卡念同一串行头() {
+        val weeks = listOf(1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13)
+        for (day in listOf(1, 3, 7, 0)) {
+            val group = CourseConflictResolution.ConflictGroup(
+                dayOfWeek = day,
+                courses = emptyList(),
+                weeks = weeks,
+            )
+            assertEquals(
+                "星期序号 $day 这一档：统计页冲突卡那句与向导行头分家了 —— 台账 #458 记的就是这一格" +
+                    "（两处一折一段不折，用户看到的是同一组冲突跨了不同的周）",
+                conflictGroupTitle(group),
+                conflictGroupHeaderLabel(group.dayOfWeek, group.weeks),
+            )
+        }
+    }
+
     // ---------------- helpers（刀法照抄 ConflictShiftWeekScopeWiringGuardTest） ----------------
 
     /** 形状尺：每一枚裸 `<数>.dp`（连同数值与偏移端出来，不按某串字面量匹配） */
     private fun bareDpLiterals(code: String): List<Pair<String, Int>> =
         BARE_DP.findAll(code).map { it.value to it.range.first }.toList()
+
+    /** 从签名那句起按花括号配平取整个函数（含签名自己）；锚点找不到就失败，不静默跳过 */
+    private fun functionBody(code: String, signature: String, label: String): String {
+        val at = code.indexOf(signature)
+        assertTrue("$label 的签名锚点没找到（改名/挪家要回来重钉本守卫）：$signature", at >= 0)
+        val open = code.indexOf('{', at)
+        assertTrue("$label 找不到函数体的开括号", open >= 0)
+        var depth = 0
+        for (i in open until code.length) {
+            when (code[i]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return code.substring(at, i + 1)
+                }
+            }
+        }
+        throw IllegalStateException("$label 的花括号没配平")
+    }
 
     private fun source(relative: String): String = File(findMainJavaDir(), relative).readText()
 
@@ -182,6 +291,14 @@ class ConflictWizardCopyTokenWiringGuardTest {
         const val SPACING_TOKEN_USE = "Modifier.padding(top = DesignTokens.spaceMicro)"
         const val SPACING_LITERAL = "Modifier.padding(top = 2.dp)"
         const val HEIGHT_LITERAL = "modifier = Modifier.height(360.dp),"
+
+        // —— #458：行头那一句周次的取法 ——
+        const val HEADER_CALL = "conflictGroupHeaderLabel(group.dayOfWeek, group.weeks)"
+        const val RAW_WEEKS_NEEDLE = "group.weeks.joinToString("
+        const val SPANS_OF = "CourseWeekSpans.spansOf("
+        const val HEADER_SIGNATURE = "internal fun conflictGroupHeaderLabel("
+        const val HEADER_SIGNATURE_SHAPE =
+            """internal fun conflictGroupHeaderLabel\(\s*dayOfWeek: Int,\s*weeks: List<Int>\s*\)"""
 
         val BARE_DP = Regex("""(?<![\w.])\d+(?:\.\d+)?\.dp\b""")
 
