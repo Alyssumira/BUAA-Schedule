@@ -709,7 +709,7 @@ private fun EditorSection(
  * 屏幕上一个字都没说。这里把它说出来：口径照旧（默认开启 + 默认提前量，
  * 两枚常量只有一处字面量，见 [ReminderSetting] 顶部 KDoc），改的是**它必须让用户看得见**。
  *
- * 抽成纯函数是为了 JVM 表驱动单测（`ui/editor/EditorReminderSummaryTest`）：
+ * 抽成纯函数是为了 JVM 表驱动单测（`ui/editor/EditorReminderSectionSummaryTest`）：
  * 三档各摆一格，其中"没有行"那一格必须非空 —— 空了就等于这句口径又回到日志里。
  * 已有行时返回 null：那一档用户在开关与提前量两格里看得见，不许多占一行。
  */

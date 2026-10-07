@@ -114,7 +114,9 @@ object TermWeekGate {
      *
      * ⚠️ 它是**展示侧的历史包袱**，不是第二枚"默认值"：排铃两条链的 `totalWeeks` 是必填参数，
      * 拿不到学期行时传 null（判不出 ⇒ 不放行），传这一枚就是把自己退回病灶本身。
-     * 第 ② 层守卫数的是"带这一枚默认值的调用点里，`reminder/` 那两条链一处都不许有"。
+     * 第 ③ 层守卫数的是"带这一枚默认值的调用点里，`reminder/` 那两条链一处都不许有"
+     * （`alarmChainsNeverTakeTheUnboundedDefault`；第 ④ 层再按目录把 `planNextClassWindow` 的
+     * 调用点逐枚点名，两把尺互为备份）。
      */
     const val UNBOUNDED_TOTAL_WEEKS: Int = Int.MAX_VALUE
 
@@ -285,7 +287,7 @@ object ClassProgressScheduler {
      * 纯函数，可单测。
      *
      * @param totalWeeks 学期总周数，喂给 [TermWeekGate.isInTermWeek]：**排铃两条链必须显式递它**
-     *   （`rescheduleWindows` 与 `ReminderScheduler.shouldTakeDownClassProgress`，守卫第 ② 层数调用点）。
+     *   （`rescheduleWindows` 与 `ReminderScheduler.shouldTakeDownClassProgress`，守卫第 ③④ 层数调用点）。
      *   默认值 [TermWeekGate.UNBOUNDED_TOTAL_WEEKS] = "这一处调用方明说不判上界"，
      *   它今天只属于展示侧那三处没收进来的调用点（改它们要动本卡白名单外的
      *   `widget/WidgetCommon.kt` 与 `reminder/LiveClassResyncer.kt` ⇒ 回执「需要跨卡配合」那一节），
