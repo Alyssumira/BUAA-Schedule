@@ -361,7 +361,7 @@ class BackupSemesterRestoreWiringGuardTest {
                 occurrences(code, reason) >= 1,
             )
         }
-        for (decl in listOf("enum class RebuiltStartReason", "enum class RebuiltWeeksBasis")) {
+        for (decl in listOf("enum class RebuiltStartOrigin", "enum class RebuiltWeeksBasis")) {
             assertEquals(
                 "`$decl` 恰好一处声明（实到 " + occurrences(code, decl) +
                     " 处）：两枚来历枚举就是「补建那一等不许静默」的那两面，第三枚来历枚举会稀释它们",

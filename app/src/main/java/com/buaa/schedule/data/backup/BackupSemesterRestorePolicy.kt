@@ -52,7 +52,7 @@ import java.time.LocalDate
  *    [RebuiltWeeksBasis.NO_BASIS]。两种来历都要跟着结论走，一路报到恢复文案里。
  *
  * 第 2 等排在第 3 等之前、且**不拿兜底日期去"抢救"坏日期**：备份里那枚串 parse 不出来
- * 就是没出处（[RebuiltStartReason.BACKUP_DATE_UNREADABLE]），把它折算成任何一个日期都等于
+ * 就是没出处（[RebuiltStartOrigin.BACKUP_DATE_UNREADABLE]），把它折算成任何一个日期都等于
  * 重新犯本卡的病 —— 与 T180 那条「认不出来就不动」同口径。区别只在：这一路手里**有**课程要落库，
  * 不建行就等于让那一组课挂在一枚不存在的学期上（周课表画不出、学期切换器里也看不见），
  * 所以补建 + 说实话，而不是拒收。
@@ -85,7 +85,7 @@ sealed interface SemesterRowDecision {
 
     /**
      * 库里没有、备份也没带（或带了但日期认不出来）⇒ 只能补建：开学日按调用点递进来的兜底日期猜，
-     * **这一等必须留痕**（恢复结果的补建账 + 文案，见 [RebuiltStartReason] / [RebuiltWeeksBasis]）。
+     * **这一等必须留痕**（恢复结果的补建账 + 文案，见 [RebuiltStartOrigin] / [RebuiltWeeksBasis]）。
      *
      * [startDate] 恒为周一（兜底日期再过一遍 [mondayOfWeekAnchor]，在周一上是幂等的）；
      * [termName] 退成 [termCode]（没有出处就是没有，不许编一个好看的名字）；
@@ -96,7 +96,7 @@ sealed interface SemesterRowDecision {
         val termName: String,
         val startDate: String,
         val totalWeeks: Int,
-        val startReason: RebuiltStartReason,
+        val startOrigin: RebuiltStartOrigin,
         val weeksBasis: RebuiltWeeksBasis,
     ) : SemesterRowDecision {
 
@@ -111,7 +111,7 @@ sealed interface SemesterRowDecision {
 }
 
 /** 补建那一等里「开学日为什么是这一天」的出处 */
-enum class RebuiltStartReason {
+enum class RebuiltStartOrigin {
 
     /** 备份里根本没有这一 termCode 的学期行（老备份 / 老口令 / 手改过的备份） */
     NOT_IN_BACKUP,
@@ -174,10 +174,10 @@ internal fun decideSemesterRowForRestore(
         termName = backupRow?.termName?.takeIf { it.isNotBlank() } ?: termCode,
         startDate = mondayOfWeekAnchor(fallbackStartDate).toString(),
         totalWeeks = CourseConstraints.normalizeTotalWeeks(weeks ?: MIN_TOTAL_WEEKS_WITHOUT_BASIS),
-        startReason = if (backupRow == null) {
-            RebuiltStartReason.NOT_IN_BACKUP
+        startOrigin = if (backupRow == null) {
+            RebuiltStartOrigin.NOT_IN_BACKUP
         } else {
-            RebuiltStartReason.BACKUP_DATE_UNREADABLE
+            RebuiltStartOrigin.BACKUP_DATE_UNREADABLE
         },
         weeksBasis = if (weeks != null) RebuiltWeeksBasis.COURSE_WEEKS else RebuiltWeeksBasis.NO_BASIS,
     )

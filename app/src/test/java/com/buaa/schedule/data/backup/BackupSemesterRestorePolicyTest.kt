@@ -57,7 +57,7 @@ class BackupSemesterRestorePolicyTest {
     /**
      * 卡面点名的第 4 格那一族：**只能补建**那一等必须"说实话"。
      *
-     * 两处不许退回去：① 结论里必须带着开学日的来历（[RebuiltStartReason]）与周数的来历
+     * 两处不许退回去：① 结论里必须带着开学日的来历（[RebuiltStartOrigin]）与周数的来历
      * （[RebuiltWeeksBasis]），恢复结果与文案才念得出"这一枚是猜的";② 周数**不许是静默的 20** ——
      * 有周次证据就用证据（课程上到第 16 周 ⇒ 至少 16 周），没证据就给最小值并标 NO_BASIS。
      */
@@ -76,11 +76,11 @@ class BackupSemesterRestorePolicyTest {
 
             val expectedRebuild = cell.expected as SemesterRowDecision.Rebuild
             assertEquals(
-                "「${cell.name}」的开学日来历必须是 ${expectedRebuild.startReason}（实到 ${actual.startReason}）：" +
+                "「${cell.name}」的开学日来历必须是 ${expectedRebuild.startOrigin}（实到 ${actual.startOrigin}）：" +
                     "库里没有、备份也没带 / 带了但日期认不出来，这两档在用户那边是完全不同的两句话，" +
                     "合成一枚「反正都是猜」就没人能分清是老备份还是坏备份",
-                expectedRebuild.startReason,
-                actual.startReason,
+                expectedRebuild.startOrigin,
+                actual.startOrigin,
             )
             assertEquals(
                 "「${cell.name}」的周数来历必须是 ${expectedRebuild.weeksBasis}（实到 ${actual.weeksBasis} / " +
@@ -281,7 +281,7 @@ class BackupSemesterRestorePolicyTest {
             termName = "2025-2026-2",
             startDate = "2026-10-05",
             totalWeeks = 16,
-            startReason = RebuiltStartReason.NOT_IN_BACKUP,
+            startOrigin = RebuiltStartOrigin.NOT_IN_BACKUP,
             weeksBasis = RebuiltWeeksBasis.COURSE_WEEKS,
         )
         val note = rebuiltSemestersNote(listOf(one))!!
@@ -294,7 +294,7 @@ class BackupSemesterRestorePolicyTest {
         )
         val many = rebuiltSemestersNote(
             listOf(one) + (1..5).map {
-                one.copy(termCode = "TERM-$it", startReason = RebuiltStartReason.BACKUP_DATE_UNREADABLE)
+                one.copy(termCode = "TERM-$it", startOrigin = RebuiltStartOrigin.BACKUP_DATE_UNREADABLE)
             },
         )!!
         assertTrue("超过点名列举上限时要折算成「等 N 枚」，且枚数是全量（实到「$many」）", many.contains("等 6 枚"))
@@ -333,7 +333,7 @@ class BackupSemesterRestorePolicyTest {
             "InsertFromBackup(${value.semester.termCode}/${value.semester.startDate}/${value.semester.totalWeeks}周)"
         is SemesterRowDecision.Rebuild ->
             "Rebuild(${value.termCode}/${value.startDate}/${value.totalWeeks}周," +
-                "开学日来历=${value.startReason},周数来历=${value.weeksBasis})"
+                "开学日来历=${value.startOrigin},周数来历=${value.weeksBasis})"
         else -> value.toString()
     }
 
@@ -379,7 +379,7 @@ class BackupSemesterRestorePolicyTest {
                     termName = "2025-2026-2",
                     startDate = "2026-10-05",
                     totalWeeks = 16,
-                    startReason = RebuiltStartReason.NOT_IN_BACKUP,
+                    startOrigin = RebuiltStartOrigin.NOT_IN_BACKUP,
                     weeksBasis = RebuiltWeeksBasis.COURSE_WEEKS,
                 ),
                 why = "老备份只有主学期那一枚（回落见配对表），历史学期确实没出处 ⇒ 只能补建，" +
@@ -464,7 +464,7 @@ class BackupSemesterRestorePolicyTest {
                     termName = "2025-2026学年第二学期",
                     startDate = "2026-10-05",
                     totalWeeks = 18,
-                    startReason = RebuiltStartReason.BACKUP_DATE_UNREADABLE,
+                    startOrigin = RebuiltStartOrigin.BACKUP_DATE_UNREADABLE,
                     weeksBasis = RebuiltWeeksBasis.COURSE_WEEKS,
                 ),
                 why = "斜杠单位 parse 不出来就不许「抢救」成日期 —— 认不出来就是没出处（同 T180 口径）。" +
@@ -484,7 +484,7 @@ class BackupSemesterRestorePolicyTest {
                     termName = "2024-2025-1",
                     startDate = "2026-10-05",
                     totalWeeks = 1,
-                    startReason = RebuiltStartReason.NOT_IN_BACKUP,
+                    startOrigin = RebuiltStartOrigin.NOT_IN_BACKUP,
                     weeksBasis = RebuiltWeeksBasis.NO_BASIS,
                 ),
                 why = "两样都没出处时，旧代码报的是「2026-10-05 开学、20 周」且一句提示都没有。" +
@@ -503,11 +503,11 @@ class BackupSemesterRestorePolicyTest {
                     termName = "2024-2025-1",
                     startDate = "2026-10-05",
                     totalWeeks = 19,
-                    startReason = RebuiltStartReason.NOT_IN_BACKUP,
+                    startOrigin = RebuiltStartOrigin.NOT_IN_BACKUP,
                     weeksBasis = RebuiltWeeksBasis.COURSE_WEEKS,
                 ),
                 why = "课程上到第 19 周，这学期就至少 19 周：这是从备份内容里读出来的，不是造的。" +
-                    "开学日仍然是猜的（startReason 明说），这一等整枚都在补建账里",
+                    "开学日仍然是猜的（startOrigin 明说），这一等整枚都在补建账里",
                 mutantDirection = "更宽/更窄都会红（周数被换成常量就不再是「有出处」）",
             ),
             Cell(
@@ -522,7 +522,7 @@ class BackupSemesterRestorePolicyTest {
                     termName = "2024-2025-1",
                     startDate = "2026-10-05",
                     totalWeeks = 30,
-                    startReason = RebuiltStartReason.NOT_IN_BACKUP,
+                    startOrigin = RebuiltStartOrigin.NOT_IN_BACKUP,
                     weeksBasis = RebuiltWeeksBasis.COURSE_WEEKS,
                 ),
                 why = "observedMaxWeek 来自用户可改的备份（weeks 列表已被 normalize 钳在 1..30，" +
