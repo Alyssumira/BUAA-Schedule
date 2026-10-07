@@ -137,60 +137,86 @@ fun BuaaLoginScreen(
         } else {
             val selectedTerm = terms.firstOrNull { it.selected }?.code
                 ?: terms.first().code
-            fetchState = "正在逐周获取课表（学期 $selectedTerm）..."
+            fetchState = "正在获取学期信息（学期 $selectedTerm）..."
             val info = fetcher.fetchSemesterInfo(web, selectedTerm)
             val totalWeeks = info.totalWeeks
-            val outcome = fetcher.fetchSemesterCourses(
-                webView = web,
-                termCode = selectedTerm,
-                totalWeeks = totalWeeks,
-                onProgress = { week, total ->
-                    fetchWeek = week
-                    fetchTotal = total
-                    fetchState = "正在获取课表：第 $week/$total 周..."
-                },
-            )
-            // 保留登录 WebView（byxt 页面上下文，供刷新课表复用）
-            com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
-            fetchState = null
-            when {
-                // 有周次没抓到：宁可让用户重试，也不能用不完整的结果覆盖既有课表
-                // （覆盖导入是"先清空该学期再写入"，没抓到的周次会被连带删掉）
-                outcome.failedWeeks.isNotEmpty() -> {
+            // ── 闸门：开学日认不出来就当场返回，**一行课表都不抓**（T196②）──
+            //
+            // 改前的次序是「抓完二十周再判开学日」：`resolveBuaaSemesterStart` 长在
+            // `fetchSemesterCourses` 之后的 `else` 支里，于是开学日取不到时用户已经等完整轮逐周抓取
+            // （每周一到两次页面内 fetch），最后听到一句「已保留原课表未做改动，请稍后重试」——
+            // 那一轮空转正好是 20 周，因为失败档的 `totalWeeks` 是硬写的 20。
+            // 对照本仓另一路：静默刷新 `data/import/BuaaWebSession.kt` 的 `refreshSchedule` 次序本来就是
+            // 对的（拿信息 → 立刻判 → 才逐周抓），首次导入这一路照它改。
+            //
+            // **两枚失败档的优先级在这里定死**（次序即成本次序，不是语义次序）：
+            // 1. 先判开学日 `resolveBuaaSemesterStart` —— 便宜的一枚：它只吃已经拿到手的那枚串，
+            //    零页面内 fetch，认不出来整轮逐周抓取根本不必开始；
+            // 2. 再判 `outcome.failedWeeks` 与 `outcome.courses.isEmpty()` —— 贵的那两枚：
+            //    它们要有逐周抓取的结果才谈得上，而那句「抓取未完成：第 … 周失败」的措辞一个字没改。
+            //    判据本体不许在这里复刻，两枚都只读 `SemesterFetchOutcome` 的现成结论。
+            //
+            // 开学日只认 getTermWeeks 第 1 周的 startDate（过 mondayOf 归一成周一）。
+            // **认不出来就不动学期**，口径对齐静默刷新那一路（BuaaWebSession.refreshSchedule
+            // 的 `?: existingStartDate ?: return Result.failure(...)`；首次导入手里没有
+            // existingStartDate，所以那一等落到"报错 + 返回"）。
+            // 旧形状是 `runCatching { mondayOf(LocalDate.parse(rawStart)) }.getOrDefault(rawStart)`
+            // —— 兜底值正是 parse 失败的那枚原串，坏日期因此原样进 Semester.startDate 并落库，
+            // 此后 Semester.startLocalDate 恒 null（周课表空网格、提醒链 cancelAll、
+            // 组件停在"假期中"、设置页念出并回写这串垃圾）。也不许换成"今天所在周的周一"：
+            // 提前导入下一学期时那是一枚猜出来的日期，整表日期与周次编号一起偏。
+            // 判据本体在 resolveBuaaSemesterStart（纯 JVM、零时钟），这里只取它的结论。
+            when (val start = resolveBuaaSemesterStart(info.firstWeekMonday)) {
+                is BuaaSemesterStart.Undetermined -> {
+                    // 提前返回也要先把登录 WebView 保住再报错（T196② 复核过的那一行）：
+                    // retain 原先只长在逐周抓取之后，闸门搬到抓取之前以后，这一支要是照旧不掉 retain，
+                    // 用户返回时 AndroidView.onRelease 会当场 destroy 那枚 WebView —— 已经登录的 byxt
+                    // 会话跟着丢，下一次导入得重新走 SSO。形状与这一趟另两枚提前返回（页面没就绪 /
+                    // 学期列表为空）一致：retain → 清状态 → 报错 → onBack。
+                    // **不**把 retain 提前到 fetchSemesterInfo 之前：那会在页面内请求还在跑的时候
+                    // 把 WebView 转挂隐藏宿主，改的是抓取链的宿主而不是这一格的次序。
+                    com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
+                    fetchState = null
                     viewModel.showMessage(
-                        "抓取未完成：第 ${outcome.failedWeeks.joinToString("、")} 周失败，" +
+                        "教务系统没有给出可识别的开学日期" +
+                            "（第 1 周 startDate = ${if (start.raw.isNullOrBlank()) "缺失" else "「${start.raw}」"}），" +
                             "已保留原课表未做改动，请稍后重试",
                         isError = true,
                     )
                     onBack()
                 }
-                outcome.courses.isEmpty() -> {
-                    viewModel.showMessage("教务系统未返回该学期课程（可能未选课）", isError = true)
-                    onBack()
-                }
-                else -> {
-                    val termName = terms.firstOrNull { it.code == selectedTerm }?.name ?: selectedTerm
-                    // 开学日只认 getTermWeeks 第 1 周的 startDate（过 mondayOf 归一成周一）。
-                    // **认不出来就不动学期**，口径对齐静默刷新那一路（BuaaWebSession.refreshSchedule
-                    // 的 `?: existingStartDate ?: return Result.failure(...)`；首次导入手里没有
-                    // existingStartDate，所以那一等落到"报错 + 返回"）。
-                    // 旧形状是 `runCatching { mondayOf(LocalDate.parse(rawStart)) }.getOrDefault(rawStart)`
-                    // —— 兜底值正是 parse 失败的那枚原串，坏日期因此原样进 Semester.startDate 并落库，
-                    // 此后 Semester.startLocalDate 恒 null（周课表空网格、提醒链 cancelAll、
-                    // 组件停在"假期中"、设置页念出并回写这串垃圾）。也不许换成"今天所在周的周一"：
-                    // 提前导入下一学期时那是一枚猜出来的日期，整表日期与周次编号一起偏。
-                    // 判据本体在 resolveBuaaSemesterStart（纯 JVM、零时钟），这里只取它的结论。
-                    when (val start = resolveBuaaSemesterStart(info.firstWeekMonday)) {
-                        is BuaaSemesterStart.Undetermined -> {
+                is BuaaSemesterStart.Resolved -> {
+                    fetchState = "正在逐周获取课表（学期 $selectedTerm）..."
+                    val outcome = fetcher.fetchSemesterCourses(
+                        webView = web,
+                        termCode = selectedTerm,
+                        totalWeeks = totalWeeks,
+                        onProgress = { week, total ->
+                            fetchWeek = week
+                            fetchTotal = total
+                            fetchState = "正在获取课表：第 $week/$total 周..."
+                        },
+                    )
+                    // 保留登录 WebView（byxt 页面上下文，供刷新课表复用）
+                    com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
+                    fetchState = null
+                    when {
+                        // 有周次没抓到：宁可让用户重试，也不能用不完整的结果覆盖既有课表
+                        // （覆盖导入是"先清空该学期再写入"，没抓到的周次会被连带删掉）
+                        outcome.failedWeeks.isNotEmpty() -> {
                             viewModel.showMessage(
-                                "教务系统没有给出可识别的开学日期" +
-                                    "（第 1 周 startDate = ${if (start.raw.isNullOrBlank()) "缺失" else "「${start.raw}」"}），" +
+                                "抓取未完成：第 ${outcome.failedWeeks.joinToString("、")} 周失败，" +
                                     "已保留原课表未做改动，请稍后重试",
                                 isError = true,
                             )
                             onBack()
                         }
-                        is BuaaSemesterStart.Resolved -> {
+                        outcome.courses.isEmpty() -> {
+                            viewModel.showMessage("教务系统未返回该学期课程（可能未选课）", isError = true)
+                            onBack()
+                        }
+                        else -> {
+                            val termName = terms.firstOrNull { it.code == selectedTerm }?.name ?: selectedTerm
                             val semester = com.buaa.schedule.domain.model.Semester(
                                 termCode = selectedTerm,
                                 termName = termName,
