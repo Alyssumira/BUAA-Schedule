@@ -142,7 +142,7 @@ internal sealed class SecondEngineDecision {
     /** 静默观望：连击没到线 / 间隔没到线。这是绝大多数帧的取值，不许留痕 */
     internal object Waiting : SecondEngineDecision()
 
-    /** 闸门里已经有原文在手（或结果卡挂在屏上等用户按）：不补，补了也投不出去 */
+    /** 闸门里有一张待投的真原文，或屏上正挂着等用户按的结果卡：不补，补了也投不出去。失败留痕那枚 [DecodeFailurePayload] 占位**不算**（T245，派生见 [secondEngineCodeInHand]） */
     internal object CodeInHand : SecondEngineDecision()
 
     /** 本轮额头发完 */
@@ -171,7 +171,7 @@ internal sealed class SecondEngineDecision {
 internal fun secondEngineStopText(decision: SecondEngineDecision): String? = when (decision) {
     is SecondEngineDecision.Fire, is SecondEngineDecision.Waiting -> null
     is SecondEngineDecision.CodeInHand ->
-        "第二引擎暂停：闸门里已经有原文或结果卡正等用户按，这时候补解投不出去"
+        "第二引擎暂停：闸门里有一张待投的真原文，或屏上挂着等用户按的结果卡，这时候补解投不出去（失败留痕那枚占位不算）"
     is SecondEngineDecision.OutOfBudget ->
         "本轮绑定的第二引擎额度已用完（$SecondEngineMaxFiresPerBind 次），之后只由 ML Kit 解帧"
     is SecondEngineDecision.GaveUp ->
@@ -272,8 +272,9 @@ internal fun secondEngineCodeInHand(handled: ScanHandled?, awaitingUserAction: B
  * @param ledger 补解账本（只由分析线程持有）
  * @param streak 截至上一帧为止、[retryableRung] 的连续帧数（由 [ScanAssistState] 带过来的观测量）
  * @param frame 本帧帧号（[ScanRecoveryPolicy] 那枚全局帧号，同一把尺子）
- * @param codeInHand 闸门里是否已有原文 / 结果卡是否正等用户按（调用点读 [ScanHandled] 与
- *                   awaitingUserAction 当参数传，本函数不认识闸门）
+ * @param codeInHand 这一帧是不是真的「有东西也投不出去」。调用点由 [secondEngineCodeInHand]
+ *                   派生后当参数传进来（闸门里的真原文 ⇒ true、[DecodeFailurePayload] 那枚
+ *                   失败占位 ⇒ false、闸门空着时才看结果卡挂没挂）；本函数不认识闸门
  * @param engineUsable 第二引擎此刻是否可用（调用点读探针档位：未判定按可用传 ——
  *                     那一档的可用性由构造那一下现场判定，判不动自然会转成 unusableSeen）
  */
@@ -368,7 +369,11 @@ internal const val SecondEngineReprobeFrameGap = 120L
  * 本函数不新增任何一本账，也不去认识 `ImageProxy`。
  *
  * 五道闸门一枚都不能少，每一道都在挡一件具体的事：
- * - `!codeInHand`：闸门里已有原文 / 结果卡正等用户按 ⇒ 补了也投不出去，白花一发；
+ * - `!codeInHand`：这一道要的是「手里没东西」，反过来 `codeInHand` 为真（闸门里有一张待投的真原文，
+ *   或屏上挂着结果卡）时补出来的原文同样投不出去，那一发就是白花 —— 失败留痕那枚
+ *   [DecodeFailurePayload] 占位**不在**这一档里（T245 的甲档裁定，派生见 [secondEngineCodeInHand]）。
+ *   ⚠️ 这一族条目写的都是**闸门表达式**，冒号后面解释的是它不成立时挡掉的那件事，不是把它成立时
+ *   的样子复述一遍 —— 旧句「`!codeInHand`：闸门里已有原文」容易被读成符号写反了，订正至此。
  * - `engineUsable && !ledger.unusableSeen`：引擎已经报过不可用（缺 `.so` / 解帧抛过）⇒
  *   那一档的终局话由 [SecondEngineDecision.EngineUnusable] 说，复探不许绕过它去撞第二次；
  * - `ledger.fires < SecondEngineMaxFiresPerBind`：**这一条才是省电的那一条**。判死只是把节奏

@@ -33,6 +33,12 @@ internal data class ScanHandled(val payload: String, val atMillis: Long)
  * 之后**同一档失败**按"同一张码"处理（受 [RescanCooldownMillis] 与
  * [shouldSubmitScan] 的 `awaitingUserAction` 管），而一旦真的解出了一张码，
  * payload 一变就放行 —— 相机坏过一会儿又好了那种情形不需要谁来重置。
+ *
+ * ⚠️ 这一枚的语义只有「留过一次失败」，**不含**任何"手里有一张码"的意思（上面那句
+ * "那次解码根本没产出东西"就是它的定义）。按帧的其它判据若要问「闸门里有没有原文」，
+ * 只许分档读它，不许拿 `handled != null` 当尺 —— T245 的病灶正是第二引擎那样读过它，
+ * 于是一次瞬时失败把兜底补解整轮锁死。分档的落点在 [secondEngineHandState] 与
+ * [secondEngineCodeInHand]（同一口径不许在调用点再写第二份）。
  */
 internal const val DecodeFailurePayload = "\u0000decode-failed"
 
@@ -68,7 +74,12 @@ internal const val RescanCooldownMillis = 1_500L
  * @param handled 上一次放行（null = 这轮还没放行过任何东西）
  * @param raw 本帧解出的原文
  * @param nowMillis 调用点读的墙钟
- * @param awaitingUserAction 屏幕上是否挂着等用户按的结果卡
+ * @param awaitingUserAction 屏幕上是否挂着等用户按的结果卡。⚠️ 写它的不只组合侧那一支
+ *                   （`LaunchedEffect(state)` 按 `Failed` / `Signed` 推进来）：SpocScanScreen 里
+ *                   两条失败留痕也各自写一次 `awaitingUserAction = true`，那两处的含义是
+ *                   「把闸门按在只认新码这一档」，**不是**「屏上此刻有一张卡」。
+ *                   本函数只吃前者那种压重投的账，所以这一歧义在这里无害；别的读者要问
+ *                   「手里到底有没有东西」请走 [secondEngineCodeInHand]，别直接读这一位。
  * @param cooldownMillis 同一份原文的冷却期，抽成参数只为让单测能把时间钉住
  */
 internal fun shouldSubmitScan(

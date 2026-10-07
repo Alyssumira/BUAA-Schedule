@@ -1180,6 +1180,9 @@ private class QrCodeAnalyzer(
                     // 但连 MLKit 都报错时继续按帧重试只是白耗电，交给界面提示换入口。
                     // 留痕用 [DecodeFailurePayload] 占位（这次解码没有原文可记），并把闸门按在
                     // "只认新码"这一档：与旧 consumed 的口径一致，只是不再排斥以后真解出来的码。
+                    // ⚠️ 这两句说的都只关于**提交闸门**：这一枚占位不是原文，屏上此刻也没有因此
+                    // 立起结果卡，所以按帧的其它判据不许拿 `handled != null` 当"手里有码"读
+                    // （T245 的病灶，分档读法在 [secondEngineCodeInHand]）。
                     // ⚠️ 这个词的零命中由形状守卫盯着（ScanSubmissionGateTest ⑨）：
                     // 布尔死锁不许从任何一头复活，所以这里只记账、不再写那颗布尔。
                     handled = ScanHandled(DecodeFailurePayload, System.currentTimeMillis())
@@ -1482,7 +1485,7 @@ private class QrCodeAnalyzer(
      * 「这一帧为什么不出声」的留痕，每档只说一次（[secondEngineStopReported] 管换挡）。
      *
      * 这一句是本卡对"静默 no-op"那三轮病的答卷：四种停法（额度用完 / 连续失手判死 /
-     * 引擎不在这台设备上 / 闸门里已有原文）都必须读得出**是哪一种、从第几帧起闭嘴的**；
+     * 引擎不在这台设备上 / 闸门里已有待投的原文或屏上挂着结果卡）都必须读得出**是哪一种、从第几帧起闭嘴的**；
      * 而按帧重复同一句等于把 logcat 冲干净，那种"留痕"和没有留痕是一回事。
      * [SecondEngineDecision.Fire] 与 [SecondEngineDecision.Waiting] 不出声：前者由结果那一行
      * 说话，后者是绝大多数帧的常态（措辞唯一来源在 [secondEngineStopText]，这里不写第二份）。
@@ -1492,7 +1495,8 @@ private class QrCodeAnalyzer(
         if (decision == secondEngineStopReported) return
         secondEngineStopReported = decision
         val line = "第二引擎这一帧不出声（第 $frame 帧）：$text"
-        // 闸门那一档是正常流程里的常态（结果卡挂着等用户按）⇒ Info；
+        // 闸门那一档是正常流程里的常态（闸门里有一张待投的真原文，或屏上正挂着结果卡；
+        // 失败留痕那一枚占位**不**落在这一档，T245）⇒ Info；
         // 其余三档都是"本轮到此为止"的终局判据 ⇒ Warn，好让读日志的人一眼扫到
         if (decision is SecondEngineDecision.CodeInHand) Log.i(TAG, line) else Log.w(TAG, line)
     }
