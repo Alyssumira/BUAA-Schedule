@@ -14,10 +14,27 @@ import kotlinx.serialization.Serializable
  */
 const val BACKUP_FORMAT_VERSION = 2
 
+/**
+ * 备份里带全的学期行（T204）。**可选、带默认值 ⇒ 线上兼容，`BACKUP_FORMAT_VERSION` 不涨**，
+ * 理由与 [BackupCourse.credit] 那一段同口径（读 [BACKUP_FORMAT_VERSION] 的注释）：
+ * - 老备份（v1/v2）没有 `semesters` 这个键 → 解析成空列表，读侧回落到单字段 [semester] 那一枚，
+ *   恢复照旧，不报「版本过高」；
+ * - 新备份被老应用读时，`semesters` 是它不认得的键，`ignoreUnknownKeys` 直接忽略 →
+ *   它照旧按单字段 [semester] 恢复主学期（也就是**旧行为原样**，跨学期那一档的偏移老应用修不了，
+ *   但我们不产出它读不了的备份、也不改变它已能读的那些内容）；
+ * - 把版本涨到 3 只会让老应用对这份文件直接拒绝恢复（`data.version > BACKUP_FORMAT_VERSION`），
+ *   而字段本身两边都认得 —— 涨版本只换来一条更窄的升级路。
+ *
+ * 为什么必须有这一枚列表：[courses] 里每一门课都带 [BackupCourse.semesterCode]，课程是跨学期的，
+ * 单字段 [semester] 只装得下主学期那一枚 ⇒ 历史学期在恢复时无据可依（见
+ * `BackupSemesterRestorePolicy` 段首那一笔损坏账）。[semester] 保留不删：它同时是
+ * 老应用的唯一学期来源，也是恢复时主学期配置（节次、周数）的出处。
+ */
 @Serializable
 data class BackupData(
     val version: Int = BACKUP_FORMAT_VERSION,
     val semester: BackupSemester? = null,
+    val semesters: List<BackupSemester> = emptyList(),
     val timeSlots: List<BackupTimeSlot> = emptyList(),
     val courses: List<BackupCourse> = emptyList(),
     val reminders: List<BackupReminder> = emptyList(),

@@ -1999,6 +1999,18 @@ fun SettingsScreen(
                         if (preview.startDate != null) {
                             Text("开学日期：${preview.startDate}（共 ${preview.totalWeeks} 周）")
                         }
+                        // T204：恢复前就能看见这份备份到底带了几枚学期行。
+                        // 老备份（没带列表）必须说清后果 —— 其余学期的开学日不在备份里，
+                        // 恢复时只能按恢复那天补建，用户事后可在设置页核对。
+                        Text(
+                            text = if (preview.semesterCount > 0) {
+                                "学期行：${preview.semesterCount} 枚"
+                            } else {
+                                "学期行：这份备份只带主学期那一枚，其余学期恢复时按恢复那天补建，之后可在设置页核对"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         Text("课程：${preview.courseCount} 条（其中手动课程 ${preview.manualCourseCount} 条）")
                         Text(
                             text = if (preview.timeSlotCount > 0) {

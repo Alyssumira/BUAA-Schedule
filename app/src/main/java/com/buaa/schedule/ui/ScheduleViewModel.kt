@@ -822,6 +822,14 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
          * release 又剥 Verbose（口径同扫码页那族取证行，见 ScanSilentBranchGuardTest ⑦）。
          */
         private const val SPECIAL_DAY_LOG_TAG = "SpecialDays"
+
+        /**
+         * 备份/口令恢复那一路的取证 tag（T204）。级别 Info（口径同上面那一枚：
+         * 用户那台机器把 logcat 砍到 Info 以下、release 剥 Verbose）。
+         * 恢复成功的 toast 是会自己消失的，而「补建了几枚学期行、它们的开学日是推算的」
+         * 这笔账要能在事后被读出来 —— 否则用户报"历史学期的日期不对"时没有任何取证面可查。
+         */
+        private const val RESTORE_LOG_TAG = "BackupRestore"
     }
 
     private val _buaaTermCode = MutableStateFlow(DEFAULT_BUAA_TERM)
@@ -1285,12 +1293,16 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     /** 备份导出：整表序列化，放 Default 上跑，避免调用方用 Main 调度器时卡界面 */
     suspend fun exportBackup(): String = withContext(Dispatchers.Default) {
         val semester = repository.getCurrentSemester()
+        // 全部学期行都要带上（T204）：课程列表是跨学期的，只写主学期那一枚，
+        // 换机恢复时历史学期就无据可依（补成"恢复那天开学"）。
+        val semesters = repository.getAllSemesters()
         val courses = repository.getAllCourses()
         val timeSlots = repository.getTimeSlots()
         val reminders = repository.getReminders()
         val courseById = courses.associateBy { it.id }
         val backup = BackupData(
             semester = semester?.toBackup(),
+            semesters = semesters.map { it.toBackup() },
             timeSlots = timeSlots.map { it.toBackup() },
             courses = courses.map { it.toBackup() },
             reminders = reminders.mapNotNull { setting ->
@@ -1365,6 +1377,12 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         val semesterName: String?,
         val startDate: String?,
         val totalWeeks: Int?,
+        /**
+         * 备份里带了几枚学期行（T204）。0 = 老备份 / 老口令只有单字段那一枚 ⇒
+         * 恢复时历史学期无据可依，只能走补建那一等（界面上先把这件事说清楚，
+         * 而不是等用户发现日期不对）。
+         */
+        val semesterCount: Int,
         val courseCount: Int,
         val manualCourseCount: Int,
         val timeSlotCount: Int,
@@ -1386,6 +1404,8 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 semesterName = data.semester?.termName,
                 startDate = data.semester?.startDate,
                 totalWeeks = data.semester?.totalWeeks,
+                // 老备份没有 semesters 键 ⇒ 空列表，此处如实报 0（不是"1 枚都看不清"）
+                semesterCount = data.semesters.size,
                 courseCount = data.courses.size,
                 manualCourseCount = data.courses.count { it.toDomain().isManualCourse },
                 timeSlotCount = data.timeSlots.size,
@@ -1396,6 +1416,11 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     /**
      * 生成课表分享口令（当前学期 + 手动课程 + 节次时间）。
      * 返回 null 表示当前没有可分享的课表。
+     *
+     * 学期行按库里全部学期一起带（T204，与 `exportBackup` 同一口径）：
+     * 口令走的就是同一个 `BackupData` JSON，只带当前学期那一枚时，
+     * 落在其它学期上的手动课程在对方设备上会被补建成本卡要消灭的那一等
+     * （开学日 = 对方导入口令那天）。多带几枚学期行的体积在 deflate 之后可忽略。
      */
     suspend fun buildShareCode(): String? {
         val semester = repository.getCurrentSemester() ?: return null
@@ -1403,6 +1428,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         if (courses.isEmpty()) return null
         val backup = BackupData(
             semester = semester.toBackup(),
+            semesters = repository.getAllSemesters().map { it.toBackup() },
             timeSlots = repository.getTimeSlots().map { it.toBackup() },
             courses = courses.map { it.toBackup() },
         )
@@ -1453,6 +1479,9 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         }
         val result = repository.restoreBackupData(
             backupSemester = data.semester?.toDomain(),
+            // 备份里带全的学期行（T204）：按 termCode 与课程分组配对，缺了才轮得到补建那一等。
+            // 老备份 / 老口令没有这个键 ⇒ 空列表，读侧在仓储层回落到上面那一枚 semester。
+            backupSemesterRows = data.semesters.map { it.toDomain() },
             courses = data.courses.map { it.toDomain() },
             timeSlots = data.timeSlots.map { it.toDomain() },
             remindersByCourseKey = data.reminders.associate {
@@ -1487,10 +1516,15 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     )
                 }
                 afterDataChangedInternal()
+                // 补建账必须念出来（T204）：这些学期行的开学日不是备份里的，是按恢复那天推算的。
+                // 不念就是把跨学期恢复的日期偏移重新藏回静默里 —— 那正是本卡的病灶。
+                val rebuiltNote = com.buaa.schedule.data.backup.rebuiltSemestersNote(result.rebuiltSemesters)
+                if (rebuiltNote != null) Log.i(RESTORE_LOG_TAG, "$sourceLabel：$rebuiltNote")
                 _importMessage.value = AppMessage(buildString {
                     append("${sourceLabel}成功：${result.restoredCourses} 条课程")
                     if (result.insertedManual > 0) append("（新增手动课程 ${result.insertedManual} 条）")
                     if (result.skippedInvalid > 0) append("，跳过无效数据 ${result.skippedInvalid} 条")
+                    if (rebuiltNote != null) append("。$rebuiltNote")
                 }, isSuccess = true)
             }
         }

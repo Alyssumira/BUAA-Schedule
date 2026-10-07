@@ -2,6 +2,9 @@ package com.buaa.schedule.data.repository
 
 import android.content.Context
 import androidx.room.withTransaction
+import com.buaa.schedule.data.backup.SemesterRowDecision
+import com.buaa.schedule.data.backup.decideSemesterRowForRestore
+import com.buaa.schedule.data.backup.indexBackupSemesterRows
 import com.buaa.schedule.data.local.AppDatabase
 import com.buaa.schedule.data.local.toDomain
 import com.buaa.schedule.data.local.toEntity
@@ -24,11 +27,19 @@ import java.time.LocalDate
 
 /** 备份/口令恢复结果 */
 sealed interface RestoreResult {
-    /** 已写入数据库 */
+    /**
+     * 已写入数据库。
+     *
+     * [rebuiltSemesters] 是 T204 那笔"说实话"的账：本次恢复里**补建**出来的学期行
+     * （库里没有、备份也没带该 termCode），它们的 `startDate` 是按恢复那天推出来的、
+     * 不是备份里的值 —— 念恢复文案那一侧必须把它念出来，不念就是把偏移藏回静默里。
+     * 空列表 = 这一次没有任何学期行是靠猜建出来的。
+     */
     data class Applied(
         val restoredCourses: Int,
         val skippedInvalid: Int,
         val insertedManual: Int,
+        val rebuiltSemesters: List<SemesterRowDecision.Rebuild> = emptyList(),
     ) : RestoreResult
 
     /**
@@ -583,28 +594,51 @@ class ScheduleRepository(
 
     /**
      * 替换某学期的课程但不改写学期行（避免把历史学期顶成“当前学期”）；
-     * 学期行不存在时用兜底日期补建。
+     * 学期行不存在时**只能经内核**（`data/backup/BackupSemesterRestorePolicy.kt` 的
+     * `decideSemesterRowForRestore`）决定用备份带来的日期、还是补建并如实标出来（T204）。
+     *
+     * 旧形状（`8caf3f7` 上这一段的逐字原文，守卫按"抹注释后 0 处"钉它）是：库里查不到该 termCode
+     * 就补一行 `startDate = fallbackStartDate.toString(),` 加 `totalWeeks = 20,`。
+     * 换机恢复多学期备份时，每一枚历史学期都被补成「恢复那天开学、20 周」，
+     * 而备份里本来就可能带着那一学期的真实开学日（`BackupData.semesters`，读侧由调用方
+     * 按 termCode 配对后当 [backupRow] 递进来）。同机恢复（库里已有该行）无损 —— 那正是它没被看见的原因。
+     *
+     * @return 只有「补建」那一等返回非 null（要落进恢复结果的补建账），其余等返回 null。
      */
     private suspend fun replaceCoursesForExistingSemesterInTx(
         semesterCode: String,
         imported: List<Course>,
         fallbackStartDate: LocalDate,
-    ) {
-        if (semesterDao.getByTermCode(semesterCode) == null) {
-            semesterDao.insert(
-                Semester(
-                    termCode = semesterCode,
-                    termName = semesterCode,
-                    startDate = fallbackStartDate.toString(),
-                    totalWeeks = 20,
-                ).toEntity()
-            )
+        backupRow: Semester?,
+    ): SemesterRowDecision.Rebuild? {
+        val decision = decideSemesterRowForRestore(
+            termCode = semesterCode,
+            backupRow = backupRow,
+            existingRow = semesterDao.getByTermCode(semesterCode)?.toDomain(),
+            fallbackStartDate = fallbackStartDate,
+            // 周次证据：这批课程里出现过的最大周次（`CourseConstraints.normalize` 保证已落 1..MAX_WEEK）
+            observedMaxWeek = imported.flatMap { it.weeks }.maxOrNull(),
+        )
+        val rebuilt = when (decision) {
+            // 库里已有这一枚学期行：一个字节都不动（同机恢复无损那一档）
+            is SemesterRowDecision.KeepExistingInDb -> null
+            // 备份带了这一 termCode ⇒ 开学日有出处，不进补建账
+            is SemesterRowDecision.InsertFromBackup -> {
+                semesterDao.insert(decision.semester.toEntity())
+                null
+            }
+            // 只能补建 ⇒ 开学日是按 [fallbackStartDate] 推的，必须留痕
+            is SemesterRowDecision.Rebuild -> {
+                semesterDao.insert(decision.toSemester().toEntity())
+                decision
+            }
         }
         val existing = courseDao.getBySemester(semesterCode).map { it.toDomain() }
         courseDao.deleteBySemester(semesterCode)
         val plan = ImportPlanner.buildImportPlan(existing, imported)
         courseDao.insertAll(plan.map { it.toEntity() })
         deleteRemindersOfDroppedCourses(existing, plan)
+        return rebuilt
     }
 
     /**
@@ -613,10 +647,14 @@ class ScheduleRepository(
      * 幂等性设计（重复恢复同一备份结果一致）：
      * - 其他学期课程先按 id 复用替换，主学期最后写入 —— "当前学期"就是 id 最大的
      *   学期行，顺序反过来会让恢复后的首页停在历史学期上（看起来"课表空了"）；
-     * - 缺失的学期行会被补建（其 id 仍小于最后写入的主学期）；
+     * - 缺失的学期行按 termCode 与备份里的学期行配对后逐枚判定（`decideSemesterRowForRestore`：
+     *   备份带了就用备份的日期、库里已有就不动、两边都没有才补建并记进补建账）；
+     *   补建行仍先于主学期写入，其 id 小于最后写入的主学期（见上面的次序理由）；
      * - 手动课程按合并语义，只插入本地缺失的，不删除用户手动添加的课程；
      * - 提醒按 courseKey 对回恢复后的课程。
      *
+     * @param backupSemesterRows 备份里带全的学期行（`BackupData.semesters`，老备份为空列表时
+     *   由 `indexBackupSemesterRows` 回落到 [backupSemester] 那一枚）。按 termCode 与课程分组配对。
      * @param allowEmptyReplacement 备份里一条课程都没有时的开关。默认拒绝：
      *   一份字段被改名的新备份会被 ignoreUnknownKeys 静默解成空列表，
      *   照单执行就是删光课表后提示"恢复成功：0 条课程"。
@@ -628,6 +666,7 @@ class ScheduleRepository(
         remindersByCourseKey: Map<String, Pair<Boolean, Int>>,
         fallbackStartDate: LocalDate,
         allowEmptyReplacement: Boolean = false,
+        backupSemesterRows: List<Semester> = emptyList(),
     ): RestoreResult = writeMutex.withLock {
         restoreBackupDataInTx(
             backupSemester = backupSemester,
@@ -636,6 +675,7 @@ class ScheduleRepository(
             remindersByCourseKey = remindersByCourseKey,
             fallbackStartDate = fallbackStartDate,
             allowEmptyReplacement = allowEmptyReplacement,
+            backupSemesterRows = backupSemesterRows,
         )
     }
 
@@ -646,6 +686,7 @@ class ScheduleRepository(
         remindersByCourseKey: Map<String, Pair<Boolean, Int>>,
         fallbackStartDate: LocalDate,
         allowEmptyReplacement: Boolean,
+        backupSemesterRows: List<Semester>,
     ): RestoreResult = db.withTransaction {
         val normalized = courses.mapNotNull(CourseConstraints::normalize)
         val skippedInvalid = courses.size - normalized.size
@@ -670,17 +711,28 @@ class ScheduleRepository(
             .mapNotNull { course -> course.semesterCode?.let { code -> code to course } }
             .groupBy({ it.first }, { it.second })
 
+        // 备份里带全的学期行按 termCode 配对（老备份 / 老口令没有列表时回落到单字段那一枚）
+        val backupRows = indexBackupSemesterRows(backupSemesterRows, backupSemester)
+        // 补建账：只有「库里没有、备份也没带」那一等进得来，最后交给恢复文案念出来（T204）
+        val rebuiltSemesters = mutableListOf<SemesterRowDecision.Rebuild>()
+
         // 历史学期在前、主学期在最后：见 KDoc 的幂等性说明
         semesterGroups.forEach { (code, group) ->
             if (code != mainCode) {
-                replaceCoursesForExistingSemesterInTx(code, group, fallbackStartDate)
+                replaceCoursesForExistingSemesterInTx(code, group, fallbackStartDate, backupRows[code])
+                    ?.let(rebuiltSemesters::add)
             }
         }
         if (safeSemester != null && mainCode != null) {
             // 主学期：恢复备份中的学期配置并整体替换课程
             replaceSemesterCoursesInTx(safeSemester, semesterGroups[mainCode].orEmpty())
         } else if (mainCode != null) {
-            replaceCoursesForExistingSemesterInTx(mainCode, semesterGroups[mainCode].orEmpty(), fallbackStartDate)
+            replaceCoursesForExistingSemesterInTx(
+                mainCode,
+                semesterGroups[mainCode].orEmpty(),
+                fallbackStartDate,
+                backupRows[mainCode],
+            )?.let(rebuiltSemesters::add)
         }
 
         // 手动课程：只插入本地没有的（按课程身份键判断）。
@@ -728,6 +780,7 @@ class ScheduleRepository(
             restoredCourses = normalized.size,
             skippedInvalid = skippedInvalid,
             insertedManual = manualToInsert.size,
+            rebuiltSemesters = rebuiltSemesters,
         )
     }
 }
