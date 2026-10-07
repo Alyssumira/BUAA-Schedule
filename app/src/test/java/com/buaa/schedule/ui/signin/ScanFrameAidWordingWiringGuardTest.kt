@@ -202,9 +202,16 @@ class ScanFrameAidWordingWiringGuardTest {
         for (relative in listOf(ADMISSION_FILE, RECOVERY_FILE, GATE_FILE, VIEW_MODEL_FILE)) {
             val path = "$MAIN_PREFIX/$relative"
             // T245② 被授权改过 ScanSubmissionGate.kt 的**措辞**（占位的语义 + awaitingUserAction
-            // 有两个写者那两句），所以这一枚的基点前移到 T245②；其余三枚仍按 d7af6f8 逐字节核对。
-            // 反向钉一枚没删、没放宽：闸门文件从今往后照样"不许顺手改"。
-            val rev = if (relative == GATE_FILE) T245_GATE_BASELINE else T90_BASELINE
+            // 有两个写者那两句），所以这一枚的基点前移到 T245②；其余两枚仍按 d7af6f8 逐字节核对。
+            // T257③ 被授权改过 SignInViewModel.kt 的**漏斗**（第四处 `if (flight.value) return`
+            // 换成 ScanFlightAdmission 分档 + 一句卡面 + 一行 Log.w），同理前移到那一枚；
+            // 两头都有靶子当场复算字节差异，前移不是白给的。
+            // 反向钉一枚没删、没放宽：闸门与状态机从今往后照样"不许顺手改"。
+            val rev = when (relative) {
+                GATE_FILE -> T245_GATE_BASELINE
+                VIEW_MODEL_FILE -> T257_VIEW_MODEL_BASELINE
+                else -> T90_BASELINE
+            }
             val baseline = gitShow(rev, path)
             check(baseline != null) { "git 跑不动或基线取不到（$path@$rev），反向钉无从核对" }
             assertEquals(
@@ -219,6 +226,26 @@ class ScanFrameAidWordingWiringGuardTest {
         assertTrue(
             "ScanSubmissionGate.kt 在 d7af6f8 与 T245 基点上逐字节相同 ⇒ 基点前移是白给的，这一枚反向钉已经空转",
             gitShow(T90_BASELINE, "$MAIN_PREFIX/$GATE_FILE") != gitShow(T245_GATE_BASELINE, "$MAIN_PREFIX/$GATE_FILE"),
+        )
+        // 同一枚靶子换到状态机那一头（T257③）：旧基线里那四处静默早退必须还在，
+        // 新基线里必须已经换成判据分档，两头都在才说明前移押的是本卡改的那一手
+        val viewModelPath = "$MAIN_PREFIX/$VIEW_MODEL_FILE"
+        val oldViewModel = gitShow(T90_BASELINE, viewModelPath)
+        val newViewModel = gitShow(T257_VIEW_MODEL_BASELINE, viewModelPath)
+        check(oldViewModel != null && newViewModel != null) {
+            "状态机的两份基线取不到（$viewModelPath），靶子无从复算"
+        }
+        assertTrue(
+            "SignInViewModel.kt 在 d7af6f8 与 T257 基点上逐字节相同 ⇒ 基点前移是白给的，这一枚反向钉已经空转",
+            normalizeNewlines(oldViewModel) != normalizeNewlines(newViewModel),
+        )
+        assertTrue(
+            "旧基线里已经没有那四处被换掉的静默早退（前移的前面不是本卡改的那一手）：",
+            Regex(Regex.escape("if (flight.value) return")).findAll(oldViewModel).count() == 4,
+        )
+        assertTrue(
+            "新基线的状态机不再问 ScanFlightAdmission（前移的后面不是本卡改的那一手）：",
+            newViewModel.contains("scanFlightAdmission("),
         )
         // 帧观测那颗内核的头部：挖掉 T92 的「空转速率」一段之外逐字节（同一把尺子，另一枚文件）
         val flowPath = "$MAIN_PREFIX/$FRAME_FLOW_FILE"
@@ -577,6 +604,13 @@ class ScanFrameAidWordingWiringGuardTest {
 
         /** T245② 授权改过 ScanSubmissionGate.kt 的措辞，这一枚反向钉的基点因此前移到这里 */
         const val T245_GATE_BASELINE = "ddf493f"
+
+        /**
+         * T257③：状态机漏斗被授权改过的那一手（第四处 `if (flight.value) return` 换成
+         * ScanFlightAdmission 分档 + 一句卡面 + 一行 Log.w），所以 [VIEW_MODEL_FILE] 的逐字节
+         * 基点前移到这一枚；靶子在本条守卫里当场复算新旧两份的字节差异。
+         */
+        const val T257_VIEW_MODEL_BASELINE = "00b0b51"
 
         /**
          * T92（#133）被授权改动的那一段（[FRAME_FLOW_FILE] 头部"空转有多少帧"的读数）的两个锚点，

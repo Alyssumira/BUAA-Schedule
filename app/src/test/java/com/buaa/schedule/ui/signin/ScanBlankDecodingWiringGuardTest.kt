@@ -195,7 +195,16 @@ class ScanBlankDecodingWiringGuardTest {
             // T245② 被授权改过 ScanSubmissionGate.kt 的**措辞**（占位的语义 + awaitingUserAction
             // 有两个写者那两句），所以这一枚的基点前移到 T245②；其余三枚仍按 6a27324 逐字节核对。
             // 反向钉一枚没删、没放宽：闸门文件从今往后照样"不许顺手改"。
-            val rev = if (relative == GATE_FILE) T245_GATE_BASELINE else T87_BASELINE
+            //
+            // T257③ 被授权改过 SignInViewModel.kt 的**漏斗**（那第四处 `if (flight.value) return`
+            // 换成 ScanFlightAdmission 分档 + 一句卡面 + 一行 Log.w），所以这一枚的基点同样前移，
+            // 前移的实物由下面那枚靶子当场复算（新旧两份状态机逐字节不同才允许不同源）。
+            // 状态机从今往后照样"不许顺手改"：改它就得连带重钉这一枚与本文件的反向钉。
+            val rev = when (relative) {
+                GATE_FILE -> T245_GATE_BASELINE
+                VIEW_MODEL_FILE -> T257_VIEW_MODEL_BASELINE
+                else -> T87_BASELINE
+            }
             val baseline = gitShow(rev, path)
             check(baseline != null) { "git 跑不动或基线取不到（$path@$rev），反向钉无从核对" }
             assertEquals(
@@ -210,6 +219,26 @@ class ScanBlankDecodingWiringGuardTest {
         assertTrue(
             "ScanSubmissionGate.kt 在 6a27324 与 T245 基点上逐字节相同 ⇒ 基点前移是白给的，这一枚反向钉已经空转",
             gitShow(T87_BASELINE, "$MAIN_PREFIX/$GATE_FILE") != gitShow(T245_GATE_BASELINE, "$MAIN_PREFIX/$GATE_FILE"),
+        )
+        // 同一枚靶子换到状态机那一头（T257③）：旧基线里那句静默早退必须还在，
+        // 新基线里必须已经换成判据分档 —— 两头都在，才说明前移前的是"被授权改过"那一手
+        val viewModelPath = "$MAIN_PREFIX/$VIEW_MODEL_FILE"
+        val oldViewModel = gitShow(T87_BASELINE, viewModelPath)
+        val newViewModel = gitShow(T257_VIEW_MODEL_BASELINE, viewModelPath)
+        check(oldViewModel != null && newViewModel != null) {
+            "状态机的两份基线取不到（$viewModelPath），靶子无从复算"
+        }
+        assertTrue(
+            "SignInViewModel.kt 在 6a27324 与 T257 基点上逐字节相同 ⇒ 基点前移是白给的，这一枚反向钉已经空转",
+            normalizeNewlines(oldViewModel) != normalizeNewlines(newViewModel),
+        )
+        assertTrue(
+            "旧基线里已经没有那处被换掉的静默早退了（前移的前面不是本卡改的那一手）：",
+            Regex(Regex.escape("if (flight.value) return")).findAll(oldViewModel).count() == 4,
+        )
+        assertTrue(
+            "新基线的状态机不再问 ScanFlightAdmission（前移的后面不是本卡改的那一手）：",
+            newViewModel.contains("scanFlightAdmission("),
         )
         val statusPath = "$MAIN_PREFIX/$STATUS_FILE"
         val statusBaseline = gitShow(T87_BASELINE, statusPath)
@@ -440,6 +469,12 @@ class ScanBlankDecodingWiringGuardTest {
 
         /** T245② 授权改过 ScanSubmissionGate.kt 的措辞，这一枚反向钉的基点因此前移到这里 */
         const val T245_GATE_BASELINE = "ddf493f"
+
+        /**
+         * T257③：状态机漏斗被授权改过的那一手（第四处静默早退还给判据分档），
+         * 所以 [VIEW_MODEL_FILE] 的逐字节基点前移到这一枚 —— 靶子在本条守卫里当场复算。
+         */
+        const val T257_VIEW_MODEL_BASELINE = "00b0b51"
 
         /** 真码形状（值本身是假的，滚动码的真值永远不该出现在这里） */
         val realCode =

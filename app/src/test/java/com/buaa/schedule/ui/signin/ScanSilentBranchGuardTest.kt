@@ -156,6 +156,13 @@ class ScanSilentBranchGuardTest {
      *
      * 排队被明确排除（本卡的取舍）：签到重复提交比"这次没吃进去"更糟，
      * 所以这里钉的是「没有第二份 inFlight」，而不是「有重试队列」。
+     *
+     * ⚠️ T257 把这一条的**枚数**从 4 重钉成 3，不是放宽，是换形状：
+     * 第四处（`signIn` 那一颗）此前也是 `if (flight.value) return`，但它吞的不是"用户按下去的
+     * 那一下"（那颗按钮早就 `enabled = !inFlight` 按灭了），而是相机按帧递进来的滚动码 ——
+     * 那条路没有任何按钮可灭，吃掉就是纯静默。现在它走 [ScanFlightAdmission] 分档、
+     * 卡面一句 + `Log.w` 一行。剩下三处仍然按原样钉住：它们对应的三颗按钮都按灭着，
+     * "点不动"就是它们的那一句实话（本条的第二半）。
      */
     @Test
     fun inFlightTapsDisableTheAffordanceInsteadOfVanishing() {
@@ -163,9 +170,20 @@ class ScanSilentBranchGuardTest {
         assertEquals("inFlight 有了第二个来源：", 1, occurrences(vm, "MutableStateFlow(false)"))
         assertFalse("还留着裸 Boolean 的 inFlight（界面就读不到它）：", vm.contains("private var inFlight"))
         assertTrue("inFlight 没作为 StateFlow 暴露出去：", vm.contains("val inFlight: StateFlow<Boolean>"))
-        // 三处吞动作的守卫读的都是那颗 flow
-        assertEquals("if (flight.value) return 应当有 4 处（signIn/reset/reportNoQrCode/reportGalleryBlocked）：",
-            4, occurrences(vm, "if (flight.value) return"))
+        // 三处吞动作的守卫读的都是那颗 flow（第四处 signIn 已被 T257 换成"分档 + 说话"）
+        assertEquals(
+            "if (flight.value) return 应当有 3 处（reset/reportNoQrCode/reportGalleryBlocked，" +
+                "对应的三颗按钮都由 enabled = !inFlight 按住；signIn 那一处已换成判据分档）：",
+            3,
+            occurrences(vm, "if (flight.value) return"),
+        )
+        // 靶子：枚数从 4 降到 3 是有实物的 —— signIn 真的改走了判据，不是把守卫数错地方
+        assertEquals("状态机漏斗问判据的落点只许一处：", 1, occurrences(vm, "scanFlightAdmission("))
+        assertEquals(
+            "丢掉那一手没有独立的说话那颗（调用点 + 定义应当两处，少一处就是又回到静默早退）：",
+            2,
+            occurrences(vm, "tellDroppedArrival("),
+        )
         assertFalse("签到入口在排队重投（本卡明确不许）：", vm.contains("Channel<") || vm.contains("enqueue"))
 
         val screen = withoutComments(readMainSource(SCAN_SCREEN_FILE))
