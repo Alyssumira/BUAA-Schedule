@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.compose.ui.graphics.toArgb
 import com.buaa.schedule.core.designsystem.courseColor
 import com.buaa.schedule.domain.model.Course
+import com.buaa.schedule.domain.model.EffectiveReminderSetting
 import com.buaa.schedule.domain.model.ReminderSetting
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
@@ -35,7 +36,6 @@ import java.time.ZoneId
 object ReminderScheduler {
 
     private const val TAG = "ReminderScheduler"
-    private const val DEFAULT_ADVANCE_MINUTES = 10
 
     /**
      * 课前提醒闹钟槽位窗口的**第一格** requestCode。
@@ -76,6 +76,16 @@ object ReminderScheduler {
         /** 这一次上课落在第几周：课前实况的「第 N 周」取它，与 [segment] 同为"这一次"的属性 */
         val week: Int,
         /**
+         * 这一提前量的**出处**（T214 病灶 B，#264）：读来的行，还是"库里没有那一行"按默认造的。
+         *
+         * 病灶的形态是「没设过」被读成「设了、且开着」而无人交代。行为口径本身没改
+         * （默认仍然是开启 + [com.buaa.schedule.domain.model.ReminderSetting.DEFAULT_ADVANCE_MINUTES] 分钟，
+         * 那两枚常量全仓只有一处字面量），改的是**这一档必须说得出自己是哪一档**：
+         * 排查现场时 `toString()` 里就带着它，用户看得见的那一句在编辑器「提醒」那一组
+         * （`ui/editor/CourseEditorScreen.kt` 的 `editorReminderSectionSummary`）。
+         */
+        val settingBasis: EffectiveReminderSetting.Basis,
+        /**
          * 与这一条**同一触发时刻**并列的其余各门（不含自己）。
          *
          * 只有等首（[planTiedReminders] 交出来的那一条）这一格非空，伙伴自己那一格恒为
@@ -95,7 +105,7 @@ object ReminderScheduler {
      *
      * @return 本轮排上的那**一等**课前提醒里的等首（[ReminderPlan.sameInstantPartners] 带着
      *   一起排出去的其余各门，最多 [MAX_TIED_REMINDERS] 枚闹钟）；null 表示本轮没有待触发的课前提醒
-     *   （没配学期 / 课表为空 / 学期已结束 / 提醒全关）。
+     *   （没配学期 / 课表为空 / 学期已结束 / 提醒全关 / 课的周次全在学期外）。
      *   ⚠️ null **不等于**"课堂侧状态已经被收干净"：此刻正处在课堂窗口内（正在上课，
      *   或在数着一节还没开始的课的课前倒计时）时那道撤销会被跳过
      *   （见 [shouldTakeDownClassProgress]），清理交给调用方的续排链
@@ -106,6 +116,9 @@ object ReminderScheduler {
      * 它自己再搜一遍等于把 O(课程数 × 剩余周次 × 节次段) 的窗口展开在一次唤醒里做两遍
      * （学期中段上千次窗口构造），而且外层那一遍必须再读一次时钟——
      * 正好破掉下面那段"一次重排只读一次时钟"的同源约束。
+     *
+     * [semester] 同时是**总周数**的唯一出处（`semester.totalWeeks`）：T214 病灶 A 之前这里只把
+     * `semester.startLocalDate` 递给两条链，`totalWeeks` 全程没当判据用过。
      */
     fun rescheduleAll(
         context: Context,
@@ -115,6 +128,9 @@ object ReminderScheduler {
         reminders: Map<Long, ReminderSetting> = emptyMap(),
     ): ReminderPlan? {
         val semesterStart = semester?.startLocalDate
+        // 学期行在不在，决定了"这一周在不在学期内"判不判得出来：null 那一档由 TermWeekGate
+        // 答"不放行"（与展示侧的 showAllCoursesWithoutWeek 故意不对称，理由见那枚内核的第 3 条口径）
+        val totalWeeks = semester?.totalWeeks
         if (semesterStart == null || courses.isEmpty()) {
             cancelAll(context)
             // 只撤课前提醒还不够：上下课铃、常驻通知与勿扰都得收干净，
@@ -132,10 +148,11 @@ object ReminderScheduler {
         // 拿 `nowMillis` 判"触发时刻过了没有"，两次各读各的就会在跨秒那一刻自相矛盾
         // （表现为提前量刚好用尽的那节课被跳过，链条跳到下周）。
         val now = LocalDateTime.now()
-        val plan = planOnce(courses, semesterStart, timeSlots, reminders, now)
+        val plan = planOnce(courses, semesterStart, totalWeeks, timeSlots, reminders, now)
         cancelAll(context)
         if (plan == null) {
-            // 没有下一条提醒（提醒全关 / 学期已结束）**不等于**课堂侧状态也该当场收干净。
+            // 没有下一条提醒（提醒全关 / 学期已结束 / 课的周次全在学期外那几周上）**不等于**
+            // 课堂侧状态也该当场收干净。
             // 此前这里无条件 ClassProgressScheduler.cancelAll，实测（emulator-5554、ed70a1d）
             // 「课前提醒全关」的用户每重排一次，正在上的那节课就被强制恢复勿扰
             // （ZenModeController 20:06:05.450 →0）、约 5 秒后再被紧随其后的续排链补回来
@@ -154,6 +171,7 @@ object ReminderScheduler {
             val takenDown = takeDownClassProgressIfNeeded(
                 courses = courses,
                 semesterStart = semesterStart,
+                totalWeeks = totalWeeks,
                 timeSlots = timeSlots,
                 classProgressEnabled = classProgress,
                 dndEnabled = dndEnabled,
@@ -200,6 +218,8 @@ object ReminderScheduler {
                 context = context,
                 courses = courses,
                 semesterStart = semesterStart,
+                // 同一次重排的同一枚学期行：这里不传就是"屏上画不到的那一周照样排铃、照样挂勿扰"（#263）
+                totalWeeks = totalWeeks,
                 timeSlots = timeSlots,
             )
             if (!bellsArmed) {
@@ -292,6 +312,7 @@ object ReminderScheduler {
     internal fun takeDownClassProgressIfNeeded(
         courses: List<Course>,
         semesterStart: LocalDate,
+        totalWeeks: Int?,
         timeSlots: List<TimeSlot>,
         classProgressEnabled: Boolean,
         dndEnabled: Boolean,
@@ -302,6 +323,7 @@ object ReminderScheduler {
         val due = shouldTakeDownClassProgress(
             courses = courses,
             semesterStart = semesterStart,
+            totalWeeks = totalWeeks,
             timeSlots = timeSlots,
             classProgressEnabled = classProgressEnabled,
             dndEnabled = dndEnabled,
@@ -335,6 +357,8 @@ object ReminderScheduler {
      * "在不在数这节课的课前倒计时"由 [countingDownTo] 注入（生产传
      * [ReminderNotifications.ownsCountdownTo]），带判据的那份清理实现仍然只有
      * [ClassProgressScheduler.rescheduleWindows] 一处（它在 `:280-291` 用的就是同一对状态）。
+     * **"这一周在不在学期内"也不在这里重写**：它由 [totalWeeks] 递给窗口那一读，
+     * 判据本体是 [TermWeekGate.isInTermWeek]（与展示侧同一把尺，见那枚内核的三条口径）。
      *
      * **论证 1 —— 为什么放过这一判不会变成"永远收不掉"**：能走到这里说明窗口就在眼前，
      * 而那一发上课铃不是别处来的：课前提醒的广播（`ReminderReceiver.kt:44-62`）在下发倒计时的
@@ -367,6 +391,7 @@ object ReminderScheduler {
     internal fun shouldTakeDownClassProgress(
         courses: List<Course>,
         semesterStart: LocalDate,
+        totalWeeks: Int?,
         timeSlots: List<TimeSlot>,
         classProgressEnabled: Boolean,
         dndEnabled: Boolean,
@@ -379,6 +404,9 @@ object ReminderScheduler {
             semesterStart = semesterStart,
             timeSlots = timeSlots,
             now = now,
+            // 这一读也是排铃判据的一环（"还在不在上课"决定收不收勿扰），所以 totalWeeks 必须递进去：
+            // 屏上画不到的那一周不算"正在上课"，也就没有"这一节的勿扰别动"可保护
+            totalWeeks = totalWeeks,
         ) ?: return true
         if (window.ongoingAt(now.toEpochMillis())) return false
         return !countingDownTo(window.courseId, window.startMillis)
@@ -396,18 +424,20 @@ object ReminderScheduler {
     internal fun planOnce(
         courses: List<Course>,
         semesterStart: LocalDate,
+        totalWeeks: Int?,
         timeSlots: List<TimeSlot>,
         reminders: Map<Long, ReminderSetting>,
         now: LocalDateTime,
         search: (
             List<Course>,
             LocalDate,
+            Int?,
             List<TimeSlot>,
             Map<Long, ReminderSetting>,
             LocalDateTime,
             Long,
         ) -> ReminderPlan? = ::planNextReminder,
-    ): ReminderPlan? = search(courses, semesterStart, timeSlots, reminders, now, now.toEpochMillis())
+    ): ReminderPlan? = search(courses, semesterStart, totalWeeks, timeSlots, reminders, now, now.toEpochMillis())
 
     /**
      * 纯函数：挑出「下一个应触发的提醒」那一**等**的全部课程。
@@ -423,15 +453,27 @@ object ReminderScheduler {
      *   所以返回的是"最小键那一等"，不是"全部候选"。
      *
      * 零 android、零时钟：[now] / [nowMillis] / [zone] 全由参数给（本仓收单硬口径）。
+     * 学期边界同样**当参数给**（[semesterStart] + [totalWeeks]）：本函数与它调的
+     * [nextOccurrence] 都不读库、不读钟，也不许在这里再写一遍 `week <= totalWeeks`
+     * —— 那一判只有 [TermWeekGate.isInTermWeek] 一枚，而它委托给展示侧同一把尺。
+     *
+     * 提醒那一档同样当参数给（[reminders] 就是那一行，可能没有）：三档判定
+     * （有行且开 / 有行但关 / 没有行按默认）的唯一实现是
+     * [EffectiveReminderSetting.of]，这里不写第二份 `?:` 兜底，结论的出处带在
+     * [ReminderPlan.settingBasis] 上。
+     *
+     * @param totalWeeks 学期总周数；null = 没有学期行可问 ⇒ [TermWeekGate] 答"不放行"
+     *   （排铃侧与展示侧在这一档故意不对称，理由写在 [TermWeekGate] 的第 3 条口径）
      *
      * @return 等首在前的那一等（等首的 [ReminderPlan.sameInstantPartners] 带着其余各门）；
      *   没有可排候选时是**空表**（不是 null —— 这条判据不再需要"空表还是 null"的第二档）。
      *   次序按课程 id 升序，那只是**槽位分配**的稳定序：同一节课表重排两次落到同样的槽位上，
-     *   它不取舍任何一门课（取舍只有"触发时刻已过"与"提醒被关掉"两条）。
+     *   它不取舍任何一门课（取舍只有"触发时刻已过"、"提醒被关掉"与"周次全在学期外"三条）。
      */
     fun planTiedReminders(
         courses: List<Course>,
         semesterStart: LocalDate,
+        totalWeeks: Int?,
         timeSlots: List<TimeSlot>,
         reminders: Map<Long, ReminderSetting>,
         now: LocalDateTime,
@@ -443,12 +485,14 @@ object ReminderScheduler {
         val gapMinutes = periodGapMinutesOf(slots)
         val candidates = courses.asSequence()
             .mapNotNull { course ->
-                val setting = reminders[course.id]
-                if (setting != null && !setting.enabled) return@mapNotNull null
-                val occurrence = nextOccurrence(course, semesterStart, slots, gapMinutes, now)
+                // 三档只此一份取法（改前这里是两行：`if (setting != null && !setting.enabled) return` +
+                // `setting?.advanceMinutes ?: 10` —— 库里没有那一行时前一句放行、后一句造出一枚提前量，
+                // 于是"没设过"被读成"设了、且开着"，而且这两处都说不清自己是哪一档）
+                val effective = EffectiveReminderSetting.of(reminders[course.id])
+                if (!effective.enabled) return@mapNotNull null
+                val occurrence = nextOccurrence(course, semesterStart, totalWeeks, slots, gapMinutes, now)
                     ?: return@mapNotNull null
-                val advanceMinutes =
-                    CourseConstraints.normalizeAdvanceMinutes(setting?.advanceMinutes ?: DEFAULT_ADVANCE_MINUTES)
+                val advanceMinutes = CourseConstraints.normalizeAdvanceMinutes(effective.advanceMinutes)
                 val triggerAt = occurrence.classStart.atZone(zone).toInstant().toEpochMilli() -
                     advanceMinutes * 60_000L
                 if (triggerAt <= nowMillis) return@mapNotNull null
@@ -459,6 +503,7 @@ object ReminderScheduler {
                     advanceMinutes = advanceMinutes,
                     triggerAtMillis = triggerAt,
                     week = occurrence.week,
+                    settingBasis = effective.basis,
                 )
             }
             .toList()
@@ -495,13 +540,15 @@ object ReminderScheduler {
     fun planNextReminder(
         courses: List<Course>,
         semesterStart: LocalDate,
+        totalWeeks: Int?,
         timeSlots: List<TimeSlot>,
         reminders: Map<Long, ReminderSetting>,
         now: LocalDateTime,
         nowMillis: Long,
         zone: ZoneId = ZoneId.systemDefault(),
-    ): ReminderPlan? = planTiedReminders(courses, semesterStart, timeSlots, reminders, now, nowMillis, zone)
-        .firstOrNull()
+    ): ReminderPlan? = planTiedReminders(
+        courses, semesterStart, totalWeeks, timeSlots, reminders, now, nowMillis, zone,
+    ).firstOrNull()
 
     fun cancelAll(context: Context) {
         val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
@@ -604,16 +651,28 @@ object ReminderScheduler {
      *
      * 缺时间表时跳过该段，不兜底成 08:00：那会凭空造出一节 8 点的课，
      * 让一门没有任何时间信息的课每天早上被提醒一次（与课堂窗口同一取舍）。
+     *
+     * **周次先过 [TermWeekGate.isInTermWeek] 再生成日期**（T214 病灶 A，与
+     * [ClassProgressScheduler] 的 `nextOrCurrentWindow` 同一判据、同一条链）：
+     * 超出 `totalWeeks` 的那几周在周课表上是空的（展示侧 `WeekCalculator.currentWeekOrNull` 判 null），
+     * 改前这里照旧 `plusWeeks(week - 1)` 生成日期、照旧排闹钟。越界周次是**跳过**，
+     * 不是把整门课丢掉 —— `weeks = [1, 2, 17]` 的课在第 1、2 周继续照响。
+     *
+     * 日期那一行保持 `semesterStart.plusWeeks(week - 1)` 原样（锚点归一是
+     * `domain/model/Semester.kt` 的 `startLocalDate` 那一处的活儿，改它属于另一张卡）：
+     * 生产递进来的学期起点一律已过 `mondayOfWeekAnchor`，与判据内部那一周周一无关紧要地一致。
      */
     private fun nextOccurrence(
         course: Course,
         semesterStart: LocalDate,
+        totalWeeks: Int?,
         slots: Map<Int, Pair<LocalTime, LocalTime>>,
         gapMinutes: (Int, Int) -> Long?,
         now: LocalDateTime,
     ): Occurrence? {
         val segments = course.periods.toPeriodSegments(gapMinutes)
         for (week in course.weeks.sorted()) {
+            if (!TermWeekGate.isInTermWeek(week, semesterStart, totalWeeks)) continue
             val date = semesterStart.plusWeeks((week - 1).toLong())
                 .plusDays((course.dayOfWeek - 1).toLong())
             for (segment in segments) {

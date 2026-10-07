@@ -46,6 +46,8 @@ class ClassProgressRescheduleFailureReportTest {
     private fun input() = NextWindowInput(
         courses = emptyList(),
         semesterStart = LocalDate.of(2026, 9, 7),
+        // 缝上那一格现在带总周数（T214 病灶 A）：seam 的本体不判周次，这里给一档合法的数就行
+        totalWeeks = 16,
         timeSlots = emptyList(),
     )
 

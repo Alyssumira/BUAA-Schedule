@@ -66,6 +66,7 @@ import com.buaa.schedule.core.designsystem.motionSpec
 import com.buaa.schedule.core.designsystem.swatchPlaceholderColor
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.CourseSaveOptions
+import com.buaa.schedule.domain.model.EffectiveReminderSetting
 import com.buaa.schedule.domain.model.NO_PERIOD_GAP
 import com.buaa.schedule.domain.model.ReminderSetting
 import com.buaa.schedule.domain.model.toPeriodSegments
@@ -121,8 +122,12 @@ fun CourseEditorScreen(
     }
     var colorIndex by rememberSaveable { mutableIntStateOf(initialCourse?.colorIndex ?: 0) }
     var customColor by rememberSaveable { mutableStateOf(initialCourse?.customColorArgb) }
-    var reminderEnabled by rememberSaveable { mutableStateOf(initialReminder?.enabled ?: true) }
-    var advanceMinutes by rememberSaveable { mutableStateOf(initialReminder?.advanceMinutes?.toString() ?: "10") }
+    var reminderEnabled by rememberSaveable { mutableStateOf(initialReminder?.enabled ?: ReminderSetting.DEFAULT_ENABLED) }
+    // 提前量初值 = 那一行里的值；没有那一行时**念得出默认值**（原来这里是一枚裸字面量 "10"，
+    // 与 domain 那枚同源却各写各的 —— 枚数册子由 reminder/ReminderDefaultSingleSourceGuardTest 钉）
+    var advanceMinutes by rememberSaveable {
+        mutableStateOf(initialReminder?.advanceMinutes?.toString() ?: ReminderSetting.DEFAULT_ADVANCE_MINUTES.toString())
+    }
     var partialWeeks by rememberSaveable { mutableStateOf(false) }
     var applyToGroup by rememberSaveable { mutableStateOf(false) }
     var showColorPicker by remember { mutableStateOf(false) }
@@ -525,6 +530,9 @@ fun CourseEditorScreen(
                         title = "开启课前提醒",
                         checked = reminderEnabled,
                         onCheckedChange = { reminderEnabled = it },
+                        // 「没有那一行」是常态（三条写库链都不建行），所以这句口径必须念给用户听，
+                        // 不许只留在日志里 —— 取法与排铃侧同一份，见 editorReminderSectionSummary
+                        summary = editorReminderSectionSummary(initialReminder),
                     )
                     OutlinedTextField(
                         value = advanceMinutes,
@@ -537,7 +545,8 @@ fun CourseEditorScreen(
                         isError = advanceInvalid,
                         supportingText = fieldError(
                             advanceInvalid,
-                            "提前量取 0–${CourseConstraints.MAX_ADVANCE_MINUTES} 分钟，留空按默认",
+                            "提前量取 0–${CourseConstraints.MAX_ADVANCE_MINUTES} 分钟，" +
+                                "留空按默认 ${ReminderSetting.DEFAULT_ADVANCE_MINUTES} 分钟",
                         ),
                     )
                 }
@@ -691,8 +700,29 @@ private fun EditorSection(
     }
 }
 
-/** 提醒默认提前分钟（与编辑器初始值保持一致） */
-private const val DEFAULT_ADVANCE_MINUTES = 10
+/**
+ * 「提醒」那一组开关底下那一句。
+ *
+ * 病灶（#264）：库里**没有那一行**才是常态 —— 教务导入链对 reminders 表只删不建、
+ * 备份恢复只带库里已有的那些行、而下面 [saveCourseDraft] 写那一行时包着
+ * `if (isEditingExisting)`（新建那一路不写）。于是"没设过"被排铃读成"设了、且开着"，
+ * 屏幕上一个字都没说。这里把它说出来：口径照旧（默认开启 + 默认提前量，
+ * 两枚常量只有一处字面量，见 [ReminderSetting] 顶部 KDoc），改的是**它必须让用户看得见**。
+ *
+ * 抽成纯函数是为了 JVM 表驱动单测（`ui/editor/EditorReminderSummaryTest`）：
+ * 三档各摆一格，其中"没有行"那一格必须非空 —— 空了就等于这句口径又回到日志里。
+ * 已有行时返回 null：那一档用户在开关与提前量两格里看得见，不许多占一行。
+ */
+internal fun editorReminderSectionSummary(initialReminder: ReminderSetting?): String? {
+    val effective = EffectiveReminderSetting.of(initialReminder)
+    return if (effective.basis == EffectiveReminderSetting.Basis.NoRowDefaultOn) {
+        "还没为这门课单独设过提醒：按默认口径" +
+            "${if (effective.enabled) "开启" else "不开"}提醒、提前 ${effective.advanceMinutes} 分钟。" +
+            "点保存才会为它写入设置。"
+    } else {
+        null
+    }
+}
 
 /**
  * 保存编排（抽成纯函数以便单测）：
@@ -702,6 +732,11 @@ private const val DEFAULT_ADVANCE_MINUTES = 10
  * 第 2 步必须用 [onSave] 的返回值、而不是原课程 id：部分周次编辑会把选中周次
  * 拆成新行，此时原 id 代表的是“剩余周次”的课程，写回去会让用户实际编辑的
  * 课程丢掉提醒设置（history P1）。
+ *
+ * ⚠️ 第 2 步外面那层 `if (isEditingExisting)` 是「新建的课没有提醒行」这个常态的**第三个出处**
+ * （前两个是导入链与恢复链），本卡有意不收它 —— 收了就是给新建课凭空写一行，
+ * 属于写库链的行为变更，要另开卡配装机验收。它改变的只是"什么时候才有行"，
+ * 不是"没有行时按什么口径"（那一档的口径与用户可见的说明见 [editorReminderSectionSummary]）。
  *
  * @return true 表示保存成功，调用方据此退出编辑器
  */
@@ -720,7 +755,7 @@ internal suspend fun saveCourseDraft(
             savedId,
             reminderEnabled,
             CourseConstraints.normalizeAdvanceMinutes(
-                advanceMinutesText.toIntOrNull() ?: DEFAULT_ADVANCE_MINUTES
+                advanceMinutesText.toIntOrNull() ?: ReminderSetting.DEFAULT_ADVANCE_MINUTES
             ),
         )
     }

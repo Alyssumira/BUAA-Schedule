@@ -1,6 +1,7 @@
 package com.buaa.schedule.reminder
 
 import com.buaa.schedule.domain.model.Course
+import com.buaa.schedule.domain.model.EffectiveReminderSetting
 import com.buaa.schedule.domain.model.ReminderSetting
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -28,6 +29,13 @@ class ReminderTieGroupTest {
 
     /** 学期第 1 周周一 = 2026-09-07 ⇒ 周三 = 09-09；默认节次表第 3 节 09:50 上课 */
     private val semesterStart = LocalDate.of(2026, 9, 7)
+
+    /**
+     * 本文件全部格子都用这一档总周数：`wednesdayCourse` 默认的 `weeks = 1..16` 全在学期内，
+     * 于是"并列"那一判的账不被 T214 病灶 A 的新判据干扰
+     * （越界周次单独在 `reminder/AlarmChainTermWeekBoundaryTest` 那枚文件里摆格子）。
+     */
+    private val TOTAL_WEEKS = 16
 
     private val earlyNow = LocalDateTime.of(2026, 9, 7, 8, 0)
 
@@ -149,6 +157,7 @@ class ReminderTieGroupTest {
             val group = ReminderScheduler.planTiedReminders(
                 courses = cell.courses,
                 semesterStart = semesterStart,
+                totalWeeks = TOTAL_WEEKS,
                 timeSlots = emptyList(),
                 reminders = cell.reminders,
                 now = cell.now,
@@ -169,10 +178,10 @@ class ReminderTieGroupTest {
         val a = wednesdayCourse(9, 3)
         val b = wednesdayCourse(2, 3)
         val forward = ReminderScheduler.planTiedReminders(
-            listOf(a, b), semesterStart, emptyList(), emptyMap(), earlyNow, mills(earlyNow), zone,
+            listOf(a, b), semesterStart, TOTAL_WEEKS, emptyList(), emptyMap(), earlyNow, mills(earlyNow), zone,
         )
         val reversed = ReminderScheduler.planTiedReminders(
-            listOf(b, a), semesterStart, emptyList(), emptyMap(), earlyNow, mills(earlyNow), zone,
+            listOf(b, a), semesterStart, TOTAL_WEEKS, emptyList(), emptyMap(), earlyNow, mills(earlyNow), zone,
         )
 
         assertEquals(2, forward.size)
@@ -193,6 +202,7 @@ class ReminderTieGroupTest {
         val group = ReminderScheduler.planTiedReminders(
             courses = listOf(wednesdayCourse(9, 3), wednesdayCourse(2, 3), wednesdayCourse(7, 3)),
             semesterStart = semesterStart,
+            totalWeeks = TOTAL_WEEKS,
             timeSlots = emptyList(),
             reminders = emptyMap(),
             now = earlyNow,
@@ -224,6 +234,7 @@ class ReminderTieGroupTest {
         val head = ReminderScheduler.planTiedReminders(
             courses = listOf(wednesdayCourse(9, 3), wednesdayCourse(2, 3)),
             semesterStart = semesterStart,
+            totalWeeks = TOTAL_WEEKS,
             timeSlots = emptyList(),
             reminders = emptyMap(),
             now = earlyNow,
@@ -240,6 +251,7 @@ class ReminderTieGroupTest {
         val head = ReminderScheduler.planNextReminder(
             courses = listOf(wednesdayCourse(9, 3), wednesdayCourse(2, 3)),
             semesterStart = semesterStart,
+            totalWeeks = TOTAL_WEEKS,
             timeSlots = emptyList(),
             reminders = emptyMap(),
             now = earlyNow,
@@ -260,6 +272,7 @@ class ReminderTieGroupTest {
             ReminderScheduler.planNextReminder(
                 courses = listOf(wednesdayCourse(2, 3, weeks = listOf(1))),
                 semesterStart = semesterStart,
+                totalWeeks = TOTAL_WEEKS,
                 timeSlots = emptyList(),
                 reminders = emptyMap(),
                 now = late,
@@ -316,6 +329,9 @@ class ReminderTieGroupTest {
                     advanceMinutes = 10,
                     triggerAtMillis = wednesdayThirdTrigger,
                     week = 1,
+                    // 槽位那一判不吃这一格（它只数门数），给一档合法的出处即可：
+                    // 提醒三档的账在 `reminder/ReminderSettingResolutionTest` 里摆
+                    settingBasis = EffectiveReminderSetting.Basis.RowOn,
                 )
             }
             val tied = if (plans.isEmpty()) {

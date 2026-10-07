@@ -35,6 +35,9 @@ class ReminderRescheduleRoundTest {
     private val semesterStart = LocalDate.of(2026, 9, 7) // 周一
     private val zone = ZoneId.of("Asia/Shanghai")
 
+    /** 本文件的课都是 `weeks = 1..16`，这一档让它们全在学期内（越界档见 AlarmChainTermWeekBoundaryTest） */
+    private val TOTAL_WEEKS = 16
+
     private val mondayCourse = Course(
         id = 1,
         name = "高等数学",
@@ -52,14 +55,16 @@ class ReminderRescheduleRoundTest {
         val plan = ReminderScheduler.planOnce(
             courses = listOf(mondayCourse),
             semesterStart = semesterStart,
+            totalWeeks = TOTAL_WEEKS,
             timeSlots = emptyList(),
             reminders = mapOf(1L to ReminderSetting(1, true, 10)),
             now = now,
-        ) { courses, start, slots, reminders, searchedAt, nowMillis ->
+        ) { courses, start, weeks, slots, reminders, searchedAt, nowMillis ->
             rounds++
             searched = ReminderScheduler.planNextReminder(
                 courses = courses,
                 semesterStart = start,
+                totalWeeks = weeks,
                 timeSlots = slots,
                 reminders = reminders,
                 now = searchedAt,
@@ -81,17 +86,22 @@ class ReminderRescheduleRoundTest {
         val now = LocalDateTime.now().minusDays(1)
         var seenNow: LocalDateTime? = null
         var seenMillis = 0L
+        var seenWeeks: Int? = null
 
         ReminderScheduler.planOnce(
             courses = listOf(mondayCourse),
             semesterStart = semesterStart,
+            totalWeeks = TOTAL_WEEKS,
             timeSlots = emptyList(),
             reminders = emptyMap(),
             now = now,
-        ) { courses, start, slots, reminders, searchedAt, nowMillis ->
+        ) { courses, start, weeks, slots, reminders, searchedAt, nowMillis ->
             seenNow = searchedAt
             seenMillis = nowMillis
-            ReminderScheduler.planNextReminder(courses, start, slots, reminders, searchedAt, nowMillis, zone)
+            seenWeeks = weeks
+            ReminderScheduler.planNextReminder(
+                courses, start, weeks, slots, reminders, searchedAt, nowMillis, zone,
+            )
         }
 
         // "这一段还没开始"与"触发时刻过了没有"两个判据必须读同一只钟

@@ -1,6 +1,7 @@
 package com.buaa.schedule.data.backup
 
 import com.buaa.schedule.domain.model.Course
+import com.buaa.schedule.domain.model.ReminderSetting
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.schedule.CourseConstraints
@@ -88,12 +89,16 @@ data class BackupCourse(
 /**
  * 提醒设置按 courseKey（课程内容签名）而不是数据库 id 备份，
  * 这样恢复后即使课程 id 重新生成，提醒也能对回正确的课程。
+ *
+ * ⚠️ 备份**只带库里有的那些行**（导出侧读的是 `getReminders()`），所以"这份备份里没有这门课的提醒"
+ * 与"库里没有那一行"是同一件事，恢复后仍按 [ReminderSetting] 顶部那条默认口径走 ——
+ * 这里的两枚默认值因此必须与 [ReminderSetting] 同源，不许自己写一遍 `10`。
  */
 @Serializable
 data class BackupReminder(
     val courseKey: String,
-    val enabled: Boolean = true,
-    val advanceMinutes: Int = 10,
+    val enabled: Boolean = ReminderSetting.DEFAULT_ENABLED,
+    val advanceMinutes: Int = ReminderSetting.DEFAULT_ADVANCE_MINUTES,
 )
 
 fun Semester.toBackup() = BackupSemester(

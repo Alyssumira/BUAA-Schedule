@@ -1,6 +1,7 @@
 package com.buaa.schedule.reminder
 
 import com.buaa.schedule.domain.model.Course
+import com.buaa.schedule.domain.model.EffectiveReminderSetting
 import com.buaa.schedule.domain.model.ReminderSetting
 import com.buaa.schedule.domain.model.TimeSlot
 import org.junit.Assert.assertEquals
@@ -14,6 +15,9 @@ class ReminderPlannerTest {
 
     private val semesterStart = LocalDate.of(2026, 9, 7) // 周一
     private val zone = ZoneId.of("Asia/Shanghai")
+
+    /** 本文件的课一律 `weeks = 1..16`，配这一档总周数就全在学期内（越界那档见 AlarmChainTermWeekBoundaryTest） */
+    private val TOTAL_WEEKS = 16
 
     private fun course(id: Long, dayOfWeek: Int, startPeriod: Int) = Course(
         id = id,
@@ -40,6 +44,7 @@ class ReminderPlannerTest {
         val plan = ReminderScheduler.planNextReminder(
             courses = listOf(a, b),
             semesterStart = semesterStart,
+            totalWeeks = TOTAL_WEEKS,
             timeSlots = emptyList(),
             reminders = mapOf(1L to ReminderSetting(1, true, 10)),
             now = now,
@@ -61,6 +66,7 @@ class ReminderPlannerTest {
         val plan = ReminderScheduler.planNextReminder(
             courses = listOf(a, b),
             semesterStart = semesterStart,
+            totalWeeks = TOTAL_WEEKS,
             timeSlots = emptyList(),
             reminders = mapOf(
                 1L to ReminderSetting(1, true, 180),
@@ -85,6 +91,7 @@ class ReminderPlannerTest {
         val plan = ReminderScheduler.planNextReminder(
             courses = listOf(a, b),
             semesterStart = semesterStart,
+            totalWeeks = TOTAL_WEEKS,
             timeSlots = emptyList(),
             reminders = mapOf(1L to ReminderSetting(1, true, 240)),
             now = now,
@@ -104,6 +111,7 @@ class ReminderPlannerTest {
         val plan = ReminderScheduler.planNextReminder(
             courses = listOf(a, b),
             semesterStart = semesterStart,
+            totalWeeks = TOTAL_WEEKS,
             timeSlots = emptyList(),
             reminders = mapOf(1L to ReminderSetting(1, false, 10)),
             now = now,
@@ -123,6 +131,7 @@ class ReminderPlannerTest {
         val plan = ReminderScheduler.planNextReminder(
             courses = listOf(a),
             semesterStart = semesterStart,
+            totalWeeks = TOTAL_WEEKS,
             timeSlots = emptyList(),
             reminders = emptyMap(),
             now = now,
@@ -141,6 +150,7 @@ class ReminderPlannerTest {
         val plan = ReminderScheduler.planNextReminder(
             courses = listOf(a),
             semesterStart = semesterStart,
+            totalWeeks = TOTAL_WEEKS,
             timeSlots = emptyList(),
             reminders = emptyMap(),
             now = now,
@@ -150,6 +160,9 @@ class ReminderPlannerTest {
 
         assertEquals(10, plan?.advanceMinutes)
         assertEquals(mills(mondayFirstPeriod) - 10 * 60_000L, plan?.triggerAtMillis)
+        // 行为一字未改（改前也是造一枚 10 分钟），改的是**这一档必须带出处**：
+        // "提醒表里没有这门课的行"从今天起写在结论里，而不是只在调用点的 `?:` 里
+        assertEquals(EffectiveReminderSetting.Basis.NoRowDefaultOn, plan?.settingBasis)
     }
 
     @Test
@@ -169,6 +182,7 @@ class ReminderPlannerTest {
         val plan = ReminderScheduler.planNextReminder(
             courses = listOf(spanning),
             semesterStart = semesterStart,
+            totalWeeks = TOTAL_WEEKS,
             timeSlots = emptyList(),
             reminders = emptyMap(),
             now = now,
@@ -196,6 +210,7 @@ class ReminderPlannerTest {
         val plan = ReminderScheduler.planNextReminder(
             courses = listOf(ghost),
             semesterStart = semesterStart,
+            totalWeeks = TOTAL_WEEKS,
             timeSlots = emptyList(),
             reminders = emptyMap(),
             now = now,

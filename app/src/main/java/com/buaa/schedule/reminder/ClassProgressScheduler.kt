@@ -19,6 +19,8 @@ import com.buaa.schedule.domain.model.periodLabel
 import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.model.toPeriodSegments
 import com.buaa.schedule.domain.model.toStartEndTimes
+import com.buaa.schedule.domain.schedule.SemesterWeekDates
+import com.buaa.schedule.domain.schedule.WeekCalculator
 import com.buaa.schedule.domain.schedule.periodWindowsOf
 import com.buaa.schedule.domain.schedule.toEpochMillis
 import java.time.LocalDate
@@ -62,6 +64,75 @@ private val LOG_RESCHEDULE_WINDOW_FAILURE: (Throwable) -> Unit = {
  */
 private val LOG_BELL_ARM_FAILURE: (reason: String, error: Throwable) -> Unit = { reason, error ->
     Log.w("ClassProgressScheduler", reason, error)
+}
+
+/**
+ * 「这一周在不在学期内」的**唯一**排铃判据（T214 病灶 A，#263）。
+ *
+ * ## 它补的是哪半句话
+ *
+ * 两条排铃链此前只吃 `course.weeks`：周次升序 → `semesterStart.plusWeeks(week - 1)` → 排闹钟。
+ * **`Semester.totalWeeks` 不是判据的参数**，而展示侧那一遍全判它
+ * （[com.buaa.schedule.domain.schedule.WeekCalculator.currentWeekOrNull] 里
+ * `if (week <= 0 || week > totalWeeks) return null`。本卡自己数过：盘面 18 处调用、散在 9 枚文件里
+ * —— `widget/WidgetCommon.kt` 8 处、`ui/home/DayView.kt` 2 处、`reminder/TomorrowPreviewReceiver.kt`
+ * 2 处，`widget/WeekGridWidgetService.kt`、`widget/CourseListWidgetService.kt`、
+ * `ui/home/HomeScreen.kt`、`ui/ScheduleViewModel.kt`、`domain/schedule/TodayPlanner.kt`、
+ * `domain/schedule/ScheduleExporters.kt` 各 1 处；另有两枚同名私有薄壳
+ * `WidgetCommon.kt` / `CourseListWidgetService.kt` 各一处定义）。
+ * 于是 `weeks` 里有超出总周数的值时（教务脏数据、学期行 `totalWeeks` 少报、手动课、旧版本遗留），
+ * **周课表上那一周是空的，闹钟 / 上课铃 / 下课铃 / 自动勿扰却会在那一周照响照挂**。
+ *
+ * ## 三条口径
+ *
+ * 1. **与展示侧同源**：本体不写第二遍 `week <= totalWeeks`，而是把那一周的周一
+ *    （[com.buaa.schedule.domain.schedule.SemesterWeekDates.mondayOf]，也是展示侧翻周那一份）
+ *    喂回 [com.buaa.schedule.domain.schedule.WeekCalculator.currentWeekOrNull]，
+ *    要求它映射回来的教学周**就是这一周**。比较式全仓只有 WeekCalculator 那一处，
+ *    本文件一处都没有 —— 这正是卡面要防的「同一判据两份写法各错各的」。
+ * 2. **零时钟**：`currentWeekOrNull` 的 `today` 形参带着一枚 `LocalDate.now()` 默认值，
+ *    这里**必须**显式递那一周的周一（守卫 `reminder/TermWeekGateSingleSourceGuardTest` 第 ① 层
+ *    按逐字节钉这三格实参）。读默认值那一手 = 判据在函数体内读钟，与同文件 KDoc 的纯函数承诺
+ *    自相矛盾（台账 #265 那一族）。
+ * 3. **判不出就不放行**：`semesterStart` 为 null（没有学期行 / 学期日期解析不出来）或
+ *    `totalWeeks` 为 null（没有学期行）时一律答"不在学期内"。
+ *    与展示侧**故意不对称**，理由要说清：展示侧没有学期行时走
+ *    `ui/home/WeekView.kt` 的 `showAllCoursesWithoutWeek = semester == null` 把课全画出来
+ *    （展示只需要"星期几"，不需要日历时刻，宁多不漏）；排铃侧没有学期行就连"哪一天几点"都算不出来，
+ *    **没有日历起点就没有可以吵醒用户的闹钟**，宁漏不多。今天排铃侧在 `semesterStart == null`
+ *    那一支本来就是整批 `cancelAll`（`ReminderScheduler.rescheduleAll`）+ 读库侧
+ *    `getCurrentSemester() ?: return@load null` 直接早退，这一格答"不放行"与它一致，不是新行为。
+ *
+ * [UNBOUNDED_TOTAL_WEEKS] 是唯一一档"明说不判上界"的输入，只留给展示侧那三处还没收进来的
+ * 调用点（`widget/WidgetCommon.kt` 两处、「实况重挂」`reminder/LiveClassResyncer.kt` 一处，
+ * 它们改起来要动本卡白名单外的文件 ⇒ 台账里登记的跨卡那一格）。排铃两条链**不许**用它。
+ */
+object TermWeekGate {
+
+    /**
+     * "这一档调用方明说自己不判学期上界"的输入值。
+     *
+     * ⚠️ 它是**展示侧的历史包袱**，不是第二枚"默认值"：排铃两条链的 `totalWeeks` 是必填参数，
+     * 拿不到学期行时传 null（判不出 ⇒ 不放行），传这一枚就是把自己退回病灶本身。
+     * 第 ② 层守卫数的是"带这一枚默认值的调用点里，`reminder/` 那两条链一处都不许有"。
+     */
+    const val UNBOUNDED_TOTAL_WEEKS: Int = Int.MAX_VALUE
+
+    /**
+     * 纯 JVM 判据：教学周 [week] 落不落在「[semesterStart] 开学、共 [totalWeeks] 周」这一学期里。
+     *
+     * @param week 待判的教学周序号（1 基，来自 `course.weeks`，可能是脏数据里的 0 / 负数 / 越界值）
+     * @param semesterStart 开学日期；null = 没有学期行或那一行解析不出日期
+     * @param totalWeeks 学期总周数；null = 没有学期行可问
+     * @return 越上界、越下界、判不出 ⇒ false（不放行）
+     */
+    fun isInTermWeek(week: Int, semesterStart: LocalDate?, totalWeeks: Int?): Boolean {
+        val start = semesterStart ?: return false
+        val bound = totalWeeks ?: return false
+        // 越下界在这一格里由"没有这一周"交代：SemesterWeekDates.mondayOf 对 week < 1 交 null
+        val weekMonday = SemesterWeekDates.mondayOf(start, week) ?: return false
+        return WeekCalculator.currentWeekOrNull(start, bound, weekMonday) == week
+    }
 }
 
 /**
@@ -212,19 +283,27 @@ object ClassProgressScheduler {
      * 注意包含**正在上课**的那一次：此前只找 `now` 之后的开始时间，
      * 于是"上课进行中"会跳到再下一节，与本类下课铃撤销本次通知的口径不一致。
      * 纯函数，可单测。
+     *
+     * @param totalWeeks 学期总周数，喂给 [TermWeekGate.isInTermWeek]：**排铃两条链必须显式递它**
+     *   （`rescheduleWindows` 与 `ReminderScheduler.shouldTakeDownClassProgress`，守卫第 ② 层数调用点）。
+     *   默认值 [TermWeekGate.UNBOUNDED_TOTAL_WEEKS] = "这一处调用方明说不判上界"，
+     *   它今天只属于展示侧那三处没收进来的调用点（改它们要动本卡白名单外的
+     *   `widget/WidgetCommon.kt` 与 `reminder/LiveClassResyncer.kt` ⇒ 回执「需要跨卡配合」那一节），
+     *   **不是**第二枚"默认值"：拿不到学期行的排铃侧传的是 null，那一档答"不在学期内"。
      */
     fun planNextClassWindow(
         courses: List<Course>,
         semesterStart: LocalDate,
         timeSlots: List<TimeSlot>,
         now: LocalDateTime,
+        totalWeeks: Int? = TermWeekGate.UNBOUNDED_TOTAL_WEEKS,
     ): ClassWindow? {
         val slots = (if (timeSlots.isNotEmpty()) timeSlots else TimeSlotProfile.DEFAULT)
             .toStartEndTimes()
         val gapMinutes = periodGapMinutesOf(slots)
         val (course, window) = courses.asSequence()
             .mapNotNull { candidate ->
-                nextOrCurrentWindow(candidate, semesterStart, slots, gapMinutes, now)
+                nextOrCurrentWindow(candidate, semesterStart, totalWeeks, slots, gapMinutes, now)
                     ?.let { candidate to it }
             }
             .filter { (_, window) -> window.end.isAfter(window.begin) }
@@ -254,16 +333,22 @@ object ClassProgressScheduler {
      * 窗口本身（哪一段、几点到几点、缺时间怎么兜）由
      * [com.buaa.schedule.domain.schedule.periodWindowsOf] 给 —— 界面 Hero 与桌面组件
      * 读的是同一份，三处各写一遍时"缺下课时间"就有三种答案。
+     *
+     * **周次先过 [TermWeekGate.isInTermWeek] 再算日期**（T214 病灶 A）：屏上那一周画不到，
+     * 这一节就不该有上课铃、下课铃与自动勿扰。越界的周次是**跳过**而不是截断整门课 ——
+     * 一门 `weeks = [1, 2, 17]`、学期只有 16 周的课仍然在第 1、2 周照响。
      */
     private fun nextOrCurrentWindow(
         course: Course,
         semesterStart: LocalDate,
+        totalWeeks: Int?,
         slots: Map<Int, Pair<LocalTime, LocalTime>>,
         gapMinutes: (Int, Int) -> Long?,
         now: LocalDateTime,
     ): SegmentWindow? {
         val gapSegments = course.periods.toPeriodSegments(gapMinutes)
         for (week in course.weeks.sorted()) {
+            if (!TermWeekGate.isInTermWeek(week, semesterStart, totalWeeks)) continue
             val date = semesterStart.plusWeeks((week - 1).toLong())
                 .plusDays((course.dayOfWeek - 1).toLong())
             val window = periodWindowsOf(course, date, slots, gapSegments)
@@ -297,6 +382,9 @@ object ClassProgressScheduler {
      * 或勿扰（典型场景：用户把正在上 / 刚上完的那门课删了，重排后直接跳到下周），
      * 必须先收干净，否则那条通知会一直留到下一节课下课、勿扰也会一直关着。
      *
+     * @param totalWeeks 学期总周数，**必填**：这一条是排铃链（上/下课铃 + 自动勿扰），
+     *   屏上画不到的那一周不该有铃。拿不到学期行时传 null（[TermWeekGate] 那一档答"不放行"），
+     *   不许退到 [TermWeekGate.UNBOUNDED_TOTAL_WEEKS]（那是展示侧三处旧调用点的包袱，不是默认值）。
      * @return 本轮**有没有**"该排而没排上"的课堂铃。false 只有一种来源：排铃那两手里至少
      *   有一枚抛了异常（每一枚自己都已 `Log.w` 留痕）。挑不出课堂窗口是 true ——
      *   那是"没有可排的铃"，不是"排失败"，把它记成失败会逼调用方去救一个不需要救的现场
@@ -306,6 +394,7 @@ object ClassProgressScheduler {
         context: Context,
         courses: List<Course>,
         semesterStart: LocalDate,
+        totalWeeks: Int?,
         timeSlots: List<TimeSlot>,
     ): Boolean {
         // 先撤掉旧的两个闹钟，再按最新的「尚未结束的最早一次课」重排
@@ -318,6 +407,7 @@ object ClassProgressScheduler {
             semesterStart = semesterStart,
             timeSlots = timeSlots,
             now = now,
+            totalWeeks = totalWeeks,
         )
         if (window == null) {
             cancelAll(context)
@@ -372,6 +462,9 @@ object ClassProgressScheduler {
             NextWindowInput(
                 courses = repository.getDisplayCourses(semester),
                 semesterStart = semesterStart,
+                // 学期行就在手上，总周数就没有"取不到"那一档：这里传的是那一行的真值，
+                // 而不是 UNBOUNDED 那一枚（拿不到学期行的路在上一句已经 return@load null 了）
+                totalWeeks = semester.totalWeeks,
                 timeSlots = repository.getTimeSlots(),
             )
         },
@@ -380,6 +473,7 @@ object ClassProgressScheduler {
                 context = context,
                 courses = input.courses,
                 semesterStart = input.semesterStart,
+                totalWeeks = input.totalWeeks,
                 timeSlots = input.timeSlots,
             )
         },
@@ -422,10 +516,19 @@ object ClassProgressScheduler {
         }
     }
 
-    /** 续排一个课堂窗口要读的三样输入：只在 seam 与生产接线之间传一次，不落任何状态 */
+    /**
+     * 续排一个课堂窗口要读的三样输入 + 那一枚学期行的总周数：只在 seam 与生产接线之间传一次，
+     * 不落任何状态。
+     *
+     * [totalWeeks] 可空不是"大概用不上"：读库侧只有拿到学期行才会构造这一格，所以生产上它恒为非 null；
+     * 类型留成 `Int?` 是为了让 [TermWeekGate] 的"判不出 ⇒ 不放行"那一档在 seam 上也摆得进去
+     * （表驱动单测 `reminder/TermWeekGateTest` 的第五格），而不是在这里再兜一枚假的周数 ——
+     * 台账 #236 那族 `?: 20` 造出「这学期 20 周」的账就是这么来的。
+     */
     internal data class NextWindowInput(
         val courses: List<Course>,
         val semesterStart: LocalDate,
+        val totalWeeks: Int?,
         val timeSlots: List<TimeSlot>,
     )
 

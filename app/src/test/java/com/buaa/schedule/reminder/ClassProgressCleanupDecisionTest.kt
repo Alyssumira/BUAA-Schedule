@@ -52,6 +52,9 @@ import org.junit.Test
 class ClassProgressCleanupDecisionTest {
 
     private val semesterStart = LocalDate.of(2026, 9, 7) // 周一
+
+    /** 本文件的课都只在第 1 周，这一档总周数让它们全部落在学期内（越界档见 AlarmChainTermWeekBoundaryTest） */
+    private val TOTAL_WEEKS = 16
     private val slots = listOf(
         TimeSlot(number = 1, startTime = "08:00", endTime = "08:45"),
         TimeSlot(number = 2, startTime = "08:50", endTime = "09:35"),
@@ -105,6 +108,7 @@ class ClassProgressCleanupDecisionTest {
         val tookDown = ReminderScheduler.takeDownClassProgressIfNeeded(
             courses = courses,
             semesterStart = semesterStart,
+            totalWeeks = TOTAL_WEEKS,
             timeSlots = slots,
             classProgressEnabled = classProgressEnabled,
             dndEnabled = dndEnabled,
@@ -182,6 +186,7 @@ class ClassProgressCleanupDecisionTest {
             ReminderScheduler.shouldTakeDownClassProgress(
                 courses = emptyList(),
                 semesterStart = semesterStart,
+                totalWeeks = TOTAL_WEEKS,
                 timeSlots = slots,
                 classProgressEnabled = true,
                 dndEnabled = true,
