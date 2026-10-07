@@ -68,7 +68,7 @@ class ConflictWizardSettlementReceiverPolicyTest {
     // ---- ① 定性：写库不在行组合 scope 上，dispose 顶不掉它；被吞掉的只有收尾 ----
 
     @Test
-    fun 行组合scope被dispose时写库照样落库而收尾一行都不执行() = runBlocking {
+    fun `行组合scope被dispose时 写库照样落库而收尾一行都不执行`() = runBlocking {
         val gate = CompletableDeferred<Unit>()
         val db = FakeDb(gate)
         val vmScope = newScope()
@@ -101,7 +101,7 @@ class ConflictWizardSettlementReceiverPolicyTest {
     // ---- ② 修好的那一手：同一档 dispose，收尾照样落地 ----
 
     @Test
-    fun 收尾搬到viewModelScope之后同一档dispose不再吞掉记账() = runBlocking {
+    fun `收尾搬到viewModelScope之后 同一档dispose不再吞掉记账`() = runBlocking {
         val gate = CompletableDeferred<Unit>()
         val db = FakeDb(gate)
         val vmScope = newScope()
@@ -133,7 +133,7 @@ class ConflictWizardSettlementReceiverPolicyTest {
      * `shiftedCourses` 里 ⇒ 「账记没记上」与「有没有第二次位移」被并成一判。
      */
     @Test
-    fun 重复位移保护只在收尾记账成立那一档挡得住第二次点击() = runBlocking {
+    fun `重复位移保护只在收尾记账成立那一档挡得住第二次点击`() = runBlocking {
         val cases = listOf(
             Case("收尾挂在行组合 scope（T250 之前的病形状）", diseased = true, wantWrites = 2),
             Case("收尾挂在 viewModelScope（T250① 的修法）", diseased = false, wantWrites = 1),

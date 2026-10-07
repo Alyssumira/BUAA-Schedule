@@ -45,7 +45,7 @@ class ConflictWizardSettlementReceiverWiringGuardTest {
     // ---- ① 族一：本文件里 rememberCoroutineScope 一次都不许多（不按名字钉） ----
 
     @Test
-    fun 向导生产文件里任何换名的行组合scope声明都算违反() {
+    fun `换名的行组合scope声明 在向导生产文件里一枚都不许多`() {
         val code = blankComments(source(WIZARD))
         // 尺 A：标识符本身（import、声明、就地调用一起算）
         assertEquals(
@@ -69,7 +69,7 @@ class ConflictWizardSettlementReceiverWiringGuardTest {
     // ---- ② 族二：每一枚 .launch 的接收者必须落在 viewModelScope 那一族 ----
 
     @Test
-    fun 本文件每一枚launch的接收者都在viewModelScope那一族() {
+    fun `本文件每一枚launch的接收者都在viewModelScope那一族`() {
         val raw = source(WIZARD)
         val code = blankComments(raw)
         val receivers = launchReceivers(code)
@@ -97,7 +97,7 @@ class ConflictWizardSettlementReceiverWiringGuardTest {
     // ---- ③ 那一手点击的形状：立旗在先、收尾在那一枚 viewModelScope 协程体里 ----
 
     @Test
-    fun 点击那一手的收尾协程落在viewModelScope上而记账在体内() {
+    fun `点击那一手的收尾协程落在viewModelScope上而记账在体内`() {
         val code = blankComments(source(WIZARD))
         val hits = indexOfAll(code, ON_CLICK)
         assertEquals(
@@ -137,7 +137,7 @@ class ConflictWizardSettlementReceiverWiringGuardTest {
     // ---- ④ 换名靶子：形状尺点名，逐字节尺失明（本守卫自证免疫） ----
 
     @Test
-    fun 形状尺在换名的那一形上不像逐字节字面量那样失明() {
+    fun `形状尺在换名的那一形上不像逐字节字面量那样失明`() {
         val target = blankComments(ROW_SCOPE_TARGET)
         // 在册那两枚棘轮的尺（逐字节字面量）：靶子里一枚都数不到 ⇒ 那正是被绕过去的那个洞
         assertEquals(
@@ -164,7 +164,7 @@ class ConflictWizardSettlementReceiverWiringGuardTest {
     // ---- ⑤ 两枚调用点不许把这一手抄回目的地层 ----
 
     @Test
-    fun 首页与统计页那两枚回调里不许自己起协程() {
+    fun `首页与统计页那两枚回调里不许自己起协程`() {
         for (relative in listOf(HOME_SCREEN, STATS_SCREEN)) {
             val code = blankComments(source(relative))
             val at = code.indexOf(ENTRY_LAMBDA)
@@ -193,7 +193,7 @@ class ConflictWizardSettlementReceiverWiringGuardTest {
     // ---- ⑥ 卡面 §5 的契约：先例那一手与弹窗层记账位置都不许动 ----
 
     @Test
-    fun 先例那一枚job的次序未动而弹窗层那两枚账没被搬回行内() {
+    fun `先例那一枚job的次序未动而弹窗层那两枚账没被搬回行内`() {
         val code = blankComments(source(WIZARD))
         val apply = functionBody(code, APPLY_SIGNATURE, "applyConflictShift")
         assertEquals(
@@ -236,7 +236,7 @@ class ConflictWizardSettlementReceiverWiringGuardTest {
     // ---- ⑦ 内核纯度：替身那一侧一掺 android 就再也打不开 ----
 
     @Test
-    fun 配套内核只跑在JVM上零android零读钟() {
+    fun `配套内核只跑在JVM上 零android零读钟`() {
         val code = blankComments(sourceOfTestDir(POLICY_TEST))
         for (banned in listOf(
             "import android", "import androidx", "import java.time", "import kotlin.time",
