@@ -191,9 +191,13 @@ class DaySwipeWiringGuardTest {
     fun dayCourseFilterIsRememberedAcrossTheTransition() {
         val at = dayView.indexOf("val dayCourses = ")
         check(at >= 0) { "找不到 val dayCourses = ：那一处过滤挪过家了，这条守卫要跟着改" }
-        val head = dayView.substring(at, at + 60)
+        val head = dayView.substring(at, at + 96)
+        // T266（#344）换了这一行的入参：keys 从 remember(date, courses, semester, semesterStart, week)
+        // 变成 remember(scope, weekdayCourses, termWeekCourses)（两把尺各自的命中集 + 内核选定那一把尺的结论）。
+        // 本格的判据一个字没改：dayCourses 仍旧不许在组合期裸算
         assertTrue("dayCourses 又回到组合期裸算了——AnimatedContent 转场那 140ms 里新旧两页" +
-            "每重组一次就把整张课表过滤+排序一遍：\n$head", head.contains("remember(date, courses, semester"))
+            "每重组一次就把整张课表过滤+排序一遍：\n$head",
+            head.startsWith("val dayCourses = remember(scope, weekdayCourses, termWeekCourses"))
     }
 
     // ---- 靶子定位与词法小工具 ---------------------------------------------------

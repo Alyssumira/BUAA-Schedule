@@ -15,7 +15,8 @@ import java.io.File
  * 四层各用一种钉法（点名写明，红了按消息里的文件名与判据回去看）：
  * - ① 逐字节：门那一行、planner 那一行的整行字面量。
  * - ② 抹注释后找锚点：TodayPlanner 里学期那把尺的三个锚点一处都不许有（它只许执行内核的结论）。
- * - ③ 数出现次数：DayView 里 `semester == null` 零枚、内核调用恰三枚；
+ * - ③ 数出现次数：DayView 里 `semester == null` 恰一枚（只许是顶栏那句「未设置学期」的文案分支）、
+ *   `semester != null` 恰一枚（只许是内核 scopeOf 的 hasSemester 入参）、内核调用恰三枚；
  *   **这一层就是拦「同屏两处又各读一把尺」的那枚**——册子按文件点名 `WeekdayOnly` 这一档落在哪几枚文件里，
  *   DayView 一旦自己判「没设学期 ⇒ 走星期几」，册子立刻多出一枚文件而红。
  * - ④ 读形状：按花括号配平取出 DayScreen 与 TodayHero 两段，读门那枚条件的写法与句子的落点。
@@ -90,10 +91,26 @@ class TodayHeroSingleRulerWiringGuardTest {
             occurrences(dayView, "currentWeekOrNull("),
         )
         assertEquals(
-            "$DAY_VIEW 里又出现 semester == null 的裸判据：没设学期走哪把尺由 TodayScreenRuler.scopeOf 交回，" +
-                "界面自己判一次就会和 Hero 那侧分叉（这正是本卡那句谎话的来源）",
-            0,
+            "$DAY_VIEW 里又出现第二枚 semester == null 的裸判据：没设学期走哪把尺由 TodayScreenRuler.scopeOf " +
+                "交回，界面自己再判一次就会和 Hero 那侧分叉（这正是本卡那句谎话的来源）。" +
+                "允许的那一枚是顶栏「未设置学期」那句文案——它说的是有没有学期行，不是这一天的课怎么取",
+            1,
             occurrences(dayView, "semester == null"),
+        )
+        assertTrue(
+            "$DAY_VIEW 里那一枚 semester == null 不再是顶栏的文案分支（变成了取课/开门的判据）：" +
+                "这一档只许写成 semester == null -> \"未设置学期\"",
+            dayView.contains("semester == null -> \"未设置学期\""),
+        )
+        assertEquals(
+            "$DAY_VIEW 里 semester != null 的裸判据枚数漂了：只许出现在内核 scopeOf 的 hasSemester 入参处，" +
+                "它是递给内核的**已算好的值**，不是界面自己那把尺",
+            1,
+            occurrences(dayView, "semester != null"),
+        )
+        assertTrue(
+            "$DAY_VIEW 里 semester != null 不再是以 hasSemester = 入参的形式交给内核：那就是界面又自己判了一次",
+            dayView.contains("scopeOf(hasSemester = semester != null"),
         )
     }
 
