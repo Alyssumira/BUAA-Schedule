@@ -387,6 +387,7 @@ class SemesterRowPolicyTest {
         val rows: MutableList<Semester> = rows.toMutableList()
         val courseCodes: MutableList<String> = mutableListOf(OTHER, TERM)
         private val pending = mutableListOf<SemesterRenameSaveStep>()
+        private var nextId = (rows.maxOfOrNull { it.id } ?: 0L) + 1L
         var appliedSteps = 0
             private set
 
@@ -410,7 +411,7 @@ class SemesterRowPolicyTest {
                         rows.removeAll(rows.filter { it.termCode == step.termCode }.toSet())
 
                     is SemesterRenameSaveStep.WriteSemesterRow ->
-                        rows += step.semester.copy(id = (rows.maxOfOrNull { it.id } ?: 0L) + 1L)
+                        rows += step.semester.copy(id = nextId++)
                 }
                 appliedSteps++
             }

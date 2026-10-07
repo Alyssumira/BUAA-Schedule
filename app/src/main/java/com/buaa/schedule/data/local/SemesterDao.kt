@@ -31,6 +31,9 @@ interface SemesterDao {
      * （「最近写入的那一行 = 当前学期」），取法在盘上是确定的。
      * 形状守卫 `data/local/SemesterRowShapeGuardTest` 钉这一条 SQL 逐字，
      * 口径本体在 `data/local/SemesterRowPolicy.kt` 的 [pickSemesterRowForTermCode]。
+     *
+     * 旧形状（T249 之前逐字）：`SELECT * FROM semesters WHERE termCode = :termCode LIMIT 1`
+     * —— 全文件三族查询里只有这一族没有 ORDER BY，守卫按「抹掉注释之后 0 处」钉它不许回来。
      */
     @Query("SELECT * FROM semesters WHERE termCode = :termCode ORDER BY id DESC LIMIT 1")
     suspend fun getByTermCode(termCode: String): SemesterEntity?
