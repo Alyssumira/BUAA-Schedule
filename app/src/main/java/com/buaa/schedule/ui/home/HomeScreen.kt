@@ -111,11 +111,37 @@ import com.buaa.schedule.core.designsystem.MotionTokens
 import com.buaa.schedule.data.import.BuaaInPageFetcher
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.startLocalDate
+import com.buaa.schedule.domain.schedule.ConflictDetector
 import com.buaa.schedule.domain.schedule.SemesterWeekDates
 import com.buaa.schedule.ui.ScheduleViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+
+/**
+ * 「这一周到底有没有真的撞」—— 冲突警示的那一维（T222 病灶 2，#306）。
+ *
+ * 改前这一格在页面里是 `state.conflicts.flatMap { listOf(it.first.id, it.second.id) }.toSet()`：
+ * 算出来的是一枚 **id 集合**，`Conflict.weeks` 里那串周次被就地扔掉 ⇒ 周课表在**任何一周**
+ * 都给那张卡挂红色警示图标、读屏照念「与其他课程时间冲突」，而那一周的
+ * `coursesForContent` 里根本没有与它撞的课（一门只在 1-8 周上的课，第 20 周屏上是空的，卡上却挂着冲突旗）。
+ *
+ * 现在按**屏上正在画的那一周**取：`Conflict.weeks` 已经过 `TermWeekGate.weeksInsideTerm`
+ * 裁过学期（ViewModel 那一格递进学期两枚事实），这一格再把剩下的那一维用完 ——
+ * 两处判定共用同一枚判据，页面这一侧零比较式。
+ *
+ * [week] = null 那一档**全部出场**，与 `WeekGrid.coursesForContent` 的
+ * `showAllCoursesWithoutWeek = semester == null` 同一条口径：没有学期行时网格画的是全部课程，
+ * 那一周确实可能真的撞着；有学期却取不到周次（假期）时网格本身就是空网格，这一格给什么都不挂。
+ * 纯 JVM（不碰 Context、不读钟），逐格断言见 `ui/home/ConflictCourseIdsPerWeekTest`。
+ */
+internal fun conflictCourseIdsForWeek(
+    conflicts: List<ConflictDetector.Conflict>,
+    week: Int?,
+): Set<Long> = conflicts
+    .filter { conflict -> week == null || conflict.weeks.contains(week) }
+    .flatMap { conflict -> listOf(conflict.first.id, conflict.second.id) }
+    .toSet()
 
 /**
  * 首页：背景由全局 SceneBackground 提供，这里只负责
@@ -363,8 +389,11 @@ fun HomeScreen(
 
     // 冲突课程 id 集合：周视图/日视图两个分支各算一次（此前是两处重复的 flatMap+toSet），
     // 而且每次重组都重算。这里派生为一个 remember 值，两个分支共用同一份。
-    val conflictCourseIds: Set<Long> = remember(state.conflicts) {
-        state.conflicts.flatMap { listOf(it.first.id, it.second.id) }.toSet()
+    // ⚠️ 键表里必须有 displayWeekNumber（T222/#306）：改前它只键 state.conflicts，
+    // 于是翻到哪一周都是同一枚 id 集合 —— 那一周的格子里根本没有与它撞的课，卡上仍挂冲突旗。
+    // 取数的形状收在 [conflictCourseIdsForWeek] 那一枚纯函数里，页面不写第二遍判据。
+    val conflictCourseIds: Set<Long> = remember(state.conflicts, displayWeekNumber) {
+        conflictCourseIdsForWeek(state.conflicts, displayWeekNumber)
     }
     // 冲突**归并成组**的结果，一条横幅与一枚向导共用（T82）。
     // 改前横幅那句念的是 `state.conflicts.size` —— 那是两两配对的条数：三门课在同一格

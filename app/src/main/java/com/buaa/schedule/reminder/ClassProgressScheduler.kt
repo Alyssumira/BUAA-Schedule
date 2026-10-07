@@ -19,8 +19,6 @@ import com.buaa.schedule.domain.model.periodLabel
 import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.model.toPeriodSegments
 import com.buaa.schedule.domain.model.toStartEndTimes
-import com.buaa.schedule.domain.schedule.SemesterWeekDates
-import com.buaa.schedule.domain.schedule.WeekCalculator
 import com.buaa.schedule.domain.schedule.periodWindowsOf
 import com.buaa.schedule.domain.schedule.toEpochMillis
 import java.time.LocalDate
@@ -67,76 +65,26 @@ private val LOG_BELL_ARM_FAILURE: (reason: String, error: Throwable) -> Unit = {
 }
 
 /**
- * 「这一周在不在学期内」的**唯一**排铃判据（T214 病灶 A，#263）。
+ * 「这一周在不在学期内」那枚判据的**旧名字**（T222，#306 + #307）。
  *
- * ## 它补的是哪半句话
+ * 判据本体已由这张卡从本文件搬进 `domain/schedule/TermWeekGate.kt` —— 搬的理由是"并尺"：
+ * 冲突判定（`domain/schedule/ConflictDetector.kt`）与三条导出链
+ * （`ScheduleOccurrences.build` 喂 ICS 与系统日历、`ScheduleExporters.toWakeUpJson` 喂 WakeUp）
+ * 都在 domain 里，让它们去 import `reminder/` 那一枚 = 让 domain 反向依赖排铃侧，
+ * 而排铃侧本来就 import domain 的 [com.buaa.schedule.domain.schedule.WeekCalculator] 与
+ * [com.buaa.schedule.domain.schedule.SemesterWeekDates]。
  *
- * 两条排铃链此前只吃 `course.weeks`：周次升序 → `semesterStart.plusWeeks(week - 1)` → 排闹钟。
- * **`Semester.totalWeeks` 不是判据的参数**，而展示侧那一遍全判它
- * （[com.buaa.schedule.domain.schedule.WeekCalculator.currentWeekOrNull] 里
- * `if (week <= 0 || week > totalWeeks) return null`。本卡自己数过：盘面 18 处调用、散在 9 枚文件里
- * —— `widget/WidgetCommon.kt` 8 处、`ui/home/DayView.kt` 2 处、`reminder/TomorrowPreviewReceiver.kt`
- * 2 处，`widget/WeekGridWidgetService.kt`、`widget/CourseListWidgetService.kt`、
- * `ui/home/HomeScreen.kt`、`ui/ScheduleViewModel.kt`、`domain/schedule/TodayPlanner.kt`、
- * `domain/schedule/ScheduleExporters.kt` 各 1 处；另有两枚同名私有薄壳
- * `WidgetCommon.kt` / `CourseListWidgetService.kt` 各一处定义）。
- * 于是 `weeks` 里有超出总周数的值时（教务脏数据、学期行 `totalWeeks` 少报、手动课、旧版本遗留），
- * **周课表上那一周是空的，闹钟 / 上课铃 / 下课铃 / 自动勿扰却会在那一周照响照挂**。
+ * **别名不是第二把尺**：这一行不承载任何判据文本，编译期直接折成 domain 那一枚 `object`，
+ * 两条排铃链里那道判据语句（`if (!TermWeekGate.isInTermWeek(week, semesterStart, totalWeeks)) continue`）
+ * 逐字节一字未改 —— 这正是卡面要的"搬家后 `reminder/` 侧零行为改动"的证据，
+ * 守卫 `reminder/TermWeekGateSingleSourceGuardTest` 第 ⑦ 层按别名目标的全限定名钉住它，
+ * 再数"全 `app/src/main` 里 `object TermWeekGate` 恰一处、且长在 domain"。
  *
- * ## 三条口径
- *
- * 1. **与展示侧同源**：本体不写第二遍 `week <= totalWeeks`，而是把那一周的周一
- *    （[com.buaa.schedule.domain.schedule.SemesterWeekDates.mondayOf]，也是展示侧翻周那一份）
- *    喂回 [com.buaa.schedule.domain.schedule.WeekCalculator.currentWeekOrNull]，
- *    要求它映射回来的教学周**就是这一周**。比较式全仓只有 WeekCalculator 那一处，
- *    本文件一处都没有 —— 这正是卡面要防的「同一判据两份写法各错各的」。
- * 2. **零时钟**：`currentWeekOrNull` 的 `today` 形参带着一枚 `LocalDate.now()` 默认值，
- *    这里**必须**显式递那一周的周一（守卫 `reminder/TermWeekGateSingleSourceGuardTest` 第 ① 层
- *    按逐字节钉这三格实参）。读默认值那一手 = 判据在函数体内读钟，与同文件 KDoc 的纯函数承诺
- *    自相矛盾（台账 #265 那一族）。
- * 3. **判不出就不放行**：`semesterStart` 为 null（没有学期行 / 学期日期解析不出来）或
- *    `totalWeeks` 为 null（没有学期行）时一律答"不在学期内"。
- *    与展示侧**故意不对称**，理由要说清：展示侧没有学期行时走
- *    `ui/home/WeekView.kt` 的 `showAllCoursesWithoutWeek = semester == null` 把课全画出来
- *    （展示只需要"星期几"，不需要日历时刻，宁多不漏）；排铃侧没有学期行就连"哪一天几点"都算不出来，
- *    **没有日历起点就没有可以吵醒用户的闹钟**，宁漏不多。今天排铃侧在 `semesterStart == null`
- *    那一支本来就是整批 `cancelAll`（`ReminderScheduler.rescheduleAll`）+ 读库侧
- *    `getCurrentSemester() ?: return@load null` 直接早退，这一格答"不放行"与它一致，不是新行为。
- *
- * [UNBOUNDED_TOTAL_WEEKS] 是唯一一档"明说不判上界"的输入，只留给展示侧那三处还没收进来的
- * 调用点（`widget/WidgetCommon.kt` 两处、「实况重挂」`reminder/LiveClassResyncer.kt` 一处，
- * 它们改起来要动本卡白名单外的文件 ⇒ 台账里登记的跨卡那一格）。排铃两条链**不许**用它。
+ * 为什么用别名而不是给 `ReminderScheduler.kt` 补一行 import：那张卡的白名单只给了本文件，
+ * 越界改它比留一行别名更贵（别名与本文件同包 ⇒ 那一侧那句 `TermWeekGate.isInTermWeek(...)`
+ * 不补 import 也照样解析到 domain 那一枚，一根线都没多）。
  */
-object TermWeekGate {
-
-    /**
-     * "这一档调用方明说自己不判学期上界"的输入值。
-     *
-     * ⚠️ 它是**展示侧的历史包袱**，不是第二枚"默认值"：排铃两条链的 `totalWeeks` 是必填参数，
-     * 拿不到学期行时传 null（判不出 ⇒ 不放行），传这一枚就是把自己退回病灶本身。
-     * 第 ③ 层守卫数的是"带这一枚默认值的调用点里，`reminder/` 那两条链一处都不许有"
-     * （`alarmChainsNeverTakeTheUnboundedDefault`；第 ④ 层再按目录把 `planNextClassWindow` 的
-     * 调用点逐枚点名，两把尺互为备份）。
-     */
-    const val UNBOUNDED_TOTAL_WEEKS: Int = Int.MAX_VALUE
-
-    /**
-     * 纯 JVM 判据：教学周 [week] 落不落在「[semesterStart] 开学、共 [totalWeeks] 周」这一学期里。
-     *
-     * @param week 待判的教学周序号（1 基，来自 `course.weeks`，可能是脏数据里的 0 / 负数 / 越界值）
-     * @param semesterStart 开学日期；null = 没有学期行或那一行解析不出日期
-     * @param totalWeeks 学期总周数；null = 没有学期行可问
-     * @return 越上界、越下界、判不出 ⇒ false（不放行）
-     */
-    fun isInTermWeek(week: Int, semesterStart: LocalDate?, totalWeeks: Int?): Boolean {
-        val start = semesterStart ?: return false
-        val bound = totalWeeks ?: return false
-        // 越下界在这一格里由"没有这一周"交代：SemesterWeekDates.mondayOf 对 week < 1 交 null
-        val weekMonday = SemesterWeekDates.mondayOf(start, week) ?: return false
-        return WeekCalculator.currentWeekOrNull(start, bound, weekMonday) == week
-    }
-}
-
+typealias TermWeekGate = com.buaa.schedule.domain.schedule.TermWeekGate
 /**
  * 「课程进行中」常驻通知的调度。
  *

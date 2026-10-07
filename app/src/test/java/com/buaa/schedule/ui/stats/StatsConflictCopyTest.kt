@@ -66,7 +66,9 @@ class StatsConflictCopyTest {
         val a = course("高等数学", day = 1, periods = listOf(3, 4), weeks = (1..8).toList(), id = 1L)
         val b = course("大学物理", day = 1, periods = listOf(3, 4), weeks = (1..8).toList(), id = 2L)
         val c = course("线性代数", day = 1, periods = listOf(3, 4), weeks = (1..8).toList(), id = 3L)
-        val conflicts = ConflictDetector.findConflicts(listOf(a, b, c))
+        // 两枚 null = 「这一格不判学期」那一档（T222/#306 之后 findConflicts 要收学期两枚实参）：
+        // 本文件钉的是**文案**那几档，周次都是 1..8、本来就在界内 ⇒ 裁与不裁交回同一串周次，逐字维持改前。
+        val conflicts = ConflictDetector.findConflicts(listOf(a, b, c), semesterStart = null, totalWeeks = null)
         assertEquals("两两配对是 3 条", 3, conflicts.size)
         val groups = CourseConflictResolution.groupConflicts(conflicts)
         assertEquals("归并成组是 1 组", 1, groups.size)
@@ -81,7 +83,7 @@ class StatsConflictCopyTest {
         val wed = course("体育", day = 3, periods = listOf(3, 4), weeks = (1..8).toList(), id = 3L)
         val clashWed = course("毛概", day = 3, periods = listOf(3, 4), weeks = (1..8).toList(), id = 4L)
         val groups = CourseConflictResolution.groupConflicts(
-            ConflictDetector.findConflicts(listOf(mon, clashMon, wed, clashWed)),
+            ConflictDetector.findConflicts(listOf(mon, clashMon, wed, clashWed), semesterStart = null, totalWeeks = null),
         )
         assertEquals(2, groups.size)
         assertEquals("有 2 组时间冲突", conflictHeadlineNote(groups.size))
@@ -101,7 +103,9 @@ class StatsConflictCopyTest {
             listOf(course("第一节", 1, listOf(1), (1..8).toList(), 1L), course("第三节", 1, listOf(3), (1..8).toList(), 2L)),
         )
         cases.forEach { courses ->
-            val groups = CourseConflictResolution.groupConflicts(ConflictDetector.findConflicts(courses))
+            val groups = CourseConflictResolution.groupConflicts(
+                ConflictDetector.findConflicts(courses, semesterStart = null, totalWeeks = null),
+            )
             assertEquals(0, groups.size)
             assertEquals("没有冲突时那一块也要开口", "这学期没有撞课的时段", conflictHeadlineNote(groups.size))
         }

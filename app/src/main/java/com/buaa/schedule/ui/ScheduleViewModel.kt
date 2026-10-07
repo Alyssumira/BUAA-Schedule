@@ -482,7 +482,12 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             semester = semester,
             timeSlots = timeSlots,
             currentWeek = currentWeek,
-            conflicts = ConflictDetector.findConflicts(visibleCourses),
+            // 学期两枚事实递进冲突判定（T222/#306）：改前这一格只有 `findConflicts(visibleCourses)`，
+            // 签名里压根没有学期 ⇒ 第 20 周（学期只有 19 周）照样报「存在时间冲突」，
+            // 而同屏顶栏念「共 19 周」、统计页那句「整天没课：周三」是**裁过周次**的。
+            // 递的是当前学期行本身：`semester == null` 时两枚都是 null ⇒ 内核那一档答"判不出 ⇒ 不裁"，
+            // 与周课表 `showAllCoursesWithoutWeek` 的形状对得上（不许在这里兜一枚假周数，台账 #236 那族）。
+            conflicts = ConflictDetector.findConflicts(visibleCourses, semester?.startLocalDate, semester?.totalWeeks),
             loading = false,
             today = today,
         )
@@ -964,7 +969,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 addedCount = selection.addedCount,
                 changedCount = selection.changedCount,
                 keptCount = selection.keptCount,
-                conflicts = ConflictDetector.findConflicts(selection.toWrite),
+                conflicts = ConflictDetector.findConflicts(selection.toWrite, pending.semester.startLocalDate, pending.semester.totalWeeks),
             )
         }
     }
@@ -985,7 +990,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 addedCount = selection.addedCount,
                 changedCount = selection.changedCount,
                 keptCount = selection.keptCount,
-                conflicts = ConflictDetector.findConflicts(selection.toWrite),
+                conflicts = ConflictDetector.findConflicts(selection.toWrite, pending.semester.startLocalDate, pending.semester.totalWeeks),
             )
         }
     }
@@ -1207,7 +1212,9 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             val old = existingMap[ImportPlanner.courseKey(course)]
             old != null && old.weeks != course.weeks
         }
-        val conflicts = ConflictDetector.findConflicts(courses)
+        // 预览那一条链同样递学期（T222/#306）：这一格交出去的 conflicts 会喂给
+        // 「存在 N 组时间冲突」那句与向导的「只改这些周」，假周次在**落库之前**就得裁掉
+        val conflicts = ConflictDetector.findConflicts(courses, semester.startLocalDate, semester.totalWeeks)
         val pending = PendingImport(
             semester = semester,
             courses = courses,

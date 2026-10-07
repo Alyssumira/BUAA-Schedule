@@ -53,6 +53,11 @@ data class OccurrenceBuildResult(
 /**
  * 把课程表展开为“每次实际上课”的课次列表。
  * ICS 导出与系统日历同步共用，保证两者的身份与内容语义一致。
+ *
+ * 展开的**只有学期内的那些周次**（T222，#307）：判据是 [TermWeekGate.isInTermWeek]，
+ * 学期两枚事实从 [Semester] 参数来。这两条链是「离开本应用的数据」，
+ * 所以拿不到学期日期时整批不写（上面那句 `?: return OccurrenceBuildResult(emptyList(), 0)`），
+ * 与展示侧的"没有学期行就把课全画出来"故意不对称。
  */
 object ScheduleOccurrences {
 
@@ -76,6 +81,18 @@ object ScheduleOccurrences {
         var skipped = 0
         for (course in courses) {
             for (week in course.weeks) {
+                // **周次先过学期尺再生成日期**（T222，#307）：这一枚 build 是 ICS 与系统日历**共用**的
+                // 课次展开，改前它 `for (week in course.weeks)` 一格都不裁，于是
+                // `semesterStart.plusWeeks(week - 1)` 把学期结束后那几天也推成真实日期 ——
+                // 用户导出一次，对方日历里就多出一批**本机任何一屏都画不出来**的日程，
+                // 而 UID 是稳定身份（`stableIdFor` 按 课程身份|周次|节次 算），手删了下次同步又被
+                // update 回来。裁掉之后那些课次不进 `occurrences`，`CalendarSyncPlanner` 看到
+                // 映射表里还有它们就把映射连同事件一起删掉 ⇒ 幽灵日程这一侧是**会自己清场**的。
+                // 判据与排铃两条链、冲突判定同一枚（`TermWeekGate`），这里不写第二遍比较式。
+                // 学期这两枚都从**参数**来（`Semester.startLocalDate` / `Semester.totalWeeks`），
+                // 本函数不读库、不读钟；`semesterStart` 取不到时上面那行已经整批返回空
+                // —— 导出侧的"判不出 ⇒ 不写"与排铃侧同口径（离开本应用的数据没有"宁多"这一档）。
+                if (!TermWeekGate.isInTermWeek(week, semesterStart, semester.totalWeeks)) continue
                 for (segment in course.periods.toPeriodSegments(gapMinutes)) {
                     val startSlot = slots[segment.first]
                     val endSlot = slots[segment.last]

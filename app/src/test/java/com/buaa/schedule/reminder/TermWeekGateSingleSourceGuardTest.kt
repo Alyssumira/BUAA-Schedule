@@ -39,19 +39,20 @@ class TermWeekGateSingleSourceGuardTest {
 
     @Test
     fun theKernelHoldsNoSecondCopyOfTheBound() {
-        val code = withoutComments(readMainSource(SCHEDULER_FILE))
-        val kernel = balancedBlock(code, "object TermWeekGate {")
+        // 宿主挪了家（T222 第 ① 步「内核搬家」）：`object TermWeekGate` 从 reminder/ClassProgressScheduler.kt
+        // 搬进 domain/schedule/TermWeekGate.kt —— 本层那一格逐字没改，只把**读哪一枚文件**跟着挪。
+        val kernel = balancedBlock(withoutComments(readMainSource(KERNEL_FILE)), "object TermWeekGate {")
 
         assertEquals(
             "**钉法 = 逐字节**：判据本体必须把那一周的周一喂回展示侧那把尺，并且只认「映射回来的周号就是这一周」。\n" +
-                "复算：grep -Fn '$DELEGATION_LINE' app/src/main/java/$SCHEDULER_FILE\n" +
+                "复算：grep -Fn '$DELEGATION_LINE' app/src/main/java/$KERNEL_FILE\n" +
                 "红了 = 有人把判据改成自己比较 week 与 totalWeeks（第二份写法），本卡要的正是「比较式全仓只有一处」",
             1,
             occurrences(kernel, DELEGATION_LINE),
         )
         assertEquals(
             "**钉法 = 逐字节**：那一周的周一只能取自 SemesterWeekDates（展示侧翻周那一份），" +
-                "不许在判据里再算一遍 plusWeeks。\n复算：grep -Fn '$MONDAY_LINE' app/src/main/java/$SCHEDULER_FILE",
+                "不许在判据里再算一遍 plusWeeks。\n复算：grep -Fn '$MONDAY_LINE' app/src/main/java/$KERNEL_FILE",
             1,
             occurrences(kernel, MONDAY_LINE),
         )
@@ -134,10 +135,18 @@ class TermWeekGateSingleSourceGuardTest {
             .sortedBy { it.first }
             .joinToString(separator = "") { "  ${it.first}: ${it.second} 处\n" }
         assertEquals(
-            "**钉法 = 数出现次数（全 main 册子）**：isInTermWeek 全仓只许三处 = 1 定义（ClassProgressScheduler）" +
-                "+ 2 调用点（两条排铃链各一枚）。第四处 = 又长出一条链或第二份门面；少一处 = 有条链又不判了。\n" +
-                "实到册子：\n$register",
-            "  $SCHEDULER_FILE: 2 处\n  $REMINDER_FILE: 1 处\n",
+            "**钉法 = 数出现次数（全 main 册子）**：`isInTermWeek(` 全仓只许这五处 —— " +
+                "1 定义 + 1 内核里周次表入口的逐周委托（都在 $KERNEL_FILE）" +
+                "+ 2 调用点（两条排铃链各一枚）+ 1 调用点（ICS 与系统日历共用的课次展开，T222 #307）。" +
+                "少一处 = 有条链又不判学期了；册子里长出第六处 = 又一条链挂进来（或是第二份门面）。" +
+                "**冲突侧走的是周次表那一枚入口（`weeksInsideTerm(`），所以它不在这把尺的账上，" +
+                "由第 ⑦ 层与 domain 那枚并尺守卫逐枚点名。**\n实到册子：\n$register",
+            listOf(
+                "  $OCCURRENCES_FILE: 1 处",
+                "  $KERNEL_FILE: 2 处",
+                "  $SCHEDULER_FILE: 1 处",
+                "  $REMINDER_FILE: 1 处",
+            ).joinToString(separator = "\n") + "\n",
             register,
         )
     }
@@ -149,12 +158,14 @@ class TermWeekGateSingleSourceGuardTest {
         val progress = withoutComments(readMainSource(SCHEDULER_FILE))
         val reminder = withoutComments(readMainSource(REMINDER_FILE))
 
+        val kernel = withoutComments(readMainSource(KERNEL_FILE))
         assertEquals(
             "**钉法 = 逐字节**：不判上界那一档全仓只许有一枚声明（`const val UNBOUNDED_TOTAL_WEEKS`）" +
-                "加一处默认值挂法，实到声明 " + occurrences(progress, UNBOUNDED_CONST_DECLARATION) +
+                "加一处默认值挂法；声明跟着内核搬进了 $KERNEL_FILE（T222 第 ① 步），挂法仍在 $SCHEDULER_FILE。" +
+                "实到声明 " + occurrences(kernel, UNBOUNDED_CONST_DECLARATION) +
                 " 处、挂法 " + occurrences(progress, UNBOUNDED_DECLARATION) + " 处",
             1,
-            occurrences(progress, UNBOUNDED_CONST_DECLARATION),
+            occurrences(kernel, UNBOUNDED_CONST_DECLARATION),
         )
         assertEquals(
             "**钉法 = 数出现次数**：UNBOUNDED_TOTAL_WEEKS 全 app/src/main 恰两处（1 定义 + 1 默认值），" +
@@ -347,6 +358,85 @@ class TermWeekGateSingleSourceGuardTest {
         )
     }
 
+    // ─────────────── ⑦ 搬家之后：排铃侧与冲突/导出侧引用的是**同一枚符号** ───────────────
+
+    /**
+     * T222 第 ① 步要求的补充格（卡面："并给它补一格'排铃侧与冲突/导出侧引用的是同一枚符号'"）。
+     *
+     * 静态面三把一起用：
+     * - **数出现次数**：`object TermWeekGate` 全 `app/src/main` 恰一处，且它长在 domain 那一枚文件里
+     *   （`reminder/` 里再长一枚 = 搬家搬出第二把尺）；
+     * - **逐字节**：`reminder/ClassProgressScheduler.kt` 只剩一行别名，别名目标的**全限定名**逐字节钉死
+     *   ⇒ 排铃那两条链写的 `TermWeekGate.isInTermWeek(...)` 编译期折到的就是 domain 那一枚，
+     *     与冲突侧（`ConflictDetector`）、导出侧（`ScheduleOccurrences` / `ScheduleExporters`）
+     *     import 的是同一个包同一个名；
+     * - **读形状（册子）**：引用 `TermWeekGate.` 的文件恰五侧（排铃两 + 冲突一 + 导出二），
+     *   一枚不多一枚不少。
+     *
+     * 红了点名哪一侧：册子里少 `ConflictDetector` = **冲突侧没并尺**；少导出那两枚 = **导出侧没并尺**；
+     * 少 reminder 那两枚 = **排铃侧被摘掉了判据**（#263 的病灶回潮）。
+     */
+    @Test
+    fun alarmChainsAndTheConflictAndExportSidesResolveToOneSymbol() {
+        assertEquals(
+            "**钉法 = 数出现次数**：`object TermWeekGate` 全 app/src/main 恰一处。" +
+                "实到 " + mainOccurrences("object TermWeekGate {") + " 处，出资：\n" +
+                mainSources()
+                    .map { it.relative to occurrences(withoutComments(it.text), "object TermWeekGate {") }
+                    .filter { it.second > 0 }
+                    .sortedBy { it.first }
+                    .joinToString(separator = "") { "  ${it.first}: ${it.second} 处\n" },
+            1,
+            mainOccurrences("object TermWeekGate {"),
+        )
+        assertEquals(
+            "**钉法 = 逐字节**：那一枚必须在 domain 的 $KERNEL_FILE 里（搬回 reminder/ ⇒ 冲突侧与导出侧要反向 import 排铃那一侧）",
+            1,
+            occurrences(withoutComments(readMainSource(KERNEL_FILE)), "object TermWeekGate {"),
+        )
+        assertEquals(
+            "**钉法 = 逐字节**：reminder/ 那一侧只剩这一行别名，目标的全限定名逐字节钉死 —— " +
+                "这一行就是「两条排铃链与冲突/导出三侧引用的是同一枚符号」的证据。实到 " +
+                occurrences(withoutComments(readMainSource(SCHEDULER_FILE)), ALIAS_LINE) + " 处",
+            1,
+            occurrences(withoutComments(readMainSource(SCHEDULER_FILE)), ALIAS_LINE),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数**：别名目标的全限定名全仓恰一处（第二处 = 有人绕过别名直接抄了一条私有副本）",
+            1,
+            mainOccurrences(ALIAS_TARGET),
+        )
+
+        val sides = listOf(
+            SCHEDULER_FILE to "排铃侧·课堂铃",
+            REMINDER_FILE to "排铃侧·课前提醒",
+            CONFLICT_FILE to "冲突侧",
+            OCCURRENCES_FILE to "导出侧·ICS 与系统日历",
+            WAKE_UP_FILE to "导出侧·WakeUp",
+        )
+        val register = sides.joinToString(separator = "\n") { (file, side) ->
+            "$side -> $file：${occurrences(withoutComments(readMainSource(file)), "TermWeekGate.")} 处"
+        }
+        for ((file, side) in sides) {
+            assertTrue(
+                "**钉法 = 读形状**：$side（$file）里必须引用同一枚 `TermWeekGate.` —— 0 处就是**这一侧没并尺**。" +
+                    "\n实到册子：\n$register",
+                occurrences(withoutComments(readMainSource(file)), "TermWeekGate.") > 0,
+            )
+        }
+        val extra = mainSources()
+            .map { it.relative }
+            .filter { it !in sides.map { pair -> pair.first } }
+            .filter { occurrences(withoutComments(readMainSource(it)), "TermWeekGate.") > 0 }
+        assertEquals(
+            "**钉法 = 数出现次数（全 main 册子）**：除这五侧之外不许再有第六枚文件引用 `TermWeekGate.`" +
+                "（组件与实况那几处走的是展示侧那把尺 + UNBOUNDED 那一档，跨卡那一格已登记）。实到多出：\n" +
+                extra.joinToString(separator = "\n") { "  $it" }.ifEmpty { "（无）" },
+            "",
+            extra.joinToString(separator = "\n"),
+        )
+    }
+
     // ---------------- 源码核对小工具（与本仓守卫同一套写法）----------------
 
     private class SourceFile(val relative: String, val text: String)
@@ -478,6 +568,14 @@ class TermWeekGateSingleSourceGuardTest {
         const val WEEK_CALCULATOR_FILE = "com/buaa/schedule/domain/schedule/WeekCalculator.kt"
         const val LIVE_RESYNCER_FILE = "com/buaa/schedule/reminder/LiveClassResyncer.kt"
         const val WIDGET_FILE = "com/buaa/schedule/widget/WidgetCommon.kt"
+
+        // T222 搬家之后的新宿主 + 并尺那三侧（第 ⑦ 层逐枚点名）
+        const val KERNEL_FILE = "com/buaa/schedule/domain/schedule/TermWeekGate.kt"
+        const val CONFLICT_FILE = "com/buaa/schedule/domain/schedule/ConflictDetector.kt"
+        const val OCCURRENCES_FILE = "com/buaa/schedule/domain/schedule/ScheduleOccurrences.kt"
+        const val WAKE_UP_FILE = "com/buaa/schedule/domain/schedule/ScheduleExporters.kt"
+        const val ALIAS_LINE = "typealias TermWeekGate = com.buaa.schedule.domain.schedule.TermWeekGate"
+        const val ALIAS_TARGET = "com.buaa.schedule.domain.schedule.TermWeekGate"
 
         // ① 内核本体
         const val DELEGATION_LINE = "WeekCalculator.currentWeekOrNull(start, bound, weekMonday) == week"

@@ -367,7 +367,9 @@ class ManualTimeOverridePolicyTest {
         )
         var suggestions = 0
         for (courses in schedules) {
-            val groups = CourseConflictResolution.groupConflicts(ConflictDetector.findConflicts(courses))
+            val groups = CourseConflictResolution.groupConflicts(
+                ConflictDetector.findConflicts(courses, semesterStart = null, totalWeeks = null),
+            )
             assertTrue("这一格根本组不出冲突组，喂不进向导", groups.isNotEmpty())
             for (group in groups) {
                 val target = group.courses.firstOrNull() ?: continue

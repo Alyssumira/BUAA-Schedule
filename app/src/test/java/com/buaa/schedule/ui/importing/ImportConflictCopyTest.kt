@@ -40,7 +40,8 @@ class ImportConflictCopyTest {
 
     /** 一批课程经真内核得到的两枚数：两两配对的条数、归并后的组数 */
     private class Clash(courses: List<Course>) {
-        val pairs: List<ConflictDetector.Conflict> = ConflictDetector.findConflicts(courses)
+        val pairs: List<ConflictDetector.Conflict> =
+            ConflictDetector.findConflicts(courses, semesterStart = null, totalWeeks = null)
         val groups: List<CourseConflictResolution.ConflictGroup> = CourseConflictResolution.groupConflicts(pairs)
 
         /** 界面上真正画出来的那几行配对（与 ImportScreen 同一道 take、同一枚常数） */

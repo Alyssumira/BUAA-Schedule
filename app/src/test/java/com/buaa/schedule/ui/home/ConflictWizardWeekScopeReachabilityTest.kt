@@ -65,7 +65,10 @@ class ConflictWizardWeekScopeReachabilityTest {
     )
 
     private fun firstWizardRow(courses: List<Course>): WizardRow {
-        val conflicts = ConflictDetector.findConflicts(courses)
+        // 两枚 null = 「本卡不判学期」那一档（TermWeekGate.weeksInsideTerm 判不出时原样交回），
+        // 于是这一枚可达性测试看到的周次集合与 T222 之前逐字相同 —— 它钉的是「组周 ⊆ target.weeks」
+        // 那一步的形状，不是学期裁剪；学期裁剪那一维归 ConflictDetectorTest 那五档格子。
+        val conflicts = ConflictDetector.findConflicts(courses, semesterStart = null, totalWeeks = null)
         val groups = CourseConflictResolution.groupConflicts(conflicts)
         assertTrue("这格根本组不出冲突组，向导一行都不出", groups.isNotEmpty())
         val group = groups.first()
@@ -78,7 +81,9 @@ class ConflictWizardWeekScopeReachabilityTest {
         // target 在哪些周里其实谁也没撞：把那一周的课单独喂回 findConflicts
         val untouched = target.weeks.filter { week ->
             ConflictDetector.findConflicts(
-                courses.mapNotNull { c -> if (week in c.weeks) c.copy(weeks = listOf(week)) else null }
+                courses.mapNotNull { c -> if (week in c.weeks) c.copy(weeks = listOf(week)) else null },
+                semesterStart = null,
+                totalWeeks = null,
             ).isEmpty()
         }
         return WizardRow(

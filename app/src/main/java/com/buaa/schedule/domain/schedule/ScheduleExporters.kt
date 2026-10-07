@@ -24,6 +24,11 @@ object ScheduleExporters {
      *  导出的门数**可以少于**入参：一条节次都没有（T27）、一条周次都没有（T203/#237）的课整条不写，
      *  调用方要按"写出去了几门"说话，不能拿 courses.size 报数；两档各几门见 [WakeUpDropTally.tally]。
      *
+     *  写出去的 `startWeek`/`endWeek`/`type` **只数学期内的那些周次**（T222/#307）：判据是
+     *  [TermWeekGate.weeksInsideTerm]，上界用的就是同一份 JSON 里那枚 `maxWeek`，
+     *  所以对方 App 不会再拿到一节课在学期结束之后。整门课都在学期外那一档今天**仍然出场**，
+     *  把它判成第三档"没进导出件"要连着改报数那两枚文件 ⇒ 回执「需要跨卡配合」。
+     *
      *  不带 credit：WakeUp 的 courses schema 里没有学分这一列，多写未知键能不能被容忍
      *  取决于对方解析器（不受我们控制），而学分只有本应用的统计页用得上。 */
     fun toWakeUpJson(
@@ -34,10 +39,13 @@ object ScheduleExporters {
         val slots = if (timeSlots.isNotEmpty()) timeSlots else TimeSlotProfile.DEFAULT
         // WakeUp 按「startDate=第 1 周周一」推周次；无学期时用今天兜底必须先归一到周一，
         // 否则对方 App 里整表课程错位最多 6 天
-        val start = WeekCalculator.mondayOf(
+        val startMonday = WeekCalculator.mondayOf(
             runCatching { LocalDate.parse(semester?.startDate ?: LocalDate.now().toString()) }
                 .getOrDefault(LocalDate.now())
-        ).toString()
+        )
+        val start = startMonday.toString()
+        // 这一枚数同时写进 `maxWeek`（见下面那行）⇒ 它就是这份导出件自己声明的学期上界，
+        // 周次裁剪判的必须是它，不能另找一把尺（T222，#307）
         val totalWeeks = semester?.totalWeeks ?: CourseConstraints.MAX_TOTAL_WEEKS
 
         fun compact(time: String): String = time.replace(":", "") + "00"
@@ -57,7 +65,20 @@ object ScheduleExporters {
             val startNode = course.firstPeriodOrNull ?: return@mapNotNull null
             var step = 0
             while (course.periods.contains(startNode + step)) step++
-            val weeks = course.weeks.sorted()
+            val sortedWeeks = course.weeks.sorted()
+            // 学期外的那些周次不进 startWeek/endWeek/type（T222，#307）：改前这里吃的是**整条**
+            // `course.weeks.sorted()`，而下面 `"maxWeek":$totalWeeks` 写的是学期总周数 ——
+            // 同一份 JSON 里 `endWeek > maxWeek` 就是对方 App 多出来的那几天
+            // （WakeUp 按 `startDate` + `startWeek..endWeek` + `type` 推日期，学期结束后那一周照样排课），
+            // 而那是离开本应用的数据，我们无从收回。
+            // 判据走 [TermWeekGate.weeksInsideTerm]（与排铃两条链、冲突判定、ICS/系统日历同一枚符号），
+            // 递进去的上界就是这份导出件**自己声明**的那一枚 `maxWeek` ⇒ 没有学期行时也在判：
+            // 那一档判不出的是"这学期到底几周"，不是"这一周超出我自己写的范围"。
+            // ⚠️ 整门课都在学期外时（裁完交回空表）这里**照旧让它出场**，不另加一枚 `return@mapNotNull null`：
+            // 那等于多出第三档"没进导出件"，要同时改 `WakeUpDropTally` 的档位与 `wakeUpExportMessage`
+            // 那句报数 —— 两枚文件都不在本卡白名单里（那句的"门 / 段"措辞是 #308 的地盘）
+            // ⇒ 逐字登记进回执「需要跨卡配合」，不在这里顺手改。
+            val weeks = TermWeekGate.weeksInsideTerm(sortedWeeks, startMonday, totalWeeks).ifEmpty { sortedWeeks }
             val startWeek = weeks.firstOrNull() ?: return@mapNotNull null // 改前是 `?: 1`：空周次造出"第 1-1 周"（#237）
             val endWeek = weeks.last() // 上一行已判非空 ⇒ 改前那枚 `?: startWeek` 是不可达支（T193 那一族）
             val type = when {

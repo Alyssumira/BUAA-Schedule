@@ -62,7 +62,7 @@ class PendingImportConflictGroupTest {
     )
 
     private fun pairsOf(courses: List<Course>): List<ConflictDetector.Conflict> =
-        ConflictDetector.findConflicts(courses)
+        ConflictDetector.findConflicts(courses, semesterStart = null, totalWeeks = null)
 
     private fun groupsOf(pairs: List<ConflictDetector.Conflict>): Int =
         CourseConflictResolution.groupConflicts(pairs).size
@@ -205,9 +205,11 @@ class PendingImportConflictGroupTest {
             occurrences(viewModel, "CourseConflictResolution.groupConflicts("),
         )
         assertEquals(
-            "两处逐条勾选的 copy 站点都还在按子集重算 conflicts（少了就是勾了不重算）",
+            "两处逐条勾选的 copy 站点都还在按子集重算 conflicts（少了就是勾了不重算），" +
+                "而且**两处都还在把当前学期的两枚事实递给判据**（T222/#306 把学期递进 findConflicts，" +
+                "锚点跟着重钉：少了后两个实参 = 这一站又不裁周次了）",
             2,
-            occurrences(viewModel, "conflicts = ConflictDetector.findConflicts(selection.toWrite)"),
+            occurrences(viewModel, CONFLICT_COPY_SITE_WITH_SEMESTER),
         )
         assertTrue(
             "确认卡标题读的仍是 PendingImport 上那枚组数（改回界面就地归并 = 第四处各算各的）",
@@ -244,5 +246,14 @@ class PendingImportConflictGroupTest {
             dir = dir?.parentFile
         }
         throw IllegalStateException("找不到 app/src/main/java：当前目录 ${File("").absolutePath}")
+    }
+
+    private companion object {
+        /**
+         * 逐条勾选那两站的重锚点（T222/#306）：`findConflicts` 的签名里多了学期两枚实参，
+         * 锚点连着把「这一站确实把当前学期的两枚事实递进去了」钉在同一句里。
+         */
+        const val CONFLICT_COPY_SITE_WITH_SEMESTER =
+            "conflicts = ConflictDetector.findConflicts(selection.toWrite, pending.semester.startLocalDate, pending.semester.totalWeeks)"
     }
 }
