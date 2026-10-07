@@ -48,6 +48,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -86,6 +87,9 @@ import com.buaa.schedule.core.designsystem.SceneBackground
 import com.buaa.schedule.core.designsystem.motionSpecFor
 import com.buaa.schedule.core.designsystem.rememberReduceMotion
 import com.buaa.schedule.core.designsystem.BUAAScheduleTheme
+import com.buaa.schedule.domain.editor.EditorDraftIdentity
+import com.buaa.schedule.domain.editor.EditorSaveFinishing
+import com.buaa.schedule.domain.editor.EditorSaveSentinel
 import com.buaa.schedule.ui.ScheduleViewModel
 import com.buaa.schedule.core.designsystem.liquid.LiquidBottomTab
 import com.buaa.schedule.ui.editor.CourseEditorScreen
@@ -1006,12 +1010,45 @@ private fun AppNavHost(
                     navController.popBackStack()
                 }
             }
+            // T260：保存在途这一刻转屏 ⇒ 页面那一支（挂在 `rememberCoroutineScope()` 上）被取消，
+            // 而写库那一半早在 VM 的 viewModelScope 那一枚 job 里跑完了整趟 —— 课已入库，屏幕却退回
+            // 「添加课程」（新建那一路的身份还是 `id = 0L`，草稿又是 rememberSaveable 的），
+            // 用户读作「点了没反应」，再点一次就插出第二门同样的课（台账 #498 那枚「重」）。
+            // 所以结论落在**跨配置变化存活**的那枚 VM 旗上，收尾只消费状态决定退栈：
+            // 页面那一支活着跑到了收尾（tailReported 那格由它自己写）⇒ 归它弹、这里不动；
+            // 它被取消 ⇒ 那一格永远留在 false ⇒ 这里替它弹。两枚认领点结构上互斥，
+            // 不靠时序论证。判据本体在 `domain/editor/EditorSaveFinishing.kt`（七档表驱动单测
+            // EditorSaveFinishingTest 逐格钉着），这一层只把已经算好的值递进去。
+            val editorSaveStage by viewModel.editorSaveStage.collectAsState()
+            // 本条 entry 这一趟保存的号：发起那一刻写进**这一条 entry 的 saveable 槽** ——
+            // 转屏带得走（它随 entry 的 savedState 一起回灌），换 entry 换一份，
+            // 于是别处留下的陈旧结论永远配不上这里：新打开的那页编辑器不替上一趟写库退栈。
+            var editorSaveRequestId by rememberSaveable { mutableLongStateOf(EditorSaveSentinel.NO_REQUEST) }
+            val editorSaveFinish = EditorSaveFinishing.readout(editorSaveStage, editorSaveRequestId)
+                .finish(
+                    if (courseId >= 0L) EditorDraftIdentity.EditingExistingCourse
+                    else EditorDraftIdentity.CreatingNewCourse,
+                )
+            LaunchedEffect(editorSaveFinish) {
+                if (EditorSaveFinishing.claimedByDestination(editorSaveFinish)) {
+                    // 消费排在退栈**之前**，两句之间没有挂起点 ⇒ 这一趟一定弹得出去；消费之后
+                    // 状态归零 ⇒ 任何重启（转屏、键变化）都点不动第二次，不会把用户多往后弹一格。
+                    viewModel.editorSaveConsumed(editorSaveRequestId)
+                    navController.popBackStack()
+                }
+            }
             CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
                 if (!uiState.loading && !courseMissing) {
                     CourseEditorScreen(
                         initialCourse = course,
                         initialReminder = course?.let { c -> reminders.firstOrNull { it.courseId == c.id } },
                         onSave = { edited, options ->
+                            // T260：领号 + 立旗都排在 await **之前**（同删除链那枚旗的理由 ——
+                            // await 之后那一支多半跑不到，旗立不起来就等于没有旗）。
+                            // 号存本条 entry 的 saveable 槽、旗存 VM：一个跨转屏跟着这一条 entry，
+                            // 一个跨转屏跟着整个进程内的这一趟结论。
+                            editorSaveRequestId = viewModel.nextEditorSaveRequestId()
+                            viewModel.editorSaveRequested(editorSaveRequestId)
                             // 写库返回最终落库行 id，null = 失败（编辑器据此保留草稿）
                             val savedId = if (edited.id == 0L) {
                                 viewModel.saveCourseAndAwait(edited)
@@ -1038,6 +1075,11 @@ private fun AppNavHost(
                                 com.buaa.schedule.domain.model.ReminderSetting(id, enabled, minutes)
                             )
                         },
+                        // T260：闸门那一枚读的是跨配置存活的结论旗（写库在飞时转屏，页面自己的
+                        // `saving` 归零，只认它就等于放开第二趟 `id = 0L` 的入口）；
+                        // 报到那一手是「收尾所在的 scope 还活着」的唯一出处 —— 目的地层据此不弹。
+                        saveInFlight = EditorSaveFinishing.holdsSaveGate(editorSaveFinish),
+                        onSaveTailReached = { viewModel.editorSaveTailReached(editorSaveRequestId) },
                     )
                 }
             }

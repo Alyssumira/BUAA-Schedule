@@ -22,6 +22,8 @@ import android.webkit.CookieManager
 import com.buaa.schedule.data.import.IcsParser
 import com.buaa.schedule.data.import.TextScheduleParser
 import com.buaa.schedule.data.share.ScheduleShareCodec
+import com.buaa.schedule.domain.editor.EditorSavePhase
+import com.buaa.schedule.domain.editor.EditorSaveStage
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.CourseSaveOptions
 import com.buaa.schedule.domain.model.ImportHistory
@@ -543,10 +545,21 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
      * ⚠️ 不许退成 `return saveCourse(course)`（透传 = 写库那一手又落回调用者的 scope，本卡白做），
      * 也不许把 `savedId` 升级成 VM 的共享可变属性（那会新造一枚没人清的状态）。它**必须**是函数内的
      * 局部捕获。先例：本卡 [deleteCourseAndAwait] 与本仓 `ConflictWizardDialog.applyConflictShift`。
+     *
+     * T260 在这一枚 job 体内多写了**一句**：`editorSaveSettled(...)` —— 它交回的是「结论落地与否」这
+     * 一枚证据（目的地层据此决定退栈），**不是**第二枚返回通道：本函数端出去的行 id 仍只走
+     * `job.join()` 之后的那个局部量。把 `savedId` 改从旗上读 = 两条路读同一件事且其中一条没人清场。
      */
     suspend fun saveCourseAndAwait(course: Course): Long? {
         var savedId: Long? = null
-        val job = viewModelScope.launch { savedId = saveCourse(course) }
+        val job = viewModelScope.launch {
+            savedId = saveCourse(course)
+            // T260：结论交回这一手**必须**长在 job 里面 —— 它是唯一一枚「页 scope 被取消也执行得到」的落点。
+            // 写库那一手已经在同一枚 viewModelScope 里跑完整趟（T124c），结论却只交给 `join()` 的续体，
+            // 而续体归页面管：「点保存到落库之间转一次屏」那一档里课进了库、收尾那一行没跑，
+            // 页面退回「添加课程」，再点一次就是第二门同样的课。
+            editorSaveSettled(landed = savedId != null)
+        }
         job.join()
         return savedId
     }
@@ -600,9 +613,89 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
      */
     suspend fun updateCourseAndAwait(course: Course, options: CourseSaveOptions): Long? {
         var savedId: Long? = null
-        val job = viewModelScope.launch { savedId = updateCourse(course, options) }
+        val job = viewModelScope.launch {
+            savedId = updateCourse(course, options)
+            // T260：与 [saveCourseAndAwait] 同一枚落点、同一个理由（结论由跑完那一趟的人交回）
+            editorSaveSettled(landed = savedId != null)
+        }
         job.join()
         return savedId
+    }
+
+    /**
+     * 编辑器保存链那一趟写库的**结论旗**（T260 · 第 ⓪ 问裁的乙档）：唯一一枚跨配置变化存活、
+     * 又按「哪一趟请求」配好对的状态。形状与判据本体都在 `domain/editor/EditorSaveFinishing.kt`。
+     *
+     * ## 为什么必须是 VM 的状态，而不是页面那一支的续体
+     *
+     * 写库那一半在 [viewModelScope] 的那一枚 job 里（T124c），页 scope 被 dispose 也照样跑完整趟；
+     * 而「落成了 ⇒ 退栈」那一手挂在 `rememberCoroutineScope()` 的续体上。「点保存到落库之间转一次屏」
+     * 那一档就是这两半的寿命差：库里多了一行、屏幕上还是发起那一刻的那一页（新建那一路身份是
+     * `id = 0L`，草稿又是 `rememberSaveable` 的），用户读作「点了没反应」，再点一次插出第二门课。
+     *
+     * ## 为什么不是甲档（把收尾也搬进 viewModelScope）
+     *
+     * 那一枚协程攥的是**发起那一刻**的 `navController` / `savedStateHandle` / `mutableStateOf`，
+     * 三者都属于已经被销毁的那棵 composition：换接收者改的是「谁来跑这一行」，跑的还是一枚死掉的
+     * controller。本 VM 是全站唯一一枚跨配置变化活着的载体（Activity 级 ViewModelStore），
+     * 所以结论只能落在这里，退栈那一手由**还活着的那一侧**读它之后执行。
+     *
+     * ## 为什么不是「VM 的属性当返回通道」
+     *
+     * 上面两枚 `...AndAwait` 的红线一条没动：`var savedId: Long? = null` 仍是方法体内的**局部捕获**，
+     * 端出去的行 id 仍走 `job.join()` 之后的返回值。这一枚旗只是「结论交回了没有 + 页面那一支
+     * 有没有跑到」的**证据**，不是第二枚返回通道：它不参与任何一处取值，消费点只有目的地层那一枚
+     * 协程（点火即消费，见 `MainActivity` 编辑器目的地），陈旧的那一枚靠 [EditorSaveStage.requestId]
+     * 配对挡掉，不会替下一 entry 退栈。
+     */
+    private val _editorSaveStage = MutableStateFlow<EditorSaveStage?>(null)
+    val editorSaveStage: StateFlow<EditorSaveStage?> = _editorSaveStage.asStateFlow()
+
+    /** 发号器：`EditorSaveSentinel.NO_REQUEST` 那枚 0L 永远不发，所以号与「没发起过」在类型上不可混 */
+    private var editorSaveRequestSequence = 0L
+
+    /** 领一枚本趟写库的号（只有主线程的保存链会调，故不需要原子性） */
+    fun nextEditorSaveRequestId(): Long {
+        editorSaveRequestSequence += 1
+        return editorSaveRequestSequence
+    }
+
+    /**
+     * 立旗：这一页起了一趟写库（[EditorSavePhase.Writing]）。**必须排在任何挂起点之前** ——
+     * 与删除链那枚旗同一个理由：await 之后那一支多半跑不到，旗立不起来就等于没有旗。
+     */
+    fun editorSaveRequested(requestId: Long) {
+        _editorSaveStage.value = EditorSaveStage(
+            requestId = requestId,
+            phase = EditorSavePhase.Writing,
+            tailReported = false,
+        )
+    }
+
+    /** 结论交回（落成 / 没落成）。只由那两枚 `...AndAwait` 体内的那一枚 job 调用。 */
+    private fun editorSaveSettled(landed: Boolean) {
+        val current = _editorSaveStage.value ?: return
+        _editorSaveStage.value = current.copy(
+            phase = if (landed) EditorSavePhase.Landed else EditorSavePhase.Failed,
+        )
+    }
+
+    /**
+     * 页面那一支（跑在组合 scope 上）报告「我活着跑到了收尾」。这一手就是
+     * [EditorSaveStage.tailReported] 那枚盘上证据的唯一出处：它执行得到 ⇒ 退栈归页面；
+     * 它被组合取消 ⇒ 这一格永远留在 false ⇒ 退栈归目的地层。两枚认领点因此结构上互斥，
+     * 不需要按时序猜「页面那一支这会儿还在不在」。
+     */
+    fun editorSaveTailReached(requestId: Long) {
+        val current = _editorSaveStage.value ?: return
+        if (current.requestId != requestId) return
+        _editorSaveStage.value = current.copy(tailReported = true)
+    }
+
+    /** 目的地层把自己已经替它弹过的那一枚结论消费掉（按号清，别处的结论一枚都不碰） */
+    fun editorSaveConsumed(requestId: Long) {
+        val current = _editorSaveStage.value ?: return
+        if (current.requestId == requestId) _editorSaveStage.value = null
     }
 
     suspend fun deleteCourse(course: Course): Boolean = suspendCatching {

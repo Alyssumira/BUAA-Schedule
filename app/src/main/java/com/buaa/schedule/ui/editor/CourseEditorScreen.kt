@@ -87,6 +87,24 @@ fun CourseEditorScreen(
     onBack: () -> Unit,
     onSaveReminder: (Long, Boolean, Int) -> Unit = { _, _, _ -> },
     initialReminder: ReminderSetting? = null,
+    /**
+     * 目的地层按 VM 那一枚结论旗算出来的「这一页有一趟写库在飞」（T260）。
+     *
+     * 它与本页那枚 `saving` 是**两把尺量两件事**：`saving` 长在组合上、转屏归零，
+     * 而这一枚读的是跨配置变化存活的状态。写库在飞的那一刻转屏，新 composition 里
+     * `saving` 已经是 false —— 只认 `saving` 的那颗按钮就会放开，第二趟 `id = 0L`
+     * 起手，库里多出第二门同样的课（台账 #498 那枚「重」正落在这里）。
+     */
+    saveInFlight: Boolean,
+    /**
+     * 页面这一支（跑在 `rememberCoroutineScope()` 上）**活着走到了收尾**的报到点（T260）。
+     *
+     * 它是「收尾所在的 scope 还在不在」的盘上证据：报到执行得到 ⇒ 退栈归这一支，
+     * 目的地层据此**不**跟着弹（否则对着 navController 连 pop 两格）；
+     * 被组合取消 ⇒ 这一行压根不执行 ⇒ 退栈归目的地层。两枚认领点结构上互斥，
+     * 不需要按时序猜「那一支这会儿还在不在」。没有默认值 —— 漏接就等于把这一族放回来。
+     */
+    onSaveTailReached: () -> Unit,
 ) {
     // 草稿字段全部用 rememberSaveable：旋转/进程恢复后不丢输入
     var name by rememberSaveable { mutableStateOf(initialCourse?.name ?: "") }
@@ -175,7 +193,9 @@ fun CourseEditorScreen(
     }
     val weeks = remember(weeksText) { WeekParser.parse(weeksText) }
     // 没有节次就没有"这门课几点上"，保存必须禁用（本体在 editorCanSave，单测钉住）
-    val canSave = editorCanSave(weeks = weeks, periods = periods, saving = saving)
+    // T260：`saving` 只管这一棵组合，转屏就归零；写库在飞那一刻转屏时放开这颗按钮的就是
+    // `saveInFlight` 那一枚（读的是跨配置存活的 VM 结论旗）。两枚取并，不放宽任何一格判据。
+    val canSave = editorCanSave(weeks = weeks, periods = periods, saving = saving || saveInFlight)
 
     // 字段级校验：判定与 parsePeriods 一一对应，这样"红框"和"存不存得进去"永远同步，
     // 不会出现标了红却能保存、或者没标红却被拦住。
@@ -245,6 +265,11 @@ fun CourseEditorScreen(
                 onSave = onSave,
                 onSaveReminder = onSaveReminder,
             )
+            // T260：收尾第一手是**向 VM 报到**（「这一支活着跑到了这里」）。它是目的地层唯一
+            // 能读到「退栈归页面」的证据：这一行执行得到 ⇒ 下面那枚 onBack() 归这一支弹，
+            // 目的地层不跟着弹；被组合取消（转屏 / 摘页）⇒ 这一行连同下面的退栈一行都不执行，
+            // 而写库那一半早在 VM 的 viewModelScope 里跑完了整趟 ⇒ 由目的地层替这一页弹。
+            onSaveTailReached()
             if (saved) {
                 onBack()
             } else {
@@ -255,8 +280,10 @@ fun CourseEditorScreen(
     }
 
     // 中途返回不再静默丢草稿（P2）：顶部箭头与系统返回键都过这道闸。
-    // 保存成功走的是 onBack() 本身，不经过这里；删除成功现在压根不在这页退栈 ——
-    // 那一档由 MainActivity 编辑器目的地那一侧认领（见删除确认框里那句 ⚠️ 注释，T166）。
+    // 保存成功走的是 onBack() 本身，不经过这里（这一支活着的时候才走得到那一手 ——
+    // 它被组合取消时退栈归目的地层，凭据就是上面那一次 `onSaveTailReached()` 报到，T260）；
+    // 删除成功压根不在这页退栈 —— 那一档由 MainActivity 编辑器目的地那一侧认领
+    // （见删除确认框里那句 ⚠️ 注释，T166）。
     fun requestBack() {
         if (isDraftDirty) showDiscardDialog = true else onBack()
     }
