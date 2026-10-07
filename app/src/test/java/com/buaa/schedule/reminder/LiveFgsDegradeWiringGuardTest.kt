@@ -262,7 +262,24 @@ class LiveFgsDegradeWiringGuardTest {
         )) {
             assertFalse("降级那一步里出现了「$banned」：一次降级不该再骚扰用户第二遍，也不该新起线程/新排任务\n$reporter", reporter.contains(banned))
         }
-        assertEquals("实况通知 id 只许一处定义", 1, Regex("""private const val NOTIFY_ID = 20_260_002""").findAll(svc).count())
+        // T206 重钉：这一格原本钉的是**服务侧那枚 `20_260_002` 字面量**，而那张卡把两份字面量收成
+        // 一枚来源（`ReminderNotifications.NOTIFY_ID_CLASS_PROGRESS`），服务侧那枚只剩别名。
+        // 意图没变（实况通知 id 只许一处定义），改的是锚点：钉那枚别名行 + 服务侧不许再出现裸字面量。
+        // 「全仓只剩一枚字面量」那一层由 CountdownOwnershipAnchorGuardTest 第 ⑤ 层负责（它抹注释后
+        // 走全 app/src/main，本文件的 svc 只有一枚文件、撑不起那一句）。
+        assertEquals(
+            "实况通知 id 在服务侧必须是**别名**而不是第二份数字（`private const val NOTIFY_ID = " +
+                "ReminderNotifications.NOTIFY_ID_CLASS_PROGRESS`，T206 那一刀的形状）",
+            1,
+            Regex("""private const val NOTIFY_ID = ReminderNotifications\.NOTIFY_ID_CLASS_PROGRESS""")
+                .findAll(svc).count(),
+        )
+        assertEquals(
+            "CourseFluidService 里不许再出现 `20_260_002` 这枚数字（唯一来源是 ReminderNotifications " +
+                "那枚 internal 常量；同一枚事实写两遍就是「撤的不是发出去的那条」那一族）",
+            0,
+            Regex("""20_260_002""").findAll(svc).count(),
+        )
         // 服务里新增的那段取证不许搬到设置页 / 资源里（那是"用另一处打扰换掉这一处打扰"）
         val settings = blankComments(source("com/buaa/schedule/ui/settings/SettingsScreen.kt"))
         val res = resValuesText()
