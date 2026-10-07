@@ -198,7 +198,7 @@ class ConflictWizardSettlementReceiverWiringGuardTest {
         val apply = functionBody(code, APPLY_SIGNATURE, "applyConflictShift")
         assertEquals(
             "`applyConflictShift` 体内 `$VM_JOB` 必须恰好一枚（实到 " + occurrences(apply, VM_JOB) + " 处）：" +
-                "本卡只搬收尾那一手，:102 那一手的语义与顺序是契约",
+                "本卡只搬收尾那一手，那枚 `val job = …` 的语义与顺序是契约",
             1,
             occurrences(apply, VM_JOB),
         )
