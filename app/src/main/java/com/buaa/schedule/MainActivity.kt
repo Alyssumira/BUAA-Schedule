@@ -794,6 +794,10 @@ private fun AppNavHost(
     bottomBarVisible: Boolean = false,
 ) {
     val reduceMotion = LocalReduceMotion.current
+    // 返回键最后一道兜底要用的 Activity 句柄（T244②）：只有 import 弹不动那一手用它，
+    // 判据写在 composable("import") 的 onBack 上。写法照抄本文件里既有的
+    // `as? android.app.Activity`（可空转型，拿不到就不动栈，比硬转诚实）。
+    val navActivity = LocalContext.current as? android.app.Activity
     // 一条带、一个主人（T80）：两枚 Boolean 都从**同一枚** headerBandOwner 算出来 ——
     // "板上同时摆两套页头文字"于是在这一层就不成立，而不是靠两个页面各自自觉。
     val homeHeaderBandOnScreen = headerBandDrawnOnScreen(headerBandOwner, HeaderBandOwner.Home)
@@ -1013,11 +1017,18 @@ private fun AppNavHost(
         composable("import") {
             CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
                 ImportScreen(
-                    // 引导以「导入课表」收尾时会把 startRoute 定成 import，那一刻 import
-                    // 就是起始目的地：栈里没有更低的条目，popBackStack 返回 false，
-                    // 左上角返回箭头点了没反应（用户读作"卡在导入页"）。弹不动就回首页。
+                    // 判据显式化（T244②，台账 #391 兜底的那一半）。
+                    // import 不在 ROOT_SAFE_START_ROUTES 册子里 ⇒ 它当不了 startDestination ⇒
+                    // 栈里在它下面恒垫着一枚首页 ⇒ popBackStack 恒弹得动。弹不动这一支
+                    // 今天按构造不可达，但它曾是整条病的入口：基点上无条件
+                    // navigateTopLevel("home")，而 navigateTopLevel 弹到的是
+                    // graph.findStartDestination() —— 根栈正是 import 自己时那一手既弹不掉
+                    // import、又把首页叠在它上面，返回键从此在 [import, home] 与 [import]
+                    // 之间来回，一整趟会话退不出应用。
+                    // 所以这里不留一条「今天靠①才不炸」的隐式依赖：真弹不动就说明册子破了，
+                    // 唯一诚实的一手是把这个 Activity 收掉 —— 返回键该退出就退出。
                     onBack = {
-                        if (!navController.popBackStack()) navController.navigateTopLevel("home")
+                        if (!navController.popBackStack()) navActivity?.finish()
                     },
                     onStartBuaaLogin = { navController.navigate("buaa_login") },
                     onOpenHistory = { navController.navigate("import_history") },
