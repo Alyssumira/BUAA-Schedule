@@ -126,7 +126,14 @@ class WeekGridFactory(
     override fun getCount(): Int = cells.size
 
     override fun getViewAt(position: Int): RemoteViews {
-        val cell = cells[position]
+        // 越界防护：宿主手里的 position 来自上一次 getCount()（= cells.size），而本工厂的
+        // onDataSetChanged 在快照未命中时会**立刻**把 cells 清空再异步补数据，两者错位时
+        // cells[position] 抛的 IndexOutOfBoundsException 崩掉的是整个应用进程 ——
+        // RemoteViewsFactory 跑在我们的进程里，不是只有组件画不对。
+        // 取法与 getItemId 同一形状（getOrNull + 兜底早返回），兜底 id 的出处见 WidgetCommon.oobItemKey。
+        val cell = cells.getOrNull(position) ?: return RemoteViews(
+            context.packageName, R.layout.widget_week_grid_item,
+        )
         val views = RemoteViews(context.packageName, R.layout.widget_week_grid_item)
         views.setTextViewText(R.id.widget_grid_day, cell.dayName)
         views.setTextViewText(
@@ -189,7 +196,7 @@ class WeekGridFactory(
      * （都是空串），不折进来就永远刷不出那句「无课」。
      */
     override fun getItemId(position: Int): Long {
-        val cell = cells.getOrNull(position) ?: return WidgetCommon.itemKey(position, position.toLong())
+        val cell = cells.getOrNull(position) ?: return WidgetCommon.oobItemKey(position)
         val content = (cell.dayName + cell.summary + cell.isToday + cell.isBlankDay + weekOfGrid).hashCode()
         return WidgetCommon.itemKey(position, content.toLong() + appearance.viewIdStamp())
     }

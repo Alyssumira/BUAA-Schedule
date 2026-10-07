@@ -190,6 +190,29 @@ object WidgetCommon {
         ((position + 1L) shl 32) or (contentStamp and 0xFFFF_FFFFL)
 
     /**
+     * **越界那一格的兜底 id**：`getItemId` 在 `getOrNull(position)` 取不到行时交出去的那一枚。
+     * 两枚工厂（周网格与课程列表）都必须走这里，不许各自随手写一枚常量或 `0L`/`-1L`。
+     *
+     * 形状 = [itemKey] 原样，只把低位的内容指纹顶成 `position` 自己。为什么这样安全，逐条算：
+     * - **不同列不可能撞号**：高 32 位是 `position + 1`，兜底格与正常行只要 position 不同，
+     *   高位就不同 ⇒ 整个 id 不同。而**同一轮渲染里**一个 position 要么在界内、要么越界，
+     *   两者不可能同时出场，所以单轮内 id 必两两互异 —— [itemKey] 上面记的那条
+     *   「`hasStableIds()` 下重复 id 会抛」在这里根本不会被触发。
+     * - **同一列撞号的条件与概率**：唯一可能撞的一对是「越界的 P」与「正常那一条 P」，
+     *   撞上的条件是 `(内容指纹 + 外观戳) and 0xFFFF_FFFF == P`。两枚加数都出自 `hashCode()`
+     *   （32 位 Int，`WidgetAppearance.viewIdStamp()` 就是它自己的 hashCode），P 的取值范围是
+     *   网格 0..6、列表 0..行数-1（几十） ⇒ 单格撞号概率 ~P/2^32 ≤ 6/4.29e9 ≈ 1.4e-9，
+     *   一整轮最多按行数那么多格一起算也仍在 1e-8 量级。而且用户改课名/换教室只能把指纹
+     *   推到**另一个** 32 位值上，凑不出这一枚特定的 P —— 撞车不是「可被数据制造」的。
+     * - **撞上了会怎样**（要把代价说清，别只报概率）：宿主把缓存里那一行的旧视图贴回 P 列，
+     *   下一次越界→在界内的那一轮可能少刷一次。这正是 T137/#170 那一族「稳定 key 与内容
+     *   不同源」的形状，所以这一格必须**有出处、有推算**（本函数），而不是随手在调用点写死。
+     * - **兜底 id 反过来要求"稳定"**：连续几轮越界画的是同一张空 RemoteViews，id 相同正好让
+     *   宿主复用缓存。越界那一格的"内容"就是"空"，key 与内容仍然同源。
+     */
+    fun oobItemKey(position: Int): Long = itemKey(position, position.toLong())
+
+    /**
      * 只通知「列表数据变了」，不重画 RemoteViews 骨架。
      *
      * `RemoteViewsFactory.onDataSetChanged()` 跑在主线程、不能查库：未命中快照时它先渲染

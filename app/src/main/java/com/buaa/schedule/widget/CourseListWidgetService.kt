@@ -200,7 +200,11 @@ class CourseListFactory(
     override fun getViewAt(position: Int): RemoteViews {
         // 越界防护：宿主给的 position 与异步 refetch 替换过的 rows 错位时（本工厂的
         // onDataSetChanged 会另起协程重写 rows），抛 IndexOutOfBoundsException 死掉的是
-        // 整个应用进程——RemoteViewsFactory 跑在我们的进程里。同 WeekGridWidgetService 的 getOrNull 口径。
+        // 整个应用进程——RemoteViewsFactory 跑在我们的进程里。
+        // ⚠️ 口径是**约定**而不是既成事实：本文件与 WeekGridWidgetService 各有两枚按 position 索引的
+        // override（getViewAt / getItemId），T219 之前每枚文件只护住其中一枚、另一枚裸着 [position]。
+        // 四枚今天都护住了，但"都护住"这件事由 WidgetPositionIndexGuardTest 钉着（裸索引形状归零 +
+        // 四枚首行逐字节），不是这一句注释自证的 —— 拆掉任何一手，那枚守卫红，这句注释不背这个责。
         val row = rows.getOrNull(position) ?: return RemoteViews(
             context.packageName, R.layout.widget_list_item,
         )
@@ -272,7 +276,9 @@ class CourseListFactory(
     override fun getViewTypeCount(): Int = 1
 
     override fun getItemId(position: Int): Long {
-        val row = rows[position]
+        // 越界防护与兜底 id 的出处见 WidgetCommon.oobItemKey：这里不能随手回一枚常量，
+        // 也不能照抄正常行那一路的指纹（越界时根本没有 row 可指纹）。
+        val row = rows.getOrNull(position) ?: return WidgetCommon.oobItemKey(position)
         // 宿主按这个 id 缓存行视图，id 不变就不看工厂新算的内容。
         // 旧式只折了 courseId + 节次：改课名、换教室、换上课时间都不换 id，
         // 于是"编辑后组件不动"、"手动刷新好了、一点击又变回原样"。
