@@ -33,11 +33,16 @@ import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.schedule.ConflictDetector
 import com.buaa.schedule.domain.schedule.CourseConflictResolution
 import com.buaa.schedule.domain.schedule.CourseFilter
+import com.buaa.schedule.domain.schedule.IcsExportDecision
+import com.buaa.schedule.domain.schedule.IcsExportGate
 import com.buaa.schedule.domain.schedule.ImportPlanner
 import com.buaa.schedule.domain.schedule.WeekCalculator
 import com.buaa.schedule.ui.home.nextDayTickDelayMillis
 import com.buaa.schedule.ui.importing.importCompletionMessage
 import com.buaa.schedule.ui.importing.importParseSummary
+import com.buaa.schedule.ui.settings.icsExportInconsistentMessage
+import com.buaa.schedule.ui.settings.icsExportRefusedMessage
+import com.buaa.schedule.ui.settings.icsExportWrittenMessage
 import com.buaa.schedule.ui.settings.wakeUpExportMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -1789,6 +1794,32 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    /**
+     * 导出 ICS 到用户选中的位置（T252，#309）。
+     *
+     * ## 改前的三行为什么必须拆
+     *
+     * 改前这一节是：算内容 → 开流写 → 报数，中间**没有一格问过"有没有东西可写"**：
+     * `val written = withContext(Dispatchers.IO) { writeTextToUri(uriString, result.text) }`
+     * 而 `writeTextToUri` 走的是 `ContentResolver.openOutputStream(uri)` 的默认模式（截断写），
+     * 于是 `IcsExporter` 交回 `ExportResult(text = "", eventCount = 0, …)` 那一等 ——
+     * 课程不为空、学期也设了、但每门课的周次全落在学期区间之外（T222 裁周次）或节次全不在作息表里 ——
+     * **先把用户挑的那份文件截成 0 字节**，再念一句「已导出 0 个日程，可在系统日历中导入」。
+     * 用户读到的是一次成功，盘上发生的是一次破坏。
+     *
+     * ## 现在这一手长在哪
+     *
+     * 判空**排在开流之前**：条数、跳过数、导出件文本、是否真选中了文件这四枚事实先交给
+     * [IcsExportGate.decide]，再由它的档位决定要不要开流 ——
+     * [IcsExportDecision.WriteTruncating] 才截断写，[IcsExportDecision.RefuseEmpty] 与
+     * [IcsExportDecision.RefuseInconsistent] 一次都不开流（用户选中的文件保持原样），
+     * [IcsExportDecision.NoFileSelected] 一句不说。句子在
+     * [icsExportWrittenMessage] / [icsExportRefusedMessage] / [icsExportInconsistentMessage]，
+     * 与本卡的裁定同尺：**零日程时不动用户选中的那个文件**。
+     *
+     * ⚠️ 「保持原样」钉的是我们这一手不动它；`CreateDocument` 那一步由系统选择器建文档，
+     * 不在本应用手里（本卡零设备，没量过它建出来的那一刻是什么状态）。
+     */
     fun exportIcsTo(uriString: String) {
         viewModelScope.launch {
             val result = exportIcs()
@@ -1796,20 +1827,25 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 showMessage("暂无可导出的课表，请先导入课程并设置学期", isError = true)
                 return@launch
             }
-            val written = withContext(Dispatchers.IO) { writeTextToUri(uriString, result.text) }
-            showMessage(
-                if (written) {
-                    buildString {
-                        append("已导出 ${result.eventCount} 个日程，可在系统日历中导入")
-                        if (result.skippedOccurrences > 0) {
-                            append("（${result.skippedOccurrences} 个课次因节次时间缺失被跳过）")
-                        }
-                    }
-                } else {
-                    "导出失败：无法写入所选位置"
-                },
-                isError = !written,
-            )
+            when (val decision = IcsExportGate.decide(
+                eventCount = result.eventCount,
+                skippedOccurrences = result.skippedOccurrences,
+                icsText = result.text,
+                fileSelected = uriString.isNotBlank(),
+            )) {
+                // 取消不是失败：没落地文件，后面两判都无从谈起，也一句话不说
+                IcsExportDecision.NoFileSelected -> Unit
+                is IcsExportDecision.RefuseEmpty -> showMessage(icsExportRefusedMessage(decision), isError = true)
+                is IcsExportDecision.RefuseInconsistent ->
+                    showMessage(icsExportInconsistentMessage(decision), isError = true)
+                is IcsExportDecision.WriteTruncating -> {
+                    val written = withContext(Dispatchers.IO) { writeTextToUri(uriString, decision.text) }
+                    showMessage(
+                        if (written) icsExportWrittenMessage(decision) else "导出失败：无法写入所选位置",
+                        isError = !written,
+                    )
+                }
+            }
         }
     }
 
