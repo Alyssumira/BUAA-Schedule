@@ -40,7 +40,9 @@ class CourseUnitCopySourceGuardTest {
         val callAnchor: String,
         /**
          * 那一行上允许的 `.size` 枚数。今天只有一枚例外：课表管理页的 `groups.size` ——
-         * 它合法是因为同一行册子里钉着 `groups` 的上游是 `SemesterStats.creditsByCourse(filtered)`
+         * 它合法是因为同一行册子里钉着 `groups` 的上游是 `SemesterStats.creditsByCourse(courses)`
+         * （T253 之前那一枚写的是 `creditsByCourse(filtered)`：归并吃的已经是过滤后的表 ——
+         * 那句「N 门课」数的还是门，卡底下挂的片段却跟着子集走了）。
          * （归并只发生一次，那枚 size 数的就是门）。其余四句的 N 都必须来自具名读数，一律 0。
          */
         val expectSizeInCallLine: Int = 0,
@@ -88,7 +90,9 @@ class CourseUnitCopySourceGuardTest {
             verbatim = listOf(
                 // 门的那把尺：groups 的上游只能是 creditsByCourse，不是第二套键
                 "title = \"课表管理（\${groups.size} 门课）\"," to 1,
-                "return SemesterStats.creditsByCourse(filtered)" to 1,
+                // T253：归并吃的是**全量** courses，过滤挪到归并**之后**只筛组 ⇒ 这一枚 needle
+                // 从 `creditsByCourse(filtered)` 重钉成 `creditsByCourse(courses)`（改回前者就红在这一格）
+                "return SemesterStats.creditsByCourse(courses)" to 1,
                 "val groups = remember(state.courses, query) { groupCourses(state.courses, query) }" to 1,
             ),
             // 改前那一形（界面上就地 groupBy 出"门"）必须 0 处；它同时是本行的靶子——
@@ -165,7 +169,8 @@ class CourseUnitCopySourceGuardTest {
      * 「N 门课」这句的 N 只能来自具名读数，一旦那行出现 `.size`，两把尺就又回到同一屏上了。
      *
      * ⚠️ 一枚合法例外（写在这里而不是藏在常量里）：课表管理页那句吃 `groups.size`。它成立是因为
-     * 同一行册子里还钉着 `groups` 的上游 = `SemesterStats.creditsByCourse(filtered)` ——
+     * 同一行册子里还钉着 `groups` 的上游 = `SemesterStats.creditsByCourse(courses)`（T253 重钉：
+     * 改前那一枚是 `creditsByCourse(filtered)`，归并在过滤之后 ⇒ 门数对、卡底下的片段数跟着子集走）——
      * 归并只发生一次，那枚 size 数的就是门。谁把上游换回第二把键，第 ① 档那格先红，
      * 这一格才跟着红；两把尺各数各的，不是拿常量比常量的套套逻辑。
      */

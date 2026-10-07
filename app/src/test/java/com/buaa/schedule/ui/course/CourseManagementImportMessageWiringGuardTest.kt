@@ -574,7 +574,9 @@ class CourseManagementImportMessageWiringGuardTest {
         // ④ T127 那一支（本卡一字不许动）
         // T124b（B 档）：调用名换成 ...AndAwait，**仍在 :220 那一行**（改名不插行 ⇒ 十八枚锚点的行号没漂；
         // 那一句是 T124b 当时的账，T170 给这一页插了 12 行之后这一枚落在下面册子写的 :232）
-        const val GROUP_READ_VERDICT = "val deleted = viewModel.deleteCourseGroupAndAwait(target.fragments)"
+        // T253：那一手的实参从 target.fragments 换成 deletion.fragments（判据产物，搜索态下不再窄），
+        // 而这一页插了 53 行 ⇒ 十八枚行号在下面那本册子里逐枚按现盘重钉（复算：awk 'NR==行号'）
+        const val GROUP_READ_VERDICT = "val deleted = viewModel.deleteCourseGroupAndAwait(deletion.fragments)"
         const val GROUP_MESSAGE_EXPRESSION =
             "message = if (deleted) \"已删除「\${target.displayName}」\" " +
                 "else \"删除失败：\${target.displayName} 还在课表里\","
@@ -592,29 +594,36 @@ class CourseManagementImportMessageWiringGuardTest {
         // T224 把归并换源到 SemesterStats.creditsByCourse：文件头 KDoc +4 行、import +1 行 ⇒
         // 这十八枚逐字原文仍然一字未动，行号整体 +5（`groupCourses` 与 `groupColorScopeNote` 那两处
         // 改动都落在本册子末档 244 之后，所以偏移是同一个常数，不是逐枚重量的）。
-        // 下面这十八枚行号按现盘重钉（复算：wc -l = 593，逐枚 awk 'NR==行号'）。
+        // 下面这十八枚行号按现盘重钉（复算：wc -l = 646，逐枚 awk 'NR==行号'）。
         // ⚠️ 本行注释此前写着「wc -l = 468」而常量是 542 —— 那是 T170 之后的注释没跟上 T207 的插行，
         // 本轮一并重钉（枚数与逐字判据一格未减）。
-        const val PAGE_LINES = 593
+        // T253（甲档：删除范围与过滤态并尺）在这一页净插 **+53** 行，四扇窗口各有各的偏移、
+        // 不是同一个常数：import 那一段 +5（两扇 +2 与 +3）、`ModalTransition` 里那枚判据产物 +9、
+        // `deleteGroupConfirmText` 那一族 +29（KDoc +15、函数体 +14）、`groupCourses` +10
+        // （KDoc +19、函数体 −11、筛组那一行 +2）。复算：
+        // `git diff -U0 cc44f7b -- app/src/main/java/com/buaa/schedule/ui/course/CourseManagementScreen.kt | grep -oE '^@@'`
+        // ⇒ 十三扇；逐枚 awk 'NR==行号' 才是这十八枚的取数法，别拿 +53 去减。
+        // 逐字原文只有 GROUP_READ_VERDICT 那一枚被换过实参，其余十七枚一字未动。
+        const val PAGE_LINES = 646
         val ANCHORS = listOf(
-            104 to "val state by viewModel.uiState.collectAsState()",
-            110 to "val snackbarHostState = remember { SnackbarHostState() }",
-            114 to "Scaffold(",
-            115 to "snackbarHost = { SnackbarHost(snackbarHostState) },",
-            199 to "viewModel.viewModelScope.launch {",
-            200 to "viewModel.updateCourse(",
-            201 to "primary.copy(colorIndex = index, customColorArgb = null),",
-            224 to "ModalTransition(payload = pendingDelete) { group, modal ->",
-            232 to "confirmButton = {",
-            235 to "pendingDelete = null",
-            236 to "scope.launch {",
-            237 to GROUP_READ_VERDICT,
-            238 to "val result = snackbarHostState.showSnackbar(",
-            239 to GROUP_MESSAGE_EXPRESSION,
-            240 to GROUP_GATED_LABEL,
-            241 to GROUP_DURATION,
-            243 to GROUP_PERFORMED,
-            244 to GROUP_UNDO,
+            109 to "val state by viewModel.uiState.collectAsState()",
+            115 to "val snackbarHostState = remember { SnackbarHostState() }",
+            119 to "Scaffold(",
+            120 to "snackbarHost = { SnackbarHost(snackbarHostState) },",
+            204 to "viewModel.viewModelScope.launch {",
+            205 to "viewModel.updateCourse(",
+            206 to "primary.copy(colorIndex = index, customColorArgb = null),",
+            229 to "ModalTransition(payload = pendingDelete) { group, modal ->",
+            246 to "confirmButton = {",
+            249 to "pendingDelete = null",
+            250 to "scope.launch {",
+            251 to GROUP_READ_VERDICT,
+            252 to "val result = snackbarHostState.showSnackbar(",
+            253 to GROUP_MESSAGE_EXPRESSION,
+            254 to GROUP_GATED_LABEL,
+            255 to GROUP_DURATION,
+            257 to GROUP_PERFORMED,
+            258 to GROUP_UNDO,
         )
     }
 }

@@ -79,7 +79,12 @@ import com.buaa.schedule.domain.model.joinMeta
 import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.model.unwrappedPeriodLabel
 import com.buaa.schedule.domain.model.weekdayLabel
+import com.buaa.schedule.domain.schedule.GroupDeletionRequest
+import com.buaa.schedule.domain.schedule.GroupDeletionScope
 import com.buaa.schedule.domain.schedule.SemesterStats
+import com.buaa.schedule.domain.schedule.courseFragmentMatchesQuery
+import com.buaa.schedule.domain.schedule.courseGroupDeletionScope
+import com.buaa.schedule.domain.schedule.normalizedCourseQuery
 import com.buaa.schedule.ui.ScheduleViewModel
 import kotlinx.coroutines.launch
 
@@ -222,19 +227,28 @@ fun CourseManagementScreen(
 
     // 走 payload 版而不是 `pendingDelete?.let`：清空的那一刻整棵子树就没了，收场一帧都播不出来
     ModalTransition(payload = pendingDelete) { group, modal ->
+        // T253 甲档：这一次删除**删哪几段**与弹窗**念哪个数**只由这一枚判据产物决定，两支都读它。
+        // 从前这一手直接把 `group.fragments` 交出去，而过滤态下那是「命中片段」而非整组 ——
+        // 按钮念「删除整门课」、弹窗念「全部 N 个片段」，落库的却只有搜索命中的那几段。
+        // 判据本体在 `domain/schedule/CourseGroupDeletionScope.kt`（纯 JVM，可单测）。
+        val deletion = courseGroupDeletionScope(
+            wholeGroupFragments = group.fragments,
+            query = query,
+            request = GroupDeletionRequest.WholeCourse,
+        )
         AlertDialog(
             modifier = modal,
             onDismissRequest = { pendingDelete = null },
             title = { Text("删除「${group.displayName}」？") },
             text = {
-                Text(text = deleteGroupConfirmText(group.fragments, state.timeSlots))
+                Text(text = deleteGroupConfirmText(deletion, state.timeSlots))
             },
             confirmButton = {
                 TextButton(onClick = {
                     val target = group
                     pendingDelete = null
                     scope.launch {
-                        val deleted = viewModel.deleteCourseGroupAndAwait(target.fragments)
+                        val deleted = viewModel.deleteCourseGroupAndAwait(deletion.fragments)
                         val result = snackbarHostState.showSnackbar(
                             message = if (deleted) "已删除「${target.displayName}」" else "删除失败：${target.displayName} 还在课表里",
                             actionLabel = "撤销".takeIf { deleted },
@@ -404,18 +418,47 @@ internal fun fragmentSummary(fragments: List<Course>, timeSlots: List<TimeSlot>)
 }
 
 /**
- * 删除确认的正文（纯函数，可单测）：说清删掉几个片段、都排在第几节。
+ * 删除确认的正文（纯函数，可单测）：说清删掉几个片段、都排在第几节，以及**过滤态在这件事上说了什么**。
  *
  * 括号里那串节次走 [joinMeta]：没有节次的片段整段缺席，一个也没有时连「（）」
  * 一起不出场 —— 以前它长成「（第节、第3节）」，那既不是节次也不是省略。
+ *
+ * ## 入参为什么是判据产物而不是一段片段表（T253）
+ *
+ * 改前这一枚吃的是 `group.fragments`，句里的数就是 `fragments.size`。问题不在句子里，在**调用点**：
+ * 过滤态下 `group.fragments` 装的是命中片段，于是那句「将删除这门课的全部 N 个片段」念的是 N=2
+ * 而整组有 5 段 —— 句子跟着子集走，按钮那句「删除整门课」跟着整组走，同一屏两把尺。
+ * 现在数与集合都来自 [GroupDeletionScope]（由 `domain/schedule/CourseGroupDeletionScope.kt` 判定），
+ * 与交给仓储层的那一手**同一枚产物**：谁改判据，这句话跟着变；谁只改句子不改判据，这句话不跟着变，
+ * 于是第 ⑤ 层那枚守卫会先红。
+ *
+ * 两档各有句子（[GroupDeletionRequest.WholeCourse] / [GroupDeletionRequest.MatchedFragmentsOnly]）：
+ * 乙档在今天的 main 里没有调用方（本卡裁定走甲档），那一支留在这里是为了**换成乙档时那句
+ * 「全部 N 个片段」不会继续谎称整门课** —— 卡面红线不许把两档折成一枚 Boolean，也就不许让
+ * 其中一档没有句子。它由表驱动单测逐格踩过（`domain/schedule/CourseGroupDeletionScopeTest`），
+ * 不是没人验的分支。
  */
-internal fun deleteGroupConfirmText(fragments: List<Course>, timeSlots: List<TimeSlot>): String {
+internal fun deleteGroupConfirmText(scope: GroupDeletionScope, timeSlots: List<TimeSlot>): String {
     val periods = joinMeta(
-        fragments.map { periodLabelOf(it.periods, timeSlots) },
+        scope.fragments.map { periodLabelOf(it.periods, timeSlots) },
         separator = "、",
     )
     val where = periods.takeIf { it.isNotBlank() }?.let { "（$it）" } ?: ""
-    return "将删除这门课的全部 ${fragments.size} 个片段$where。删除后可在提示条里撤销。"
+    val head = when (scope.request) {
+        GroupDeletionRequest.WholeCourse ->
+            "将删除这门课的全部 ${scope.announcedFragmentCount} 个片段$where"
+        GroupDeletionRequest.MatchedFragmentsOnly ->
+            "只删除这门课的 ${scope.announcedFragmentCount} 个片段$where"
+    }
+    // 过滤态与删除范围的关系必须写在屏上，而不是藏在"搜索框里刚好有字"这件事里
+    val filterNote = when {
+        !scope.narrowedByFilter -> ""
+        scope.request == GroupDeletionRequest.WholeCourse ->
+            "。搜索只命中其中 ${scope.matchedFragmentCount} 段，删除按整门课执行、不受搜索影响"
+        else ->
+            "。这门课另有 ${scope.wholeGroupFragmentCount - scope.matchedFragmentCount} 段不在搜索结果里，它们不会被动到"
+    }
+    return "$head$filterNote。删除后可在提示条里撤销。"
 }
 
 /**
@@ -467,21 +510,29 @@ internal fun groupColorScopeNote(fragmentCount: Int, hasSourceGroupKey: Boolean)
  * 2. 组卡的门面（组名 / 教师 / 别名回退名）由 [primaryFragmentOf] 决定，而并入的片段现在
  *    **跨星期跨节次**，那一族的四档次序（有节次 → 节次 → 星期 → id）从"偶尔用得上"变成
  *    "每枚手动组都靠它"，T207 那枚守卫因此更不许放宽。
+ *
+ * ## 过滤只决定这张卡出不出场，决定不了删除范围（T253 甲档）
+ *
+ * 改前这里是**先过滤再归并**（`SemesterStats.creditsByCourse(filtered)`），于是搜索态下交回的
+ * `CourseGroup.fragments` 装的是「命中片段」而不是上面那句承诺的「组内**全部**片段」
+ * （[SemesterStats.CourseCredit.fragments] 的 KDoc 就写着"组内全部"）。带出的三句同屏矛盾：
+ * 按钮念「删除整门课」、确认框念「将删除这门课的全部 N 个片段」、交给仓储层的却是命中的那几段 ⇒
+ * 搜索命中 2 / 整组 5 时**删 2 留 3**，而屏幕上没有一处说过这件事。
+ *
+ * 现在**先归并、后过滤，且过滤只筛组**：一枚组内只要有任意一段命中，这张卡就整张出场，
+ * 卡上的 `fragments` 仍是整组全部片段。于是
+ * 「N 段」/「全部 N 个片段」/「删除整门课」/ 换色那句「全部 N 段排课」/ 交给仓储层的那一手，
+ * 五处读的是同一枚集合；删除范围与搜索框里写着什么**无关**。
+ * 判据本体（删哪几段 + 弹窗念哪个数）在 [courseGroupDeletionScope]，页头那句「N 门课」数的
+ * 是"命中的门数"—— 那是过滤本来就该管的事。
+ *
+ * ⚠️ 命中判据 [courseFragmentMatchesQuery] 与关键词归一 [normalizedCourseQuery] 都在 domain：
+ * 列表面（这里，决定哪张卡出场）与判据面（`courseGroupDeletionScope`，决定删哪几段）共吃同一枚，
+ * 在界面里再写一遍 `contains` 就是第二把"搜索态"的尺。
  */
 internal fun groupCourses(courses: List<Course>, query: String): List<CourseGroup> {
-    val keyword = query.trim()
-    val filtered = if (keyword.isEmpty()) {
-        courses
-    } else {
-        courses.filter {
-            // 两个名字都要能命中：日常界面看到的是别名，用户到这里只会打别名；
-            // 但教务原名才是这门课的"真名"，按它搜也该出来（别名可以是「物理」这种无信息量的词）
-            it.name.contains(keyword, ignoreCase = true) ||
-                it.displayName.contains(keyword, ignoreCase = true) ||
-                it.teacher?.contains(keyword, ignoreCase = true) == true
-        }
-    }
-    return SemesterStats.creditsByCourse(filtered)
+    val keyword = normalizedCourseQuery(query)
+    return SemesterStats.creditsByCourse(courses)
         .map { credit ->
             val fragments = credit.fragments
             val primary = primaryFragmentOf(fragments)
@@ -495,6 +546,8 @@ internal fun groupCourses(courses: List<Course>, query: String): List<CourseGrou
                 ),
             )
         }
+        // 筛的是**组**，不是组里的片段：一段命中就整组出场，fragments 一枚不许被过滤掉
+        .filter { group -> group.fragments.any { courseFragmentMatchesQuery(it, keyword) } }
         .sortedBy { it.displayName }
 }
 

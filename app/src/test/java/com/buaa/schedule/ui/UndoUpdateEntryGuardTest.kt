@@ -431,17 +431,18 @@ class UndoUpdateEntryGuardTest {
             occurrences(code, UNGATED_LABEL),
         )
         assertFalse(
-            "`viewModel.deleteCourseGroupAndAwait(target.fragments)` 不许再单独成一句（返回值被丢掉）——" +
+            "`viewModel.deleteCourseGroupAndAwait(deletion.fragments)` 不许再单独成一句（返回值被丢掉）——" +
                 "那正是 T127 修的病灶本体：删没删到只有 VM 知道，UI 不读就无从分辨。" +
-                "（调用名是 T124b 换的：那一手写库改挂在 VM 的 `viewModelScope` job 上，读法一字未改。）\n" +
+                "（调用名是 T124b 换的：那一手写库改挂在 VM 的 `viewModelScope` job 上，读法一字未改；" +
+                "实参是 T253 换的：`target.fragments` 在搜索态下是命中片段，换成了判据产物 `deletion.fragments`。）\n" +
                 "复算：grep -n 'viewModel.deleteCourseGroup' app/src/main/java/com/buaa/schedule/ui/course/CourseManagementScreen.kt\n" +
-                "⚠️ 这一格不能按旧写法拿子串计数：`viewModel.deleteCourseGroupAndAwait(target.fragments)` 是" +
-                "`val deleted = viewModel.deleteCourseGroupAndAwait(target.fragments)` 的**子串**，改前改后都命中一次，" +
+                "⚠️ 这一格不能按旧写法拿子串计数：`viewModel.deleteCourseGroupAndAwait(deletion.fragments)` 是" +
+                "`val deleted = viewModel.deleteCourseGroupAndAwait(deletion.fragments)` 的**子串**，改前改后都命中一次，" +
                 "数出来永远对 ⇒ 套套逻辑（#118 那一族）。这里改成整行比对",
             code.lineSequence().any { it.trim() == DISCARDED_GROUP_DELETE },
         )
         assertEquals(
-            "那一支今天必须**读**这枚结论（`val deleted = viewModel.deleteCourseGroupAndAwait(target.fragments)` 恰好一处）。" +
+            "那一支今天必须**读**这枚结论（`val deleted = viewModel.deleteCourseGroupAndAwait(deletion.fragments)` 恰好一处）。" +
                 "**朝窄扭这里红**：整句换成别的接收法（`@Suppress(\"UNUSED_VARIABLE\")`、或换成再调一趟判存在性）" +
                 "都不算读了结论",
             1,
@@ -1437,12 +1438,13 @@ class UndoUpdateEntryGuardTest {
         const val SNACKBAR_LONG = "duration = SnackbarDuration.Long,"
         const val HOME_GATED_LABEL = "actionLabel = \"撤销\".takeIf { deleted }"
         const val UNGATED_LABEL = "actionLabel = \"撤销\","
-        const val DISCARDED_GROUP_DELETE = "viewModel.deleteCourseGroupAndAwait(target.fragments)"
+        const val DISCARDED_GROUP_DELETE = "viewModel.deleteCourseGroupAndAwait(deletion.fragments)"
 
-        // ④ 管理页那一支（T127 改判后钉的是药；T124b 把调用名换成 ...AndAwait，其余形状一字未动）
+        // ④ 管理页那一支（T127 改判后钉的是药；T124b 把调用名换成 ...AndAwait，其余形状一字未动；
+        // T253 把那一手的实参从 target.fragments 换成 deletion.fragments —— 判据产物，搜索态下不再窄）
         const val LAUNCH_ANCHOR = "scope.launch {"
         const val READING_GROUP_DELETE =
-            "val deleted = viewModel.deleteCourseGroupAndAwait(target.fragments)"
+            "val deleted = viewModel.deleteCourseGroupAndAwait(deletion.fragments)"
         const val GROUP_IF_DELETED = "message = if (deleted) \"已删除「\${target.displayName}」\""
         const val GROUP_SUCCESS_COPY = "\"已删除「\${target.displayName}」\""
         const val GROUP_FAILURE_COPY = "\"删除失败：\${target.displayName} 还在课表里\""

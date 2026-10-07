@@ -27,7 +27,7 @@ import org.junit.Test
  * ## 药（本卡落的形状，一字照同仓 `HomeScreen` 单课删除那一支对齐 · T121 收的）
  *
  * ```
- * val deleted = viewModel.deleteCourseGroupAndAwait(target.fragments)
+ * val deleted = viewModel.deleteCourseGroupAndAwait(deletion.fragments)
  * message = if (deleted) "已删除「${target.displayName}」" else "删除失败：${target.displayName} 还在课表里",
  * actionLabel = "撤销".takeIf { deleted },
  * ```
@@ -35,6 +35,10 @@ import org.junit.Test
  * ⚠️ 第一行是 **T124b 之后**的形状（B 档：`deleteCourseGroup` → `deleteCourseGroupAndAwait`，写库那一手
  * 挪进 VM 的 `viewModelScope` job、`join()` 与提示条留页 scope）。T127 落的那三拍本身一字未改 ——
  * 本守卫下面那张表除 `readVerdict` / `assignPattern` 两格外其余格子仍按 T127 的原文钉。
+ * ⚠️ **T253 又重钉了同一对格子**：删组那一手的实参从 `target.fragments` 换成 `deletion.fragments`
+ * （判据产物，`domain/schedule/CourseGroupDeletionScope.kt`）。改前那一枚在搜索态下装的是**命中片段**，
+ * 于是"读了结论"那三拍逐字成立、删的却只是子集；换成判据产物后那三拍一字未动，动的只有"删哪一组"。
+ * 第 ⑥ 层确认框那枚针同批改：`deleteGroupConfirmText(deletion, state.timeSlots)`。
  *
  * 提示条文案与那颗按钮**同读一枚** `deleted`，且两处都在同一次 `scope.launch` 里 —— 于是
  * "念了删除失败却还给一颗撤销"这种自相矛盾的组合在形状上就拼不出来。
@@ -366,8 +370,8 @@ class CourseGroupDeletionWiringGuardTest {
         assertEquals(
             "全仓不许再出现「调了组删除却不看返回值」那种裸语句（行首就是 `viewModel.deleteCourseGroupAndAwait(`）。" +
                 "**朝宽扭这里红**：把那枚 `val deleted = ` 拆掉，本格与第 ① 层同时塌；" +
-                "⚠️ 这一格必须按整行判，不能数子串 —— `viewModel.deleteCourseGroupAndAwait(target.fragments)` 是" +
-                "`val deleted = viewModel.deleteCourseGroupAndAwait(target.fragments)` 的子串，改前改后都命中一次",
+                "⚠️ 这一格必须按整行判，不能数子串 —— `viewModel.deleteCourseGroupAndAwait(deletion.fragments)` 是" +
+                "`val deleted = viewModel.deleteCourseGroupAndAwait(deletion.fragments)` 的子串，改前改后都命中一次",
             emptyList<String>(),
             byFile.mapNotNull { (name, text) ->
                 val line = text.lineSequence()
@@ -501,10 +505,14 @@ class CourseGroupDeletionWiringGuardTest {
             dismissAt in 0 until launchAt,
         )
         assertEquals(
-            "确认框正文仍走共享文案件 `deleteGroupConfirmText(group.fragments, state.timeSlots)`（恰好一处）：" +
-                "本卡没碰它 —— 它承诺的是「删掉整组」，与提示条念的「删没删到」是两件事",
+            "确认框正文仍走共享文案件 `deleteGroupConfirmText(deletion, state.timeSlots)`（恰好一处）：" +
+                "**T253 重钉** —— 改前这一格钉的是 `deleteGroupConfirmText(group.fragments, …)`，" +
+                "那一枚 `group.fragments` 在过滤态下是「命中片段」，于是这句念的数与第 ① 层那颗按钮删的" +
+                "集合虽然同名、却一起窄掉了（同屏两句一起说谎，本守卫抓不到）。现在它吃的是判据产物 " +
+                "`deletion`，与那颗按钮交出去的 `deletion.fragments` 同一枚值 ⇒ 「删掉整组」这句话" +
+                "第一次真的由那一手兑现。它承诺的是「删掉整组」，与提示条念的「删没删到」仍是两件事",
             1,
-            occurrences(code, "Text(text = deleteGroupConfirmText(group.fragments, state.timeSlots))"),
+            occurrences(code, "Text(text = deleteGroupConfirmText(deletion, state.timeSlots))"),
         )
     }
 
@@ -719,13 +727,13 @@ class CourseGroupDeletionWiringGuardTest {
         const val UNGATED_LABEL = "actionLabel = \"撤销\","
         const val GATED_LABEL = "actionLabel = \"撤销\".takeIf { deleted },"
         const val GROUP_SUCCESS_COPY = "\"已删除「\${target.displayName}」\""
-        const val GROUP_READ_VERDICT = "val deleted = viewModel.deleteCourseGroupAndAwait(target.fragments)"
+        const val GROUP_READ_VERDICT = "val deleted = viewModel.deleteCourseGroupAndAwait(deletion.fragments)"
 
         // ④ 调用点册子（T124b 换名：写库那一手进了 VM 的 viewModelScope job，调用点只剩 join）
         const val GROUP_AND_AWAIT_CALL_SITE = "viewModel.deleteCourseGroupAndAwait("
         const val GROUP_BARE_CALL_SITE = "viewModel.deleteCourseGroup("
         const val GROUP_READ_AND_AWAIT = "val deleted = viewModel.deleteCourseGroupAndAwait("
-        const val GROUP_BARE_LINE = "viewModel.deleteCourseGroupAndAwait(target.fragments)"
+        const val GROUP_BARE_LINE = "viewModel.deleteCourseGroupAndAwait(deletion.fragments)"
 
         // ② VM
         const val VM_GROUP_SIGNATURE =
@@ -784,7 +792,7 @@ class CourseGroupDeletionWiringGuardTest {
             DeletionEntry(
                 who = "课表管理页删一整组（T127）",
                 file = "com/buaa/schedule/ui/course/CourseManagementScreen.kt",
-                readVerdict = "val deleted = viewModel.deleteCourseGroupAndAwait(target.fragments)",
+                readVerdict = "val deleted = viewModel.deleteCourseGroupAndAwait(deletion.fragments)",
                 messageExpression =
                     "message = if (deleted) \"已删除「\${target.displayName}」\" " +
                         "else \"删除失败：\${target.displayName} 还在课表里\",",
@@ -792,7 +800,7 @@ class CourseGroupDeletionWiringGuardTest {
                 gatedLabel = GATED_LABEL,
                 actionPerformed = "if (result == SnackbarResult.ActionPerformed) {",
                 undoCall = "viewModel.undoDeleteCourse()",
-                assignPattern = Regex("""val (\w+) = viewModel\.deleteCourseGroupAndAwait\(target\.fragments\)"""),
+                assignPattern = Regex("""val (\w+) = viewModel\.deleteCourseGroupAndAwait\(deletion\.fragments\)"""),
                 messagePattern = Regex("""message = if \((\w+)\) "已删除「"""),
                 labelPattern = Regex("""actionLabel = "撤销"\.takeIf \{ (\w+) \},"""),
             ),

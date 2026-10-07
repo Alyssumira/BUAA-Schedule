@@ -181,4 +181,37 @@ class CourseGroupingTest {
     fun emptyCourseListYieldsNoGroups() {
         assertTrue(groupCourses(emptyList(), "").isEmpty())
     }
+
+    // —— T253：过滤态只决定"哪张卡出场"，决定不了"删哪几段" ——
+
+    @Test
+    fun filteredGroupCardStillCarriesTheWholeCourse() {
+        // 本卡病灶那一格：搜索命中 2 / 整组 5。改前这里交回的是那 2 段，于是「删除整门课」只删 2 段，
+        // 而卡上的「N 段」与弹窗那句「全部 N 个片段」都跟着念 2 —— 剩下的 3 段照旧在库里。
+        val group = groupCourses(fiveFragmentGroup(), query = "李四").single()
+        assertEquals("一张卡照旧是那一门课", 1, groupCourses(fiveFragmentGroup(), "李四").size)
+        assertEquals(
+            "过滤态下卡底下仍挂着整组五段（一枚都不许被搜索筛掉）",
+            listOf(11L, 12L, 13L, 14L, 15L),
+            group.fragments.map { it.id },
+        )
+        assertEquals("卡片上那句「N 段」念的是整组", 5, group.fragments.size)
+    }
+
+    @Test
+    fun filterHidesCoursesWithoutTouchingTheMatchedOnes() {
+        // 页头那句「N 门课」数的是命中的门数 —— 过滤本来就该管这件事，且只管这件事
+        val groups = groupCourses(fiveFragmentGroup() + course(16, "大学英语", day = 1, groupKey = "G2"), query = "高等")
+        assertEquals("只有那一门命中 ⇒ 一张卡", 1, groups.size)
+        assertEquals("那张卡是整门课", 5, groups.single().fragments.size)
+        assertEquals("组键仍逐字来自内核那把尺", SemesterStats.courseGroupKey(groups.single().fragments.first()), groups.single().key)
+    }
+
+    private fun fiveFragmentGroup(): List<Course> = listOf(
+        course(11, "高等数学", day = 1, periods = listOf(1, 2), groupKey = "G1", teacher = "张三"),
+        course(12, "高等数学", day = 2, periods = listOf(3, 4), groupKey = "G1", teacher = "张三"),
+        course(13, "高等数学", day = 3, periods = listOf(3, 4), groupKey = "G1", teacher = "李四"),
+        course(14, "高等数学", day = 4, periods = listOf(5, 6), groupKey = "G1", teacher = "李四"),
+        course(15, "高等数学", day = 5, periods = listOf(7, 8), groupKey = "G1", teacher = "王五"),
+    )
 }

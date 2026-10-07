@@ -5,6 +5,8 @@ import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.TimeSlotProfile
 import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.schedule.CourseConflictResolution
+import com.buaa.schedule.domain.schedule.GroupDeletionRequest
+import com.buaa.schedule.domain.schedule.courseGroupDeletionScope
 import com.buaa.schedule.ui.course.deleteGroupConfirmText
 import com.buaa.schedule.ui.course.fragmentSummary
 import com.buaa.schedule.ui.home.conflictCourseLine
@@ -122,16 +124,24 @@ class EmptyPeriodCopyTest {
         val two = listOf(course(day = 1, periods = listOf(1, 2)), course(day = 3, periods = listOf(3, 4)))
         assertEquals(
             "将删除这门课的全部 2 个片段（第1-2节、第3-4节）。删除后可在提示条里撤销。",
-            deleteGroupConfirmText(two, slots),
+            deleteGroupConfirmText(wholeCourseScope(two), slots),
         )
         assertEquals(
             "将删除这门课的全部 2 个片段。删除后可在提示条里撤销。",
-            deleteGroupConfirmText(listOf(course(periods = emptyList()), course(day = 3, periods = emptyList())), slots),
+            deleteGroupConfirmText(wholeCourseScope(listOf(course(periods = emptyList()), course(day = 3, periods = emptyList()))), slots),
         )
         // 只有一段缺节次时，括号里剩下的那段前面不能有悬空的顿号
         assertEquals(
             "将删除这门课的全部 2 个片段（第3-4节）。删除后可在提示条里撤销。",
-            deleteGroupConfirmText(listOf(course(periods = emptyList()), course(day = 3, periods = listOf(3, 4))), slots),
+            deleteGroupConfirmText(wholeCourseScope(listOf(course(periods = emptyList()), course(day = 3, periods = listOf(3, 4)))), slots),
         )
     }
+
+    /**
+     * T253：`deleteGroupConfirmText` 的入参换成了判据产物（数与集合同源）。
+     * 本文件判的是**空节次**那一族，与过滤态无关，所以每一格都走「空搜索框 + 甲档」——
+     * 判据在空过滤下交回的就是传入的那一组，句子里的数也就是片段数，与改前逐字相同。
+     */
+    private fun wholeCourseScope(fragments: List<Course>) =
+        courseGroupDeletionScope(fragments, query = "", request = GroupDeletionRequest.WholeCourse)
 }

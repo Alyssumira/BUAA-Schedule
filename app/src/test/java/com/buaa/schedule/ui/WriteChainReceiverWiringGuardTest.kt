@@ -228,7 +228,7 @@ class WriteChainReceiverWiringGuardTest {
                 signature = "suspend fun deleteCourseGroupAndAwait(courses: List<Course>): Boolean {",
                 jobWrite = "deleted = deleteCourseGroup(courses)",
                 passthrough = "return deleteCourseGroup(courses)",
-                awaitCall = "viewModel.deleteCourseGroupAndAwait(target.fragments)",
+                awaitCall = "viewModel.deleteCourseGroupAndAwait(deletion.fragments)",
                 rawCall = "viewModel.deleteCourseGroup(",
                 undoCall = "viewModel.undoDeleteCourse()",
             ),

@@ -4,7 +4,9 @@ import com.buaa.schedule.core.designsystem.weekCourseCounts
 import com.buaa.schedule.core.designsystem.weekDensityBarDescription
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.TimeSlotProfile
+import com.buaa.schedule.domain.schedule.GroupDeletionRequest
 import com.buaa.schedule.domain.schedule.SemesterStats
+import com.buaa.schedule.domain.schedule.courseGroupDeletionScope
 import com.buaa.schedule.ui.settings.courseManagementRowSummary
 import com.buaa.schedule.ui.settings.wakeUpExportMessage
 import com.buaa.schedule.ui.settings.wakeUpExportRowSummary
@@ -271,7 +273,7 @@ class CourseUnitTwoRulersTableTest {
             "改前那句「将删除这门课的全部 1 个片段」在第二把尺下是谎（删完统计页那门课照旧在列）；" +
                 "换源之后「这门课」与「全部片段」同尺 ⇒ 逐字钉住这句",
             "将删除这门课的全部 2 个片段（第1-2节、第3-4节）。删除后可在提示条里撤销。",
-            deleteGroupConfirmText(merged, TimeSlotProfile.DEFAULT),
+            deleteGroupConfirmText(wholeCourseScope(merged), TimeSlotProfile.DEFAULT),
         )
         // 另一档：5→6 之间是午休，节次串按作息表断开（"第5,6节"）—— 那一格钉的是"段数"与"节次串"
         // 是两把尺、各吃各的读数：段数仍是 2，不因断开而多数一枚，也不因合并而少数一枚
@@ -282,7 +284,14 @@ class CourseUnitTwoRulersTableTest {
         assertEquals(
             "段数念 2（片段行数），节次串念「第5节、第6节」——同一句里两把尺各自如实",
             "将删除这门课的全部 2 个片段（第5节、第6节）。删除后可在提示条里撤销。",
-            deleteGroupConfirmText(lunch, TimeSlotProfile.DEFAULT),
+            deleteGroupConfirmText(wholeCourseScope(lunch), TimeSlotProfile.DEFAULT),
         )
     }
+
+    /**
+     * T253：确认文案改吃判据产物（数与集合同一枚）。本文件判的是「门 / 段」两把尺，
+     * 与过滤态无关 ⇒ 每一格都走「空搜索框 + 甲档」，判据在空过滤下交回的就是传入的那一组。
+     */
+    private fun wholeCourseScope(fragments: List<Course>) =
+        courseGroupDeletionScope(fragments, query = "", request = GroupDeletionRequest.WholeCourse)
 }
