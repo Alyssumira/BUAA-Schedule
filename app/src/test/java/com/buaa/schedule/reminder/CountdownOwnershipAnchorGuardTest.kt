@@ -319,6 +319,26 @@ class CountdownOwnershipAnchorGuardTest {
             1,
             occurrences(destroyBody, GRACE_GATE),
         )
+        // 那道闸的另一半前提：通知真的被本实例挂上过前台才算"屏上没倒计时了"
+        assertEquals(
+            "`$POSTED_GATE_FLAG` 必须与宽限期闸写在**同一行**（实到 " + occurrences(destroyBody, POSTED_GATE_FLAG) +
+                " 处）：startForeground 被拒那一路上 stopForeground 摘不掉任何东西，屏上留着的是" +
+                "广播侧同 id 的兜底倒计时 —— 那份归属护的正是它，抢清就是把刚上岛的倒计时拆掉",
+            1,
+            occurrences(destroyBody, POSTED_GATE_FLAG),
+        )
+        assertEquals(
+            "`$POSTED_FLAG_SET` 恰好两处（postProgressNotification 成功那一支 + onStartCommand " +
+                "契约要求那一支；实到 " + occurrences(service, POSTED_FLAG_SET) + " 处）：漏一处 = " +
+                "那条路走 onDestroy 时归属不摘，残账回到本卡要修的那一格",
+            2,
+            occurrences(service, POSTED_FLAG_SET),
+        )
+        assertEquals(
+            "那枚旗的声明恰好一处（`$POSTED_FLAG_DECL`；实到 " + occurrences(service, POSTED_FLAG_DECL) + " 处）",
+            1,
+            occurrences(service, POSTED_FLAG_DECL),
+        )
 
         // recoverMissedClassStart：读证据 → 落闸 → 清归属 → 才补排（次序反了就是恒假判据）
         val recoverHeads = indexOfAll(service, RECOVER_HEAD)
@@ -642,7 +662,10 @@ class CountdownOwnershipAnchorGuardTest {
         const val DESTROY_ARGS = "courseId = liveWindow.courseId,"
         const val RECOVER_HEAD = "private fun recoverMissedClassStart()"
         const val RECOVER_RELEASE = "ReminderNotifications.releaseCountdownOwnership(window.courseId, anchor)"
-        const val GRACE_GATE = "if (!startBellGracePending) {"
+        const val GRACE_GATE = "if (foregroundNotificationPosted && !startBellGracePending) {"
+        const val POSTED_GATE_FLAG = "foregroundNotificationPosted &&"
+        const val POSTED_FLAG_SET = "foregroundNotificationPosted = true"
+        const val POSTED_FLAG_DECL = "private var foregroundNotificationPosted = false"
         const val GRACE_FLAG_UP = "startBellGracePending = true"
         const val GRACE_FLAG_DOWN = "startBellGracePending = false"
         const val GRACE_DECL = "private var startBellGracePending = false"

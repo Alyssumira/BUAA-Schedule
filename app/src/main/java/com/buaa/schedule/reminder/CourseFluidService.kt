@@ -54,6 +54,17 @@ class CourseFluidService : Service() {
     private var liveWindow: ClassProgressScheduler.ClassWindow = EMPTY_WINDOW
     /** 现在数到哪：只影响卡片第二行的措辞，不影响重发节拍与进度算法 */
     private var phase = LivePhase.IN_CLASS
+    /**
+     * 本实例真的挂上过前台通知（`startForeground` 成功过）。
+     *
+     * onDestroy 要不要把归属摘掉，只看这一件事：**通知还在屏上，归属就还得护着它**。
+     * `startForeground` 被拒的那一路（后台启动前台服务受限 / ROM 省电拦截）里，
+     * `stopForeground(STOP_FOREGROUND_REMOVE)` 摘不掉任何东西 —— 屏幕上留着的是广播侧
+     * 用同一枚 id 发的兜底倒计时，那正是"课前倒计时"此刻唯一的载体；那时把归属清掉，
+     * 紧随其后的重排就会对着一条**确实还挂着**的倒计时走遗留清理（`cancelClassOngoing`
+     * 当场撤掉它），修好的"课前倒计时上不了岛"就此原地复发（卡面第 2 种可能的反面）。
+     */
+    private var foregroundNotificationPosted = false
     private val updater = object : Runnable {
         override fun run() {
             val now = System.currentTimeMillis()
@@ -153,6 +164,9 @@ class CourseFluidService : Service() {
             // 契约要求：即使马上结束也必须先 startForeground()，否则 Android 12+ 抛异常
             runCatching {
                 startForeground(NOTIFY_ID, buildProgressNotification(if (window.endMillis > window.startMillis) 100 else 0))
+            }.onSuccess {
+                // 挂上过、下面立刻 stopForeground(REMOVE) 摘掉 ⇒ 这条实况确实已经不在屏上
+                foregroundNotificationPosted = true
             }
             stopForeground(STOP_FOREGROUND_REMOVE)
             finishLiveAndReschedule()
@@ -178,6 +192,10 @@ class CourseFluidService : Service() {
         // 但不能让异常从这里逃出去（会让调用方/服务崩溃）。
         runCatching {
             startForeground(NOTIFY_ID, buildProgressNotification(progress))
+        }.onSuccess {
+            // 这一格是 onDestroy 那句判据的前提：只有真的挂上过前台通知，
+            // "本实例销毁"才等于"这条实况不在屏上了"
+            foregroundNotificationPosted = true
         }.onFailure {
             android.util.Log.w(TAG, "startForeground 失败，回退普通常驻通知", it)
             stopSelf()
@@ -284,18 +302,22 @@ class CourseFluidService : Service() {
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
         // stopForeground(REMOVE) 把通知摘掉之后，归属就不能再"保护"任何一节课 ——
         // 这条不变量写在 ReminderNotifications.cancelClassOngoing 的注释里，而这一格此前是漏的：
-        // 服务被系统掐掉 / startForeground 被拒（课前那一段还没数到上课铃）之后通知已经没了，
-        // 归属却一直挂到下一次某枚 cancelClassOngoing 调用点被撞到，中间那一段里
-        // ReminderScheduler.shouldTakeDownClassProgress 会答"岛上正数着这节课、别收"，
-        // 而它保护的那条通知早就不存在了。
-        // 两道保留：
-        //  1) 课前那一段刚刚数到上课铃 ⇒ 归属换了用途（"上课铃没落地"的唯一证据），
+        // 服务被系统/ROM 掐掉、或 stopService 之后走到这里，通知已经随前台状态一起没了，
+        // 归属却会一直挂到下一次某枚 cancelClassOngoing 调用点被撞到；中间那一段里
+        // ReminderScheduler.shouldTakeDownClassProgress 答的是"岛上正数着这节课、别收"，
+        // 而它保护的那条通知早就不存在了 —— 于是真遗留（上一节课那条滑不掉的常驻通知 +
+        // 勿扰记录 + 看门狗）也一并被这条不存在的倒计时挡回去（R5 F-11 / F-15 那两条的语义）。
+        // 三道保留，缺一就把还挂在屏上的倒计时判成"已经不在了"：
+        //  1) 本实例真的挂上过前台通知（foregroundNotificationPosted）—— startForeground 被拒
+        //     那一路里 stopForeground 摘不掉任何东西，屏上留着的是广播侧同 id 的兜底倒计时，
+        //     那份归属护的正是它，摘掉它 = 卡面第 2 种可能（课前倒计时刚上岛就被拆掉）；
+        //  2) 课前那一段刚刚数到上课铃 ⇒ 归属换了用途（"上课铃没落地"的唯一证据），
         //     由 recoverMissedClassStart 判完立刻清；这里抢清会把补救判成"铃已经落地"。
-        //  2) 归属记的已经不是本实例这一节 ⇒ 那是下一段实况的账（同一枚通知 id 被接手过），
+        //  3) 归属记的已经不是本实例这一节 ⇒ 那是下一段实况的账（同一枚通知 id 被接手过），
         //     不归这里清 —— 所以走条件版 releaseCountdownOwnership，而不是无条件归零。
         // 为什么不走整包的 cancelClassOngoing：它会 cancel 同一枚通知 id，而此刻那条通知
         // 可能正是上课铃之后那条课中实况的，本实例没有撤它的资格（撤法只归它自己的宿主）。
-        if (!startBellGracePending) {
+        if (foregroundNotificationPosted && !startBellGracePending) {
             ReminderNotifications.releaseCountdownOwnership(
                 courseId = liveWindow.courseId,
                 classStartMillis = ReminderNotifications.countdownAnchorOf(liveWindow),
