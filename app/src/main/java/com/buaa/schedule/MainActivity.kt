@@ -359,6 +359,38 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * 「这一枚落点配不当 NavHost 的根栈」的在册集合（T244，台账 #391）。
+ *
+ * 与 `core/LaunchRequestPolicy.kt` 同一口径的纯判据：只吃已经抽好的可空字符串，
+ * 不碰 NavController、不碰设备、体内不读钟，因此能在纯 JVM 单测里表驱动
+ * （见 `nav/OnboardingStartRoutePolicyTest`）。
+ *
+ * ## 为什么只有首页在册
+ *
+ * `startDestination` 是返回栈的地板，坐在地板上的那一页**没有上一级可回**。它因此不能是
+ * 那种「返回键走 popBackStack，弹不动就跳首页」的页面：导入页正是这一族 —— 它的 `onBack`
+ * 兜底与 `navigateTopLevel` 的 `popUpTo(graph.findStartDestination().id)` 咬在同一条链上，
+ * 根栈是它自己时两头都指回它自己，于是返回键再也退不出去。基点上这一族的栈形状是
+ * `[import]` → 按返回 → `navigateTopLevel("home")` → `[import, home]` → 返回 → `[import]` →
+ * 再按导入页的箭头 → `[import, home]`，一整趟会话卡死（台账 #391）。
+ *
+ * `import` 与 `settings` 都在底栏那一族里（见 [navItems]），随时能从底栏再进，当根栈换不到
+ * 任何便利；`editor/-1` 更早就被排除在根栈之外，理由写在 BUAAScheduleApp 里那一行上方。
+ *
+ * ## 不在册不等于丢掉
+ *
+ * 不在册的落点走 [pendingOneShotRoute] 那条已经验证过的「先清后跳」一次性 navigate ——
+ * 也就是基点上只有 `editor/` 一族享受过的那条路，本卡把它推广成默认。
+ */
+internal val ROOT_SAFE_START_ROUTES = setOf("home")
+
+/**
+ * [ROOT_SAFE_START_ROUTES] 的成员判定。`null`（引导交回的「就落首页」）不在册 ——
+ * 调用点那一句 `?: "home"` 已经把它折成首页，不需要再判一次，也不该由这里兜着。
+ */
+internal fun canBeNavRoot(route: String?): Boolean = route != null && route in ROOT_SAFE_START_ROUTES
+
 private data class NavItem(
     val route: String,
     val labelRes: Int,
@@ -483,14 +515,15 @@ private fun BUAAScheduleApp(
         }
     }
     val navController = rememberNavController()
-    // 引导最后一步「手动添加课程」交回来的是 editor/-1 这种**一次性**路由，不能当
-    // startDestination：NavHost 找起点是按 route 模板（editor/{courseId}）匹配的，
-    // 传具体值根本找不到起点；而且编辑器成了根栈就没有可返回的上一级，
-    // 返回键等于直接退出应用。所以起点仍是首页，编辑器在后面用一次 navigate 叠上去，
-    // 消费完立刻清空 —— 转屏或重组都不会再跳第二次（P2）。
-    val navStartRoute = startRoute?.takeUnless { it.startsWith("editor/") }
-    var pendingEditorRoute by remember(startRoute) {
-        mutableStateOf(startRoute?.takeIf { it.startsWith("editor/") })
+    // 只有 ROOT_SAFE_START_ROUTES 在册的落点配当 startDestination（T244，台账 #391）。
+    // 基点上这一行的判据是「按前缀摘掉 editor/ 那一族」，于是 import 留在了允许当根的一侧：
+    // 引导第 4 步交回 import ⇒ startDestination 就是 import ⇒ navigateTopLevel 的 popUpTo
+    // 指回 import 自己 ⇒ 返回键在导入页与首页之间无限对倒。判据因此反过来写：
+    // 在册的才留下当根栈，其余一律走下面那条一次性 navigate —— startDestination 恒为首页。
+    // editor/-1 落进的是同一条路，它「先清后跳、只生效这一次」的语义一字未动。
+    val navStartRoute = startRoute?.takeIf { canBeNavRoot(it) }
+    var pendingOneShotRoute by remember(startRoute) {
+        mutableStateOf(startRoute?.takeUnless { canBeNavRoot(it) })
     }
     val viewModel: ScheduleViewModel = viewModel(
         factory = ScheduleViewModel.Factory(context.applicationContext as android.app.Application),
@@ -614,7 +647,7 @@ private fun BUAAScheduleApp(
                                 uiState = uiState,
                                 reminders = reminders,
                                 onDarkThemeChange = onDarkThemeChange,
-                                startRoute = navStartRoute,
+                                rootStartRoute = navStartRoute,
                                 requestedDayOfWeek = requestedDayOfWeek,
                                 onDayRequestConsumed = onDayRequestConsumed,
                                 headerBandOwner = headerBandOwner,
@@ -634,7 +667,7 @@ private fun BUAAScheduleApp(
                             uiState = uiState,
                             reminders = reminders,
                             onDarkThemeChange = onDarkThemeChange,
-                            startRoute = navStartRoute,
+                            rootStartRoute = navStartRoute,
                             requestedDayOfWeek = requestedDayOfWeek,
                             onDayRequestConsumed = onDayRequestConsumed,
                             headerBandOwner = headerBandOwner,
@@ -661,13 +694,14 @@ private fun BUAAScheduleApp(
                 }
             }
         }
-        // 引导落点里的一次性 editor 路由。刻意声明在 NavHost **之后**：side effect
+        // 引导落点里那些不在 ROOT_SAFE_START_ROUTES 册子内的一次性路由（editor/-1、import）。
+        // 刻意声明在 NavHost **之后**：side effect
         // 按组合顺序执行，排在后面才能保证 NavHost 已经装好 navigator，
         // 否则这里 navigate 会撞上"NavController 尚未与 NavigationHost 关联"。
-        LaunchedEffect(pendingEditorRoute) {
-            val route = pendingEditorRoute ?: return@LaunchedEffect
+        LaunchedEffect(pendingOneShotRoute) {
+            val route = pendingOneShotRoute ?: return@LaunchedEffect
             // 先清后跳：这条路由只生效这一次
-            pendingEditorRoute = null
+            pendingOneShotRoute = null
             navController.navigate(route) { launchSingleTop = true }
         }
         // 更新弹窗挂在主题层而不是某个页面：自动检测可能在任意页面弹出，
@@ -739,8 +773,17 @@ private fun AppNavHost(
     uiState: com.buaa.schedule.ui.ScheduleUiState,
     reminders: List<com.buaa.schedule.domain.model.ReminderSetting>,
     onDarkThemeChange: (DarkModePreference) -> Unit,
-    /** 引导结束时选定的落点页；null = home */
-    startRoute: String? = null,
+    /**
+     * 引导结束时选定的落点页；null = home。
+     *
+     * 名字刻意不叫 `startRoute`：传进来的必须是 BUAAScheduleApp 里过了
+     * [canBeNavRoot] 的那一枚（`navStartRoute`），不是引导交回的原始落点。
+     * 基点上这一枚参数收的就是原始 `startRoute`，于是 `import` 能一路走到
+     * `startDestination`（台账 #391 的根因）；改名之后「这一行吃的是不是已过判据的值」
+     * 在源码上直接可读，守卫也才有的可钉
+     * （`nav/StartDestinationRootGuardTest` ② 数这一行的取值来源）。
+     */
+    rootStartRoute: String? = null,
     /** 4×2 网格格子点击要打开的那一天（ISO 1..7，null = 无请求） */
     requestedDayOfWeek: Int? = null,
     onDayRequestConsumed: () -> Unit = {},
@@ -825,7 +868,7 @@ private fun AppNavHost(
         ) {
         NavHost(
         navController = navController,
-        startDestination = startRoute ?: "home",
+        startDestination = rootStartRoute ?: "home",
         // 一级页面没有 TopAppBar，状态栏内边距要自己补（Scaffold 的 padding 不含它）
         modifier = Modifier
             .padding(contentPadding)
