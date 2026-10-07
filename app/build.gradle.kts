@@ -540,7 +540,7 @@ val releaseStampVersion = (project.findProperty("releaseVersion") as String?)?.t
 /**
  * #340：这一轮发版的**运行号**（由 `release.ps1` 用 `-PreleaseRunId=` 传进来）。
  *
- * 为什么需要它：产物层守卫读的是 `app/build/outputs/apk/release/*.apk` 与
+ * 为什么需要它：产物层守卫读的是 `app/build/outputs/apk/release` 下面的 .apk 与
  * `app/build/outputs/mapping/release/configuration.txt`，这两样都可能在 `build/` 里
  * 躺着**上一轮**的残留。"文件的 mtime 够新"不是判据（复制、解压、杀软扫一遍都会改它），
  * 所以要一枚只有本轮能凑出来的暗号：脚本把 `$runId` 同时给
