@@ -170,7 +170,7 @@ class ScanFlightAdmissionTest {
         val sameCode = droppedArrivalCardText(ScanFlightAdmission.DropSameCodeWhileDispatching)
         assertEquals(
             "同一枚码那一句：",
-            "上一次签到还在提交，屏幕上这一张与正在提交的那一张是同一枚，所以没有再投第二遍。" +
+            "上一次签到还在提交，屏幕上这一张与正在提交的那一张是同一枚，所以这一手没有投出去。" +
                 "重复提交一次签到比这一手被吃掉更糟。",
             sameCode,
         )
@@ -187,10 +187,13 @@ class ScanFlightAdmissionTest {
             assertTrue("那一句没说明白「没有投出去」：$text", text.contains("没有投出去"))
             assertFalse("那一句糊成了网络故障的说法：$text", text.contains("网络异常"))
         }
-        // 只有真的还有一步可走的那两句给落点；「同一枚」那一档要等的就是屏幕上那一发
+        // 只有真的还有一步可走的那两句给落点；「同一枚」那一档要等的就是屏幕上那一发，
+        // 给它一个按钮就是把用户支去按一颗并不需要按的钮（那一条路本来就投不出去第二次）
         assertTrue("换一枚那一句没给下一步的落点：", newCode.contains("等屏幕上的提交结果出来之后按「重新扫码」"))
         assertTrue("相册那一句没给下一步的落点：", userHand.contains("等屏幕上的提交结果出来之后，再选一次那张图"))
-        assertTrue("「同一枚」那一句把话说成要用户做点什么了：", sameCode.contains("所以没有再投第二遍"))
+        assertFalse("「同一枚」那一句把用户指向了「重新扫码」（这一档不需要按任何东西）：", sameCode.contains("重新扫码"))
+        assertFalse("「同一枚」那一句把用户指向了相册（这一档根本没有图的事）：", sameCode.contains("再选一次"))
+        assertTrue("「同一枚」那一句没交代这是故意不重投：", sameCode.contains("重复提交一次签到比这一手被吃掉更糟"))
     }
 
     /** ⑤ 反指：六句都不许把用户指向一条本仓已经删掉的退路，也不许带出一个字符的原文 */

@@ -153,7 +153,7 @@ internal fun droppedArrivalCardText(dropped: ScanFlightAdmission.Dropped): Strin
         "上一次签到还在提交，这一张码没有投出去。它已经记进重扫冷却的账，冷却期内不会再自动补投。" +
             "等屏幕上的提交结果出来之后按「重新扫码」，再对准一次。"
     ScanFlightAdmission.DropSameCodeWhileDispatching ->
-        "上一次签到还在提交，屏幕上这一张与正在提交的那一张是同一枚，所以没有再投第二遍。" +
+        "上一次签到还在提交，屏幕上这一张与正在提交的那一张是同一枚，所以这一手没有投出去。" +
             "重复提交一次签到比这一手被吃掉更糟。"
     ScanFlightAdmission.DropUserHandWhileDispatching ->
         "上一次签到还在提交，你刚递进来的这一次没有投出去。等屏幕上的提交结果出来之后，再选一次那张图。"
