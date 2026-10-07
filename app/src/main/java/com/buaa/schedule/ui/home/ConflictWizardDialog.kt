@@ -1,5 +1,7 @@
 package com.buaa.schedule.ui.home
 
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,10 +21,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.viewModelScope
-import androidx.navigation.compose.activityViewModels
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.CourseSaveOptions
@@ -55,6 +59,27 @@ private fun CourseConflictResolution.ConflictGroup.stableKey(): String = buildSt
 
 /** 课程在弹窗生命周期内的稳定身份：未落库的课（id=0）只能退到名字。 */
 private fun Course.wizardKey(): String = if (id != 0L) id.toString() else "n:$name"
+
+/**
+ * `LocalContext` 可能被主题/Dialog 包了一层 `ContextWrapper`：剥到真正持有 ViewModelStore 的那一枚
+ * （MainActivity 是 ComponentActivity ⇒ 它自己就是 `ViewModelStoreOwner`）。剥不到交 null。
+ */
+private fun Context.asActivityStoreOwnerOrNull(): ViewModelStoreOwner? = when (this) {
+    is ViewModelStoreOwner -> this
+    is ContextWrapper -> baseContext.asActivityStoreOwnerOrNull()
+    else -> null
+}
+
+/**
+ * 剥不到就抛，报"这枚对话框被摆到了 Activity 之外"那一档 —— 不许在此处编一枚"看起来能用"的 scope：
+ * 那正是本卡修掉的那件事（协程的寿命悄悄换了主人，而界面上一切照旧）。
+ */
+private fun requireActivityStoreOwner(context: Context): ViewModelStoreOwner =
+    context.asActivityStoreOwnerOrNull()
+        ?: error(
+            "冲突向导的收尾协程要挂在 Activity 作用域那枚 ScheduleViewModel 的 viewModelScope 上（T250）：" +
+                "LocalContext 剥不到 ViewModelStoreOwner ⇒ 这枚对话框被摆到了 Activity 之外",
+        )
 
 /**
  * 「只改这些周」那一次落库，**首页与统计页共用这一份**（T82）。
@@ -140,13 +165,23 @@ fun ConflictWizardDialog(
      * —— 与 [applyConflictShift] 里那枚 job **同一枚** scope，不许是行的组合 scope
      * （行滚出 LazyColumn 视口即 dispose，见本文件 [applyConflictShift] KDoc 里 T250 那一条）。
      *
-     * ⚠️ 这个默认值就是**生产接线本身**，不是给测试留的兜底：MainActivity 全站只建一枚
-     * Activity 作用域的 `ScheduleViewModel`（`MainActivity.kt:556`）并把**同一个实例**递进首页与统计页
+     * ⚠️ 这个默认值就是**生产接线本身**，不是给测试留的兜底：MainActivity 全站只建一枚 Activity
+     * 作用域的 `ScheduleViewModel`（`MainActivity.kt:556`）并把**同一个实例**递进首页与统计页
      * （`viewModel = viewModel`），所以这里取到的与调用方 `onApplyShift` 闭包里那一枚是同一个对象。
-     * 取 `activityViewModels()` 而不是 `viewModel()`：本对话框长在两页的 NavHost 目的地**里面**，
-     * 后者会落到 NavBackStackEntry 的 store 上、当场造出第二枚 `ScheduleViewModel`。
+     *
+     * 取法与 MainActivity 那句**同一个 compose 函数、同一个 owner、同一把 key 算法**（类的规范名），
+     * 因此命中 store 里那枚已缓存的实例；不许退成裸的 `viewModel()`：本对话框长在两页的 NavHost
+     * 目的地**里面**，那里默认的 `LocalViewModelStoreOwner` 是 NavBackStackEntry 的 store ⇒
+     * 会当场造出**第二枚** `ScheduleViewModel`（第二枚 viewModelScope、第二趟 init）。
      */
-    viewModel: ScheduleViewModel = activityViewModels(),
+    viewModel: ScheduleViewModel = viewModel(
+        viewModelStoreOwner = requireActivityStoreOwner(LocalContext.current),
+        // factory 与 MainActivity:556 同一枚：store 里已缓存时它压根不会被调用，
+        // 这一档只是"万一没缓存"（冷进程直进统计页那一支）的兜底
+        factory = ScheduleViewModel.Factory(
+            LocalContext.current.applicationContext as android.app.Application,
+        ),
+    ),
     /** 平移落库：挂起直到写完，返回 true 表示确实写进了库。第三个参数是那组冲突的周次。 */
     onApplyShift: suspend (Course, List<Int>, List<Int>) -> Boolean,
     onDismiss: () -> Unit,
