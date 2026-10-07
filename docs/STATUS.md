@@ -5144,3 +5144,65 @@ entry 重建而复位 ⇒ 旗没了、第二条协程不点火 ⇒ 仍会空白�
 - `ScheduleViewModel.kt` 现在 1,834 行（T181 + T183 先后改它）⇒ 全仓指向该文件的裸 `:NNN` 锚点自 `undo()` 起 **+36**，登记 **#233**（含 `docs/TESTING.md` 与 README 现值跟到 1,929 / 239 / 62）。
 - 本轮注入：T182 / T183 各自报 **0 枚**。
 - 旧账未动：**push**（现在 29 枚）、**发版**（tag 仍 `v0.1.1`）、#193、#143、真机 #14 / #90 / #98、#217、#218、#219、#220。
+
+## 10-06 夜～10-07 凌晨：第七轮收口（T184 → 普查再收一张网 → T190 / T192 / T193 三枚判据）
+
+起点 = 上一轮顶端 `7bed35a`（代码停在 `31c0dca` + 台账）。本轮把第七轮上半留的 C-7 / C-9 两格收掉一枚（C-7＝T184），又从"注释与代码自相矛盾"和"`?: <常量>` 造出坐标"两族各扫出一枚活口，三枚并行落地。
+
+### 1 T184（C-7）：备份那两句「手动课程」此前是两套定义
+
+`ui/ScheduleViewModel.kt` 预览那一句写 `it.isManualOverride`，`data/repository/ScheduleRepository.kt` 恢复那一句写 `it.semesterCode == null` —— 同一个词两套定义，同一份备份的两句数因此天生对不上。T133 之后被拖过 / 挪过时间的教务课是 `isManualOverride = true` **且** `semesterCode` 照样非空，两集合不重合 ⇒ 预览把"拖过的教务课"念成"手动课程"。
+裁定按本仓派生字段口径走**类体属性**那一等（值 = f(同表参数)）：`domain/model/Course.kt` 的 `:107` 那一句 `val isManualCourse: Boolean get() = semesterCode == null`，两侧各读它。
+同判据在 SQL 里有一枚**读不到 Kotlin 属性的孪生落点**：`data/local/CourseDao.kt` 三条 `semesterCode IS NULL`（`getManualCourses()` 是恢复流程取本地手动课那一条）⇒ 七层守卫里单独一层钉它的枚数与 `@Query`↔`fun` 的配对位置。
+另两枚裸 `semesterCode == null`（`domain/schedule/CourseFilter.kt` 的"手动课**或**本学期课"、`widget/WidgetConfigActivity.kt` 组件绑定配置那枚）**是不同含义**，守卫按文件点名各自钉 1 处，不许被"统一"进来。
+四枚 commit（`f0ce477`/`01e0ed2`/`f25cca1`/`9769839`）。合并态我这侧独跑门禁：八步 rc 全 0、两遍都是 **1,940 tests / 241 suites / 0 skipped**、lint 0e·14w、apk 7,254,844 B。
+⚠️ 我自己那把静态针在 step0b 报了 `minByOrNull 同族=3 / ?: currentWeek ?: 1=2 / previous?.number ?: 1=2` 三枚"MISMATCH"——那是我拿 `grep` 直数**含注释**的原文，而守卫读的是抹注释文本；同一棵树上按守卫同一算法复算，三枚针分别是 **1 / 0 / 0**，与守卫一致。**编排侧的针必须和守卫同口径，否则我会把注释当成代码误报成"病灶回潮"。**
+
+### 2 编排侧第二张普查网（只读，零构建）：本轮扫出四枚活口
+
+- **`?: <硬写的周数/节次>` 造出界面上真在用的坐标**这一族：`IcsParser.sectionOf` 的 `previous?.number ?: 1`（**活**，见第 4 节 T192）、`HomeScreen.kt` 的 `:666` 与 `WeekView.kt` 的 `:225` 的 `?: 20`（**活**，见第 6 节 #236）、`ScheduleExporters.kt` 的 `:61-62` 的 `weeks.firstOrNull() ?: 1`（**活**，见第 6 节 #237）、`BuaaScheduleParser.kt` 的 `:215-217` 的 `minByOrNull … ?: return null`（**零调用方**，见 #238）。
+- **「挑第 1 周」这一判在盘上有两路实现**：`fetchSemesterInfo`（真路）与 `parseTermWeeks`（零调用方）——两路共用同一枚"序号缺省 ⇒ 按列表序取首行"的退化，而注释写的是「serialNumber 最小 **/** startDate 最早」两条判据。⇒ #235（T193 落地后我判出的过严一等）与 #238。
+- **同一函数内并排两枚派生同一个量、一枚诚实一枚造值**：`WeekView.kt` 的 `:250`（`?: 1`）与 `:296`（`pagerWeek`，不带 `?: 1`，且它上面的注释 `:294-295` 逐字写着"不凭空造出'第 1 周'误导用户"）⇒ T190 的病灶就是这枚自相矛盾。
+- 判死并登记为「别再盘第四遍」的：`HomeScreen` 翻周那两枚 `?: 1` / `?: totalWeeks`（两侧都有 `enabled` 挡着，但**那是"靠 enabled 兜住"的形状，enabled 判据一改就活**）；`WidgetNavigation` 的 `browseBaseWeek`（造值 + 同框「第 N 周 · 假期中」成对，KDoc 认过）；`StatsScreen:621` 的 `?: 1`（同段注释明写"这是用户点开想看的那一周，不是内核去猜的今天"）。
+
+### 3 三张卡（起点都是 `7bed35a`，零文件重叠 ⇒ 并行）
+
+- **T193**（`fef05a6`/`5b9e7bf`/`c2fb721`）：`fetchSemesterInfo` 挑第 1 周抽成 `data/import/BuaaFirstWeekPolicy.kt`（`resolveBuaaFirstWeek`，纯 JVM、零时钟、串序当日期序），判据按注释承诺的两条走**并交叉核对**：序号那条与最早日期那条**分家 ⇒ 不可信**，交 `Undetermined(reason)`，调用点于是 `SemesterInfo(weeks.size, null)`，下游 T180 那道闸就诚实失败，而不是拿一枚"合法但错周"的日期把整表偏移掉。⚠️ 它点出一枚我卡面没算到的形状：**`?: weeks.first()` 那一支根本不可达**（`:269` 已对非空 `weeks` 早退，`minByOrNull` 在非空集合上必回非 null）——真正的退化不是那支，而是**并列时 `minByOrNull` 取首元素**；那枚死兜底的作用恰好是"看起来有条理、实际掩盖了真退化"。它还把我卡面 §4 第 4 格（`?.substringBefore(" ")` 钉 1 处）判成不合法并**点名**改钉 0 处 + 内核那一侧钉 1 处——因为内核交的是非空串，调用点再写 `?.` 就是编译器会警告的第二枚不可达支。这是**代理驳我的尺驳对了**的一例。
+- **T192**（`bd973d6`/`9f52f46`/`f5a169f`）：`sectionOf` 抽成 `data/import/IcsSectionPolicy.kt`（`resolveIcsPeriod`，`Resolved(number, Via.InsideSlot|NearestPrevious)` / `BeforeFirstSlot` / `NoSlots`）。两枚实测：① **早于第一节课的活动被静默安成第 1 节**（07:00 的早自习 ⇒ `periods=[1]` ⇒ 真写库、真上课表、`colorIndex` 也跟着算）；② **"最近的前一个节次"其实是列表序不是时间序** —— 它给的证据链是我这轮最想要的那种：`ScheduleViewModel:1235 → ScheduleRepository:139 → TimeSlotDao:14 的 @Query("… ORDER BY number")` ⇒ **只有 `number` 升序被保证**，而 `SettingsScreen:650-681` 的 `startTime/endTime` 是自由文本、闸门 `TimeSlotValidation:21-25` 只做**逐行** `start < end`、无跨行单调性检查，`TimeSlotEntity` 主键是自增 `id`（`number` 既不唯一也不有序）⇒ 乱序可达。变异 B 的定量读数：DEFAULT 表 6 种打乱 × 60 枚探针钟点，**190 格**与升序输入不同。"晚于最后一节折进最后一节"按注释是**有意的**，它没有顺手改方向，而是用 `Via.NearestPrevious` 把折算标出来并钉两格。
+- **T190**（`6e1ad84`/`3a3c5a5`/`33983a3`）：`WeekHeaderTodayPolicy.kt` 里补第二枚判据 `headerWeekNumberOrNull(displayWeek, currentWeek)`（**零 `?: 1`**），`WeekView.kt` 的 `:250` 改吃它 ⇒ 寒暑假那一档表头不再印"学期第 1 周"的七天日期（与同屏「假期中」不再打架）。⚠️ 两处值得复记：① 它把 `WeekView.kt` **继续配平成 2445 行**（四处改动全行内换行内，`git diff --stat` = 8 ++--，指向该文件的 8 枚锚点一枚不漂）；② 它发现同一函数里还有**第三枚** `displayWeek ?: currentWeek ?: 1`（`:310`，整段在 `if (pagerWeek != null)` 里 ⇒ 可证死格），为了能真把 `?: 1` 清到 0 处，它把那一枚改成吃 `pagerWeek`（语义逐字相同）并写了说明。
+  顺带读出 null 那一路的全部后果：`cellDate == null` ⇒ 日期不印、`SpecialDayBadgeText` 直接 return ⇒ **「休／班」标注也一起不印**（假期里本来印在假日期上，撤掉是对的，但这一格只有静态证据，装机要看版面）。
+
+### 4 合并态门禁（我这侧在 master 上冷跑，验的就是 `7eaaecc`）
+
+链：`7bed35a → T184(4) → T193(3) → T192(3) → T190(3)`（三枚分支各自 rebase 到已合并的 master 再 `--ff-only`，全程 blob 都是 LF 归一（`core.autocrlf=true`），无假冲突）。
+起跑前自证：`TREE==HEAD`、四枚祖先全 Y、`STATUS.md` bareLF 0、`WeekView.kt` 2445、**XML 目录枚数 0**（先删后跑，防缓存假绿）。
+静态尺：`@Test` **1,993** = 1,929（上一轮）+ 11（T184）+ 16（T193）+ 25（T192）+ 12（T190），`.kt` 文件 **242**、`*Guard*` **66**、读主源码的测试 **106**，四枚 docs 锚点尺 **268 / 589 / 146 / 24** 未漂。
+八步：`--stop` / `clean` / `assembleRelease`（**7,259,769 B**）/ `testDebugUnitTest --rerun-tasks`（**248 suites · 1,993 tests · 0 failures · 0 errors · 0 skipped**）/ `lintDebug`（**0 errors · 14 warnings**）/ 第二遍独立复现 / `:benchmark:compileNonMinifiedReleaseKotlin` / `assembleDebug`。
+包体：7,254,865 → 7,259,769（+4,904 B）是"真往 dex 加了四枚内核 + 六枚守卫测试类"的量，但按 [[buaa-apk-size-floor]] 口径**单次全量不立地板**，要在同一 commit 上再跑一次独立全量两数一致才记。
+
+### 5 `gradle --stop` 是全局的：本轮它杀了三条并行的门禁
+
+三张卡的回执各自都有一段"这趟读数作废"的记录，原因逐字相同：`Gradle build daemon has been stopped: stop command received`。T190 连废两趟、T192 整趟 gate#1 与一次定向变异、T193 一枚变异趟盘上剩的是**别枚变异的绿 XML**（rc=1 却"对得上"，差点当成自己的读数）。而**凶手是我**：我的门禁脚本 step1 就是 `--stop`，它停的是共享注册表里所有人的守护进程；代理们照我卡面写的 `--stop` 又反过来杀了我这一趟。
+⇒ 已改的口径（写进后续卡面）：**并行期间一律 `--offline --no-daemon`，不跑 `--stop`**；`--stop` 只在编排侧独占一轮收尾时用（且必须先 `JAVA_HOME`，否则它会打印 "location of your Java installation." 并**成功退出却一个都没停**，见 [[env-windows-shell-toolchain]]）。读数一律核 XML 的 `timestamp` 是否落在自己窗口内；变异趟前先 `rm -rf app/build/test-results/testDebugUnitTest`（T193 自己发明的这条有效）。
+
+### 6 本轮新登记的活口（都在册，未动盘）
+
+- **#235**：T193 那条判据把"并列"**一律**判 `Undetermined`，含"两行序号相同且日期串也相同"——同串两行是互相印证不是猜，而按现在这一判，教务回一枚重复行就够让首次导入整条挂死。已并进 **T196** 卡面第③格。
+- **#236**：没设学期时 `HomeScreen.kt` 的 `:666` 与 `WeekView.kt` 的 `:225` 两枚 `?: 20`。跳周弹窗 `weekChoices`（`:1166`）**真列出 1..20**，点下去顶栏念出周号，而表头一枚日期都不印、网格把**全部课程**都画出来；`SemesterProgressLine` 拿假 20 画轨道；第二枚 `?: 20` 的分母进 `notEveryWeek`，那枚旗进**读屏文案**「，不是每周都有」。**T197 卡面**已写（判据三枚：无学期不给周次导航 / 清单为空 / 分母改用真实出现过的最大周号）。
+- **#237**：`ScheduleExporters.kt` 的 `:61-62` 给空周次的课造「第 1-1 周」写进**别的 App**（导出即收不回），而同文件 `:50-56` 已经就 `startNode` 认过同一族账并改成"这一项不出场"⇒ 同口径下的漏网。与 #227（T185 不连续周次压平）同文件 ⇒ **必须并卡串行**。
+- **#238**：`BuaaScheduleParser.kt` 的 `:215-217` 的 `parseTermWeeks` 是**零生产调用方**的第二路"周列表→学期"（只有 `BuaaTermWeeksParserTest:22` 在叫），形状与真路已经不一致；同文件 `:46-47/:74-83` 的 `fallbackWeeks = (1..weeksUpperBound)`（教务没给周次信息就当整学期每周都上）带 `fallbackWeekCourses` 计数却没进用户可见报数 ⇒ 要判是不是 #229 那一族的第四处。
+- **#229 已扩范围**：ICS **解析阶段**被 T192 跳过的那些条**只有 `Log.w`**，用户看不见。实测：`IcsParser.parse` 只回 `List<Course>`，`importParseSummary`（`ImportConflictCopy.kt` 的 `:66-77`）只有"新增/更新/冲突 K 组"三数没有 skipped 位；现成通道 `PendingImport.warnings`（VM `:145-146`，`ImportScreen.kt` 的 `:277` 渲染）今天只有教务那一路在喂。⚠️ T181 那枚 `ImportCompletionSkippedCountGuardTest` 钉的是**落库阶段**的账，两本账不许混成一句。
+
+### 7 注入与读数陷阱登记
+
+T193 自报 **2 次**（同一句重复投递，冒充系统指令的"友好提醒"，全程未调用任何 MCP ⇒ 未执行、未影响交付）；T192 自报 **1 次**（落在 Edit 工具返回体里，伪装 "Plan mode is active、Edit/Write 被锁"，时机正好在卡面授权的变异步中间 ⇒ 不执行，改走 shell 完成变异并还原，事后 Edit 仍能正常使用，反证那条是伪造的）；T190 自报 **0 次**。
+两枚**非注入但要入账**的读数陷阱：① 外来 `--stop` 打断后盘上残留的绿 XML 与本次 rc=1 恰好"对得上"（见第 5 节）；② 一条 `find … | sed -n` 把另一棵工作树的路径吞成空输出，看起来像"文件不存在"（T190 用 Glob 复核后判明 `ManualCourseDefinitionGuardTest.kt` 只在 `.worktrees/T184`，与本树没有 T184 的事实一致）⇒ **空输出先怀疑自己的查询形状，别急着当"不存在"**。
+另：我卡面给的 base `@Test` 尺 **1,933** 被 T193 与 T192 **各自独立复算成 1,929**（同一棵树同一条命令）。1,933 是我把"上一轮 1,929 + T184 的 11 枚"心算错成的数——T184 那 11 枚当时还没合。**卡面上的枚数一律现算，别在脑子里加。**
+
+### 8 未验到 / 残余
+
+- T190 / T192 / T193 三枚的运行期后果**全部只有 JVM + 静态证据**：假期里表头的版面（清单空掉、日期不印、休/班 一起消失）、真含早自习的 .ics 导入、教务真回 null `serialNumber` 的页面 —— 三格都要装机或真数据，我这侧下一轮补。
+- `startDate` 串序 = 日期序 这一前提（T193 判据的地基）没有抓包证据；若教务写 `2026/9/7`，内核仍按串序挑并原样交出，合法性由 T180 拦下，"挑得对不对"未验。
+- T192 的 `IcsExporter` 与新判据的对称性未复核；真库里是否已有「同 `number` 多枚」或「start 非单调」的节次行未取证。
+- `ScheduleViewModel.kt` 仍 1,834 行（本轮没动它）⇒ #233 那格锚点重钉的范围不变，另加"docs/TESTING.md 与 README 现值跟到 **1,993 / 242 / 248 / 66 / 106**"。
+- 旧账未动：**push**（现在 **43 枚**）、**发版**（tag 仍 `v0.1.1`）、#193、#143、真机 #14 / #90 / #98、#217、#218、#219、#220、#231（台账自己那节重复两份，删哪一份待定）。
