@@ -52,15 +52,33 @@ class ClassProgressReceiver : BroadcastReceiver() {
                                 if (classProgress) {
                                     // 同一条实况窗口：先发 promoted 兜底通知，再交给前台服务接管。
                                     // 两者共用同一通知 id，服务启动成功后自然覆盖兜底那条。
-                                    ReminderNotifications.startLiveWindow(
-                                        context = context,
-                                        window = window,
-                                        phase = LivePhase.IN_CLASS,
-                                    )
+                                    //
+                                    // 这枚 runCatching 是**附加能力不连坐核心能力**那一族的第②格（#333）：
+                                    // 实况那手（ensureChannels 的 binder、builder.build()、notify()）
+                                    // 一抛，原先就会直接跳到最外层那句 Log.w，把后面的 enter() 整个带走 ——
+                                    // 这一节课的自动勿扰永久不进，而下课铃早已在上一行排好、
+                                    // restore 因"没记录"整程 no-op，自愈链也无从接手。
+                                    // 分兜之后各死各的，红的只是实况那一半。不换序：
+                                    // scheduleEnd 仍排第一（R5 F-31，被 ClassProgressCleanupDecisionTest
+                                    // 的 startBellStillSchedulesEndBellFirst 逐字钉着）。
+                                    runCatching {
+                                        ReminderNotifications.startLiveWindow(
+                                            context = context,
+                                            window = window,
+                                            phase = LivePhase.IN_CLASS,
+                                        )
+                                    }.onFailure {
+                                        android.util.Log.w(TAG, "上课实况窗口下发失败（勿扰与下课铃照常）", it)
+                                    }
                                 }
                                 // 下课铃只是首选恢复路径，ROM 清闹钟时它会被吞：把下课时刻一并交给
                                 // enter()，由它落恢复期限 + 排看门狗闹钟，静音不至于没有终点。
-                                ClassProgressDnd.enter(context, end)
+                                // 这一枚自己一枚兜底：勿扰是三条链里最"沉默即失效"的一条 ——
+                                // 少进一次用户不会收到任何提示，只会以为"这 app 又不灵了"，
+                                // 所以它的失败必须有自己的那一行，而不是混进"广播处理失败"里。
+                                runCatching { ClassProgressDnd.enter(context, end) }.onFailure {
+                                    android.util.Log.w(TAG, "上课自动勿扰进入失败（实况/下课铃不受影响）", it)
+                                }
                                 // 上课铃这一刻正是"上一节课 → 这一节课"的转折点：
                                 // 今日列表里的「进行中」标记和「下一节课」的倒计时都必须跟着翻面。
                                 WidgetCommon.requestLiveRefresh(context)
@@ -81,7 +99,12 @@ class ClassProgressReceiver : BroadcastReceiver() {
                             ACTION_DND_WATCHDOG -> ClassProgressDnd.selfCheck(context)
                         }
                     }
-                }.onFailure { android.util.Log.w(TAG, "课程进行中广播处理失败", it) }
+                }.onFailure {
+                    // 这一句现在只管"唤醒锁没拿到 / when 落空 / 组件刷新与撤销那两手"，
+                    // 实况与勿扰各自有上面那两行分兜 —— 改前它一条链上三种死法都念同一句，
+                    // 读日志的人分不出是勿扰没进、实况没起、还是组件没刷（#333 的取证面）。
+                    android.util.Log.w(TAG, "课程进行中广播主体失败（勿扰/实况的分兜见紧邻上一条）", it)
+                }
             } finally {
                 pendingResult.finish()
             }

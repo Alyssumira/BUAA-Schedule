@@ -38,18 +38,30 @@ class ReminderReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 WakeLocks.withPartialWakeLock(context, "reminder_show_and_reschedule") {
-                    // 失败只意味着这一节课没有实况/通知，链式重排照旧要跑
-                    runCatching {
-                        if (livePhase != null) {
+                    // 失败只意味着这一节课没有实况或没有横幅，链式重排照旧要跑。
+                    // 两半各一枚兜底（#335，与 ClassProgressReceiver 那一格同一族）：改前两者共用
+                    // 一枚 runCatching 且**附加能力排在核心能力之前** —— 实况那手抛了就整节课
+                    // 一个提醒都没有（横幅、声音、锁屏全无），而那句日志还写成"（实况/通知）"，
+                    // 把两种不同的死法合成一句。次序一个字都不许换：
+                    // startLiveWindow 里的 recordCountdownOwnership 必须早于紧随其后的 rescheduleAll
+                    // （T206 落的那条"先记归属再下发"，换序会把刚上岛的倒计时判成遗留拆掉）。
+                    if (livePhase != null) {
+                        runCatching {
                             ReminderNotifications.startLiveWindow(
                                 context = context,
                                 // 课前这一段进度条量的是"这段等待"，所以起点是此刻而不是上课时间
                                 window = scheduled.copy(startMillis = now),
                                 phase = livePhase,
                             )
+                        }.onFailure {
+                            android.util.Log.w(TAG, "课前实况下发失败（提醒横幅照常）", it)
                         }
-                        notifyCourse(context, scheduled)
-                    }.onFailure { android.util.Log.w(TAG, "课前提醒展示失败（实况/通知）", it) }
+                    }
+                    runCatching { notifyCourse(context, scheduled) }.onFailure {
+                        // 主功能自己那一枚出口：它是这条链上唯一"用户必看"的一步，
+                        // 改前却是唯一没有结论出口的一步
+                        android.util.Log.w(TAG, "课前提醒横幅下发失败（实况不受影响）", it)
+                    }
                     // 闹钟触发后链式调度下一次提醒；goAsync 保证广播进程存活到调度完成，
                     // 唤醒锁保证 Doze 下 CPU 不会在 DB 查询/重排中途再度入睡（进程活着 ≠ CPU 醒着）
                     runCatching {
