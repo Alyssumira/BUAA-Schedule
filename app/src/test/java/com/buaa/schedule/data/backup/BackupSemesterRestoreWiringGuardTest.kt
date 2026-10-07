@@ -38,8 +38,28 @@ import org.junit.Test
  * 7. [口令那条链没有第二套序列化口径] —— **数出现次数**：`ScheduleShareCodec` 仍只做
  *    JSON ↔ deflate ↔ Base64，`BackupData(` 构造 0 处（它只搬运，不裁剪字段）。
  *
+ * ## T223 追加的三把（卡面 §3 点名的①②③，逐格点名）
+ *
+ * 8. [主学期「就地兜底一枚日历值」那一形全树 0 处]（`主学期就地兜底一枚日历值那一形在全树零命中`）——
+ *    **先抹注释再数出现次数**：`?: fallbackStartDate` / `val safeSemester` /
+ *    `WeekCalculator.mondayOf(LocalDate.parse(s.startDate))` 三枚锚点在 `app/src/main` 各 0 处，
+ *    外加仓储层 `LocalDate.parse(` 0 处；另有 [探测器自己认得就地兜底那一形] 那一格做两侧自检
+ *    （改之前的逐字原文必须抓得出、`?: backupSemester?.takeIf { ... }` 与具名实参那一形不许误伤）。
+ * 9. [主学期与历史学期两条路都调同一枚内核]（`主学期与历史学期两条路都调同一枚内核 只有 mainSemester 不同`）——
+ *    **读形状**（两枚函数体各取一块）+ **数调用点**：仓储文件内 `decideSemesterRowForRestore(` 两处
+ *    （每条路各一枚）、全 `app/src/main` 三处（一处定义 + 两处调用）；主学期那一支的三等分支、
+ *    `mainSemester = true / false` 各一枚、`rebuiltSemesters += decision`（主学期必须进补建账）、
+ *    「历史学期在前、主学期在最后」的次序，以及攒账两枚来源成对。
+ * 10. [内核纯度扩到九枚时钟针 + `mainSemester` 没有默认值]
+ *    （`判据内核零 android 依赖 不读时钟 全仓只有一份` 与 `mainSemester 没有默认值 且只在第一问那一处参与判定`）——
+ *    零 android 那一层一字未削，时钟针从四枚扩到九枚（`java.time.Clock` / `Instant.` / `ZonedDateTime` /
+ *    `TimeZone` / `Date(`）；再加签名 `mainSemester: Boolean,` 一枚、`= true` / `= false` 两枚默认值 0 处、
+ *    `mainSemester` 全文件恰好两处（签名 + 第一问那一枚条件）、第一问条件逐字节、
+ *    `backupRow?.startLocalDate` 一枚（认不认得出来只有这把尺）。
+ *
  * 本守卫只读源码，**不证明**运行时行为：真实换机恢复一份多学期备份后历史学期的日期对不对、
- * 恢复文案那一句在屏幕上长什么样，都归编排者装机（见回执的未验到清单）。
+ * **真恢复一份坏日期的备份后主学期那一行长什么样**、恢复文案那一句在屏幕上长什么样，
+ * 都归编排者装机（`:app` 的 JVM 测试面没有 Robolectric、没有能在 JVM 上跑的 Room 缝 —— 见回执的未验到清单）。
  */
 class BackupSemesterRestoreWiringGuardTest {
 
@@ -287,6 +307,256 @@ class BackupSemesterRestoreWiringGuardTest {
         )
     }
 
+    // ─────────────── ④′ T223：主学期「认不出来就就地兜底一枚日历值」那一形全树 0 处 ───────────────
+
+    /**
+     * 钉的是 `safeSemester` 那一形（备份带来的开学日 parse 不出来 ⇒ `?: fallbackStartDate` 换一枚日历值
+     * 再无条件 delete+insert 落库）。四家钉法逐格点名：**先抹注释**（`ScheduleRepository` 与本内核的
+     * KDoc 都逐字引用着旧那一形，只 grep 字面量会假绿）**再数出现次数**；另有
+     * [探测器自己认得就地兜底那一形] 做两侧自检。
+     *
+     * 为什么这一形必须 0 处：它绕开内核 ⇒ ① 坏日期被静默换成"恢复那天所在的周一"，
+     * 整学期日期与周次编号一起错位；② 补建账里没有它，恢复文案此时念"没有任何学期行是补建出来的"
+     * —— 那一档是谎话（卡面 §病灶 那一格）。
+     */
+    @Test
+    fun `主学期就地兜底一枚日历值那一形在全树零命中`() {
+        val hits = mutableListOf<String>()
+        val anchors = listOf(
+            MAIN_SEMESTER_FALLBACK to "日期 parse 不出来 ⇒ 就地 ?: fallbackStartDate",
+            SAFE_SEMESTER_BINDING to "val safeSemester 那一枚绑定",
+            MAIN_SEMESTER_GATE to "仓储层自己 mondayOf(LocalDate.parse(s.startDate)) 那道闸门",
+        )
+        for (file in mainSources()) {
+            for ((needle, label) in anchors) {
+                val at = file.code.indexOf(needle)
+                if (at >= 0) hits += "${file.path} 第 ${lineOf(file.code, at)} 行命中「$needle」（$label）"
+            }
+        }
+        assertEquals(
+            "app/src/main（抹掉注释之后）这三枚锚点必须 0 处。实到 ${hits.size} 处：\n  " +
+                hits.joinToString("\n  ") +
+                "\n红了说明主学期那一路又绕回内核外面自己判日期了。旧形状（`425c5f5` 上逐字）是 " +
+                "`runCatching { WeekCalculator.mondayOf(LocalDate.parse(s.startDate)) }.getOrNull()" +
+                " ?: fallbackStartDate`：认不出来就换一枚日历值，随后无条件写库，" +
+                "整学期的日期与周次编号一起错位，而补建账里没有它 ⇒ 恢复文案念" +
+                "「没有任何学期行是补建出来的」，那一档是谎话",
+            0,
+            hits.size,
+        )
+        val repo = blankCommentsKeepingLiterals(source(REPOSITORY))
+        assertEquals(
+            "`$REPOSITORY` 里 `LocalDate.parse(` 必须 0 处（实到 " + occurrences(repo, "LocalDate.parse(") +
+                " 处）：仓储层一个字都不 parse —— 日期认不认得出来只有 " +
+                "`domain/model/Semester.kt` 的 `startLocalDate` 那一把尺（由内核引它）",
+            0,
+            occurrences(repo, "LocalDate.parse("),
+        )
+        assertEquals(
+            "兜底日期在仓储层只许**当参数递给内核**：`fallbackStartDate = fallbackStartDate,` 恰好三处" +
+                "（① `restoreBackupData` 把参数转给 `restoreBackupDataInTx`；② 历史学期那一路递进内核；" +
+                "③ 主学期那一路递进内核；实到 " + occurrences(repo, "fallbackStartDate = fallbackStartDate,") + " 处）",
+            3,
+            occurrences(repo, "fallbackStartDate = fallbackStartDate,"),
+        )
+        assertEquals(
+            "仓储层里 `$OLD_START_DATE_SHAPE` 与裸的 `fallbackStartDate.toString()` 都必须 0 处（实到 " +
+                occurrences(repo, OLD_START_DATE_SHAPE) + " + " +
+                occurrences(repo, "fallbackStartDate.toString()") +
+                " 处）：兜底日期一旦在仓储层被 `.toString()` 出来，就是有人又开始拿它写库了" +
+                "（历史学期与主学期两路都只能把它当参数递给内核）",
+            0,
+            occurrences(repo, OLD_START_DATE_SHAPE) + occurrences(repo, "fallbackStartDate.toString()"),
+        )
+    }
+
+    /**
+     * 探测器自己得认得出旧那一形，也不许误伤合法形状（"全树 0 命中"不是空转的证据，两侧各一头）。
+     *
+     * 朝窄那一头尤其要紧：主学期那一路合法地留着 `?: backupSemester?.takeIf { ... }`
+     * （配对表配不到时退回单字段那一枚标的行）与 `fallbackStartDate = fallbackStartDate,`
+     * （当参数递给内核）—— 一把见 `?:` 就杀的尺会把这两枚一起拆掉；把前者拆掉，主学期就退成
+     * "备份压根没带这一 termCode" 那一等，文案反过来念一句「开学日不在备份里」的假话。
+     */
+    @Test
+    fun `探测器自己认得就地兜底那一形 也不误伤合法形状`() {
+        val oldShape = """
+            val safeSemester = backupSemester?.let { s ->
+                val monday = runCatching { WeekCalculator.mondayOf(LocalDate.parse(s.startDate)) }.getOrNull()
+                    ?: fallbackStartDate
+                s.copy(
+                    startDate = monday.toString(),
+                    totalWeeks = CourseConstraints.normalizeTotalWeeks(s.totalWeeks),
+                )
+            }
+        """.trimIndent()
+        val blankedOld = blankCommentsKeepingLiterals(oldShape)
+        assertEquals(
+            "探测器必须抓得出改之前那一形的「就地兜底一枚日历值」（实到 " +
+                occurrences(blankedOld, MAIN_SEMESTER_FALLBACK) + " 处）：0 处就说明上面那句「全树 0 命中」是假的绿",
+            1,
+            occurrences(blankedOld, MAIN_SEMESTER_FALLBACK),
+        )
+        assertEquals(
+            "探测器必须抓得出改之前那一形自己 parse 备份日期的那道闸门（实到 " +
+                occurrences(blankedOld, MAIN_SEMESTER_GATE) + " 处）",
+            1,
+            occurrences(blankedOld, MAIN_SEMESTER_GATE),
+        )
+        assertEquals(
+            "探测器必须抓得出 `val safeSemester` 那一枚绑定本身（实到 " +
+                occurrences(blankedOld, SAFE_SEMESTER_BINDING) + " 处）：锚点拼错的话那一层就永远绿",
+            1,
+            occurrences(blankedOld, SAFE_SEMESTER_BINDING),
+        )
+        val legitPairing = """
+            val mainBackupRow = backupRows[mainCode] ?: backupSemester?.takeIf { it.termCode == mainCode }
+            val decision = decideSemesterRowForRestore(
+                fallbackStartDate = fallbackStartDate,
+                mainSemester = true,
+            )
+        """.trimIndent()
+        val blankedLegit = blankCommentsKeepingLiterals(legitPairing)
+        assertEquals(
+            "`?: backupSemester?.takeIf { ... }` 这一形**不许**被算成病灶（实到 " +
+                occurrences(blankedLegit, MAIN_SEMESTER_FALLBACK) +
+                " 处）：它兜的是「备份带来的标的行」，日期仍然交给内核去认。" +
+                "把它当病灶拆掉，主学期就退成「备份压根没带」那一等 —— 文案会念一句相反的假话",
+            0,
+            occurrences(blankedLegit, MAIN_SEMESTER_FALLBACK),
+        )
+        assertEquals(
+            "合法的具名实参 `fallbackStartDate = fallbackStartDate,` **不许**被算成病灶（实到 " +
+                occurrences(blankedLegit, SAFE_SEMESTER_BINDING) + " 处命中绑定锚点、" +
+                occurrences(blankedLegit, MAIN_SEMESTER_FALLBACK) + " 处命中兜底锚点）",
+            0,
+            occurrences(blankedLegit, MAIN_SEMESTER_FALLBACK) + occurrences(blankedLegit, SAFE_SEMESTER_BINDING),
+        )
+        val quotedInComment = """
+            /**
+             * 旧形状：`.getOrNull()` 后跟 `?: fallbackStartDate`（T223 收掉的那一格）。
+             */
+            fun noop() = Unit
+        """.trimIndent()
+        assertEquals(
+            "注释里逐字引用的那一形不许进上面那层的账（抹注释后必须 0 处；实到 " +
+                occurrences(blankCommentsKeepingLiterals(quotedInComment), MAIN_SEMESTER_FALLBACK) +
+                " 处）。未抹注释时它确实在原文里：" + occurrences(quotedInComment, MAIN_SEMESTER_FALLBACK) +
+                " 处 —— 这就是「只 grep 字面量的守卫会假绿」的实物证据",
+            0,
+            occurrences(blankCommentsKeepingLiterals(quotedInComment), MAIN_SEMESTER_FALLBACK),
+        )
+        // 盘上的 KDoc 确实逐字登记着旧那一形（与本仓 ① 层同一口径：删了登记本层仍成立，但形状守卫靠的是抹注释）
+        assertTrue(
+            "`$REPOSITORY` 原文的**注释**里必须仍找得到 `$MAIN_SEMESTER_FALLBACK`（旧形状登记用；抹注释后 0 处" +
+                "才算修复）。实到未抹注释 " + occurrences(source(REPOSITORY), MAIN_SEMESTER_FALLBACK) + " 处",
+            occurrences(source(REPOSITORY), MAIN_SEMESTER_FALLBACK) >= 1,
+        )
+    }
+
+    // ─────────────── ⑤′ T223：主学期与历史学期两条路都调同一枚内核 ───────────────
+
+    /**
+     * 读形状（两枚函数体各自取块）+ 数出现次数：同一判在仓储里**恰好两个入口**，
+     * 主学期那一支三等齐全，且两侧只有 `mainSemester` 那一枚参数按各自的答复表态。
+     *
+     * 为什么不能只在历史学期那一支：主学期绕开内核 = 本卡的病灶（坏日期静默 + 不进账）。
+     * 为什么不许另起第四等：卡面 §1 那句由 ④ 层「三等结论各恰好一处声明」钉着；这里再加一把尺 ——
+     * 主学期那一支的 `when` 三个分支必须齐全且各自动作与内核 KDoc「两问的结论」一一对应。
+     */
+    @Test
+    fun `主学期与历史学期两条路都调同一枚内核 只有 mainSemester 不同`() {
+        val code = blankCommentsKeepingLiterals(source(REPOSITORY))
+        val repoCalls = occurrences(code, "decideSemesterRowForRestore(")
+        assertEquals(
+            "`decideSemesterRowForRestore(` 在仓储文件里恰好两处（历史学期 + 主学期各一枚；实到 $repoCalls 处）：" +
+                "全仓唯一一枚判据、两个入口。少一处 = 有一侧还在自己判；多一处 = 又分岔出第三路",
+            2,
+            repoCalls,
+        )
+        assertEquals(
+            "全 app/src/main 里 `decideSemesterRowForRestore(` 恰好三处（一处定义 + 两处调用；实到 " +
+                mainDefinitionCount("decideSemesterRowForRestore(") + " 处）",
+            3,
+            mainDefinitionCount("decideSemesterRowForRestore("),
+        )
+        val historyBody = braceBodyFrom(
+            code,
+            code.indexOf('{', indexOfAll(code, REPLACE_ANCHOR).first() + REPLACE_ANCHOR.length),
+        )
+        val mainBody = braceBodyFrom(
+            code,
+            code.indexOf('{', indexOfAll(code, RESTORE_TX_ANCHOR).first() + RESTORE_TX_ANCHOR.length),
+        )
+        assertEquals(
+            "历史学期那一路的体内 `decideSemesterRowForRestore(` 恰好一处（实到 " +
+                occurrences(historyBody, "decideSemesterRowForRestore(") + " 处）",
+            1,
+            occurrences(historyBody, "decideSemesterRowForRestore("),
+        )
+        assertEquals(
+            "主学期那一路的体内 `decideSemesterRowForRestore(` 恰好一处（实到 " +
+                occurrences(mainBody, "decideSemesterRowForRestore(") +
+                " 处）：这一处就是「把主学期并进同一枚内核」本身。" +
+                "红了说明主学期又退回仓储层自判日期（本卡病灶），或者被搬去了别的地方",
+            1,
+            occurrences(mainBody, "decideSemesterRowForRestore("),
+        )
+        assertEquals(
+            "主学期体内 `mainSemester = true,` 恰好一处（实到 " +
+                occurrences(mainBody, "mainSemester = true,") + " 处）",
+            1,
+            occurrences(mainBody, "mainSemester = true,"),
+        )
+        assertEquals(
+            "历史学期体内 `mainSemester = false,` 恰好一处（实到 " +
+                occurrences(historyBody, "mainSemester = false,") +
+                " 处）：内核那一枚参数**没有默认值**（见 ④ 层那一格），两侧调用点都必须自己表态 —— " +
+                "「这一枚是不是这次恢复的标的」不许靠默认值蒙过去",
+            1,
+            occurrences(historyBody, "mainSemester = false,"),
+        )
+        for ((needle, label) in listOf(
+            MAIN_KEEP_ACTION to "认不出来 + 库里已有 ⇒ 那一行一个字节都不动（只换课程）",
+            "is SemesterRowDecision.InsertFromBackup ->" to "日期有出处 ⇒ 用备份那一枚（顶掉库里那一行、最后写成当前学期）",
+            "is SemesterRowDecision.Rebuild -> {" to "两边都没有 ⇒ 补建并留痕",
+            "replaceSemesterCoursesInTx(decision.semester, mainImported)" to "InsertFromBackup 走 delete+insert（当前学期 = id 最大的那一行）",
+            "replaceSemesterCoursesInTx(decision.toSemester(), mainImported)" to "Rebuild 走 delete+insert",
+            "rebuiltSemesters += decision" to "主学期那一枚必须进补建账 —— 少这一句文案就在说谎",
+        )) {
+            assertEquals(
+                "主学期那一路体内 `$needle` 恰好一处（实到 " + occurrences(mainBody, needle) + " 处）：$label",
+                1,
+                occurrences(mainBody, needle),
+            )
+        }
+        assertEquals(
+            "主学期那一支体内 `$MAIN_SEMESTER_FALLBACK` 必须 0 处（实到 " +
+                occurrences(mainBody, MAIN_SEMESTER_FALLBACK) + " 处）：病灶本体就是这一枚",
+            0,
+            occurrences(mainBody, MAIN_SEMESTER_FALLBACK),
+        )
+        val historyLoopAt = mainBody.indexOf("semesterGroups.forEach")
+        val mainBlockAt = mainBody.indexOf("decideSemesterRowForRestore(")
+        assertTrue(
+            "体内次序必须是 **历史学期在前、主学期在最后**：forEach 落在 $historyLoopAt、主学期判定落在 " +
+                "$mainBlockAt。反了之后主学期行不再是 id 最大的那一行（`SemesterDao.getCurrent()` 是 " +
+                "`ORDER BY id DESC LIMIT 1`）⇒ 恢复完的首页停在历史学期上，看起来「课表空了」—— " +
+                "`restoreBackupData` 的 KDoc 早写着这条",
+            historyLoopAt in 0 until mainBlockAt,
+        )
+        assertEquals(
+            "攒账的两枚来源都在（历史学期 `?.let(rebuiltSemesters::add)` 一处 + 主学期 " +
+                "`rebuiltSemesters += decision` 一处；实到 " +
+                occurrences(mainBody, "?.let(rebuiltSemesters::add)") + " + " +
+                occurrences(mainBody, "rebuiltSemesters += decision") + " 处）：少一枚 = 那一侧的补建不进账，" +
+                "恢复文案就在那一档说谎",
+            2,
+            occurrences(mainBody, "?.let(rebuiltSemesters::add)") +
+                occurrences(mainBody, "rebuiltSemesters += decision"),
+        )
+    }
+
     // ─────────────── ④ 内核纯度：零 android、零时钟、判据只有一份 ───────────────
 
     @Test
@@ -305,7 +575,12 @@ class BackupSemesterRestoreWiringGuardTest {
             emptyList<String>(),
             offenders,
         )
-        for (clock in listOf("LocalDate.now(", "mostRecentMonday(", "System.currentTimeMillis", "Calendar.")) {
+        // T223 把时钟针从四枚扩到九枚（卡面 §3 第③把：照已有的形状守卫**扩**，一枚都不许削）——
+        // 「兜底日期当参数递进来」这条口径一旦被下面任何一枚读数绕过，判据就又能在内核里造"恢复那天"
+        for (clock in listOf(
+            "LocalDate.now(", "mostRecentMonday(", "System.currentTimeMillis", "Calendar.",
+            "java.time.Clock", "Instant.", "ZonedDateTime", "TimeZone", "Date(",
+        )) {
             assertEquals(
                 "内核里 `$clock` 必须 0 处（实到 " + occurrences(code, clock) +
                     " 处）：判据一旦能读时钟，「恢复那天所在周一」就会顺着参数爬回判据本体 —— " +
@@ -374,6 +649,62 @@ class BackupSemesterRestoreWiringGuardTest {
                 " 处）：那正是被本卡判死的那一等静默值",
             0,
             occurrences(code, " = 20"),
+        )
+    }
+
+    // ─────────────── ④′ mainSemester 只买通第一问：没有默认值、只在库里那一行那一处用 ───────────────
+
+    /**
+     * 卡面 §1 的"不许另起第四等 + 判据本体零时钟"落到参数层的那一把尺。
+     *
+     * 三格各自的靶：
+     * - **没有默认值**（`= true` / `= false` 都不许有）⇒ 每一枚调用点都必须表态"这是不是恢复的标的"；
+     *   默认值就是本仓那一族"默认参数口子"（T214b 同族）—— 新增一条路时忘了表态，
+     *   主学期会静默按历史学期走（坏日期又被兜底）或反过来。
+     * - **只在第一问那一处用**（体内两次：签名 + 库里那一行的条件）⇒ 它一旦出现在补建那一等里，
+     *   第二问"两侧同答"就地失效，主学期重新拿到"猜了日期还不留痕"的特权。
+     * - **条件逐字**（`existingRow != null && (!mainSemester || backupStart == null)`）⇒
+     *   把它写成 `existingRow != null && !mainSemester` 会让主学期永远顶掉库里那一行（连坏日期也顶），
+     *   写成恒 `existingRow != null` 就让 `mainSemester` 成死参（恢复不再恢复学期配置）。
+     */
+    @Test
+    fun `mainSemester 没有默认值 且只在第一问那一处参与判定`() {
+        val raw = source(POLICY)
+        val code = blankCommentsKeepingLiterals(raw)
+        assertEquals(
+            "签名里 `mainSemester: Boolean,` 恰好一处（实到 " + occurrences(code, "mainSemester: Boolean,") +
+                " 处）：这一枚参数是**必填**的",
+            1,
+            occurrences(code, "mainSemester: Boolean,"),
+        )
+        for (default in listOf("mainSemester: Boolean = true", "mainSemester: Boolean = false")) {
+            assertEquals(
+                "内核签名里 `$default` 必须 0 处（实到 " + occurrences(code, default) +
+                    " 处）：默认值 = 新调用点忘了表态时静默选边（本仓「默认参数口子」那一族，T214b 同口径）",
+                0,
+                occurrences(code, default),
+            )
+        }
+        assertEquals(
+            "内核里 `mainSemester` 必须恰好两处（签名一枚 + 「库里那一行 vs 备份那一枚」那一枚条件；实到 " +
+                occurrences(code, "mainSemester") + " 处）：它一旦参与补建那一等或周数那一档，" +
+                "第二问「认不出来就不动 / 补建并留痕」就不再两侧同答 —— 那正是卡面 §1 否掉的东西",
+            2,
+            occurrences(code, "mainSemester"),
+        )
+        assertEquals(
+            "第一问的条件必须逐字还在（`$MAIN_SEMESTER_CONDITION`，实到 " +
+                occurrences(code, MAIN_SEMESTER_CONDITION) + " 处）：它是「两问的结论」在代码里的唯一落点 —— " +
+                "去掉 `backupStart == null` 那一头 = 主学期连坏日期也顶掉库里那一行（改之前的病）；" +
+                "去掉 `!mainSemester` 那一头 = 参数成死参、恢复不再恢复主学期配置",
+            1,
+            occurrences(code, MAIN_SEMESTER_CONDITION),
+        )
+        assertEquals(
+            "「认得出来」的判据仍然只有 `backupRow?.startLocalDate` 一枚（实到 " +
+                occurrences(code, "backupRow?.startLocalDate") + " 处）：第二把尺就是 R7 P2-12 那一族",
+            1,
+            occurrences(code, "backupRow?.startLocalDate"),
         )
     }
 
@@ -694,6 +1025,21 @@ class BackupSemesterRestoreWiringGuardTest {
         /** 病灶 1B / 1C 的逐字本体（`8caf3f7` 上 `replaceCoursesForExistingSemesterInTx` 补建那两行） */
         const val OLD_START_DATE_SHAPE = "startDate = fallbackStartDate.toString(),"
         const val OLD_TOTAL_WEEKS_SHAPE = "totalWeeks = 20,"
+
+        /**
+         * T223 的病灶本体（`425c5f5` 上 `restoreBackupDataInTx` 里 `safeSemester` 那一形）：
+         * 日期 parse 不出来 ⇒ 就地兜底一枚日历值，绕开内核、不进补建账。
+         */
+        const val MAIN_SEMESTER_FALLBACK = "?: fallbackStartDate"
+        const val SAFE_SEMESTER_BINDING = "val safeSemester"
+        const val MAIN_SEMESTER_GATE = "WeekCalculator.mondayOf(LocalDate.parse(s.startDate))"
+
+        /** 主学期那一支「库里已有 + 备份认不出来」的落点动作（一个字节都不写那一行） */
+        const val MAIN_KEEP_ACTION = "is SemesterRowDecision.KeepExistingInDb -> replaceCoursesOnlyInTx(mainCode, mainImported)"
+
+        /** 「两问的结论」在内核里的唯一落点：第一问的条件（T223 逐字节钉住它） */
+        const val MAIN_SEMESTER_CONDITION =
+            "if (existingRow != null && (!mainSemester || backupStart == null)) {"
 
         /** 旧那一形在仓储层**手造**学期行的两枚可辨锚点（构造是换行起头的，`8caf3f7` 上的形状） */
         const val SEMESTER_CONSTRUCTION = "Semester(\n"

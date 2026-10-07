@@ -48,7 +48,9 @@ import org.junit.Test
  * 5. [写库链仍然没有第二道闸门]：`ScheduleRepository.replaceSemesterCoursesInTx` 体内
  *    `semesterDao.insert(semester.toEntity())` 一处且体内 `LocalDate.parse(` 0 处 ——
  *    这一格是**前提**不是判据：哪天有人在写库前补了一道 parse 闸门，本卡「必须长在写库之前」
- *    的理由就要重读，所以它必须红一次让人看见。
+ *    的理由就要重读，所以它必须红一次让人看见。（T223 之后这一族重钉：备份恢复那一路原本那道
+ *    自 parse 闸门并进了 `data/backup/BackupSemesterRestorePolicy.kt`，于是**整个仓储层**
+ *    `LocalDate.parse(` 0 处 —— 比改之前更严，且导入链依旧不经过那道闸门。）
  *
  * 本守卫只读源码，**不证明**运行时行为：教务真返回非 ISO 首周时用户看到的那一句新报错、
  * 以及"重试一次就成功"那一档归编排者装机。
@@ -371,12 +373,37 @@ class BuaaSemesterStartWiringGuardTest {
             0,
             occurrences(body, "LocalDate.parse("),
         )
-        // 备份恢复那一路**有**闸门，但它不在导入链上（别拿它当"已经有第二道闸门"的证据）
+        // ── 备份恢复那一路的闸门（T180 之后由 T223 搬家，这一格按 KDoc 的说法"红一次让人看见"）──
+        //
+        // 改之前：仓里唯一那道 parse 闸门长在 `restoreBackupDataInTx` 体内（旧锚点
+        // `WeekCalculator.mondayOf(LocalDate.parse(s.startDate))`）。它不在导入链上，救不了本卡。
+        // T223 之后：主学期那一路并进 `data/backup/BackupSemesterRestorePolicy.kt`，仓储层**一个字都不 parse**
+        // （那一枚 `?: fallbackStartDate` 就地兜底日历值的形状被守卫钉成 0 处），
+        // 闸门换到内核里的 `Semester.startLocalDate`。本层的三格因此重钉，且比改之前更严：
+        // ① 旧锚点 0 处 ② 整个仓储层 `LocalDate.parse(` 0 处 ③ 内核确实拿 startLocalDate 当唯一判据。
         assertEquals(
-            "仓里唯一那道 parse 闸门长在备份恢复那一路（`restoreBackupDataInTx` 体内一处，实到 " +
-                occurrences(code, BACKUP_GATE) + " 处）：导入链不经过它，所以它救不了本卡",
-            1,
+            "旧锚点 `$BACKUP_GATE`（仓储层自己 parse 备份带来的日期那一形）必须 0 处（实到 " +
+                occurrences(code, BACKUP_GATE) + " 处）：T223 把主学期并进内核后，" +
+                "认不出来时不再就地兜底一枚日历值。这一格红了说明有人在仓储层又自己 parse 了一遍" +
+                "（= 第二把尺，且「认不出来就静默换成恢复那天」那一族会重新长出来）",
+            0,
             occurrences(code, BACKUP_GATE),
+        )
+        assertEquals(
+            "整个仓储层（抹注释后）`LocalDate.parse(` 必须 0 处（实到 " +
+                occurrences(code, "LocalDate.parse(") +
+                " 处）：改之前只有备份恢复那一路有 1 处，改之后一处都不许有 —— " +
+                "日期认不认得出来只有 `domain/model/Semester.kt` 的 `startLocalDate` 那一把尺",
+            0,
+            occurrences(code, "LocalDate.parse("),
+        )
+        assertEquals(
+            "内核 `BackupSemesterRestorePolicy.kt` 必须真的拿 `startLocalDate` 当唯一判据" +
+                "（实到 " + occurrences(blankCommentsKeepingLiterals(source(BACKUP_POLICY)), BACKUP_START_GATE) +
+                " 处，恰好一处才算闸门搬家而不是又添了一把尺）：导入链仍然不经过它，所以本卡的" +
+                "「判据必须长在写库之前」这条前提一个字都没变",
+            1,
+            occurrences(blankCommentsKeepingLiterals(source(BACKUP_POLICY)), BACKUP_START_GATE),
         )
     }
 
@@ -622,10 +649,12 @@ class BuaaSemesterStartWiringGuardTest {
         const val EXISTING_START_FALLBACK = "?: existingStartDate"
         const val REFUSE_MESSAGE = "未取得学期第一周周一，未改动课表"
 
-        /** 导入写库落点与备份恢复那一道路唯一的闸门 */
+        /** 导入写库落点与备份恢复那一路的闸门（旧锚点 + T223 搬家后的新锚点） */
         const val WRITE_TX_ANCHOR = "private suspend fun replaceSemesterCoursesInTx("
         const val SEMESTER_INSERT = "semesterDao.insert(semester.toEntity())"
         const val BACKUP_GATE = "WeekCalculator.mondayOf(LocalDate.parse(s.startDate))"
+        const val BACKUP_POLICY = "com/buaa/schedule/data/backup/BackupSemesterRestorePolicy.kt"
+        const val BACKUP_START_GATE = "backupRow?.startLocalDate"
 
         /** 裸标识符 / 点分路径（`rawStart`、`info.firstWeekMonday`）才算回 echo */
         val SIMPLE_PATH = Regex("""[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*""")
