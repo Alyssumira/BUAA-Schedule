@@ -12,6 +12,7 @@ import com.buaa.schedule.BUAAApplication
 import com.buaa.schedule.data.backup.BACKUP_FORMAT_VERSION
 import com.buaa.schedule.data.backup.BackupData
 import com.buaa.schedule.data.backup.BackupReminder
+import com.buaa.schedule.data.backup.BackupReminderPairing
 import com.buaa.schedule.data.backup.toBackup
 import com.buaa.schedule.data.backup.toDomain
 import com.buaa.schedule.data.repository.PartialWeeksEdit
@@ -1318,6 +1319,10 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                         courseKey = ImportPlanner.courseKey(course),
                         enabled = setting.enabled,
                         advanceMinutes = setting.advanceMinutes,
+                        // 片段依据（T229 ②/#303）：courseKey 的七维里没有 weeks ⇒ 同一门课拆成的
+                        // 多枚片段共用一枚键。不带这一枚，读侧无论怎么写都回答不了
+                        // "这条提醒是给哪一行片段的"，只能后写吃前写。判据在 BackupReminderPairing。
+                        fragmentWeeks = course.weeks,
                     )
                 }
             },
@@ -1491,9 +1496,12 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             backupSemesterRows = data.semesters.map { it.toDomain() },
             courses = data.courses.map { it.toDomain() },
             timeSlots = data.timeSlots.map { it.toDomain() },
-            remindersByCourseKey = data.reminders.associate {
-                it.courseKey to (it.enabled to it.advanceMinutes)
-            },
+            // 提醒逐枚递给内核，**不在这里按 courseKey 归并**（T229 ②/#303）：
+            // 改前这一手是 `data.reminders.associate { … }`，同门课多片段共用一枚键时后写吃前写，
+            // 恢复后只有一枚片段领得到提醒（关掉的那半重新响、改过提前量的那半回默认）。
+            // 配对判据与退档口径全在 `data/backup/BackupReminderPairing.kt`，册子由
+            // `BackupReminderPairingGuardTest` 第 ② 层钉。
+            backupReminders = data.reminders.map { BackupReminderPairing.settingOf(it) },
             fallbackStartDate = mostRecentMonday(),
             allowEmptyReplacement = allowEmptyReplacement,
         )
@@ -1525,12 +1533,18 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 afterDataChangedInternal()
                 // 补建账必须念出来（T204）：这些学期行的开学日不是备份里的，是按恢复那天推算的。
                 // 不念就是把跨学期恢复的日期偏移重新藏回静默里 —— 那正是本卡的病灶。
+                // ⚠️ 次序判据（`BackupSemesterRestoreWiringGuardTest` 第 ⑥ 层钉）：**取账 → 留痕日志 → 写文案**。
+                // 别把上面那两行挪进 buildString 里，也别把新加的 append 排到 rebuiltNote 之后
+                // （补建那一句是"最后一句实话"，T204/T223 的文案册子按它收尾；T229 ② 那枚提醒账插在它前面）。
                 val rebuiltNote = com.buaa.schedule.data.backup.rebuiltSemestersNote(result.rebuiltSemesters)
                 if (rebuiltNote != null) Log.i(RESTORE_LOG_TAG, "$sourceLabel：$rebuiltNote")
                 _importMessage.value = AppMessage(buildString {
                     append("${sourceLabel}成功：${result.restoredCourses} 条课程")
                     if (result.insertedManual > 0) append("（新增手动课程 ${result.insertedManual} 条）")
                     if (result.skippedInvalid > 0) append("，跳过无效数据 ${result.skippedInvalid} 条")
+                    // 提醒对不回课程那一档也要念出来（T229 ②/#303）：不念的话"备份吃提醒"
+                    // 仍然是静默的 —— 这一枚与上面那枚 skippedInvalid 同一条口径。
+                    if (result.remindersUnplaced > 0) append("，提醒 ${result.remindersUnplaced} 条没能对回课程")
                     if (rebuiltNote != null) append("。$rebuiltNote")
                 }, isSuccess = true)
             }

@@ -93,12 +93,41 @@ data class BackupCourse(
  * ⚠️ 备份**只带库里有的那些行**（导出侧读的是 `getReminders()`），所以"这份备份里没有这门课的提醒"
  * 与"库里没有那一行"是同一件事，恢复后仍按 [ReminderSetting] 顶部那条默认口径走 ——
  * 这里的两枚默认值因此必须与 [ReminderSetting] 同源，不许自己写一遍 `10`。
+ *
+ * ## 那枚键不够用（T229 ②，台账 #303）
+ *
+ * `courseKey` 的七维是 学期 + 组键 + 名称 + 教师 + 地点 + 星期 + 节次，**里面没有 `weeks`**
+ * （定义在 `domain/schedule/ImportPlanner.courseKey`）⇒ 同一门课被编辑器「这周调课/代课」拆成的
+ * 多枚片段**共用同一枚键**，而拆行那一手本来就给两行各挂一枚提醒
+ * （`ScheduleRepository.updateCoursePartialWeeks`）。所以只有 [courseKey] 时，读侧无论怎么写都
+ * 得回答"这一枚设置是给哪一行片段的"—— 改前它答不上，只能"后写吃前写"。
+ *
+ * [fragmentWeeks] 就是补上去的那枚**片段依据**：导出时把这一行当时的周次一起带上，
+ * 恢复时按 (键, 周次签名) 配对，判据在 [BackupReminderPairing]。
+ *
+ * ## 兼容性判据（补键会不会让老备份配不上新键？）
+ *
+ * **不会**，两侧都验过（`data/backup/BackupReminderFragmentKeyCompatTest`）：
+ * - **老备份 → 新应用**：老文件根本没有 `fragmentWeeks` 这个键 ⇒ 解析成 `null`（带默认值的可选字段），
+ *   读侧把它当成"这一枚没有片段依据"，退到**同键组内逐枚配对**（[BackupReminderPairing.Basis.LegacyNoSignature]）
+ *   而不是退到"这一枚丢掉"。配对结论与改前一样能落库，只是不再有一枚片段被静默吞掉；
+ * - **新备份 → 老应用**：`fragmentWeeks` 是它不认得的键，而两边解码用的都是
+ *   `Json { ignoreUnknownKeys = true }` ⇒ 直接忽略，老应用照旧按 `courseKey` 恢复（旧行为原样）。
+ *
+ * 因此 [BACKUP_FORMAT_VERSION] **不涨**：口径与 T204 那两格（[BackupData.semesters]、
+ * [BackupCourse.credit]）一致 —— 新增带默认值的可选字段两边都认得，涨到 3 只会让老应用对这份文件
+ * 直接拒绝恢复（`data.version > BACKUP_FORMAT_VERSION`），换来的是一条**更窄**的升级路，不是更兼容。
  */
 @Serializable
 data class BackupReminder(
     val courseKey: String,
     val enabled: Boolean = ReminderSetting.DEFAULT_ENABLED,
     val advanceMinutes: Int = ReminderSetting.DEFAULT_ADVANCE_MINUTES,
+    /**
+     * 片段依据：导出时这一行课程的周次（去重升序）。老备份没这个键 ⇒ `null`，读侧退到组内逐枚配对。
+     * 带默认值的可选字段 ⇒ 线上兼容，见上面那段「兼容性判据」，[BACKUP_FORMAT_VERSION] 不涨。
+     */
+    val fragmentWeeks: List<Int>? = null,
 )
 
 fun Semester.toBackup() = BackupSemester(

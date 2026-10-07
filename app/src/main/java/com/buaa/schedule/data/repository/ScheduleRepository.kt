@@ -2,6 +2,7 @@ package com.buaa.schedule.data.repository
 
 import android.content.Context
 import androidx.room.withTransaction
+import com.buaa.schedule.data.backup.BackupReminderPairing
 import com.buaa.schedule.data.backup.SemesterRowDecision
 import com.buaa.schedule.data.backup.decideSemesterRowForRestore
 import com.buaa.schedule.data.backup.indexBackupSemesterRows
@@ -45,6 +46,13 @@ sealed interface RestoreResult {
         val skippedInvalid: Int,
         val insertedManual: Int,
         val rebuiltSemesters: List<SemesterRowDecision.Rebuild> = emptyList(),
+        /**
+         * 备份里有、恢复后**对不出任何课程行**的提醒条数（T229 ②/#303）。
+         *
+         * 与 [skippedInvalid] 同一条口径：吃了用户的东西就要念得出吃了多少。改前这一档不存在 ——
+         * 读侧 `associate` 先把同键多枚合成一枚，被吃掉的那些**连"没配上"都算不上**。
+         */
+        val remindersUnplaced: Int = 0,
     ) : RestoreResult
 
     /**
@@ -675,13 +683,17 @@ class ScheduleRepository(
      *   备份带了且日期认得出来就用备份的日期、两边都没有才补建并记进补建账；
      *   补建行仍先于主学期写入，其 id 小于最后写入的主学期（见上面的次序理由）；
      * - 手动课程按合并语义，只插入本地缺失的，不删除用户手动添加的课程；
-     * - 提醒按 courseKey 对回恢复后的课程。
+     * - 提醒按 (courseKey, 片段依据) 对回恢复后的课程，**逐枚配对**（T229 ②/#303，判据在
+     *   `data/backup/BackupReminderPairing.kt`）。改前这里是「按 courseKey 归并成一枚 + 只落一行」，
+     *   而那把键的七维里没有 `weeks` ⇒ 同一门课拆出的多枚片段共用一枚键、后写吃前写。
      *
      * ⚠️ 旧形状（T223 收掉的那一格）：主学期在写库前自己 parse 备份的 `startDate`，
      * 认不出来就 `?: fallbackStartDate` 就地换成"恢复那天所在的周一"再无条件 delete+insert。
      * 库里那一行是好日期时被顶成猜的、库里没有那一行时也是猜的，而两种情况都**不进补建账** ⇒
      * 恢复文案念"没有任何学期行是补建出来的"。今天这一路只有日期认得出来才写备份的值。
      *
+     * @param backupReminders 备份里的提醒条目（**逐枚**递进来，不在调用点按键归并）：
+     *   同键多枚 = 同一门课的多个片段各有各的设置，归并一次就少一枚。
      * @param backupSemesterRows 备份里带全的学期行（`BackupData.semesters`，老备份为空列表时
      *   由 `indexBackupSemesterRows` 回落到 [backupSemester] 那一枚）。按 termCode 与课程分组配对。
      * @param allowEmptyReplacement 备份里一条课程都没有时的开关。默认拒绝：
@@ -692,7 +704,7 @@ class ScheduleRepository(
         backupSemester: Semester?,
         courses: List<Course>,
         timeSlots: List<TimeSlot>,
-        remindersByCourseKey: Map<String, Pair<Boolean, Int>>,
+        backupReminders: List<BackupReminderPairing.Setting>,
         fallbackStartDate: LocalDate,
         allowEmptyReplacement: Boolean = false,
         backupSemesterRows: List<Semester> = emptyList(),
@@ -701,7 +713,7 @@ class ScheduleRepository(
             backupSemester = backupSemester,
             courses = courses,
             timeSlots = timeSlots,
-            remindersByCourseKey = remindersByCourseKey,
+            backupReminders = backupReminders,
             fallbackStartDate = fallbackStartDate,
             allowEmptyReplacement = allowEmptyReplacement,
             backupSemesterRows = backupSemesterRows,
@@ -712,7 +724,7 @@ class ScheduleRepository(
         backupSemester: Semester?,
         courses: List<Course>,
         timeSlots: List<TimeSlot>,
-        remindersByCourseKey: Map<String, Pair<Boolean, Int>>,
+        backupReminders: List<BackupReminderPairing.Setting>,
         fallbackStartDate: LocalDate,
         allowEmptyReplacement: Boolean,
         backupSemesterRows: List<Semester>,
@@ -806,19 +818,24 @@ class ScheduleRepository(
         } else {
             courseDao.getBySemestersOrManual(restoredCodes)
         }
-        val courseByKey = restoredCourses
-            .map { it.toDomain() }
-            .associateBy { ImportPlanner.courseKey(it) }
-        remindersByCourseKey.forEach { (key, setting) ->
-            courseByKey[key]?.let { course ->
-                reminderDao.upsert(
-                    ReminderSetting(
-                        courseId = course.id,
-                        enabled = setting.first,
-                        advanceMinutes = CourseConstraints.normalizeAdvanceMinutes(setting.second),
-                    ).toEntity()
-                )
-            }
+        // T229 ②/#303：这里改**逐枚配对**，不再 `associateBy { courseKey }`。
+        // 改前是两把行序尺叠在一起：课程侧 associateBy 让同键只留一枚，留哪一枚由
+        // `CourseDao.getBySemestersOrManual`（无 ORDER BY）的行序决定；设置侧的 associate 让同键
+        // 后写吃前写，吃的顺序由 `ReminderDao.getAll`（同样无 ORDER BY）决定。结果是
+        // 用户关掉的那半重新响、改过提前量的那半回默认，而且每轮恢复可能换一枚活下来。
+        // 判据（含退档口径与 unplaced 那本账）全在 BackupReminderPairing 那一枚纯 JVM 内核里。
+        val pairing = BackupReminderPairing.pair(
+            settings = backupReminders,
+            rows = restoredCourses.map { BackupReminderPairing.rowOf(it.toDomain()) },
+        )
+        pairing.assignments.forEach { assignment ->
+            reminderDao.upsert(
+                ReminderSetting(
+                    courseId = assignment.courseId,
+                    enabled = assignment.enabled,
+                    advanceMinutes = CourseConstraints.normalizeAdvanceMinutes(assignment.advanceMinutes),
+                ).toEntity()
+            )
         }
 
         // 整表已被备份替换，内存里攒的撤销快照指向的都是替换前的行
@@ -829,6 +846,7 @@ class ScheduleRepository(
             skippedInvalid = skippedInvalid,
             insertedManual = manualToInsert.size,
             rebuiltSemesters = rebuiltSemesters,
+            remindersUnplaced = pairing.unplaced.size,
         )
     }
 }
