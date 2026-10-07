@@ -221,8 +221,8 @@ fun WeekView(
     val slots = remember(timeSlots) {
         (if (timeSlots.isNotEmpty()) timeSlots else TimeSlotProfile.DEFAULT).sortedBy { it.number }
     }
-    // 兼容历史脏数据：总周数限幅，避免跳周列表物化超大列表
-    val totalWeeks = (semester?.totalWeeks ?: 20).coerceIn(1, CourseConstraints.MAX_TOTAL_WEEKS)
+    // 兼容历史脏数据：总周数限幅，避免跳周列表物化超大列表；没学期 ⇒ 零硬写的 20，两枚结论同源（T197）
+    val (totalWeeks, notEveryWeekBase) = weekCountsOf(semester != null, semester?.totalWeeks, courses)
     // 每分钟对齐的 tick：作为 State 传入，只有“当前课高亮/时间线”读取该状态，
     // 普通课程格不会随每分钟 tick 全量重组；后台（低于 STARTED）自动停表。
     // 与日视图同一个算式，只差步长：醒来第一件事是发布、第二件事才是等下一个边界，
@@ -359,7 +359,7 @@ fun WeekView(
                         slots = slots,
                         weekForContent = page + 1,
                         currentWeek = currentWeek,
-                        totalWeeks = totalWeeks,
+                        notEveryWeekBase = notEveryWeekBase,
                         onReturnToThisWeek = { onBrowseWeekChange(null) },
                         today = today,
                         nowTickState = nowTickState,
@@ -385,7 +385,7 @@ fun WeekView(
                     // 后者不能照旧画全部课程，详见 [WeekGrid.coursesForContent]（P1）。
                     showAllCoursesWithoutWeek = semester == null,
                     currentWeek = currentWeek,
-                    totalWeeks = totalWeeks,
+                    notEveryWeekBase = notEveryWeekBase,
                     today = today,
                     nowTickState = nowTickState,
                     compactScroll = compactScroll,
@@ -420,8 +420,8 @@ private fun WeekGrid(
     slots: List<TimeSlot>,
     weekForContent: Int?,
     currentWeek: Int?,
-    /** 学期总周数：课程 weeks 比它短就是「非每周都有」，卡角要画角标（T-30 / ③C-02） */
-    totalWeeks: Int,
+    /** 「不是每周都有」的分母；null = 这枚事实取不到 ⇒ 旗不亮、读屏那半句不出现（T197，判据见 WeekNavigationAvailability.kt） */
+    notEveryWeekBase: Int?,
     today: LocalDate,
     nowTickState: State<LocalTime>,
     compactScroll: Boolean,
@@ -886,7 +886,7 @@ private fun WeekGrid(
                                                 entranceSlotCount = entranceCardCount,
                                                 cardHeight = hDp,
                                                 inConflict = course.id in conflictCourseIds,
-                                                notEveryWeek = course.weeks.size < totalWeeks,
+                                                notEveryWeek = notEveryWeekFlag(course.weeks.size, notEveryWeekBase),
                                                 isCurrentProvider = {
                                                     weekForContent == currentWeek &&
                                                         course.dayOfWeek == today.dayOfWeek.value &&
@@ -1009,7 +1009,7 @@ private fun WeekGrid(
                                             entranceSlotCount = entranceCardCount,
                                             cardHeight = cardHeight,
                                             inConflict = course.id in conflictCourseIds,
-                                            notEveryWeek = course.weeks.size < totalWeeks,
+                                            notEveryWeek = notEveryWeekFlag(course.weeks.size, notEveryWeekBase),
                                             isCurrentProvider = {
                                                 weekForContent == currentWeek &&
                                                     course.dayOfWeek == today.dayOfWeek.value &&

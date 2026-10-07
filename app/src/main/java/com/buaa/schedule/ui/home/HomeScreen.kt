@@ -658,13 +658,16 @@ fun HomeScreen(
             // 第二行：学期切换 | 时间模式 | ‹ 周次 › | 校区切换
             // 切到「今日」时只保留学期与校区：周次步进翻的是周课表，日视图按日期翻页，
             // 时间模式开关也只改周课表网格——留在这一行里点了没反应，反而显得顶栏杂乱。
+            // 没设学期时这一簇整块不给（T197）：改前这里硬写一枚 20 周的兜底，清单与进度线吃的都是那枚假周数。
+            // ⚠️ 簇里还捎着时间模式胶囊，那一档的版面（会不会只剩一颗点不开的空入口、胶囊跟着没了）交装机验收。
             ScheduleToolbarRow(
-                showWeekNav = selectedTab == 0,
+                showWeekNav = shouldOfferWeekNavigation(selectedTab, state.semester != null, weekTab = 0),
                 weekHeadline = weekHeadline,
                 displayWeek = browseWeek ?: state.currentWeek,
                 currentWeek = state.currentWeek,
-                totalWeeks = (state.semester?.totalWeeks ?: 20)
-                    .coerceIn(1, com.buaa.schedule.domain.schedule.CourseConstraints.MAX_TOTAL_WEEKS),
+                hasSemester = state.semester != null,
+                totalWeeks = state.semester?.totalWeeks
+                    ?.coerceIn(1, com.buaa.schedule.domain.schedule.CourseConstraints.MAX_TOTAL_WEEKS),
                 // remember：这条映射每次翻周都会重建十几个 Set，而顶栏本身就在重组
                 courseWeeks = remember(visibleCourses) {
                     visibleCourses.map { it.weeks.toSet() }
@@ -987,17 +990,20 @@ private fun FirstRunEmptyState(
  * （校区筛选同时作用于周课表与今日列表），放在周视图里就会跟着消失。
  * 点中间的周次文字打开「跳转到周次」对话框。
  *
- * [showWeekNav] 为 false（今日页签）时只保留学期与校区两端：周次步进翻的是周课表，
- * 日视图按**日期**翻页（DayView 自带 ‹ 日期 › 与横滑手势），时间模式也只改周课表网格，
- * 留在这一行里既点了没反应，又和页头/日视图的周次文字凑成三份「第 N 周」。
+ * [showWeekNav] 为 false（今日页签，或**根本没设学期**——T197：改前那 20 周是硬写出来的）时
+ * 这一簇整块收掉：周次步进与「跳转到周次」翻的都是周课表，日视图按**日期**翻页（DayView 自带
+ * ‹ 日期 › 与横滑手势），学期进度线吃的也是那枚假周数。⚠️ 时间模式胶囊也住在簇里，没学期时
+ * 它跟着簇一起没——那一档的版面（#113/#118 那两笔权重账只在簇进出时成立）本卡没动，交装机验收。
  */
 @Composable
 private fun ScheduleToolbarRow(
     showWeekNav: Boolean,
+    hasSemester: Boolean,
     weekHeadline: String,
     displayWeek: Int?,
     currentWeek: Int?,
-    totalWeeks: Int,
+    /** 学期的总周数（已按 1..MAX_TOTAL_WEEKS 夹取）；**null = 没有学期这枚事实**，零硬写兜底 */
+    totalWeeks: Int?,
     courseWeeks: List<Set<Int>>,
     onBrowseWeekChange: (Int?) -> Unit,
     termSlot: (@Composable () -> Unit)?,
@@ -1007,7 +1013,7 @@ private fun ScheduleToolbarRow(
     val context = androidx.compose.ui.platform.LocalContext.current
     val timeMode = Personalization.weekGridMode == Personalization.WEEK_GRID_TIME_24H
     val weeklyCounts = remember(courseWeeks, totalWeeks) {
-        weekCourseCounts(courseWeeks, totalWeeks)
+        weekCourseCounts(courseWeeks, totalWeeks ?: 0)
     }
 
     Row(
@@ -1121,16 +1127,16 @@ private fun ScheduleToolbarRow(
                         )
                         // 「第 3 周」只是一个数：学期过半还是还剩六周得自己算。
                         // 这条线不新增信息层级——它是这行字的图形化，所以同格、同色。
-                        SemesterProgressLine(
+                        if (shouldDrawSemesterProgress(hasSemester)) SemesterProgressLine(
                             currentWeek = currentWeek,
-                            totalWeeks = totalWeeks,
+                            totalWeeks = totalWeeks ?: 0,
                             modifier = Modifier.padding(top = DesignTokens.spaceXS),
                         )
                     }
                 }
                 IconButton(
-                    onClick = { onBrowseWeekChange(((displayWeek ?: totalWeeks) + 1).coerceAtMost(totalWeeks)) },
-                    enabled = (displayWeek ?: totalWeeks) < totalWeeks,
+                    onClick = { onBrowseWeekChange(((displayWeek ?: 1) + 1).coerceAtMost(totalWeeks ?: 1)) },
+                    enabled = displayWeek != null && totalWeeks != null && displayWeek < totalWeeks,
                 ) {
                     Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "下一周")
                 }
@@ -1163,7 +1169,7 @@ private fun ScheduleToolbarRow(
                     // 这枚清单的**来源**要记住：写在 items(...) 实参里的话，这一格每重组一次就
                     // 新建一份 List（重组的来源不少：周号、密度条数据、弹窗开关本身），而下面
                     // 那枚 key 判的是"这一行还是不是原来那一行"，两者配成一对才不白干活。
-                    val weekChoices = remember(totalWeeks) { (1..totalWeeks).toList() }
+                    val weekChoices = remember(totalWeeks) { weekChoicesFor(hasSemester, totalWeeks) }
                     LazyColumn(modifier = Modifier.height(DesignTokens.dialogListMaxHeight)) {
                         // key 用周号本身：它在 1..totalWeeks 里唯一，且"第 3 周"永远是第 3 周，
                         // 与内容摘要无关（这条列表没有会被就地编辑的输入框，滚出视口也不带状态）。
