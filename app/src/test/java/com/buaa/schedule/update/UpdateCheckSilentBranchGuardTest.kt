@@ -1,6 +1,5 @@
 package com.buaa.schedule.update
 
-import com.buaa.schedule.domain.update.UpdateCheckVerdict
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
