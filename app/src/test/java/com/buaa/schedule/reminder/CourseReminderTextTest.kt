@@ -33,7 +33,7 @@ class CourseReminderTextTest {
     /**
      * 课前提醒闹钟里的那份窗口：`startMillis` 与 `endMillis` **都是上课时刻**。
      *
-     * 这是 [ReminderScheduler.createPendingIntent] 烘进 extras 的形状（课前那段实况量的
+     * 这是 [ReminderScheduler.preClassWindow] 烘进 extras 的形状（课前那段实况量的
      * 是"这段等待过去了多少"，收铃时刻就是上课时刻，真正开跑时才由接收器把 start 改成此刻）。
      * 把它当成"start=上课、end=下课"来写测试，会得到一句"09:35 上课"。
      */

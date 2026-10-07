@@ -32,7 +32,7 @@ import org.junit.Test
  *
  * | 哪一等的窗口 | startMillis | endMillis |
  * |---|---|---|
- * | 课前实况窗口（`ReminderScheduler.createPendingIntent` 造、`ReminderReceiver` 改起点） | 收铃此刻 | **上课时刻** |
+ * | 课前实况窗口（`ReminderScheduler.preClassWindow` 造、`ReminderReceiver` 改起点） | 收铃此刻 | **上课时刻** |
  * | 课堂计划窗口（`planNextClassWindow`，"课还没开始"那一等） | **上课时刻** | 下课时刻 |
  *
  * 写侧从第一型的 `endMillis` 取、三处读侧从第二型的 `startMillis` 取 ⇒ 两格同值 ⇒
@@ -94,7 +94,7 @@ class CountdownOwnershipWriterReaderTest {
      * 生产那条链造**课前实况窗口**的方式，两格凭据逐格对着源码抄（改形状必须同步改这里，
      * 而那一步由 [CountdownOwnershipAnchorGuardTest] 的第 ③ 层先把源码钉红）：
      *
-     * 1. `ReminderScheduler.createPendingIntent`：`startMillis` 与 `endMillis` **都**是上课时刻
+     * 1. `ReminderScheduler.preClassWindow`：`startMillis` 与 `endMillis` **都**是上课时刻
      *    （它自己的注释："收铃时刻就是上课时刻，所以 start/end 先都填上课时间"）；
      * 2. `ReminderReceiver`：`window = scheduled.copy(startMillis = now)` —— 只有起点被改成收铃那一刻，
      *    `endMillis` 一个字没动 ⇒ 交给写侧的那一格 `endMillis` 就是上课绝对时刻。

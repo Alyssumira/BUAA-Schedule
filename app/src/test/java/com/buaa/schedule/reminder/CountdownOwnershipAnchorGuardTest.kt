@@ -19,7 +19,7 @@ import org.junit.Test
  *
  * | 窗口哪一型 | 谁造的 | startMillis | endMillis |
  * |---|---|---|---|
- * | 课前实况窗口（写侧拿到的那一枚） | `ReminderScheduler.createPendingIntent` 造、`ReminderReceiver` 改起点 | 收铃此刻 | **上课时刻** |
+ * | 课前实况窗口（写侧拿到的那一枚） | `ReminderScheduler.preClassWindow` 造、`ReminderReceiver` 改起点 | 收铃此刻 | **上课时刻** |
  * | 课堂计划窗口（三处读侧拿的那一枚） | `ClassProgressScheduler.planNextClassWindow` | **上课时刻** | 下课时刻 |
  *
  * 写侧那句 `countdownClassStart = window.endMillis` 与三处读侧的 `window.startMillis` 因此
@@ -31,7 +31,7 @@ import org.junit.Test
  * + 把 `countdownClassStart` 那句 KDoc 订正成它真正装的东西。
  *
  * **下一次改窗口形状就会破的是哪一处**（卡面第 3 种要的那一格）：
- * `ReminderScheduler.createPendingIntent` 体内那两行 `startMillis = classStartMillis,` /
+ * `ReminderScheduler.preClassWindow` 体内那两行 `startMillis = classStartMillis,` /
  * `endMillis = classStartMillis,`（第 ③ 层钉）。谁把课前那一段的 `endMillis` 换成它的自然含义
  * （下课时刻，或让计划窗口直接进这条链），第 ③ 层当场红；若那一改动只改**读侧**，第 ② 层红。
  * 两侧一起改才会自洽，而那必须是一次有意识的收口，不是撞上的。
@@ -42,7 +42,7 @@ import org.junit.Test
  *    写入句恰好 1 处、旧那一形 0 处、两枚取法函数全仓各恰好一处定义且**体里只读自己那一格**、
  *    归零入口与赋值点各按枚数台账钉住。
  * 2. [四处读侧的口径各归各型窗口] —— **逐字节** + **数出现次数**（含跨卡那两格的现形与反面形状 0 处）。
- * 3. [造窗那两格凭据仍写着 start 与 end 都是上课时刻] —— **读形状**（配平取 `createPendingIntent` 体）
+ * 3. [造窗那两格凭据仍写着 start 与 end 都是上课时刻] —— **读形状**（配平取 `preClassWindow` 体）
  *    + **逐字节** + **数出现次数**；`ReminderReceiver` 那两句同层。
  * 4. [撤通知与清归属收进同一处] —— **读形状**（取 `cancelClassOngoing` / `stop` / `onDestroy` /
  *    `recoverMissedClassStart` 的体）+ **数出现次数** + **逐字节** + **顺序**（证据必须先读后清）。
@@ -189,9 +189,9 @@ class CountdownOwnershipAnchorGuardTest {
     @Test
     fun `课前那一型窗口的两格仍由造窗那两行供给`() {
         val scheduler = blankCommentsKeepingLiterals(source(REMINDER_SCHEDULER))
-        val hits = indexOfAll(scheduler, CREATE_PI_HEAD)
-        assertEquals("`$CREATE_PI_HEAD` 恰好一处（本层取块的宿主）：实到 " + hits.size + " 处", 1, hits.size)
-        val body = braceBodyFrom(scheduler, scheduler.indexOf('{', hits.first() + CREATE_PI_HEAD.length))
+        val hits = indexOfAll(scheduler, PRE_CLASS_WINDOW_HEAD)
+        assertEquals("`$PRE_CLASS_WINDOW_HEAD` 恰好一处（本层取块的宿主）：实到 " + hits.size + " 处", 1, hits.size)
+        val body = braceBodyFrom(scheduler, scheduler.indexOf('{', hits.first() + PRE_CLASS_WINDOW_HEAD.length))
 
         for (line in listOf(PLAN_START_SHAPE, PLAN_END_SHAPE)) {
             assertEquals(
@@ -645,7 +645,7 @@ class CountdownOwnershipAnchorGuardTest {
         const val SERVICE_READ = "ownsCountdownTo(window.courseId, anchor)"
 
         // ---- ③ 造窗凭据 ----
-        const val CREATE_PI_HEAD = "private fun createPendingIntent("
+        const val PRE_CLASS_WINDOW_HEAD = "private fun preClassWindow("
         const val PLAN_START_SHAPE = "startMillis = classStartMillis,"
         const val PLAN_END_SHAPE = "endMillis = classStartMillis,"
         const val RECEIVER_COPY = "window = scheduled.copy(startMillis = now),"
