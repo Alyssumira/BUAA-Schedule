@@ -7,6 +7,8 @@ import com.buaa.schedule.data.backup.SemesterRowDecision
 import com.buaa.schedule.data.backup.decideSemesterRowForRestore
 import com.buaa.schedule.data.backup.indexBackupSemesterRows
 import com.buaa.schedule.data.local.AppDatabase
+import com.buaa.schedule.data.local.SemesterRowBumpPlan
+import com.buaa.schedule.data.local.planSemesterRowBump
 import com.buaa.schedule.data.local.toDomain
 import com.buaa.schedule.data.local.toEntity
 import com.buaa.schedule.data.undo.UndoManager
@@ -120,16 +122,31 @@ class ScheduleRepository(
      * 因此把目标学期行删除后按新 id 重新插入即可完成切换，无需 schema 变更。
      * 课程按 termCode 关联且两表无外键级联，切换不会丢任何课。
      *
+     * **T249/#460：删的是「读到的那一枚行」，不再是「该 termCode 的全部行」。**
+     * `semesters` 没有 termCode 唯一索引，库里同 termCode 落下两枚行是数据库层面允许的：
+     * 改前这一路是「`getByTermCode` 取任一枚（那条查询连 `ORDER BY` 都没有）→ `deleteByTermCode`
+     * 删掉全部同键行 → 只插回读到的那一枚」—— 用户切一次学期，另一枚行的开学日与总周数就没了，
+     * 而那枚行他从没在屏上看过。现在读侧取的全部行交给内核定「顶哪一枚、留哪几枚」，
+     * 删只删被顶的那一枚（见 `data/local/SemesterRowPolicy.kt`）。
+     *
      * @return 本地存在该学期才返回 true
      */
     suspend fun switchSemester(termCode: String): Boolean = writeMutex.withLock {
         db.withTransaction {
-            val target = semesterDao.getByTermCode(termCode) ?: return@withTransaction false
-            semesterDao.deleteByTermCode(termCode)
-            semesterDao.insert(target.copy(id = 0L))
-            // 换学期后撤销栈里全是旧学期视图下的操作，pop 回来会插错学期
-            UndoManager.clear()
-            true
+            val plan = planSemesterRowBump(
+                termCode,
+                semesterDao.getRowsByTermCode(termCode).map { it.toDomain() },
+            )
+            when (plan) {
+                SemesterRowBumpPlan.NothingToSwitch -> return@withTransaction false
+                is SemesterRowBumpPlan.Bump -> {
+                    plan.deleteIds.forEach { semesterDao.deleteById(it) }
+                    semesterDao.insert(plan.target.copy(id = 0L))
+                    // 换学期后撤销栈里全是旧学期视图下的操作，pop 回来会插错学期
+                    UndoManager.clear()
+                    true
+                }
+            }
         }
     }
 
