@@ -189,8 +189,30 @@ class NavRootStartDestinationGuardTest {
             line.contains("navigateTopLevel"),
         )
         assertTrue(
-            "$IMPORT_ANCHOR 的兜底必须是收掉这个 Activity（弹不动 = 在册集合被破，此时该退出就退出）：\n$line",
-            line.contains("finish()"),
+            "$IMPORT_ANCHOR 的兜底必须走那枚收掉 Activity 的回调（弹不动 = 在册集合被破，" +
+                "此时该退出就退出）：\n$line",
+            line.contains("onExitApp()"),
+        )
+        // 那枚回调不许有缺省值，也不许在唯一的调用点上被漏掉：默认成 {} 就是"摆着出口、点了没反应"
+        val all = lines()
+        assertTrue(
+            "onExitApp 不许带缺省值：AppNavHost 与 BUAAScheduleApp 两个形参都得是必填，" +
+                "否则漏传一处就是静默 no-op：\n" +
+                all.filter { it.trim().contains("onExitApp:") }.joinToString("\n"),
+            all.none { it.trim().startsWith("onExitApp:") && it.contains("= {}") },
+        )
+        val wired = all.map { it.trim() }.filter { it.startsWith("onExitApp = ::finish") }
+        assertEquals(
+            "onExitApp 的真实实现只许在 BUAAScheduleApp 那一处接上 Activity 自己：\n" +
+                all.filter { it.trim().startsWith("onExitApp =") }.joinToString("\n"),
+            1,
+            wired.size,
+        )
+        val passedDown = all.map { it.trim() }.count { it == "onExitApp = onExitApp," }
+        assertEquals(
+            "AppNavHost 的两个调用点（宽屏 + 手机）都必须把这枚回调递下去，漏一个就是一支静默：",
+            2,
+            passedDown,
         )
     }
 

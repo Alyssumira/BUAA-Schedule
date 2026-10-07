@@ -190,6 +190,8 @@ class MainActivity : ComponentActivity() {
                         requestedDayOfWeek = requestedDayOfWeek.value,
                         onDayRequestConsumed = { requestedDayOfWeek.value = null },
                         startRoute = pendingStartRoute.value,
+                        // Activity 自己递下去，不在组合里 cast LocalContext（lint ContextCastToActivity）
+                        onExitApp = ::finish,
                     )
                 } else {
                     BUAAScheduleTheme(
@@ -503,6 +505,12 @@ private fun BUAAScheduleApp(
     onDayRequestConsumed: () -> Unit = {},
     /** 引导结束时选择的落点；null = 首页 */
     startRoute: String? = null,
+    /**
+     * 把这个 Activity 收掉（返回键该退出就退出）：只有 import 那一处弹不动兜底用它
+     * （T244②，判据写在 `composable("import")` 的 onBack 上）。
+     * 没有默认值：默认成 `{}` 就是"界面上摆着出口、点下去没反应"那一族（T41 的口径）。
+     */
+    onExitApp: () -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     // 组合期不重复取 SharedPreferences 句柄（口径同 SettingsScreen 里 prefs 那枚 remember(context)）。
@@ -668,6 +676,7 @@ private fun BUAAScheduleApp(
                                 reminders = reminders,
                                 onDarkThemeChange = onDarkThemeChange,
                                 rootStartRoute = navStartRoute,
+                                onExitApp = onExitApp,
                                 requestedDayOfWeek = requestedDayOfWeek,
                                 onDayRequestConsumed = onDayRequestConsumed,
                                 headerBandOwner = headerBandOwner,
@@ -688,6 +697,7 @@ private fun BUAAScheduleApp(
                             reminders = reminders,
                             onDarkThemeChange = onDarkThemeChange,
                             rootStartRoute = navStartRoute,
+                            onExitApp = onExitApp,
                             requestedDayOfWeek = requestedDayOfWeek,
                             onDayRequestConsumed = onDayRequestConsumed,
                             headerBandOwner = headerBandOwner,
@@ -804,6 +814,8 @@ private fun AppNavHost(
      * （`nav/StartDestinationRootGuardTest` ② 数这一行的取值来源）。
      */
     rootStartRoute: String? = null,
+    /** 弹不动兜底那一手要用的收掉 Activity（T244②）：由 BUAAScheduleApp 从 Activity 自己递下来 */
+    onExitApp: () -> Unit,
     /** 4×2 网格格子点击要打开的那一天（ISO 1..7，null = 无请求） */
     requestedDayOfWeek: Int? = null,
     onDayRequestConsumed: () -> Unit = {},
@@ -814,10 +826,6 @@ private fun AppNavHost(
     bottomBarVisible: Boolean = false,
 ) {
     val reduceMotion = LocalReduceMotion.current
-    // 返回键最后一道兜底要用的 Activity 句柄（T244②）：只有 import 弹不动那一手用它，
-    // 判据写在 composable("import") 的 onBack 上。写法照抄本文件里既有的
-    // `as? android.app.Activity`（可空转型，拿不到就不动栈，比硬转诚实）。
-    val navActivity = LocalContext.current as? android.app.Activity
     // 一条带、一个主人（T80）：两枚 Boolean 都从**同一枚** headerBandOwner 算出来 ——
     // "板上同时摆两套页头文字"于是在这一层就不成立，而不是靠两个页面各自自觉。
     val homeHeaderBandOnScreen = headerBandDrawnOnScreen(headerBandOwner, HeaderBandOwner.Home)
@@ -1048,7 +1056,7 @@ private fun AppNavHost(
                     // 所以这里不留一条「今天靠①才不炸」的隐式依赖：真弹不动就说明册子破了，
                     // 唯一诚实的一手是把这个 Activity 收掉 —— 返回键该退出就退出。
                     onBack = {
-                        if (!navController.popBackStack()) navActivity?.finish()
+                        if (!navController.popBackStack()) onExitApp()
                     },
                     onStartBuaaLogin = { navController.navigate("buaa_login") },
                     onOpenHistory = { navController.navigate("import_history") },
