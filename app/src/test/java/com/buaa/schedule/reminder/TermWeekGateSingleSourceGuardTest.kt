@@ -56,7 +56,9 @@ class TermWeekGateSingleSourceGuardTest {
             occurrences(kernel, MONDAY_LINE),
         )
 
-        for (needle in listOf("> totalWeeks", "<= 0", "in 1..", "coerceIn", "currentWeek(", "totalWeeks >")) {
+        // `<= totalWeeks` 与 `> totalWeeks` 两枚都要钉：第二份上界比较式的两种写法
+        // （`week <= totalWeeks` 与 `week > totalWeeks` 取反）只差一枚指针，少钉一枚就是放走其中一种写法
+        for (needle in listOf("> totalWeeks", "<= totalWeeks", "<= 0", "in 1..", "coerceIn", "currentWeek(", "totalWeeks >")) {
             assertEquals(
                 "**钉法 = 读形状**：内核体里「$needle」必须 0 处 —— 一旦长出第二份上界或下界比较式，" +
                     "就是本仓那族「同一判据两份写法各错各的」的又一处（本卡正在收它）。实到 " +
@@ -244,11 +246,14 @@ class TermWeekGateSingleSourceGuardTest {
             occurrences(reminder, SEMESTER_BOUND_LINE),
         )
         assertEquals(
-            "**钉法 = 数出现次数**：ReminderScheduler 把这一枚数往下透传恰三处" +
-                "（takeDownClassProgressIfNeeded / rescheduleWindows / planNextClassWindow 三处实参），" +
+            "**钉法 = 数出现次数**：ReminderScheduler 把这一枚数往下透传恰四处" +
+                "（`rescheduleAll` → `takeDownClassProgressIfNeeded`、`rescheduleAll` → " +
+                "`ClassProgressScheduler.rescheduleWindows`、`takeDownClassProgressIfNeeded` → " +
+                "`shouldTakeDownClassProgress`、`shouldTakeDownClassProgress` → " +
+                "`ClassProgressScheduler.planNextClassWindow` —— 勿扰那条是两跳，所以是四枚而不是三枚），" +
                 "实到 " + occurrences(reminder, "totalWeeks = totalWeeks,") + " 处。" +
                 "多一处 = 又长出一条不读学期行的排铃路；少一处 = 有一条链改回吃默认值了",
-            3,
+            4,
             occurrences(reminder, "totalWeeks = totalWeeks,"),
         )
         assertEquals(
@@ -300,12 +305,23 @@ class TermWeekGateSingleSourceGuardTest {
             occurrences(preFixLoop, "semesterStart.plusWeeks("),
         )
 
+        // 第二份上界比较式的**那一形今天长什么样**：`week <= totalWeeks`（下界另有写法）。
+        // 探测器第 ① 层的负针里有 `<= totalWeeks` 与 `> totalWeeks` 两枚，这里两头各喂一形 ——
+        // 只喂 `> totalWeeks` 那一形而拿 `<= totalWeeks` 去数是本层原先的红臂（锚点与样例对错形）。
         val secondCopyShape = "fun inTerm(week: Int, totalWeeks: Int): Boolean = week > 0 && week <= totalWeeks"
         assertEquals(
-            "探测器必须抓得出「链上自己写比较式」那一形（「> totalWeeks」数到 1 处；实到 " +
-                occurrences(secondCopyShape, "> totalWeeks") + " 处）—— 第 ① 层那句「0 处」的对照物",
+            "探测器必须抓得出「链上自己写比较式」那一形（「<= totalWeeks」数到 1 处；实到 " +
+                occurrences(secondCopyShape, "<= totalWeeks") + " 处）—— 第 ① 层那句「0 处」的对照物",
             1,
-            occurrences(secondCopyShape, "> totalWeeks"),
+            occurrences(secondCopyShape, "<= totalWeeks"),
+        )
+        val upstreamCopy = "if (week <= 0 || week > totalWeeks) return null"
+        assertEquals(
+            "探测器必须同样抓得出上界取反那一形（「> totalWeeks」数到 1 处；实到 " +
+                occurrences(upstreamCopy, "> totalWeeks") + " 处）—— 它与展示侧 WeekCalculator 原文同形，" +
+                "第 ① 层那枚「全仓恰一处 BOUND_EXPRESSION」靠的就是它",
+            1,
+            occurrences(upstreamCopy, "> totalWeeks"),
         )
 
         val defaulted = "fun plan(courses: List<Int>, totalWeeks: Int? = TermWeekGate.UNBOUNDED_TOTAL_WEEKS) = Unit"
