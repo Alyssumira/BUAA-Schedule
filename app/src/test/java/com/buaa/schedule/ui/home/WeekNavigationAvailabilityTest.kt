@@ -26,6 +26,11 @@ import org.junit.Test
  *
  * 纯 JVM：页签序号、有没有学期、学期总周数、这批课的周次信息四样事实全由参数注入 ——
  * 没有时钟、没有 Robolectric、没有 android import（本仓收单硬口径）。
+ *
+ * T202（#241）在 ① 之后补了 ①′ 那一节：那颗「课次 / 时间」模式胶囊从簇里搬出来之后，
+ * [shouldOfferTimeModeToggle] 与 [shouldOfferWeekNavigation] 打在**同一张四格表**上 ——
+ * 两枚判据只在「周课表页签 + 没学期」那一格分家（簇不给、胶囊照给），
+ * 那一格就是本卡病灶（改前胶囊住在簇里跟着 hasSemester 一起没，屏上是 24 小时轴而切不回来）。
  */
 class WeekNavigationAvailabilityTest {
 
@@ -68,6 +73,80 @@ class WeekNavigationAvailabilityTest {
                 shouldOfferWeekNavigation(selected, hasSemester = false, weekTab = selected),
             )
         }
+    }
+
+    // ─────────────── ①′ 时间模式胶囊（T202）：只吃页签，不吃有没有学期 ───────────────
+
+    /**
+     * 「课次 / 时间」那颗胶囊（[shouldOfferTimeModeToggle]）与周次那一簇（[shouldOfferWeekNavigation]）
+     * 打在**同一张表**上：两枚判据分家这件事只有摆在一起才看得见 —— 四格里唯一不同的那一格
+     * （周课表页签 + 没学期）就是本卡病灶。
+     */
+    private data class TimeModeRow(
+        val scene: String,
+        val selectedTab: Int,
+        val hasSemester: Boolean,
+        val weekTab: Int,
+        val expectedChip: Boolean,
+        val expectedWeekNav: Boolean,
+    )
+
+    @Test
+    fun `时间模式入口四格全摆 与周次簇只在没学期那一格分家`() {
+        val table = listOf(
+            TimeModeRow("周课表页签 + 有学期 ⇒ 两枚都给（正常档，改前改后逐字同值）", 0, true, 0, true, true),
+            TimeModeRow(
+                "**周课表页签 + 没学期 ⇒ 本卡病灶那一格**：簇照旧不给（那 20 周是硬写的，T197 的账），" +
+                    "但胶囊必须给 —— 它拨的是 Personalization.weekGridMode（落盘偏好），与" +
+                    "「这学期多少周」一枚字都不相干。改前它住在簇里被 hasSemester 捎走，" +
+                    "屏上画的仍是 24 小时轴（WeekView 那枚 timeMode 照旧为真），切回来的那颗按钮却看不见",
+                0, false, 0, true, false,
+            ),
+            TimeModeRow("今日页签 + 有学期 ⇒ 胶囊不给（它只改周课表网格，点了没反应）", 1, true, 0, false, false),
+            TimeModeRow("今日页签 + 没学期 ⇒ 两枚都不给", 1, false, 0, false, false),
+            TimeModeRow("页签序号是调用点递进来的事实：换一枚 weekTab=2 也照命中（内核里一枚都不写死）", 2, false, 2, true, false),
+            TimeModeRow("weekTab=2 而选中 0 ⇒ 胶囊不给（「0 就是周课表」那种暗号不许留在内核里）", 0, true, 2, false, false),
+            TimeModeRow("weekTab=2 + 选中 2 + 有学期 ⇒ 两枚都给（同源的那一格）", 2, true, 2, true, true),
+            TimeModeRow("越界的页签号 ⇒ 不给，也不报错（判据只比序号）", 7, true, 0, false, false),
+        )
+        for (row in table) {
+            val chip = shouldOfferTimeModeToggle(row.selectedTab, row.weekTab)
+            val nav = shouldOfferWeekNavigation(row.selectedTab, row.hasSemester, row.weekTab)
+            assertEquals("${row.scene} —— 胶囊入口实到 $chip", row.expectedChip, chip)
+            assertEquals("${row.scene} —— 周次簇实到 $nav", row.expectedWeekNav, nav)
+        }
+    }
+
+    @Test
+    fun `胶囊入口对有没有学期这一维必须不敏感`() {
+        // 「分家」的代数版：把 hasSemester 两档都喂给簇那一枚，胶囊那一枚始终等于「只看页签」。
+        for (selected in listOf(0, 1, 2, 7)) {
+            for (weekTab in listOf(0, 2)) {
+                val chip = shouldOfferTimeModeToggle(selected, weekTab)
+                assertEquals(
+                    "selectedTab=$selected、weekTab=$weekTab：胶囊的可见性里不许掺进学期那一维 —— " +
+                        "掺进去就是「没设学期时切不了 24 小时时间轴」（#241 的本体）",
+                    selected == weekTab,
+                    chip,
+                )
+                assertEquals(
+                    "有学期那一档两枚同源（同一排里簇与胶囊一起吃页签）",
+                    chip,
+                    shouldOfferWeekNavigation(selected, hasSemester = true, weekTab = weekTab),
+                )
+                assertFalse(
+                    "没学期时簇必须收掉（T197：那 20 周是硬写的）—— 这一维与胶囊那一枚从此是两枚判据",
+                    shouldOfferWeekNavigation(selected, hasSemester = false, weekTab = weekTab),
+                )
+            }
+        }
+        // 卡面点名要钉的那一格，单独再钉一遍：没学期 + 周课表页签 ⇒ 入口为真
+        assertTrue(
+            "没设学期时周课表页签上那颗「课次 / 时间」胶囊没了 —— 复核过的全仓唯一 weekGridMode 写点入口" +
+                "（读写点册子见 TimeModeToggleWiringGuardTest 的 KDoc）从屏上消失，" +
+                "而偏好照旧落盘，用户切不回节次行",
+            shouldOfferTimeModeToggle(selectedTab = 0, weekTab = 0),
+        )
     }
 
     // ─────────────── ② 跳周清单：无学期 ⇒ 空清单 ───────────────
