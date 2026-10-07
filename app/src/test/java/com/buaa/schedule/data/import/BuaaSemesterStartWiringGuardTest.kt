@@ -138,15 +138,18 @@ class BuaaSemesterStartWiringGuardTest {
         )
 
         // 盘上那两枚合法用法确实还在：它们被顺手删掉的话，上面的负对照就自证为空
+        // ⚠️ T196④ 给 `SemesterInfo` 加了第三枚实参（那一档「为什么没有」的原因），构造点从
+        // `SemesterInfo(20, null)` 变成 `SemesterInfo(20, null, SemesterInfoReason.…)`：
+        // 针去掉右括号，**期望枚数仍是 1+1 = 2**，`20` 与 `null` 两枚实参逐字还在那一行上。
         val fetcher = blankCommentsKeepingLiterals(source(BUA_IN_PAGE_FETCHER))
         assertEquals(
-            "`$fetcher` 里 `}.getOrDefault(value)` 与 `.getOrDefault(SemesterInfo(20, null))` 两枚合法兜底" +
+            "`$fetcher` 里 `}.getOrDefault(value)` 与 `.getOrDefault(SemesterInfo(20, null,` 两枚合法兜底" +
                 "必须都还在（它们是本层负对照的实物）。实到 " +
                 occurrences(fetcher, "}.getOrDefault(value)") + " + " +
-                occurrences(fetcher, ".getOrDefault(SemesterInfo(20, null))") + " 处",
+                occurrences(fetcher, ".getOrDefault(SemesterInfo(20, null,") + " 处",
             2,
             occurrences(fetcher, "}.getOrDefault(value)") +
-                occurrences(fetcher, ".getOrDefault(SemesterInfo(20, null))"),
+                occurrences(fetcher, ".getOrDefault(SemesterInfo(20, null,"),
         )
     }
 

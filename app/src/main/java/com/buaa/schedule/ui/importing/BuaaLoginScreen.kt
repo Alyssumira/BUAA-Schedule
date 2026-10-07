@@ -177,10 +177,13 @@ fun BuaaLoginScreen(
                     // 把 WebView 转挂隐藏宿主，改的是抓取链的宿主而不是这一格的次序。
                     com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
                     fetchState = null
+                    // 文案按两维分档（T196④）：**有没有拿到一枚串**（start.raw）与
+                    // **页面到底答没答、答成什么样**（info.missingReason，五档早返回一一对应）。
+                    // 映射本体是纯函数 semesterStartFailureMessage（同包、零 android、照
+                    // ImportCompletionCopy 的先例），那七句由 SemesterStartFailureCopyTest 表驱动钉住；
+                    // 这里只递两枚现成的事实，不在页面里再判一次日期、也不在这里长第二本原因表。
                     viewModel.showMessage(
-                        "教务系统没有给出可识别的开学日期" +
-                            "（第 1 周 startDate = ${if (start.raw.isNullOrBlank()) "缺失" else "「${start.raw}」"}），" +
-                            "已保留原课表未做改动，请稍后重试",
+                        semesterStartFailureMessage(raw = start.raw, reason = info.missingReason),
                         isError = true,
                     )
                     onBack()

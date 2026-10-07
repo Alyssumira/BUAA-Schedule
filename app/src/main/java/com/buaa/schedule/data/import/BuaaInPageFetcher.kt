@@ -102,8 +102,26 @@ object BuaaInPageFetcher {
     /** 学年学期选项 */
     data class TermOption(val code: String, val name: String, val selected: Boolean = false)
 
-    /** 学期信息：周数 + 第1周周一（开学日） */
-    data class SemesterInfo(val totalWeeks: Int, val firstWeekMonday: String?)
+    /**
+     * 学期信息：周数 + 第 1 周周一（开学日）+ 「没有开学日的话是**为什么**」（T196④）。
+     *
+     * [missingReason] 只在 `firstWeekMonday == null` 那一侧有值，取五枚之一
+     * （[SemesterInfoReason]，与 `fetchSemesterInfo` 里五档早返回一一对应）；
+     * 拿到了串的那一档留 null —— 那时无「为什么没有」要交代，而「有串而认不出」那一等的
+     * 判据在 T180 的 `resolveBuaaSemesterStart` 手里，不在这一格。
+     *
+     * 为什么这枚参数要**带默认值**：下游 `BuaaWebSession.refreshSchedule` 只读
+     * `firstWeekMonday` 与 `totalWeeks` 两枚，构造点全在 `fetchSemesterInfo` 体内 ——
+     * 卡面 §3 不许碰那份文件，所以这一格的新增必须以「不改变任何既有调用点形状」的方式落地。
+     *
+     * ⚠️ [totalWeeks] 前四档仍是硬写的 20：那一笔账在台账 #236（`?: 20` 那一族，还要判
+     * 「没学期时该不该给周次导航」），本卡只做**原因分档**、20 保持现状。
+     */
+    data class SemesterInfo(
+        val totalWeeks: Int,
+        val firstWeekMonday: String?,
+        val missingReason: SemesterInfoReason? = null,
+    )
 
     /**
      * 在当前已登录的 byxt 页面上下文里发一个请求，并把响应文本回传原生。
@@ -279,7 +297,7 @@ object BuaaInPageFetcher {
         // termCode 会被拼进页面内 JS 的 URL 里。虽然来源是教务服务端返回的 itemCode，
         // 仍按白名单过滤一次：畸形取值不应该有机会改变脚本语义。
         val safeTermCode = termCode.takeIf { TERM_CODE_PATTERN.matches(it) }
-            ?: return SemesterInfo(20, null)
+            ?: return SemesterInfo(20, null, SemesterInfoReason.InvalidTermCode)
         // 弱网抖动 / 教务瞬时超时是这一趟失败的主因（见上面的 KDoc），一次超时就判「这个学期没有开学日」
         // 等于把整趟导入判死。语义与课表那一圈同一份预算：含首次共 MAX_ATTEMPTS_PER_WEEK 次尝试，
         // 两次之间退避 RETRY_DELAY_MS；一圈只有这一枚 fetch，不长第二本预算。
@@ -296,11 +314,12 @@ object BuaaInPageFetcher {
                 "/jwapp/sys/homeapp/api/home/getTermWeeks.do?termCode=$safeTermCode", "",
             )
         }
-        val response = raw ?: return SemesterInfo(20, null)
+        // 重试之后仍然没有回音：这一档交出去的是「页面没答」而不是「这个学期没有开学日」。
+        val response = raw ?: return SemesterInfo(20, null, SemesterInfoReason.PageUnanswered)
         return runCatching {
             val resp = json.decodeFromString<BuaaTermWeeksResponse>(response)
             val weeks = resp.datas.orEmpty()
-            if (weeks.isEmpty()) return SemesterInfo(20, null)
+            if (weeks.isEmpty()) return SemesterInfo(20, null, SemesterInfoReason.EmptyWeekList)
             // 第 1 周只认两条判据：serialNumber 最小、startDate 最早（判据本体 resolveBuaaFirstWeek）。
             // 两条判据分家、或各自被两行并列占着时判不出 ⇒ Undetermined，这一格把 firstWeekMonday
             // 回成 null，让下游两路各自的诚实失败链去拦（首次导入那一路的 :169 那一枚闸门 /
@@ -324,10 +343,12 @@ object BuaaInPageFetcher {
                         "getTermWeeks 共 ${weeks.size} 周，判不出第 1 周（${firstWeek.reason}：${firstWeek.detail}），" +
                             "firstWeekMonday 回 null，未猜任何日期",
                     )
-                    SemesterInfo(weeks.size, null)
+                    SemesterInfo(weeks.size, null, SemesterInfoReason.FirstWeekUndetermined)
                 }
             }
-        }.getOrDefault(SemesterInfo(20, null))
+            // 整块解不开（不是预期的 JSON 形状）也是**一档原因**，不是「没有学期信息」这一句话：
+            // 页面答了而那份答读不出来，与「页面没答」在用户句子里必须是两句话（T196④）。
+        }.getOrDefault(SemesterInfo(20, null, SemesterInfoReason.WeekListUnreadable))
     }
 
     /** 在 UI 线程执行一个脚本并同步取回字符串结果（Promise 不可用，只能读同步值） */

@@ -264,9 +264,9 @@ class BuaaFirstWeekPolicyGuardTest {
             )
         }
         assertEquals(
-            "Undetermined 那一档交出去的是 `SemesterInfo(weeks.size, null)`（恰好一处，实到 " +
-                occurrences(undetermined, UNDETERMINED_PRODUCT) + " 处）：**不是** `SemesterInfo(20, null)` —— " +
-                "周数那一格今天的样子要留着，本卡只改「怎么挑第 1 周」",
+            "Undetermined 那一档交出去的是 `SemesterInfo(weeks.size, null, …)`（恰好一处，实到 " +
+                occurrences(undetermined, UNDETERMINED_PRODUCT) + " 处）：**不是** `SemesterInfo(20, null, …)` —— " +
+                "周数那一格今天的样子要留着，本卡只改「怎么挑第 1 周」（第三枚实参是 T196④ 的原因名）",
             1,
             occurrences(undetermined, UNDETERMINED_PRODUCT),
         )
@@ -278,20 +278,24 @@ class BuaaFirstWeekPolicyGuardTest {
         )
 
         // §3 那几枚不许碰的格子：四档早返回与 runCatching 外壳都按原样数
+        // ⚠️ T196④ 给 `SemesterInfo` 加了第三枚实参（那一档「为什么没有」的原因），构造点于是从
+        // `SemesterInfo(20, null)` 变成 `SemesterInfo(20, null, SemesterInfoReason.…)`。
+        // **枚数一格没动（4 与 1）、期望值也没改**，只有针去掉右括号 —— 卡面 §1-④ 的 ⚠️ 写明
+        // 本卡不许改 `totalWeeks` 的 20 那四格，`20` 与 `null` 两枚实参逐字还在那一行上。
         assertEquals(
-            "`SemesterInfo(20, null)` 在 `$FETCHER` 恰好 4 处（实到 " + occurrences(fetcher, "SemesterInfo(20, null)") +
+            "`SemesterInfo(20, null,` 在 `$FETCHER` 恰好 4 处（实到 " + occurrences(fetcher, "SemesterInfo(20, null,") +
                 " 处）：T188 登记过的那四档早返回一字不动（termCode 非法 / raw 取不到 / weeks 空 / " +
-                "整块 runCatching 失败）",
+                "整块 runCatching 失败），枚数钉死的是「四档」这件事本身",
             4,
-            occurrences(fetcher, "SemesterInfo(20, null)"),
+            occurrences(fetcher, "SemesterInfo(20, null,"),
         )
         assertEquals(
-            "`.getOrDefault(SemesterInfo(20, null))` 外壳恰好一处（实到 " +
-                occurrences(fetcher, "}.getOrDefault(SemesterInfo(20, null))") +
+            "`.getOrDefault(SemesterInfo(20, null,` 外壳恰好一处（实到 " +
+                occurrences(fetcher, "}.getOrDefault(SemesterInfo(20, null,") +
                 " 处）：本卡改写的是块内怎么挑第 1 周，不许把 runCatching 或 getOrDefault 摘掉 —— " +
                 "那两枚实物同时是 `BuaaSemesterStartWiringGuardTest` 第 ① 层负对照的证据",
             1,
-            occurrences(fetcher, "}.getOrDefault(SemesterInfo(20, null))"),
+            occurrences(fetcher, "}.getOrDefault(SemesterInfo(20, null,"),
         )
         assertEquals(
             "`}.getOrDefault(value)`（`decodeJsString` 那一枚合法兜底）必须还在（实到 " +
@@ -631,6 +635,11 @@ class BuaaFirstWeekPolicyGuardTest {
         const val RESOLVED_BRANCH = "is BuaaFirstWeek.Resolved ->"
         const val UNDETERMINED_BRANCH = "is BuaaFirstWeek.Undetermined ->"
         const val RESOLVED_PRODUCT = "SemesterInfo(weeks.size, firstWeek.startDate)"
-        const val UNDETERMINED_PRODUCT = "SemesterInfo(weeks.size, null)"
+
+        /**
+         * T196④ 之后 `SemesterInfo` 多第三枚实参（那一档「为什么没有」的原因），
+         * 针去掉右括号；**期望枚数仍是 1**，`weeks.size` 那一格本卡不许改成 20。
+         */
+        const val UNDETERMINED_PRODUCT = "SemesterInfo(weeks.size, null,"
     }
 }
