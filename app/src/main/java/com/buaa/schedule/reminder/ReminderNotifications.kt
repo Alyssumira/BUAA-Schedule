@@ -199,8 +199,16 @@ object ReminderNotifications {
 
     private const val NOTIFY_ID_TOMORROW = 20_260_001
 
-    /** 课程进行中常驻通知的固定 id（下课铃撤的就是它） */
-    private const val NOTIFY_ID_CLASS_PROGRESS = 20_260_002
+    /**
+     * 课程进行中常驻通知的固定 id（下课铃撤的就是它）。
+     *
+     * `internal` 而不是 `private`：[CourseFluidService] 的前台通知、[postClassOngoing] 的兜底通知、
+     * [IslandFocusTemplate.attach] 挂模板那一条**必须同一条通知** —— 服务起来后正是靠"同一枚 id"
+     * 覆盖掉兜底那条。这里曾与 `CourseFluidService` 各写一份 `20_260_002` 字面量（同一枚事实两本账，
+     * 改其一不改其余 ⇒ 症状是"屏幕上同时挂两条实况"或"撤的不是发出去的那条"，零报错），
+     * 现在只有这一处字面量，服务侧那枚 `NOTIFY_ID` 是它的别名。
+     */
+    internal const val NOTIFY_ID_CLASS_PROGRESS = 20_260_002
 
     /**
      * 通知内容意图的 requestCode —— **每一族一个码段**，不能都写 0。
@@ -228,9 +236,56 @@ object ReminderNotifications {
     @Volatile
     internal var countdownCourseId = 0L
 
-    /** [countdownCourseId] 对应的上课绝对时刻（毫秒） */
+    /**
+     * [countdownCourseId] 那节课的**上课绝对时刻**（epoch 毫秒）。
+     *
+     * ⚠️ 值名与它真正装的东西对得上，但**赋值那一句取的字段名对不上**：写侧拿到的是
+     * 「课前那一段实况窗口」，那种窗口的 `endMillis` 装的才是上课时刻。凭据两格：
+     * `ReminderScheduler.createPendingIntent` 造课前闹钟的 extras 时把 `startMillis`
+     * 与 `endMillis` **都**写成上课时刻（它自己的注释写着"收铃时刻就是上课时刻"），
+     * 而 `ReminderReceiver` 收铃时只 `copy(startMillis = 此刻)`，`endMillis` 一个字没动。
+     * 读侧拿的是另一形状的窗口（`ClassProgressScheduler.planNextClassWindow`：
+     * start=上课、end=下课），那一型的上课时刻在 `startMillis`。
+     *
+     * 所以这枚字段两侧的"哪一格是上课时刻"**不许由调用点各挑各的字段**：取法收在
+     * [countdownAnchorOf]（写侧 / 实况服务读侧）与 [classStartOf]（课堂计划窗口读侧），
+     * 由 `CountdownOwnershipAnchorGuardTest` 钉住（四处调用点 + 那两格造窗形状凭据）。
+     * 这两枚函数不是同值函数的两个名字：它们读的是**不同形状窗口的不同格**，
+     * 只在"课前窗口的 endMillis 恰好是上课时刻"这一形状成立时才同值 ——
+     * 下一次把课前窗口改成自然形状（end=下课）就会破，破的落点见 [countdownAnchorOf] 的警告。
+     */
     @Volatile
     internal var countdownClassStart = 0L
+
+    /**
+     * 「课前 / 实况那一段窗口」里上课时刻的取法（**唯一一份**）。
+     *
+     * 用它的两格：[recordCountdownOwnership] 写归属、[CourseFluidService.recoverMissedClassStart]
+     * 判上课铃落地没有。它们拿到的都是同一条链上那枚课前实况窗口
+     * （`startMillis = 收铃此刻`、`endMillis = 上课时刻`），所以这里读 `endMillis`。
+     *
+     * ⚠️ 下一次改窗口形状就会破的那一处就在这里：若有人把课前窗口的 `endMillis`
+     * 改回它的自然含义（下课时刻，或让 `planNextClassWindow` 的窗口直接进这条链），
+     * 归属就存成下课时刻，而三处读侧仍传上课时刻 ⇒ [isCountingDownTo] / [ownsCountdownTo]
+     * **恒假** ⇒ 正是 [isCountingDownTo] 自己 KDoc 里写的那句后果：
+     * 「课前倒计时刚上岛就会被拆掉」（另有一处恒假：上课铃被吞时不再补排，见
+     * [CourseFluidService.recoverMissedClassStart]）。改形状必须先改这里，
+     * 而 `CountdownOwnershipAnchorGuardTest` 会在你改之前把这条链的四处一起点亮。
+     */
+    internal fun countdownAnchorOf(window: ClassProgressScheduler.ClassWindow): Long = window.endMillis
+
+    /**
+     * 「课堂计划窗口」（[ClassProgressScheduler.planNextClassWindow] 那种
+     * `startMillis = 上课` / `endMillis = 下课`）里上课时刻的取法（**唯一一份**）。
+     *
+     * 用它的三格：`ClassProgressScheduler.rescheduleWindows`、[LiveClassResyncer.resync]、
+     * `ReminderScheduler.shouldTakeDownClassProgress`（前与后在本卡不许动的两枚文件里，
+     * 现按 `window.startMillis` 逐字取，由守卫钉住同口径；跨卡收口见回执）。
+     *
+     * 与 [countdownAnchorOf] 同值的**唯一**凭据就是上面那两格造窗形状：一枚是"课前实况窗口"
+     * 的 end、一枚是"课堂计划窗口"的 start，同一节课的同一个上课时刻。
+     */
+    internal fun classStartOf(window: ClassProgressScheduler.ClassWindow): Long = window.startMillis
 
     /**
      * 屏上的实况是不是"正在数这节即将到来的课"。
@@ -239,6 +294,10 @@ object ReminderNotifications {
      * 二者都会把"课还没开始"当成下课铃被吞的遗留来收，少了这一步区分，
      * 课前倒计时刚上岛就会被拆掉。课程 id 与开课毫秒必须同时对上、
      * 且课还没开始才算数 —— 课被删或改时间后重排自然对不上，照常回收。
+     *
+     * ⚠️ 第二个参数是**上课时刻**：调用方拿的是课堂计划窗口时要走 [classStartOf]，
+     * 拿的是课前实况窗口时要走 [countdownAnchorOf]（两型不同格、同一枚时刻，见
+     * [countdownClassStart]）。
      */
     fun isCountingDownTo(courseId: Long, classStartMillis: Long): Boolean =
         countdownCourseId == courseId &&
@@ -252,6 +311,10 @@ object ReminderNotifications {
      * 用 [isCountingDownTo] 判"上课铃到没到"会得到永远相同的答案，等于没有守卫。
      * 归属是清得掉的（ACTION_START 以 IN_CLASS 重新下发实况时归零），所以只有它能区分
      * "广播处理过了"与"广播被省电策略吞了"。
+     *
+     * ⚠️ 第二个参数的口径同 [isCountingDownTo]：`ReminderScheduler` 的生产接线传的是
+     * `window.startMillis`（课堂计划窗口），`CourseFluidService` 传的是
+     * `countdownAnchorOf(window)`（课前实况窗口）。
      */
     internal fun ownsCountdownTo(courseId: Long, classStartMillis: Long): Boolean =
         countdownCourseId == courseId && countdownClassStart == classStartMillis
@@ -280,15 +343,30 @@ object ReminderNotifications {
         ensureChannels(context)
         // 先记归属再下发：紧随其后的重排链（ReminderReceiver 的 goAsync 块）
         // 要靠这份状态区分"课前倒计时"和"下课铃被吞的遗留"。
+        recordCountdownOwnership(window, phase)
+        postClassOngoing(context, window, phase)
+        CourseFluidService.start(context, window, phase)
+    }
+
+    /**
+     * [startLiveWindow] 的第一步，单独成函数只为了让**真写侧**能在 JVM 侧被跑到：
+     * 那两步（下发通知、起前台服务）都要 Context，本模块单测没有 Robolectric
+     * （android.jar 里全是抛 "not mocked" 的桩），于是"归属存的是哪一格"这件事
+     * 此前只能靠读源码数，从来没有和真实读侧对过一次账。
+     *
+     * 口径全在 [countdownAnchorOf] 与 [countdownClassStart] 那两段里，这里不重说。
+     */
+    internal fun recordCountdownOwnership(
+        window: ClassProgressScheduler.ClassWindow,
+        phase: LivePhase,
+    ) {
         if (phase == LivePhase.BEFORE_CLASS) {
             countdownCourseId = window.courseId
-            countdownClassStart = window.endMillis
+            countdownClassStart = countdownAnchorOf(window)
         } else {
             countdownCourseId = 0L
             countdownClassStart = 0L
         }
-        postClassOngoing(context, window, phase)
-        CourseFluidService.start(context, window, phase)
     }
 
     /**
@@ -537,11 +615,47 @@ object ReminderNotifications {
     fun chipCountdownLabel(endMillis: Long): String =
         "${minutesLeft(endMillis, System.currentTimeMillis())}分钟"
 
+    /**
+     * 归属归零 —— **成对字段只此一处清零**（撤通知那一半见 [cancelClassOngoing]）。
+     *
+     * 单独成函数是给"通知由框架摘走"的那两条路用的（[CourseFluidService] 的
+     * `onDestroy` / `recoverMissedClassStart`）：它们不该去 cancel 同一枚通知 id，
+     * 因为那条通知此刻可能已经是**下一段实况**（上课铃以 IN_CLASS 接手同一 id）的了。
+     */
+    internal fun clearCountdownOwnership() {
+        countdownCourseId = 0L
+        countdownClassStart = 0L
+    }
+
+    /**
+     * 只清**仍然记着这一节**的归属（[clearCountdownOwnership] 的条件版）。
+     *
+     * 实况服务自己的收尾用这一枚：实例销毁与下一段实况的下发之间没有顺序保证，
+     * 无条件清会把别人刚记下的账抹掉，而那份账正是"别把刚上岛的课中实况当遗留拆掉"的依据。
+     *
+     * @return true 表示这份归属确实记的是这一节、并且已经被清掉
+     */
+    internal fun releaseCountdownOwnership(courseId: Long, classStartMillis: Long): Boolean =
+        if (countdownCourseId == courseId && countdownClassStart == classStartMillis) {
+            clearCountdownOwnership()
+            true
+        } else {
+            false
+        }
+
+    /**
+     * 撤掉课堂实况那条通知，**并**把归属一起清掉 —— 这两半永远同点发生（不变量见下面那句注释）。
+     *
+     * 全仓"撤这条通知"只有这一处实现：`CourseFluidService.stop` 失败那一支此前自己
+     * `NotificationManagerCompat.cancel(NOTIFY_ID)` 而不清归属，靠的恰好是它的三枚调用点
+     * （`ClassProgressReceiver` 的 ACTION_END、`ClassProgressScheduler` 的
+     * `rescheduleWindows` / `cancelAll`）都紧跟一句本函数 —— 那是**调用点在替它成对**，
+     * 不是它自己成对；新增第四枚调用点漏掉后半句就静默破掉这条不变量。
+     */
     fun cancelClassOngoing(context: Context) {
         // 撤了通知就不再保护任何一节课：归属必须同点清掉，
         // 否则下一次重排会对着一条已经不存在的实况手下留情。
-        countdownCourseId = 0L
-        countdownClassStart = 0L
+        clearCountdownOwnership()
         NotificationManagerCompat.from(context).cancel(NOTIFY_ID_CLASS_PROGRESS)
     }
 

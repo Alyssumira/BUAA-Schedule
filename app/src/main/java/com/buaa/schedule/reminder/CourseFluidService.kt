@@ -11,7 +11,6 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.buaa.schedule.BUAAApplication
 import com.buaa.schedule.R
@@ -108,12 +107,31 @@ class CourseFluidService : Service() {
      * 为什么要先等 [START_BELL_GRACE_MS]：本帧与 ACTION_START 都在主线程消息队列里排队，
      * 谁先跑只看这一次调度 —— 正常送达时也可能差几十毫秒，抢在广播之前判就变成"证据还在、
      * 于是把刚排好的下课铃撤了重排"，正是要避免的那种抖。
+     *
+     * **这笔证据是本函数借来的、不是全进程的**：倒计时收尾时通知已经不在屏上，
+     * 归属按不变量本该立刻归零（见 `ReminderNotifications.cancelClassOngoing` 的注释），
+     * 只有"上课铃落地没有"这一判还在读它。所以这里把宽限期挂进
+     * [startBellGracePending]（挡住 onDestroy 提前把证据清掉），判完**立刻自己清**：
+     * 判据成立 ⇒ 随后 ACTION_START 会归零；判据不成立 ⇒ 归属早就是 0，清它是 no-op。
+     * 两条出口都不留"屏上没倒计时、归属却一直挂着"的残账 —— 那种残账会让
+     * `ReminderScheduler.shouldTakeDownClassProgress` 一直答"岛上正数着这节课、别收"，
+     * 而它保护的那条通知早就不存在了。
+     *
+     * 清它走 CAS 版 [ReminderNotifications.releaseCountdownOwnership] 而不是无条件归零：
+     * 这 5 秒里若已经有**另一节**课的倒计时把归属接了过去（同一枚通知 id 的正常换手），
+     * 本函数那一判的证据与那份新账无关，不该由这里抹掉。
      */
     private fun recoverMissedClassStart() {
         val window = liveWindow
+        // 归属读的是课前实况那一型窗口的上课时刻（口径单份在 ReminderNotifications.countdownAnchorOf）
+        val anchor = ReminderNotifications.countdownAnchorOf(window)
+        startBellGracePending = true
         ioScope.launch {
             delay(START_BELL_GRACE_MS)
-            if (!ReminderNotifications.ownsCountdownTo(window.courseId, window.endMillis)) return@launch
+            val bellMissed = ReminderNotifications.ownsCountdownTo(window.courseId, anchor)
+            startBellGracePending = false
+            ReminderNotifications.releaseCountdownOwnership(window.courseId, anchor)
+            if (!bellMissed) return@launch
             android.util.Log.d(TAG, "上课铃未在窗口内落地，补排课堂窗口：${window.courseName}")
             ClassProgressScheduler.rescheduleNextWindow(applicationContext)
         }
@@ -264,6 +282,25 @@ class CourseFluidService : Service() {
         isRunning = false
         handler.removeCallbacks(updater)
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        // stopForeground(REMOVE) 把通知摘掉之后，归属就不能再"保护"任何一节课 ——
+        // 这条不变量写在 ReminderNotifications.cancelClassOngoing 的注释里，而这一格此前是漏的：
+        // 服务被系统掐掉 / startForeground 被拒（课前那一段还没数到上课铃）之后通知已经没了，
+        // 归属却一直挂到下一次某枚 cancelClassOngoing 调用点被撞到，中间那一段里
+        // ReminderScheduler.shouldTakeDownClassProgress 会答"岛上正数着这节课、别收"，
+        // 而它保护的那条通知早就不存在了。
+        // 两道保留：
+        //  1) 课前那一段刚刚数到上课铃 ⇒ 归属换了用途（"上课铃没落地"的唯一证据），
+        //     由 recoverMissedClassStart 判完立刻清；这里抢清会把补救判成"铃已经落地"。
+        //  2) 归属记的已经不是本实例这一节 ⇒ 那是下一段实况的账（同一枚通知 id 被接手过），
+        //     不归这里清 —— 所以走条件版 releaseCountdownOwnership，而不是无条件归零。
+        // 为什么不走整包的 cancelClassOngoing：它会 cancel 同一枚通知 id，而此刻那条通知
+        // 可能正是上课铃之后那条课中实况的，本实例没有撤它的资格（撤法只归它自己的宿主）。
+        if (!startBellGracePending) {
+            ReminderNotifications.releaseCountdownOwnership(
+                courseId = liveWindow.courseId,
+                classStartMillis = ReminderNotifications.countdownAnchorOf(liveWindow),
+            )
+        }
         super.onDestroy()
     }
 
@@ -271,7 +308,14 @@ class CourseFluidService : Service() {
 
     companion object {
         private const val TAG = "CourseFluidService"
-        private const val NOTIFY_ID = 20_260_002
+
+        /**
+         * 与课堂实况那条通知**同一枚 id**（唯一字面量在 `ReminderNotifications` 的
+         * `NOTIFY_ID_CLASS_PROGRESS` 上）：服务起来后正是靠同 id 覆盖掉广播侧先发的兜底那条，
+         * 岛模板与 `stop()` 撤的也必须是同一条。这里曾是第二份 `20_260_002` 字面量
+         * （同一枚事实两本账，改一枚不改另一枚 ⇒ "撤的不是发出去的那条"，零报错）。
+         */
+        private const val NOTIFY_ID = ReminderNotifications.NOTIFY_ID_CLASS_PROGRESS
 
         /** 两次进度更新之间的最小间隔：避免异常短的课堂窗口把 handler 打成忙等 */
         // 与下面文件级 nextCourseFluidTickMs 同处一文件，常量放在那边。
@@ -283,6 +327,18 @@ class CourseFluidService : Service() {
         @Volatile
         var isRunning: Boolean = false
             private set
+
+        /**
+         * 「上课铃落地没有」那一判还在读课前倒计时的归属（见
+         * [com.buaa.schedule.reminder.CourseFluidService.recoverMissedClassStart]）。
+         *
+         * 挂 companion 而不是实例字段：判据跑在应用级作用域里，而这条服务的实例
+         * 在 stopSelf 之后随时可能被重建（同一枚通知 id 换人接手），实例字段会在
+         * "旧实例已销毁、宽限期还没判完"那一档把证据错交给下一段实况。
+         * 进程被杀 ⇒ 归 false，而那时归属也一起归零（同一进程内状态），语义仍对。
+         */
+        @Volatile
+        private var startBellGracePending = false
 
         /** [LivePhase] 的名字；缺省按课中处理 */
         const val EXTRA_PHASE = "extra_phase"
@@ -444,13 +500,23 @@ class CourseFluidService : Service() {
             }
         }
 
-        /** 下课/取消：请求停止前台服务并移除通知 */
+        /**
+         * 下课/取消：请求停止前台服务并移除通知。
+         *
+         * `stopService` 失败那一支走 [ReminderNotifications.cancelClassOngoing]，不自己
+         * `NotificationManagerCompat.cancel` —— "撤这条通知"与"清这份归属"是同一件事的两半
+         * （不变量写在 `ReminderNotifications.cancelClassOngoing` 的注释里）。此前这里只撤通知、
+         * 不清归属，绿得全靠三枚调用点（`ClassProgressReceiver` 的 ACTION_END、
+         * `ClassProgressScheduler` 的 `rescheduleWindows` / `cancelAll`）都紧跟一句
+         * `cancelClassOngoing` —— 那是调用点在替它成对；这一卡把它们收成一处，
+         * 第四枚调用点漏掉后半句也不会再静默破掉不变量。
+         */
         fun stop(context: Context) {
             runCatching {
                 context.stopService(Intent(context, CourseFluidService::class.java))
             }.onFailure {
                 // 某些系统 stopService 失败；至少把通知清掉，由广播路径兜底
-                NotificationManagerCompat.from(context).cancel(NOTIFY_ID)
+                ReminderNotifications.cancelClassOngoing(context)
             }
         }
     }

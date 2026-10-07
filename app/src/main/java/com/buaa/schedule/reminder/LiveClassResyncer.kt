@@ -42,9 +42,15 @@ object LiveClassResyncer {
             when (val action = decide(window, System.currentTimeMillis())) {
                 ResyncAction.ClearLeftovers -> {
                     // "课还没开始"不等于遗留：正为数着这节课的课前倒计时就挂在岛上，
-                    // 判据与 rescheduleWindows 共用，口径不能两边各写一份
+                    // 判据与 rescheduleWindows 共用，口径不能两边各写一份。
+                    // 取哪一格是上课时刻也不各写一份：这里的 window 是
+                    // planNextClassWindow 那种"start=上课 / end=下课"的课堂计划窗口，
+                    // 一律走 ReminderNotifications.classStartOf（写侧那一型走 countdownAnchorOf）。
                     val countingDown = window != null &&
-                        ReminderNotifications.isCountingDownTo(window.courseId, window.startMillis)
+                        ReminderNotifications.isCountingDownTo(
+                            window.courseId,
+                            ReminderNotifications.classStartOf(window),
+                        )
                     if (!countingDown) {
                         ClassProgressDnd.restore(context)
                         ReminderNotifications.cancelClassOngoing(context)
