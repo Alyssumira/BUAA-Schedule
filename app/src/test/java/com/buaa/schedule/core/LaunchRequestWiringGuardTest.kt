@@ -67,6 +67,12 @@ class LaunchRequestWiringGuardTest {
 
     // ---- ② onCreate：三行全吃内核结论，那个布尔读 savedInstanceState ----
 
+    /**
+     * T244③ 之后这一档分成两半数（在册格子随盘面重钉，不删）：
+     * 引导出口新增了一枚**作废**（`requestedXxx.value = null`，台账 #392），它不是第二处
+     * "从 Intent 抄进状态"的赋值，所以从「吃内核结论」那一组里摘出去单独数、且只许一处。
+     * 原先的保护力一分不减：再来一处非作废的赋值，`fed` 就是两枚 ⇒ 照样红。
+     */
     @Test
     fun onCreateFeedsAllThreeStatesFromTheKernel() {
         val body = balancedBlock(activity(), "override fun onCreate(")
@@ -76,16 +82,26 @@ class LaunchRequestWiringGuardTest {
             "requestedDayOfWeek" to "dayOfWeek",
         )) {
             val lines = body.lines().filter { it.trim().startsWith("$state.value =") }
+            val invalidations = lines.filter { it.trim() == "$state.value = null" }
+            val fed = lines.filterNot { it in invalidations }
             assertEquals(
-                "$state 在 onCreate 里的赋值处数应当恰好一处（多一处就是这条链路上又冒出一处无条件赋值）：\n" +
+                "$state 在 onCreate 里吃内核结论的赋值处数应当恰好一处（多一处就是这条链路上又冒出" +
+                    "一处无条件赋值，那就是台账 #112 的病本体）：\n" +
                     body.lines().filter { it.contains("$state.value") }.joinToString("\n"),
                 1,
-                lines.size,
+                fed.size,
             )
             assertTrue(
                 "$state 在 onCreate 里不再吃内核结论（$field）——无条件重放启动 Intent 上那枚陈旧 extra " +
-                    "就是台账 #112 的病本体：\n" + lines.joinToString("\n"),
-                lines.single().contains("= launch.$field"),
+                    "就是台账 #112 的病本体：\n" + fed.joinToString("\n"),
+                fed.single().contains("= launch.$field"),
+            )
+            assertEquals(
+                "$state 在 onCreate 里的作废处数应当恰好一处（引导出口那一手，T244③/台账 #392；" +
+                    "两处 = 同一档写了两遍，零处 = 那笔请求还躺在状态里出引导第一帧踢人）：\n" +
+                    invalidations.joinToString("\n"),
+                1,
+                invalidations.size,
             )
         }
         assertTrue(
@@ -225,16 +241,34 @@ class LaunchRequestWiringGuardTest {
      * 内核"重建那一档不认"的前提是**上一次生命周期里这枚请求已经被消费方取走**
      * （`onDayRequestConsumed` / `onRouteRequestConsumed` / `onCourseRequestConsumed`）。
      * 那颗回调一旦漂没，请求就会在状态里常驻，本卡的判据也就失去了依据。
+     *
+     * T244③ 之后这一档分两半数（在册格子随盘面重钉，不删）：引导出口又添了一处**作废**
+     * —— 台账 #392 那一手（引导期间消费方整棵没组合，出引导第一帧会把人踢到没选过的目的页）。
+     * 两半数各钉一枚，谁漂没都红：回调那一枚认 `{ xxx.value = null }` 那一形，
+     * 作废那一枚认独立成行的 `xxx.value = null`。
      */
     @Test
     fun everyRequestStateHasAConsumePath() {
         val body = balancedBlock(activity(), "setContent {")
         for (state in listOf("requestedCourseId", "requestedRoute", "requestedDayOfWeek")) {
+            val nulls = body.lines().filter { it.trim().contains("$state.value = null") }
             assertEquals(
-                "$state 的「取走即清空」处数应当恰好一处：\n" +
-                    body.lines().filter { it.contains("$state.value = null") }.joinToString("\n"),
+                "$state 的清空处数应当恰好两处（消费回调 + 引导出口的作废，T244③）：\n" +
+                    nulls.joinToString("\n"),
+                2,
+                nulls.size,
+            )
+            assertEquals(
+                "$state 的「取走即清空」回调应当恰好一处（`{ $state.value = null }` 那一形）：" +
+                    "回调漂没就是本卡判据的前提没了：\n" + nulls.joinToString("\n"),
                 1,
-                body.lines().count { it.trim().contains("$state.value = null") },
+                nulls.count { it.trim().contains("{ $state.value = null }") },
+            )
+            assertEquals(
+                "$state 在引导出口的作废应当恰好一处（独立成行的 `$state.value = null`，台账 #392）：" +
+                    "零处 = 出引导第一帧踢人，两处 = 同一档写了两遍：\n" + nulls.joinToString("\n"),
+                1,
+                nulls.count { it.trim() == "$state.value = null" },
             )
         }
     }

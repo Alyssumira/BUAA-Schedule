@@ -384,7 +384,7 @@ class MainActivity : ComponentActivity() {
  *
  * 与 `core/LaunchRequestPolicy.kt` 同一口径的纯判据：只吃已经抽好的可空字符串，
  * 不碰 NavController、不碰设备、体内不读钟，因此能在纯 JVM 单测里表驱动
- * （见 `nav/OnboardingStartRoutePolicyTest`）。
+ * （见 `nav/NavRootStartRoutePolicyTest`，接线形状另有一枚 `nav/NavRootStartDestinationGuardTest`）。
  *
  * ## 为什么只有首页在册
  *
