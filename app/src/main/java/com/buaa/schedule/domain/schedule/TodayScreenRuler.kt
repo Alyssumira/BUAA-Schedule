@@ -94,9 +94,9 @@ object TodayScreenRuler {
         // 不是"上完了" —— 关着比念「今天没有更多课了」诚实
         plan == null || plan.slots.isEmpty() -> TodayHeroGate.Closed(TodayHeroAbsence.PLAN_CANNOT_SPEAK)
         else -> when {
-            plan.ongoing != null -> TodayHeroGate.Open.Ongoing(plan.slots, plan.ongoing, plan.minutesRemaining)
-            plan.next != null -> TodayHeroGate.Open.Next(plan.slots, plan.next, plan.minutesToNext)
-            else -> TodayHeroGate.Open.NothingMore(plan.slots)
+            plan.ongoing != null -> TodayHeroGate.Open(TodayHeroLine.Ongoing(plan.ongoing, plan.minutesRemaining), plan.slots)
+            plan.next != null -> TodayHeroGate.Open(TodayHeroLine.Next(plan.next, plan.minutesToNext), plan.slots)
+            else -> TodayHeroGate.Open(TodayHeroLine.NothingMore, plan.slots)
         }
     }
 }
@@ -120,50 +120,41 @@ sealed class DayCourseScope {
 }
 
 /**
- * Hero 那一档结论：门开不开（[Open] 对 [Closed]）与开了念哪句，一枚 sealed 里两码事不许各自成立。
+ * Hero 那一档结论：门开不开（[TodayHeroGate.Open] 对 [TodayHeroGate.Closed]）与开了念哪句
+ * （[TodayHeroLine]），一枚 sealed 里这两码事不许各自成立。
  *
  * 界面上「门开不开」就是 `hero is TodayHeroGate.Open` 这一枚类型判据 —— 它不是调用点算出来的，
- * 是 [TodayScreenRuler.heroGateOf] 交回的档位本身。三档开着的答案各带 [Open.slots]
+ * 是 [TodayScreenRuler.heroGateOf] 交回的档位本身。开着的档带着 [TodayHeroGate.Open.slots]
  * （Hero 底部那条全天疏密带子吃的就是它），于是这张卡再没有第二个地方去读 `plan`。
  */
 sealed class TodayHeroGate {
 
-    /** 门开着：整块 Hero 出现，念哪一句由下面三档决定 */
-    sealed class Open : TodayHeroGate() {
-
-        /** Hero 底部疏密带子那一批课次：与列表同源（同一把尺选中那一批的产物） */
-        abstract val slots: List<TodayCourseSlot>
-
-        /** 此刻正在上课：念「正在上课」 */
-        data class Ongoing(
-            override val slots: List<TodayCourseSlot],
-            val slot: TodayCourseSlot,
-            val minutesRemaining: Long?,
-        ) : Open()
-
-        /** 还没上课：念「下一节」 */
-        data class Next(
-            override val slots: List<TodayCourseSlot>,
-            val slot: TodayCourseSlot,
-            val minutesToNext: Long?,
-        ) : Open()
-
-        /**
-         * 今天的课真的排完了：才许念「今天没有更多课了」。
-         *
-         * 能走到这一档的前提是 [TodayScreenRuler.heroGateOf] 已经核过「列表有卡」与
-         * 「课次算得出来」，也就是这一句说出口时，屏上确实没有还没上的课了。
-         */
-        data class NothingMore(override val slots: List<TodayCourseSlot>) : Open()
-    }
+    /** 门开着：整块 Hero 出现。[line] 是它念哪一句，[slots] 是与列表同源的那一批课次 */
+    data class Open(val line: TodayHeroLine, val slots: List<TodayCourseSlot>) : TodayHeroGate()
 
     /** 门关着：整块 Hero 不出现 */
     data class Closed(val reason: TodayHeroAbsence) : TodayHeroGate()
 
+    /** 门开不开（[TodayScreenRuler.heroGateOf] 的结论，调用点只读不判） */
+    val isOpen: Boolean get() = this !is Closed
+}
+
+/** [TodayHeroGate.Open] 里那句念白的分档：三档各有各的落点，不许折成一句 */
+sealed class TodayHeroLine {
+
+    /** 此刻正在上课：「正在上课」＋那门课＋还剩几分钟下课 */
+    data class Ongoing(val slot: TodayCourseSlot, val minutesRemaining: Long?) : TodayHeroLine()
+
+    /** 还没上课：「下一节」＋那门课＋几分钟后开始 */
+    data class Next(val slot: TodayCourseSlot, val minutesToNext: Long?) : TodayHeroLine()
+
     /**
-     * 门开不开（[TodayScreenRuler.heroGateOf] 的结论，调用点只读不判）。
+     * 今天的课真的排完了：才许念「今天没有更多课了」。
+     *
+     * 能走到这一档的前提是 [TodayScreenRuler.heroGateOf] 已经核过「列表有卡」与
+     * 「课次算得出来」，也就是这一句说出口时，屏上确实没有还没上的课了。
      */
-    val isOpen: Boolean get() = this is Open
+    data object NothingMore : TodayHeroLine()
 }
 
 /** [TodayHeroGate.Closed] 的分档原因：四档各有各的诚实说法，不许折成一句 */

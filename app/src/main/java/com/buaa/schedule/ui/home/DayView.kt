@@ -117,6 +117,7 @@ import com.buaa.schedule.domain.model.toPeriodSegments
 import com.buaa.schedule.domain.model.weekdayLabel
 import com.buaa.schedule.domain.schedule.SlotStatus
 import com.buaa.schedule.domain.schedule.TodayHeroGate
+import com.buaa.schedule.domain.schedule.TodayHeroLine
 import com.buaa.schedule.domain.schedule.TodayPlanner
 import com.buaa.schedule.domain.schedule.TodayScreenRuler
 import com.buaa.schedule.domain.schedule.WeekCalculator
@@ -1239,9 +1240,9 @@ private fun TodayHero(
                 verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceMicro),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                when (hero) {
-                    is TodayHeroGate.Open.Ongoing -> {
-                        val ongoing = hero.slot
+                when (val line = hero.line) {
+                    is TodayHeroLine.Ongoing -> {
+                        val ongoing = line.slot
                         Text(
                             "正在上课",
                             style = MaterialTheme.typography.labelLarge,
@@ -1262,7 +1263,7 @@ private fun TodayHero(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        hero.minutesRemaining?.let {
+                        line.minutesRemaining?.let {
                             Text(
                                 "还有 $it 分钟下课",
                                 style = MaterialTheme.typography.bodyMedium,
@@ -1270,8 +1271,8 @@ private fun TodayHero(
                             )
                         }
                     }
-                    is TodayHeroGate.Open.Next -> {
-                        val next = hero.slot
+                    is TodayHeroLine.Next -> {
+                        val next = line.slot
                         Text(
                             "下一节",
                             style = MaterialTheme.typography.labelLarge,
@@ -1292,7 +1293,7 @@ private fun TodayHero(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        hero.minutesToNext?.let {
+                        line.minutesToNext?.let {
                             Text(
                                 "$it 分钟后开始",
                                 style = MaterialTheme.typography.bodyMedium,
@@ -1300,7 +1301,7 @@ private fun TodayHero(
                             )
                         }
                     }
-                    is TodayHeroGate.Open.NothingMore -> {
+                    TodayHeroLine.NothingMore -> {
                         // 这一档由内核核过两件事才许出声：列表有卡、且课次真的排完了（全部已结束）。
                         // 改前它是「没学期」那一格的默认出口 —— 谎话压在还挂着的 14:00 卡上
                         Text(

@@ -169,8 +169,8 @@ class TodayHeroSingleRulerWiringGuardTest {
         )
         assertTrue(
             "TodayHero 里那句「今天没有更多课了」不再挂在 NothingMore 那一档下面：它必须只在" +
-                "is TodayHeroGate.Open.NothingMore 里出声（那一档由内核核过「列表有卡且课次真排完了」）",
-            hero.indexOf("is TodayHeroGate.Open.NothingMore ->") in 0 until hero.indexOf(sentence),
+                "TodayHeroLine.NothingMore 里出声（那一档由内核核过「列表有卡且课次真排完了」）",
+            hero.indexOf("TodayHeroLine.NothingMore ->") in 0 until hero.indexOf(sentence),
         )
     }
 

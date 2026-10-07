@@ -189,10 +189,13 @@ class TodayScreenRulerTwoRulersTableTest {
             hasCards = true,
             plan = planWithNext(minutes = 25L),
         )
-        val expected = TodayHeroGate.Open.Next(slots = listOf(upcoming), slot = upcoming, minutesToNext = 25L)
+        val expected = TodayHeroGate.Open(TodayHeroLine.Next(slot = upcoming, minutesToNext = 25L), slots = listOf(upcoming))
         assertEquals(expected, verdict)
         assertTrue("甲档：门必须由内核交回为开，调用点不许自己算", verdict.isOpen)
-        assertFalse("这一格不许折成 NothingMore（那正是改前的句子）", verdict is TodayHeroGate.Open.NothingMore)
+        assertFalse(
+            "这一格不许折成 NothingMore（那正是改前的句子）",
+            (verdict as TodayHeroGate.Open).line is TodayHeroLine.NothingMore,
+        )
     }
 
     @Test
@@ -203,21 +206,21 @@ class TodayScreenRulerTwoRulersTableTest {
         val byTermWeek = TodayScreenRuler.heroGateOf(
             DayCourseScope.TermWeek(1), isToday = true, hasCards = true, plan = planAllPast(),
         )
-        assertEquals(TodayHeroGate.Open.NothingMore(listOf(past)), byWeekday)
-        assertEquals(TodayHeroGate.Open.NothingMore(listOf(past)), byTermWeek)
+        assertEquals(TodayHeroGate.Open(TodayHeroLine.NothingMore, listOf(past)), byWeekday)
+        assertEquals(TodayHeroGate.Open(TodayHeroLine.NothingMore, listOf(past)), byTermWeek)
         assertTrue(byWeekday.isOpen && byTermWeek.isOpen)
     }
 
     @Test
     fun `正在上课那一档两把尺同格`() {
         assertEquals(
-            TodayHeroGate.Open.Ongoing(slots = listOf(ongoing), slot = ongoing, minutesRemaining = 15L),
+            TodayHeroGate.Open(TodayHeroLine.Ongoing(slot = ongoing, minutesRemaining = 15L), listOf(ongoing)),
             TodayScreenRuler.heroGateOf(
                 DayCourseScope.WeekdayOnly, isToday = true, hasCards = true, plan = planWithOngoing(15L),
             ),
         )
         assertEquals(
-            TodayHeroGate.Open.Ongoing(slots = listOf(ongoing), slot = ongoing, minutesRemaining = 45L),
+            TodayHeroGate.Open(TodayHeroLine.Ongoing(slot = ongoing, minutesRemaining = 45L), listOf(ongoing)),
             TodayScreenRuler.heroGateOf(
                 DayCourseScope.TermWeek(1), isToday = true, hasCards = true, plan = planWithOngoing(45L),
             ),
@@ -286,9 +289,9 @@ class TodayScreenRulerTwoRulersTableTest {
     @Test
     fun `门开不开就是档位本身 三档开的与四档关的各有唯一的诚实说法`() {
         val open: List<TodayHeroGate> = listOf(
-            TodayHeroGate.Open.Ongoing(listOf(ongoing), ongoing, 1L),
-            TodayHeroGate.Open.Next(listOf(upcoming), upcoming, 1L),
-            TodayHeroGate.Open.NothingMore(listOf(past)),
+            TodayHeroGate.Open(TodayHeroLine.Ongoing(ongoing, 1L), listOf(ongoing)),
+            TodayHeroGate.Open(TodayHeroLine.Next(upcoming, 1L), listOf(upcoming)),
+            TodayHeroGate.Open(TodayHeroLine.NothingMore, listOf(past)),
         )
         val closed: List<TodayHeroGate> = TodayHeroAbsence.entries.map { TodayHeroGate.Closed(it) }
         for (gate in open) {
