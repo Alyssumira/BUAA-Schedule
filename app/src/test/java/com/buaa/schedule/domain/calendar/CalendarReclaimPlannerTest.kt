@@ -303,7 +303,8 @@ class CalendarReclaimPlannerTest {
             AftermathCell(
                 "**题眼档 2**：批写成功、映射落库失败而 50 枚都点得出名 ⇒ 当场撤回自己刚写的那 50 枚",
                 InsertBatchLanding.Landed, attempted = 50, named = (1L..50L).toSet(), unnamed = 0,
-                flush = MappingFlush.Failed, expectedTier = "RollbackOwnWrites", expectedEventIds = (1L..50L).toSet(),
+                flush = MappingFlush.Failed, expectedTier = "RollbackOwnWrites",
+                expectedEventIds = (1L..50L).toSet(), expectedUnnamed = 0,
             ),
             AftermathCell(
                 "两档叠在一起：40 枚点名、10 枚认不回来、映射又没落库 ⇒ 只撤点得出名的 40 枚，" +
