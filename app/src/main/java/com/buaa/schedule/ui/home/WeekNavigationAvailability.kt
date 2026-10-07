@@ -46,9 +46,11 @@ import com.buaa.schedule.domain.schedule.CourseConstraints
  */
 
 /**
- * 第二行那一簇周次控件（时间模式胶囊 + ‹ 周次 › + 「跳转到周次」清单 + 学期进度线）画不画。
+ * 第二行那一簇周次控件（‹ 周次 › + 「跳转到周次」清单 + 学期进度线）画不画。
  *
  * 改前只看 `selectedTab == 0`（周课表页签），"没设学期"那一档照画 ⇒ 本卡补的就是这一维。
+ * ⚠️ T202 之后这一枚**只管簇**：「课次 / 时间」那颗模式胶囊已经搬出簇，改由
+ * [shouldOfferTimeModeToggle] 决定画不画（它不吃 `hasSemester`）。
  *
  * ⚠️ 卡面把第三枚参数写成 `todayTab`，读码后按盘面改名 `weekTab`：调用点那一句的语义是
  * 「选中的是**周课表**页签」。这一枚序号在全仓没有任何命名常量表示它 ——
@@ -59,6 +61,27 @@ import com.buaa.schedule.domain.schedule.CourseConstraints
  */
 internal fun shouldOfferWeekNavigation(selectedTab: Int, hasSemester: Boolean, weekTab: Int): Boolean =
     hasSemester && selectedTab == weekTab
+
+/**
+ * 「课次 / 时间」那颗模式胶囊画不画（T202）。
+ *
+ * 只吃「这一屏画的是不是周课表」一枚维度，**不吃** `hasSemester`：
+ * 它改的是 `Personalization.weekGridMode`（落盘偏好），与"这学期多少周"没有任何关系。
+ *
+ * 病（#241 / 原 T200）：这颗胶囊原先住在第二行那一簇 `AnimatedVisibility` **里面**，
+ * 于是跟着 [shouldOfferWeekNavigation] 的 `hasSemester` 那一维一起进出 ——
+ * 没设学期时（新装还没导入 / 学期行被删）全仓唯一一颗能改 `weekGridMode` 的入口从屏上消失，
+ * 而偏好照旧落盘：`ui/home/WeekView.kt` 里那枚 `timeMode` 照旧为真 ⇒
+ * **屏上画的是 24 小时时间轴，而切回来的那颗胶囊看不见**。
+ * 与 [shouldOfferWeekNavigation] 分家之后，簇里只剩「‹ 周次 › + 跳周清单 + 学期进度线」三样
+ * 真正吃"这学期多少周"的东西。
+ *
+ * ⚠️ 这一枚与 [shouldOfferWeekNavigation] 是**两枚不同的判据**，不许合成一枚：
+ * 合并任何一种写法都会错 —— 跟着 `hasSemester` 走就是本病灶（入口不可达），
+ * 只看页签走就是让没学期时那排假周号控件复活（T197 的账）。
+ */
+internal fun shouldOfferTimeModeToggle(selectedTab: Int, weekTab: Int): Boolean =
+    selectedTab == weekTab
 
 /**
  * 「跳转到周次」那枚清单。

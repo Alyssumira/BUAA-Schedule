@@ -658,10 +658,13 @@ fun HomeScreen(
             // 第二行：学期切换 | 时间模式 | ‹ 周次 › | 校区切换
             // 切到「今日」时只保留学期与校区：周次步进翻的是周课表，日视图按日期翻页，
             // 时间模式开关也只改周课表网格——留在这一行里点了没反应，反而显得顶栏杂乱。
-            // 没设学期时这一簇整块不给（T197）：改前这里硬写一枚 20 周的兜底，清单与进度线吃的都是那枚假周数。
-            // ⚠️ 簇里还捎着时间模式胶囊，那一档的版面（会不会只剩一颗点不开的空入口、胶囊跟着没了）交装机验收。
+            // 没设学期时周次那一簇整块不给（T197）：改前这里硬写一枚 20 周的兜底，清单与进度线吃的都是那枚假周数。
+            // ⚠️ 两枚判据分家（T202）：时间模式胶囊改吃 shouldOfferTimeModeToggle —— 它拨的是
+            // Personalization.weekGridMode（落盘偏好，与"这学期多少周"无关），原先住在簇里被
+            // hasSemester 那一维捎走，没学期时屏上是 24 小时轴、切回来的那颗胶囊却看不见。
             ScheduleToolbarRow(
                 showWeekNav = shouldOfferWeekNavigation(selectedTab, state.semester != null, weekTab = 0),
+                showTimeModeToggle = shouldOfferTimeModeToggle(selectedTab, weekTab = 0),
                 weekHeadline = weekHeadline,
                 displayWeek = browseWeek ?: state.currentWeek,
                 currentWeek = state.currentWeek,
@@ -992,12 +995,17 @@ private fun FirstRunEmptyState(
  *
  * [showWeekNav] 为 false（今日页签，或**根本没设学期**——T197：改前那 20 周是硬写出来的）时
  * 这一簇整块收掉：周次步进与「跳转到周次」翻的都是周课表，日视图按**日期**翻页（DayView 自带
- * ‹ 日期 › 与横滑手势），学期进度线吃的也是那枚假周数。⚠️ 时间模式胶囊也住在簇里，没学期时
- * 它跟着簇一起没——那一档的版面（#113/#118 那两笔权重账只在簇进出时成立）本卡没动，交装机验收。
+ * ‹ 日期 › 与横滑手势），学期进度线吃的也是那枚假周数。
+ *
+ * [showTimeModeToggle] 单独一枚（T202）：「课次 / 时间」那颗胶囊原先住在簇里，被 `hasSemester`
+ * 那一维捎走 —— 没设学期时全仓唯一一颗能改 `Personalization.weekGridMode` 的入口从屏上消失，
+ * 而偏好照旧落盘，屏上画的仍是 24 小时轴（WeekView 那枚 timeMode 照旧为真），用户切不回来。
+ * 现在它出簇、只吃页签那一维，加权槽的位置与两笔权重账（#113/#118）一分未动。
  */
 @Composable
 private fun ScheduleToolbarRow(
     showWeekNav: Boolean,
+    showTimeModeToggle: Boolean,
     hasSemester: Boolean,
     weekHeadline: String,
     displayWeek: Int?,
@@ -1037,15 +1045,20 @@ private fun ScheduleToolbarRow(
         // 展开/收起本身仍是逐帧的（改后装机：切到今日页签 UI 线程画 10 帧、反向 33~51 帧，
         // 260ms @60fps；对照空转 1s 画 0 帧）。
         Row(modifier = Modifier.weight(1f)) {
+            // 「课次 / 时间」模式胶囊（T202 出簇）：画不画只由 shouldOfferTimeModeToggle 决定，
+            // 那一枚判据里**没有** hasSemester —— 它拨的是 Personalization.weekGridMode（落盘偏好），
+            // 与"这学期多少周"无关。原先它住在下面那簇里，被簇的可见性捎走：没设学期时屏上画的
+            // 仍是 24 小时轴（WeekView 那枚 timeMode 照旧为真），而全仓唯一一颗能切回来的按钮看不见。
+            // 摆位仍在这枚常驻加权槽**之内**、簇之前：出簇不等于换行 ——
+            // 槽的固有宽由外层 Row 先量端件、这里少一颗胶囊只会让簇的布局位窄一点，
+            // #113/#118 那两笔权重账（伸展权挂在簇自身那层、槽不随页签进出）一分没动。
             AnimatedVisibility(
-                visible = showWeekNav,
-                modifier = Modifier.weight(1f),
+                visible = showTimeModeToggle,
                 enter = expandHorizontally(motionSpec(MotionTokens.DURATION_MEDIUM)) +
                     fadeIn(motionSpec(MotionTokens.DURATION_MEDIUM)),
                 exit = shrinkHorizontally(motionSpec(MotionTokens.DURATION_MEDIUM)) +
                     fadeOut(motionSpec(MotionTokens.DURATION_MEDIUM)),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
                 // 原来是一颗没有字面的时钟图标：点一下就把整张周课表换成 24 小时
                 // 时间轴，用户看不出自己改了什么，只会觉得"默认就是时间轴"。
                 // 现在把当前模式写在按钮上（课次 = 按节次分行，默认；时间 = 连续时间轴）。
@@ -1092,6 +1105,16 @@ private fun ScheduleToolbarRow(
                         )
                     }
                 }
+            }
+            AnimatedVisibility(
+                visible = showWeekNav,
+                modifier = Modifier.weight(1f),
+                enter = expandHorizontally(motionSpec(MotionTokens.DURATION_MEDIUM)) +
+                    fadeIn(motionSpec(MotionTokens.DURATION_MEDIUM)),
+                exit = shrinkHorizontally(motionSpec(MotionTokens.DURATION_MEDIUM)) +
+                    fadeOut(motionSpec(MotionTokens.DURATION_MEDIUM)),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(
                     onClick = { onBrowseWeekChange(((displayWeek ?: 1) - 1).coerceAtLeast(1)) },
                     enabled = (displayWeek ?: 1) > 1,
