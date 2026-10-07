@@ -18,7 +18,6 @@ import com.buaa.schedule.domain.schedule.CourseConstraints
 import com.buaa.schedule.domain.schedule.ImportPlanner
 import com.buaa.schedule.domain.schedule.ImportWriteOutcome
 import com.buaa.schedule.domain.schedule.ImportWriteTally
-import com.buaa.schedule.domain.schedule.WeekCalculator
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
@@ -31,9 +30,15 @@ sealed interface RestoreResult {
      * 已写入数据库。
      *
      * [rebuiltSemesters] 是 T204 那笔"说实话"的账：本次恢复里**补建**出来的学期行
-     * （库里没有、备份也没带该 termCode），它们的 `startDate` 是按恢复那天推出来的、
-     * 不是备份里的值 —— 念恢复文案那一侧必须把它念出来，不念就是把偏移藏回静默里。
+     * （库里没有、备份也没带该 termCode，或带了但开学日认不出来），它们的 `startDate` 是按恢复
+     * 那天推出来的、不是备份里的值 —— 念恢复文案那一侧必须把它念出来，不念就是把偏移藏回静默里。
      * 空列表 = 这一次没有任何学期行是靠猜建出来的。
+     *
+     * **T223：账本的来源从一枚扩成两枚** —— 历史学期（`semesterGroups` 里 `code != mainCode`）
+     * 之外，**主学期那一枚也算**：旧代码里主学期走 `safeSemester` 的 `?: fallbackStartDate` 就地
+     * 兜底一个日历值，绕开内核、不进这本账，于是账本空着而屏幕上那句
+     * "没有任何学期行是补建出来的"就成了谎话（措辞唯一来源见
+     * [com.buaa.schedule.data.backup.rebuiltSemestersNote]）。现在两侧走同一判、进同一本账。
      */
     data class Applied(
         val restoredCourses: Int,
@@ -603,6 +608,10 @@ class ScheduleRepository(
      * 而备份里本来就可能带着那一学期的真实开学日（`BackupData.semesters`，读侧由调用方
      * 按 termCode 配对后当 [backupRow] 递进来）。同机恢复（库里已有该行）无损 —— 那正是它没被看见的原因。
      *
+     * T223：主学期那一路也走同一枚内核（`restoreBackupDataInTx` 里直接判 + 分三路落库），
+     * 这一枚函数继续管历史学期，差别只有 `mainSemester` 那一枚参数按各自的答复递 false / true；
+     * 两问的裁定写在内核 KDoc 的「两问的结论」那一节。
+     *
      * @return 只有「补建」那一等返回非 null（要落进恢复结果的补建账），其余等返回 null。
      */
     private suspend fun replaceCoursesForExistingSemesterInTx(
@@ -618,6 +627,8 @@ class ScheduleRepository(
             fallbackStartDate = fallbackStartDate,
             // 周次证据：这批课程里出现过的最大周次（`CourseConstraints.normalize` 保证已落 1..MAX_WEEK）
             observedMaxWeek = imported.flatMap { it.weeks }.maxOrNull(),
+            // 历史学期：库里那一行是这台设备此刻的事实，备份不许顶它（第一问的答案，同内核 KDoc）
+            mainSemester = false,
         )
         val rebuilt = when (decision) {
             // 库里已有这一枚学期行：一个字节都不动（同机恢复无损那一档）
@@ -633,12 +644,23 @@ class ScheduleRepository(
                 decision
             }
         }
+        replaceCoursesOnlyInTx(semesterCode, imported)
+        return rebuilt
+    }
+
+    /**
+     * 只换某一学期的课程，**学期行一个字都不碰**（`replaceSemesterCoursesInTx` 的对偶：那一枚连行带课一起写）。
+     *
+     * 两个落点：① 历史学期那一判给出 KeepExistingInDb / InsertFromBackup / Rebuild 之后都要把课程换掉；
+     * ② T223 之后主学期在「库里已有那一行而备份的开学日认不出来」时也走这里 —— 那时结论是
+     * KeepExistingInDb，旧代码却在这一格无条件 delete+insert 把好日期顶成恢复那天。
+     */
+    private suspend fun replaceCoursesOnlyInTx(semesterCode: String, imported: List<Course>) {
         val existing = courseDao.getBySemester(semesterCode).map { it.toDomain() }
         courseDao.deleteBySemester(semesterCode)
         val plan = ImportPlanner.buildImportPlan(existing, imported)
         courseDao.insertAll(plan.map { it.toEntity() })
         deleteRemindersOfDroppedCourses(existing, plan)
-        return rebuilt
     }
 
     /**
@@ -646,12 +668,19 @@ class ScheduleRepository(
      *
      * 幂等性设计（重复恢复同一备份结果一致）：
      * - 其他学期课程先按 id 复用替换，主学期最后写入 —— "当前学期"就是 id 最大的
-     *   学期行，顺序反过来会让恢复后的首页停在历史学期上（看起来"课表空了"）；
-     * - 缺失的学期行按 termCode 与备份里的学期行配对后逐枚判定（`decideSemesterRowForRestore`：
-     *   备份带了就用备份的日期、库里已有就不动、两边都没有才补建并记进补建账）；
+     *   学期行（`data/local/SemesterDao` 的 `getCurrent()` / `observeCurrent()` 就是
+     *   `ORDER BY id DESC LIMIT 1`），顺序反过来会让恢复后的首页停在历史学期上（看起来"课表空了"）；
+     * - **每一枚学期行都走同一判**（`data/backup/BackupSemesterRestorePolicy.kt` 的
+     *   `decideSemesterRowForRestore`，T223 之后主学期不再例外）：库里已有就不动、
+     *   备份带了且日期认得出来就用备份的日期、两边都没有才补建并记进补建账；
      *   补建行仍先于主学期写入，其 id 小于最后写入的主学期（见上面的次序理由）；
      * - 手动课程按合并语义，只插入本地缺失的，不删除用户手动添加的课程；
      * - 提醒按 courseKey 对回恢复后的课程。
+     *
+     * ⚠️ 旧形状（T223 收掉的那一格）：主学期在写库前自己 parse 备份的 `startDate`，
+     * 认不出来就 `?: fallbackStartDate` 就地换成"恢复那天所在的周一"再无条件 delete+insert。
+     * 库里那一行是好日期时被顶成猜的、库里没有那一行时也是猜的，而两种情况都**不进补建账** ⇒
+     * 恢复文案念"没有任何学期行是补建出来的"。今天这一路只有日期认得出来才写备份的值。
      *
      * @param backupSemesterRows 备份里带全的学期行（`BackupData.semesters`，老备份为空列表时
      *   由 `indexBackupSemesterRows` 回落到 [backupSemester] 那一枚）。按 termCode 与课程分组配对。
@@ -692,17 +721,15 @@ class ScheduleRepository(
         val skippedInvalid = courses.size - normalized.size
         if (normalized.isEmpty() && !allowEmptyReplacement) return@withTransaction RestoreResult.EmptyBackup
 
-        // 备份可能来自手工编辑或更早版本：学期原点必须过 mondayOf、总周数必须限幅，
+        // 备份可能来自手工编辑或更早版本：学期原点必须归一到周一、总周数必须限幅，
         // 否则 ScheduleOccurrences 全表按 dayOfWeek-1 偏日期、currentWeekOrNull 返回越界周次
         // （今日视图与提醒静默全空）。节次表同理——坏时间会让整个时间轴错位。
-        val safeSemester = backupSemester?.let { s ->
-            val monday = runCatching { WeekCalculator.mondayOf(LocalDate.parse(s.startDate)) }.getOrNull()
-                ?: fallbackStartDate
-            s.copy(
-                startDate = monday.toString(),
-                totalWeeks = CourseConstraints.normalizeTotalWeeks(s.totalWeeks),
-            )
-        }
+        // ⚠️ T223：这一刀**不再由仓储自己 parse**。旧形状是
+        // `runCatching { ... }.getOrNull() ?: fallbackStartDate` —— 备份带来的开学日认不出来时
+        // 就地兜底一枚日历值，整学期日期与周次编号一起错位，且不进补建账（文案此时念
+        // "没有任何学期行是补建出来的"，那一档是谎话）。归一 / 限幅 / 认不出来怎么办全在
+        // `data/backup/BackupSemesterRestorePolicy.kt` 那一判里，与历史学期同一枚（守卫按
+        // 「app/src/main 里 0 处」钉这一形）。
         val safeSlots = timeSlots.filter { com.buaa.schedule.domain.schedule.isValidTimeSlot(it) }
 
         val mainCode = backupSemester?.termCode ?: normalized.firstNotNullOfOrNull { it.semesterCode }
@@ -713,7 +740,8 @@ class ScheduleRepository(
 
         // 备份里带全的学期行按 termCode 配对（老备份 / 老口令没有列表时回落到单字段那一枚）
         val backupRows = indexBackupSemesterRows(backupSemesterRows, backupSemester)
-        // 补建账：只有「库里没有、备份也没带」那一等进得来，最后交给恢复文案念出来（T204）
+        // 补建账：「库里没有、备份也没（能认出来的）日期」那一等进得来，最后交给恢复文案念出来。
+        // T223：主学期那一枚也算，账本来源两侧同口径（少了主学期这一档，文案就在说谎）。
         val rebuiltSemesters = mutableListOf<SemesterRowDecision.Rebuild>()
 
         // 历史学期在前、主学期在最后：见 KDoc 的幂等性说明
@@ -723,16 +751,36 @@ class ScheduleRepository(
                     ?.let(rebuiltSemesters::add)
             }
         }
-        if (safeSemester != null && mainCode != null) {
-            // 主学期：恢复备份中的学期配置并整体替换课程
-            replaceSemesterCoursesInTx(safeSemester, semesterGroups[mainCode].orEmpty())
-        } else if (mainCode != null) {
-            replaceCoursesForExistingSemesterInTx(
-                mainCode,
-                semesterGroups[mainCode].orEmpty(),
-                fallbackStartDate,
-                backupRows[mainCode],
-            )?.let(rebuiltSemesters::add)
+        if (mainCode != null) {
+            // 主学期：与历史学期**同一枚内核**（T223），差别只在 `mainSemester = true` 买通的第一问 ——
+            // 备份的日期认得出来时它顶掉库里那一行（那正是"恢复"这件事本身，而且这一行必须最后写才
+            // 落得下"当前学期"= id 最大的那一行）；日期认不出来时退回与历史学期同一答复：
+            // 库里有就整行不动、库里没有才补建并进这本账。两问的裁定见内核 KDoc「两问的结论」。
+            val mainImported = semesterGroups[mainCode].orEmpty()
+            // 配对表里配不到（列表没这一项、或单字段的 termCode 是空白被索引丢掉）时，
+            // 单字段那一枚就是主学期这一路的标的行 —— 不许让它退成"备份压根没带"那一等。
+            val mainBackupRow = backupRows[mainCode] ?: backupSemester?.takeIf { it.termCode == mainCode }
+            when (
+                val decision = decideSemesterRowForRestore(
+                    termCode = mainCode,
+                    backupRow = mainBackupRow,
+                    existingRow = semesterDao.getByTermCode(mainCode)?.toDomain(),
+                    fallbackStartDate = fallbackStartDate,
+                    observedMaxWeek = mainImported.flatMap { it.weeks }.maxOrNull(),
+                    mainSemester = true,
+                )
+            ) {
+                // 认不出来 + 库里已有 ⇒ 那一行一个字节都不动（旧代码正是这一格把当前学期的好日期顶掉的）
+                is SemesterRowDecision.KeepExistingInDb -> replaceCoursesOnlyInTx(mainCode, mainImported)
+                // 日期有出处 ⇒ 连学期配置一起写，delete+insert 让它成为最后一行 = 当前学期
+                is SemesterRowDecision.InsertFromBackup ->
+                    replaceSemesterCoursesInTx(decision.semester, mainImported)
+                // 两边都没有 ⇒ 补建，且**必须进补建账**：这一枚不记账，恢复文案就是谎话
+                is SemesterRowDecision.Rebuild -> {
+                    replaceSemesterCoursesInTx(decision.toSemester(), mainImported)
+                    rebuiltSemesters += decision
+                }
+            }
         }
 
         // 手动课程：只插入本地没有的（按课程身份键判断）。
