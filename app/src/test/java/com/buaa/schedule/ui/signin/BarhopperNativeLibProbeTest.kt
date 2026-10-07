@@ -16,7 +16,7 @@ import org.junit.Test
 /**
  * barhopper 原生库可用性探针的守卫（T24）。
  *
- * ①②③④ 真跑代码；⑤⑥⑦ 读源码文本核对（后三条量的是"漂移就红"，手法沿用
+ * ①②③④ 真跑代码；⑤⑥⑦⑧ 读源码文本核对（后四条量的是"漂移就红"，手法沿用
  * `ScanChainWarmUpTest`：本模块没有 Robolectric、`android.content.Context` 在 JVM 里
  * 造不出来，于是读文件、配平取函数体或实参、**找不到锚点就抛**）：
  *
@@ -31,6 +31,10 @@ import org.junit.Test
  * ⑥ 全仓库只有探针那一处 `System.loadLibrary`：不许有第二处自己判断。
  * ⑦ 扫码页那四条纪律（scanner 以结论为键、绑定分析流之前先等判定、相册只放行"已判定
  *   可用"、缺库时文案不指向任何出路）—— 这一页的降级形状一旦漂走，用户就会被指到一条死路。
+ * ⑧ 那六条排除挂在**谁的接收者**上（#339）：⑤ 钉的是字面量，这一条钉的是"只在 release"。
+ *   少了它，把 `excludes.addAll` 挂到 `selector().all()` 或第二枚 `onVariants` 上、或把 `variant.`
+ *   那个显式接收者省掉，⑤ 会带着六个一字未改的文件名**全绿**，而 debug 包只剩 arm64
+ *   （本仓付过一次：模拟器扫码永远降级，装机验收跟着一起瞎）。
  *
  * 至于「判定不可用时预热那一档零 ML Kit 调用」，那条落在 `ScanChainWarmUpTest` ⑨⑩。
  */
@@ -165,6 +169,94 @@ class BarhopperNativeLibProbeTest {
             excluded.size,
         )
         assertTrue("arm64-v8a 也被裁掉的话，探针在最主流的那档设备上也会判成不可用：$excluded", excluded.none { it.first == "arm64-v8a" })
+    }
+
+    /**
+     * ⑧ 那六条排除挂在**谁的接收者**上（#339：release 专属裁剪得有"只在 release"那一把尺）。
+     *
+     * ⑤ 比的是六个文件名字符串，这一条比的是"这段排除长在哪儿"。两者缺一都不是尺：
+     * 只比字面量时，把 `onVariants(selector().withBuildType("release"))` 换成 `selector().all()`、
+     * 或再补一枚 `onVariants(selector().withBuildType("debug"))`、或把 `variant.` 这个显式接收者
+     * 省掉搬去别处 —— **六个字面量一字不动**，⑤ 全绿、编译全绿、门禁三步全绿，而 debug 包从此
+     * 只剩 arm64：x86_64 模拟器的扫码页永远走降级分支，本仓全部装机验收都在那台 AVD 上跑
+     * ⇒ 验收链自己先瞎掉。这一族已经付过一次钱（jniLibs 裁剪一度对 debug 也生效）。
+     *
+     * 钉法：**读形状**（`androidComponents` → `onVariants` → 闭包体三层区间）+ **数出现次数**
+     * （`onVariants` 恰一枚、`excludes.addAll` 恰一处）+ **抹注释找锚点**：脚本注释里就写着
+     * `androidComponents`、`buildTypes.release` 这些词（`app/build.gradle.kts` 的"只能写在这里"
+     * 那一段），不抹注释就会把散文数进去；反过来字面量**必须留着**，因为
+     * `withBuildType("release")` 的内容就长在字面量里，[blankCommentsAndLiterals] 那一把会把它抹平。
+     */
+    @Test
+    fun jniLibsExcludesHangOnTheReleaseVariantReceiver() {
+        val script = readRepoFile(BUILD_SCRIPT)
+        val code = commentsOutKeepingLiterals(script)
+        val components = topLevelBlock(code, "androidComponents")
+        val inComponents = code.substring(components.first, components.last + 1)
+        val variantCalls = indexOfAll(inComponents, "onVariants(")
+        assertEquals(
+            "androidComponents 里只许一枚 onVariants（多一枚就有第二个变体也挂上裁剪，而 ⑤ 那六个文件名" +
+                "看不见这件事）：实到 ${variantCalls.size} 枚",
+            1,
+            variantCalls.size,
+        )
+        val callAt = components.first + variantCalls[0]
+        val selectorOpen = code.indexOf('(', callAt)
+        val selectorClose = matchingParen(code, selectorOpen)
+        val selector = code.substring(selectorOpen, selectorClose + 1).replace(" ", "")
+        assertTrue(
+            "release 的 ABI 剪枝挂在了 $selector 上，而不是 selector().withBuildType(\"release\")：" +
+                "换成 all() 或 debug 那一档，探针与这份清单就一起伤到调试包",
+            selector.contains("selector().withBuildType(\"release\")"),
+        )
+        assertFalse("选择器里出现 all()（对所有变体生效）：$selector", Regex("""\ball\(\)""").containsMatchIn(selector))
+
+        val bodyOpen = code.indexOf('{', selectorClose)
+        val bodyClose = matchingBrace(code, bodyOpen)
+        val header = code.substring(selectorClose + 1, minOf(bodyOpen + 40, code.length))
+        val param = Regex("""\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*->""").find(header)?.groupValues?.get(1)
+        checkNotNull(param) { "onVariants 之后不是 { 参数 -> 那一形，接收者链没有起点可认：$header" }
+
+        val marker = "packaging.jniLibs.excludes.addAll"
+        val hits = indexOfAll(code, marker)
+        assertEquals(
+            "$BUILD_SCRIPT 里 $marker 应恰好一处（多出来的那一处挂在谁的接收者上没人核对过），实到 ${hits.size} 处",
+            1,
+            hits.size,
+        )
+        val at = hits[0]
+        assertTrue(
+            "$marker 不在 release variant 的闭包体内：那份清单一旦落到顶层 android.packaging（或落到别的变体上），" +
+                "⑤ 的六个字面量照旧全绿而 debug 只剩 arm64 —— 模拟器扫码永远降级",
+            at in (bodyOpen + 1)..bodyClose,
+        )
+        val lineStart = code.lastIndexOf('\n', at) + 1
+        val receiver = code.substring(lineStart, at).trim()
+        assertEquals(
+            "$marker 的接收者链应当是闭包参数 \"$param.\"（由 release 那一枚 onVariants 给出），实到 \"$receiver\"：" +
+                "AGP 的 BuildType 没有 packaging 成员，把显式接收者省掉会沿隐式接收者链静默绑到外层" +
+                " android.packaging —— 编译不报错、门禁不红，只有 debug 包的 ABI 少三档",
+            "$param.",
+            receiver,
+        )
+
+        // 反向钉：顶层 android.packaging {} 里不许出现 jniLibs（⑤ 那六条只能挂 variant 上）
+        val android = topLevelBlock(code, "android")
+        val androidBody = code.substring(android.first, android.last + 1)
+        val packagingBlocks = indexOfAll(androidBody, "packaging {")
+        assertTrue(
+            "顶层 android 块里找不到 packaging { 那一格：形状改了要回来重钉（扫不到等于这一条没跑）",
+            packagingBlocks.isNotEmpty(),
+        )
+        for (hit in packagingBlocks) {
+            val open = android.first + androidBody.indexOf('{', hit)
+            val close = matchingBrace(code, open)
+            assertFalse(
+                "顶层 android.packaging 里出现了 jniLibs —— 那是对所有变体裁剪，debug 包只剩 arm64：\n" +
+                    code.substring(open, close + 1),
+                code.substring(open, close + 1).contains("jniLibs"),
+            )
+        }
     }
 
     /** ⑥ 全仓库只有一处真去 loadLibrary：结论不许被复制到第二个地方自己判断 */
@@ -355,6 +447,115 @@ class BarhopperNativeLibProbeTest {
             }
         }
         return String(out)
+    }
+
+    /**
+     * 抹注释、**字符串字面量原样保留**（⑧ 用这一份）。分工：[blankCommentsAndLiterals] 把字面量也
+     * 抹平，而 ⑧ 的锚点 `withBuildType("release")` 的内容就长在字面量里；[withoutComments] 会把
+     * 字符串里的 `//`（脚本里有 https 字面量）当注释起点咬掉后半段。三者都不能替三者。
+     */
+    private fun commentsOutKeepingLiterals(src: String): String {
+        val out = src.toCharArray()
+        var i = 0
+        while (i < out.size) {
+            when {
+                src.startsWith("//", i) -> {
+                    val nl = src.indexOf('\n', i).let { if (it < 0) out.size else it }
+                    for (k in i until nl) if (out[k] != '\n') out[k] = ' '
+                    i = nl
+                }
+
+                src.startsWith("/*", i) -> {
+                    var depth = 1
+                    var j = i + 2
+                    while (j < out.size && depth > 0) {
+                        when {
+                            src.startsWith("/*", j) -> { depth++; j += 2 }
+                            src.startsWith("*/", j) -> { depth--; j += 2 }
+                            else -> j++
+                        }
+                    }
+                    for (k in i until j.coerceAtMost(out.size)) if (out[k] != '\n') out[k] = ' '
+                    i = j
+                }
+
+                src.startsWith("\"\"\"", i) -> {
+                    val end = src.indexOf("\"\"\"", i + 3).let { if (it < 0) out.size else it + 3 }
+                    i = end
+                }
+
+                out[i] == '"' || out[i] == '\'' -> {
+                    val quote = out[i]
+                    var j = i + 1
+                    while (j < out.size) {
+                        when {
+                            src[j] == '\\' -> j += 2
+                            src[j] == quote -> { j++; break }
+                            src[j] == '\n' -> break
+                            else -> j++
+                        }
+                    }
+                    i = j
+                }
+
+                else -> i++
+            }
+        }
+        return String(out)
+    }
+
+    /** 顶层 `name { ... }` 的花括号区间；0 枚或多于 1 枚都抛（多一枚就有第二个挂点，链无从核对） */
+    private fun topLevelBlock(code: String, name: String): IntRange {
+        val hits = Regex("\\b$name\\s*\\{").findAll(code).map { it.range.first }.toList()
+        check(hits.size == 1) {
+            "$BUILD_SCRIPT 顶层的 $name 块找到 ${hits.size} 枚，只许 1 枚：拆成两枚就意味着有第二个地方" +
+                "也能挂 jniLibs 裁剪，而这一条守卫看不见那一枚"
+        }
+        val open = code.indexOf('{', hits[0])
+        return open..matchingBrace(code, open)
+    }
+
+    /** 从 [openAt] 的 `{` 配平到对应 `}`；不配平就抛 —— 返回 -1 会让区间判断退化成"没比也算过" */
+    private fun matchingBrace(code: String, openAt: Int): Int {
+        check(code[openAt] == '{') { "锚点 $openAt 不是左花括号" }
+        var depth = 0
+        for (index in openAt until code.length) {
+            when (code[index]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return index
+                }
+            }
+        }
+        throw IllegalStateException("第 $openAt 个花括号没配平：脚本形状改了，接收者链要重看")
+    }
+
+    private fun matchingParen(code: String, openAt: Int): Int {
+        check(code[openAt] == '(') { "锚点 $openAt 不是左圆括号" }
+        var depth = 0
+        for (index in openAt until code.length) {
+            when (code[index]) {
+                '(' -> depth++
+                ')' -> {
+                    depth--
+                    if (depth == 0) return index
+                }
+            }
+        }
+        throw IllegalStateException("第 $openAt 个圆括号没配平")
+    }
+
+    /** 全部出现位置（不是第一次）：⑧ 的"数出现次数"要把多余的那几枚一起抓出来 */
+    private fun indexOfAll(haystack: String, needle: String): List<Int> {
+        val hits = ArrayList<Int>()
+        var from = 0
+        while (true) {
+            val at = haystack.indexOf(needle, from)
+            if (at < 0) return hits
+            hits += at
+            from = at + 1
+        }
     }
 
     private fun count(haystack: String, needle: String): Int {
