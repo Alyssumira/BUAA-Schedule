@@ -139,16 +139,23 @@ class ReminderDefaultSingleSourceGuardTest {
         )
 
         // 抹注释那一族的老账：两侧一起钉。改前形状今天**只活在注释里**。
+        // 含注释那一头判的是「针是活的」（>= 1），不是枚数 —— 判成恰 1 就等于「谁在注释里逐字引用改前形状」
+        // 也会把这一格顶红，那是把散文当成进账，与本尺的口径相反。真正当判据的是抹注释后那一头的 0 处。
         val raw = bareLiteralLines(readMainSourcesRaw(), ADVANCE_BIND, BARE_TEN)
+        assertTrue(
+            "**钉法 = 抹注释找锚点（朝窄的对照物）｜尺 ②**：同一把尺在**含注释**原文里至少数到 1 处" +
+                "（实到 " + raw.size + " 处：\n" + raw.joinToString(separator = "") { "    $it\n" } +
+                "）—— 数到 0 处说明这枚针自己就是空锚点，下面那句「抹完 0 处」只是在数空气。" +
+                "今天那至少一处正是 `reminder/ReminderScheduler.kt` 交代「改前是 " +
+                "`setting?.advanceMinutes ?: 10`」的历史说明",
+            raw.size >= 1,
+        )
         assertEquals(
-            "**钉法 = 抹注释找锚点（两侧）｜尺 ②**：同一把尺在**含注释**原文里数到 1 处（实到 " + raw.size +
-                " 处：\n" + raw.joinToString(separator = "") { "    $it\n" } +
-                "），抹注释后 0 处 —— 那一处正是 `reminder/ReminderScheduler.kt` 交代「改前是 " +
-                "`setting?.advanceMinutes ?: 10`」的历史说明。" +
-                "含注释不为 0 而抹完为 0，才同时证明「针是活的（不是空锚点）」与「盘上代码里没有裸字面量」；" +
-                "把这句注释删掉来骗过第 ② 层的话，这一格会先红",
-            1,
-            raw.size,
+            "**钉法 = 抹注释找锚点（朝窄）｜尺 ②**：抹完注释必须 0 处（实到 " +
+                bareLiteralLines(main, ADVANCE_BIND, BARE_TEN).size + " 处）—— " +
+                "注释里逐字引用改前形状**不进账**，代码里真写了一枚裸字面量才进。",
+            0,
+            bareLiteralLines(main, ADVANCE_BIND, BARE_TEN).size,
         )
     }
 
