@@ -56,6 +56,9 @@ class UpdateCheckGateTest {
         const val IGNORED = "0.2.0"
         const val NEWER = "0.3.0"
         const val AUTO_LABEL = "10月8日 09:12"
+
+        // 偏好里没有时间戳时，设置页的格式器给的就是这一句（epoch 0 ⇒「从未进行」）。
+        const val NEVER_LABEL = "从未进行"
     }
 
     // ─────────────── 第一手：出不出网、该不该出声 ───────────────
@@ -267,14 +270,16 @@ class UpdateCheckGateTest {
 
     @Test
     fun `restingLine 三档各说各的话 失败与成功不许同形`() {
-        val never = UpdateCheckGate.restingLine(UpdateLastOutcome.Never, AUTO_LABEL)
+        // 每一档只喂「它在生产路径上真拿得到的那枚读数」：从没查过时偏好里没有时间戳，
+        // 设置页的格式器给的就是 NEVER_LABEL；只有查过的两档才带时间。
+        // 拿 10月8日 09:12 去喂 Never 档是本格子改前的错——那一手在生产上出不了这个输入。
+        val never = UpdateCheckGate.restingLine(UpdateLastOutcome.Never, NEVER_LABEL)
         val ok = UpdateCheckGate.restingLine(UpdateLastOutcome.Succeeded, AUTO_LABEL)
         val failed = UpdateCheckGate.restingLine(UpdateLastOutcome.Failed, AUTO_LABEL)
 
-        assertEquals(
-            "从没查过那一档要说「从未进行」，不许拿一个 1970 或空串当读数（实到：$never）",
-            true,
-            never.contains("从未进行"),
+        assertTrue(
+            "从没查过那一档要把「从未进行」原样念出来，不许吞成空串：实到 $never",
+            never.contains(NEVER_LABEL),
         )
         assertTrue("成功那一档必须念出「成功」（改前只有时间戳，失败也念这句）：实到 $ok", ok.contains("成功"))
         assertTrue("失败那一档必须念出「失败」：实到 $failed", failed.contains("失败"))
@@ -285,8 +290,15 @@ class UpdateCheckGateTest {
         assertNotEquals("成功与失败两档不许折成同一句话", ok, failed)
         assertNotEquals("「从没查过」与「查成功了」也不许同形", never, ok)
         assertNotEquals("「从没查过」与「查失败了」同样不许同形", never, failed)
+        assertTrue(
+            "从没查过那一档不许凭空造出一枚时间读数：实到 $never",
+            !never.contains(AUTO_LABEL),
+        )
+        for (line in listOf(ok, failed)) {
+            assertTrue("查过的两档都得带上时间读数，不许把 $AUTO_LABEL 丢掉：实到 $line", line.contains(AUTO_LABEL))
+        }
         for (line in listOf(never, ok, failed)) {
-            assertTrue("每一句都得带上时间读数，不许把 $AUTO_LABEL 丢掉：实到 $line", line.contains(AUTO_LABEL))
+            assertTrue("任何一档都不许把 epoch 0 原样念成 1970：实到 $line", !line.contains("1970"))
         }
     }
 
