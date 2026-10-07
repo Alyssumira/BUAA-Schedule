@@ -49,8 +49,14 @@ class WakeUpExportDropShapeGuardTest {
         const val START_WEEK_DROP = "val startWeek = weeks.firstOrNull() ?: return@mapNotNull null"
         const val END_WEEK_PLAIN = "val endWeek = weeks.last()"
 
-        /** 形状锚点：排序 → 丢掉 → 才拼字面量 */
-        const val WEEKS_SORTED = "val weeks = course.weeks.sorted()"
+        /**
+         * 形状锚点：排序 → 丢掉 → 才拼字面量。
+         *
+         * T222（#307）在"排序"与"丢掉"之间插了一刀裁周次（`val sortedWeeks = course.weeks.sorted()` →
+         * `TermWeekGate.weeksInsideTerm(...)` → `val weeks = ...`），那枚 `val weeks = course.weeks.sorted()`
+         * 因此改不了名 —— 本锚点按**新形状**重钉，顺序判据一格没松（排序仍然排在丢弃与拼字面量之前）。
+         */
+        const val WEEKS_SORTED = "val sortedWeeks = course.weeks.sorted()"
         const val START_WEEK_FIELD = """"startWeek":${'$'}startWeek,"endWeek":${'$'}endWeek"""
 
         const val RETURN_DROP = "return@mapNotNull null"

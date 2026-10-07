@@ -154,7 +154,11 @@ class WakeUpExportTermTrimTest {
             listOf(Exported.Entry(1, 2, 0)),
             exported.entries,
         )
-        val insideCeiling = export(listOf(course(listOf(1, 25))), null)
+        // ⚠️ 夹具必须是**奇偶混合**的三周（崩卡那枚代理写的是 `listOf(1, 25)`，两枚都是奇数 ⇒
+        // `type` 走的是"单周"那一支 = 1，而它把期望写成 0 ⇒ 这一格当场红，与裁周次这一维无关）。
+        // 期望那三格（startWeek 1 / endWeek 25 / type 0）照崩卡原文不动，改的是夹具：
+        // 这一格判的是"1..maxWeek 之内的周次一律留下"，奇偶混合才不越界到 type 那一档去。
+        val insideCeiling = export(listOf(course(listOf(1, 24, 25))), null)
         assertEquals(
             "而 1..maxWeek 之内的周次一律留下：判不出「这学期几周」时不裁界内",
             listOf(Exported.Entry(1, 25, 0)),
