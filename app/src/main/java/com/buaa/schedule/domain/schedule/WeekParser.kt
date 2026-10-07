@@ -9,6 +9,8 @@ package com.buaa.schedule.domain.schedule
  * - "2-18双" -> 2,4,6...18
  * - "3,7,11-17单" -> 组合
  * - "1-17周(单)" / "1-17周(双)" -> 兼容括号写法
+ * - 带「第」前缀的写法 -> 先剥前缀再解析，与不带前缀同解；
+ *   `第1,3,5周` 这一形本仓自己就在写（ICS 的 DESCRIPTION 后半段，见 IcsParser 一侧的注释）
  * - "011111111111111110..." -> 周次位图
  */
 object WeekParser {
@@ -23,9 +25,13 @@ object WeekParser {
         }
 
         val weeks = LinkedHashSet<Int>()
-        // 去掉“周”字、空格，中文逗号转英文逗号
+        // 去掉“周”“第”字、空格，中文逗号转英文逗号。
+        // 「第」与全角数字、周字同族：纯装饰字，剥掉后语义无歧义；不剥则
+        // 第1-16 会被 split("-") 切成「第1」+「16」，前者被 toIntOrNull 整枚丢掉，
+        // 区间塌成单周支 ⇒ 16 周的课静默解析成只有第 16 周。
         val clean = trimmed
             .replace("周", "")
+            .replace("第", "")
             .replace(" ", "")
             .replace("，", ",")
 
