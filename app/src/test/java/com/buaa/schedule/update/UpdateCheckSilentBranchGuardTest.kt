@@ -367,6 +367,7 @@ class UpdateCheckSilentBranchGuardTest {
     fun `被挡与失败各留一条读得到的痕迹 这一族零 Log d`() {
         val code = blankComments(source(CHECK))
         val dialog = blankComments(source(DIALOG))
+        val settings = blankComments(source(SETTINGS))
 
         assertEquals(
             "$CHECK 里 Blocked 那枚状态声明逐字节一枚在场「$BLOCKED_STATE」（实到 " +
@@ -420,7 +421,7 @@ class UpdateCheckSilentBranchGuardTest {
         )
         assertEquals(
             "$SETTINGS 里那一行念的必须是同一枚 message（「$SUBTITLE_SAME_SOURCE」），不许另写一句同义的话。实到 " +
-                occurrences(blankComments(source(SETTINGS)), SUBTITLE_SAME_SOURCE) + " 枚",
+                occurrences(settings, SUBTITLE_SAME_SOURCE) + " 枚",
             1,
             occurrences(settings, SUBTITLE_SAME_SOURCE),
         )
