@@ -5206,3 +5206,52 @@ T193 自报 **2 次**（同一句重复投递，冒充系统指令的"友好提�
 - T192 的 `IcsExporter` 与新判据的对称性未复核；真库里是否已有「同 `number` 多枚」或「start 非单调」的节次行未取证。
 - `ScheduleViewModel.kt` 仍 1,834 行（本轮没动它）⇒ #233 那格锚点重钉的范围不变，另加"docs/TESTING.md 与 README 现值跟到 **1,993 / 242 / 248 / 66 / 106**"。
 - 旧账未动：**push**（现在 **43 枚**）、**发版**（tag 仍 `v0.1.1`）、#193、#143、真机 #14 / #90 / #98、#217、#218、#219、#220、#231（台账自己那节重复两份，删哪一份待定）。
+
+## 10-07 凌晨：第七轮再收口（T190 / T192 / T193 合并 → T197 / T196 两枚 → 装机兑现 + 两枚 ANR 定性）
+
+起点 = 上一节顶端 `4cbdd56`（代码停在 `7eaaecc`）。这一节收两枚新卡（T197 / T196），并把 T190 的假期表头**拍到运行期**，另外登记一枚我自己造出来的读数陷阱与一枚新候选。
+
+### 9 合并态门禁（master `0908aad`，我这侧冷跑）
+
+链：`7bed35a → T184(4) → T193(3) → T192(3) → T190(3) → 台账 `4cbdd56` → T197(3) → T196(4)`。五枚分支各自 rebase 到已合并的 master 再 `--ff-only`，全程零冲突（blob 都是 LF 归一，`core.autocrlf=true`）。
+起跑前自证：`TREE==HEAD`、六枚祖先全 Y、`STATUS.md` bareLF 0、`WeekView.kt` 2445、**XML 目录枚数 0**（先删后跑）。
+静态尺：`@Test` **2,034** = 1,929 + 11(T184) + 16(T193) + 25(T192) + 12(T190) + 18(T197) + 23(T196)；`.kt` 测试文件 **248**、`*Guard*` **70**、读 main 源码的测试 **110**；四枚 docs 锚点尺 **268 / 589 / 146 / 24** 未漂。
+八步 rc 全 0：`--stop` / `clean` / `assembleRelease`（**7,258,960 B**）/ `testDebugUnitTest --rerun-tasks`（**254 suites · 2,034 tests · 0 failures · 0 errors · 0 skipped**）/ `lintDebug`（**0 errors · 14 warnings**）/ 第二遍独立复现（同数，XML `timestamp` 02:04:15–02:04:23Z 落在我窗口内）/ `:benchmark:compileNonMinifiedReleaseKotlin` / `assembleDebug`。
+**包体这一档本轮多了一枚罕见的数据点**：T196c 在它自己的树（内容与 `0908aad` 逐字节相同）跑出的全量是 **7,258,893 B**，我这趟是 **7,258,960 B** ⇒ **同一枚 commit 两次独立全量差 67 B**。这与 [[buaa-apk-size-floor]] 记的「同一 commit 两次全量差 61 B」是同一族，但那一族此前只在"零 dex 改动"上被引过；**这次是往 dex 真加了七枚内核/守卫类的改动上照样漂 67 B** ⇒ 「±几百字节不许归因给代码」这条在**加类的场合同样成立**，地板仍不立（要立得两数一致）。
+
+### 10 两枚新卡
+
+- **T197 · #236**（`6cf3202`/`b61adc0`/`5d83b92`）：没设学期时那两枚硬写的 `?: 20` 清零，判据抽成 `ui/home/WeekNavigationAvailability.kt`（五枚纯函数）。**它驳掉了我卡面的一格读数**：我说"没设学期时顶栏念『第 N 周（浏览）』"，实际 `weekHeadline(hasSemester=false, …)` 恒回「未设置学期」，而且 base 上就有一枚既有单测逐字钉着这件事（`WeekHeadlineTest.没设置学期优先提示设置`）⇒ **我那半句是推断，不是盘上事实**，病灶的"清单真能点/进度线真在画/假 20 当分母"三格为真。它另外量出**第四格**（我卡面没有）：`browseWeek` 是 `rememberSaveable` ⇒ 「有学期时翻到第 7 周 → 学期行被删」这一格 `pagerWeek` 仍非 null，`HorizontalPager` 带着假 20 的 `pageCount` 活着，而 `WeekGrid.coursesForContent` 真按周号过滤 ⇒ 第 17–20 页是根本不存在的周。`WeekView.kt` 仍 **2445 行**（六枚 hunk 全行内换行内）。
+  ⚠️ **连带伤亡由它自己点名交回**：时间模式胶囊与 ‹ 周次 › 同住在 `AnimatedVisibility(showWeekNav)` 那一簇里，加上"有学期"这一维之后，**没设学期那一档切不了 24 小时时间轴**（那一档网格仍在屏上，切它是有意义的）⇒ 登记 **#241**，它没有自己搬、也没有换第三种修法，这是对的。
+  它还把两枚**既有守卫**跟着新形状重钉（`LazyRecycleGuardTest` 的记住列表那一格、`ToolbarCampusWidthGuardTest` 第⑥层），后者改完比改前更严（既钉"必须走内核"，又钉"实参里不许现写合取"）。
+- **T196 · #230 + #235**（`b2475b0`/`1eaf5e0`/`9c3c27d`/`0908aad`，四格各一枚）：① `fetchSemesterInfo` 这一趟补上与课表同款的静默重试（复用 `MAX_ATTEMPTS_PER_WEEK` / `RETRY_DELAY_MS`，不新开预算数、不新开接口 seam，且 `delay` 前配 `ensureActive()`）；② 开学日闸门提到逐周抓取**之前**（认不出来就一行课表都不抓，进度文案也搬进成功支不再撒谎）；③ 并列那一等改按"这几行说的是不是同一枚串"分档；④ `SemesterInfoReason` 五档原因 + `semesterStartFailureMessage(raw, reason)` 纯文案件。
+  **它撞到我卡面里的一处自相矛盾并公开交回**：卡面 §1-③ 写「比较键（日期段）是否同一枚」，§4 又点名要一格「最早日期两行异串 ⇒ Undetermined」——并列组本来就是按日期段算出来的，按日期段比那一格必成死支。代理选了 §4，实现按 `startDate.trim()` 逐字串比。我的裁定（10-07）：**方向对、键选错**，要比的应当是**真正交出去的那枚值**（`substringBefore(" ")` 之后），否则两行同日期不同时间尾巴（`2026-09-07 08:00:00` 与 `… 00:00:00`）会在良性输入上硬失败——正是 #235 立项要防的那一族；换完判据 3 的歧义档变死支要**删掉**。登记 **#240**。
+  `retain(web, …)` 的位置它没照我猜的往前提，而是给闸门那一支**自己补一枚 retain**（提前返回时 `AndroidView.onRelease` 会把登录态的 byxt WebView 销毁）⇒ 次序守卫第②层把那一支钉成 `retain < fetchState=null < showMessage < onBack` 且 `fetchSemesterCourses(` 在该支 0 处。
+- **T196c（复验臂）**：T196 那枚代理**撞到子代理轮次上限**断在门禁前（工作树干净、四枚 commit 全在、零 stash）。按「别在原 worktree 续派」我另起 `.worktrees/T196c` 从 rebase 后的分支拉树，只派"跑门禁 + 变异 + 报告"。它交出：八步 rc 全 0、两遍 254/2,034/0 skipped、五枚变异两侧各到（含一枚补送的接线档）、每枚还原后复算 md5。⚠️ 但它**跑完后又定向重跑了 7 枚测试类**，把 `app/build/test-results/` 里那 254 份全量 XML 换成了 7 份 ⇒ 我核不到它 pass1/pass2 的原始 XML，只能拿 apk 字节（7,258,893 B 在盘上、mtime 09:31）与它日志的自述当旁证。**这就是我在 master 上再冷跑一遍的理由**（第 9 节），不是不信任它。
+
+### 11 装机兑现（模拟器 `buaa36`，本轮唯一拍到运行期的两格）
+
+装的正是合并态 `0908aad` 的 debug 包（`adb install -r`，不跑 connected 测试以免清库）。
+
+- **T190 假期表头不印日期 = 兑现**。造态与上一轮同一手法：`update semesters set startDate='2026-12-01' where id=1` ⇒ 今天（10-07）落在学期开始之前，`currentWeek` 取不到。读数（`t7c-vac-final.png`，1080×2400，表头带 y 560–700 墨像素 **3,101**，峰在 y 607–629＝星期名那一行）：屏上**只有「节次 周一…周日」七个星期名，一枚日期都没有**，也没有「今天」胶囊、没有「休／班」标注；顶栏第一行「假期中」、第二行「10月7日 星期三」；网格是「假期中」空状态卡，句子仍是那句说实话的"今天不在本学期的教学周里…开学后会自动回到课表"。**改前**这一档表头印的是 11/30–12/6（上一轮 A/B 已拍，`hol-week.png`）。⇒ #232 从"读代码推的"升级为装机兑现，T190 的未验到第 1 格销掉。
+- **对照档（学期正常）**：还原 `2026-08-31` 后重启，今日页副标题念「今天 · 第 6 周」（8/31 + 5 周 = 10/5，10/7 落在第 6 周 ✓ 算式对得上），周课表页签的表头照旧印日期、胶囊照旧 ⇒ 收掉 `?: 1` 没有把正常档一起关掉（T190 表驱动第③格"16 格里只有 `(null,null)` 一档不等"在真机上是同一件事）。
+- **两枚 ANR 的定性 = CPU 饥饿，不是新缺陷**（但这一格要留着）。第一枚 01:59 `Process … failed to complete startup`，主线程栈停在 `androidx.startup.InitializationProvider.onCreate → ProcessLifecycleOwner.<clinit>`，`utm=276 stm=1845`（主线程 18.45 s 系统时间）；第二枚 02:10 `Reason: executing service com.buaa.schedule/.widget.CourseListWidgetService, waited 20507ms`。两枚都发生在我的门禁正在跑 `assembleRelease`/`testDebugUnitTest` 的窗口里。**控制组**：门禁跑完、机器空下来之后同一枚包冷启动 `am start -W` → `TotalTime: 4098`、`Displayed +4s98ms`、logcat 零 ANR ⇒ 判为饥饿，与 #73（模拟器上 FGS 超时被杀）同族。**没当成缺陷登记，也没当成"没事"**：`CourseListWidgetService` 的填充跑在主线程这一事实我没证伪，它只是这次不是主因。
+- **新候选（未定因，交下一轮定向复现）**：删掉学期行、冷启动之后，屏上**分段控件的蓝色胶囊亮在「周课表」**（程序量到 x 706–872，与学期存在时「今日」那档的 888–1040 不同一枚），而**内容画的是今日页**（‹ 10月7日·周三 › + 「列表／时间轴」切换 + 「今天没有更多课了」，没有「节次／周一…」那一行、没有时间轴列）。同一枚包、同一个页签，学期在（假期档）时画的是周课表网格 ⇒ 差异只在"有没有学期行"。**我没能证明是哪一层造成**（可能是 `selectedTab` 初值与 `hasTodayCourses` 的配对、可能是没学期时页面被换向），所以只登记现象、不写结论。
+
+### 12 机上那几格可逆改动的账（逐值读回）
+
+`select id,termCode,termName,startDate,totalWeeks from semesters` 起手读回 `1|2026-2027-1|2026-2027 秋季学期|2026-08-31|19`；本轮三次改动（`startDate='2026-12-01'` → 还原 → `delete from semesters` → `INSERT` 原值还原），**末值与起手值逐字符相同**，`select count(*) from courses` 恒 **22**。改库全程走 `run-as … sqlite3` + 落 `.sql` 文件喂 stdin（避开设备侧引号/通配），中文 `termName` 只在文件里、不进 shell。⚠️ 中途踩到自己埋的坑：`dev7c.py` 用 `text=True` 收 sqlite 的中文输出，被 GBK 解码打死一次（`UnicodeDecodeError` 之后 `p.stdout` 是 None，像"命令没返回"）⇒ 改成 bytes + `decode('utf-8','replace')` 才继续。
+
+### 13 编排侧本轮新增/改动的两把自己用的尺
+
+- `needles.py`：**抹注释保字面量**复算守卫针（与守卫同口径）。上一节我拿裸 `grep` 直数，把注释里逐字引用的病灶原文算成"回潮"（`minByOrNull 同族=3 / ?: currentWeek ?: 1=2 / previous?.number ?: 1=2` 三枚假 MISMATCH）；这把自己写的尺换成同一套空白化算法，本轮跑合并态：`minByOrNull 同族=1`（`BuaaScheduleParser.kt`，#238 在册）、`?: currentWeek ?: 1=0`、`previous?.number ?: 1=0`、`isManualCourse=3`、`SemesterInfo(20, null)` 四档仍在（T196④ 之后是 `SemesterInfo(20, null,` 那一形，枚数照旧）。
+- **台账连写自查挪到 append 之后当场跑**（这一节又犯了同一枚错的**第五次**：写完 append 才看见 589 那把尺涨到 **602**，13 处 `Foo.kt:NNN` 连写，逐枚拆成「`Foo.kt` 的 `:NNN`」才复算回 589）。⇒ 下一节起：append 脚本里带一枚"草稿含连写就整份拒写"的前置闸，而不是事后修。
+- 本轮注入：T197 自报 **0**（点名两类噪声：harness 的任务台账 reminder、它自己守卫消息里的自述文本）；T196 前臂与 T196c 自报 **0**；上一批的 T193=2、T192=1（伪造 plan mode/只读模式）已记在上一节。
+
+### 14 未验到 / 残余
+
+- T196 全部四格**只有 JVM + 静态证据**：真抖一次能否救回（要 WebView + 网络）、判不出时页面内 fetch 真为 0 次、`retain` 真保住会话、教务究竟会不会回逐字重复的周次行 —— 五格全押设备或真数据，模拟器上没有教务会话。
+- #240（比"交出去的值"而非原串）与 #241（时间模式胶囊被簇捎走）**都要装机重量**，#241 还牵动 #113/#118 那两笔宽度账。
+- 没设学期那一档的版面只拍了一半：`t7c-nosem-w1.png` 里 ‹ 周次 › 簇确实整块不在、校区切换仍在右侧、页头念「未设置学期」，但同帧的"页签亮周课表、内容画今日页"没解释（第 11 节末格）。
+- `WeekView.kt` 的 2445 行仍守住；`HomeScreen.kt` 1,427 → **1,433**（T197 +6）⇒ 全仓指向该文件的 docs 锚点自 `:661` 起 +3、自 `:1001` 起 +6，与 `ScheduleViewModel.kt` 那 +36 一起并进 **#233**（它现在还要带 `docs/TESTING.md`／README 现值跟到 **2,034 / 248 / 254 / 70 / 110**）。
+- 旧账未动：**push（现在 51 枚）**、**发版**（tag 仍 `v0.1.1`）、#193、#143、真机 #14 / #90 / #98、#217、#218、#219、#220、#231（台账自己那节重复两份）、#227/#237（WakeUp 导出两格，同文件须并卡）、#229（导入报数同族，现已含 ICS 解析阶段那一格）、#238（`parseTermWeeks` 零调用方 + `fallbackWeeks` 每周都上）。
