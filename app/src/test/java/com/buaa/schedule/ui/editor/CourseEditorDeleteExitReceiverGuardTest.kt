@@ -200,7 +200,11 @@ class CourseEditorDeleteExitReceiverGuardTest {
         assertEquals(
             "保存链那一枚 scope.launch 体里 `onBack()` 恰好一处（普查 ③ 在册的那一枚；实到 " +
                 occurrences(saveBody, "onBack(") + " 处）：它今天不咬人靠的是「写完课程还在、闸门不摘页」，" +
-                "不是靠运气。把它搬走也**要回来重判这一格**（连同第 ③ 层那本册子）",
+                "不是靠运气。把它搬走也**要回来重判这一格**（连同第 ③ 层那本册子）。" +
+                "⚠️ T260 给这一支补了**另一侧**：页面那一支在写库期间被组合取消（转屏 / 摘页）时，" +
+                "退栈由目的地层那枚第三协程按 VM 的结论旗认领；报到那一手（`onSaveTailReached()`）" +
+                "与认领协程的互斥形状归 ui/editor/EditorSaveChainTailReceiverGuardTest 钉，" +
+                "两枚都在才算修完",
             1,
             occurrences(saveBody, "onBack("),
         )
@@ -285,15 +289,17 @@ class CourseEditorDeleteExitReceiverGuardTest {
             1,
             occurrences(destination, INITIAL_COURSE_ARG),
         )
-        // 这一枚目的地里的退栈主人共三处：从来读不到那一档 + 本页删掉那一档 + 页面上那些「返回」。
+        // 这一枚目的地里的退栈主人共四处：从来读不到那一档 + 本页删掉那一档 + 保存链收尾那一档
+        // （T260 补的认领）+ 页面上那些「返回」。
         // 数在一枚尺里是故意的：**并档**（把两档合成一枚 courseMissing 就弹）或**多开一路**
         // （例如往 onDelete lambda 里塞一枚 pop，第 ① 层那格也会一起红）都会让这个数变。
         assertEquals(
-            "这一枚目的地块内 `$POP_BACK_STACK` 恰好三处（从来读不到那一档 / 本页删掉那一档 / " +
-                "递给编辑器的 `onBack` lambda，实到 " + occurrences(destination, POP_BACK_STACK) +
-                " 处）：多一处 = 又多一条路径能弹这一格栈，删失败 / 保存成功那些档就得分不清谁弹的；" +
-                "少一处 = 有一档失去认领（整屏空白那一族回来）",
-            3,
+            "这一枚目的地块内 `$POP_BACK_STACK` 恰好四处（从来读不到那一档 / 本页删掉那一档 / " +
+                "保存链收尾没人认领那一档（T260）/ 递给编辑器的 `onBack` lambda，实到 " +
+                occurrences(destination, POP_BACK_STACK) + " 处）：多一处 = 又多一条路径能弹这一格栈，" +
+                "删失败 / 保存成功那些档就得分不清谁弹的；少一处 = 有一档失去认领" +
+                "（整屏空白那一族回来）",
+            4,
             occurrences(destination, POP_BACK_STACK),
         )
         assertEquals(
@@ -303,10 +309,13 @@ class CourseEditorDeleteExitReceiverGuardTest {
             occurrences(destination, ON_BACK_LAMBDA),
         )
         assertEquals(
-            "这一枚目的地块内 `LaunchedEffect(` 恰好两枚（旧的那枚「从来没读到」+ 新那枚「本页删掉了」；" +
-                "实到 " + occurrences(destination, "LaunchedEffect(") + " 处）：枚数就是这一族的档位表，" +
-                "长出第三枚 = 又开一路自动退栈",
-            2,
+            "这一枚目的地块内 `LaunchedEffect(` 恰好三枚（旧那枚「从来没读到」+「本页删掉了」+ " +
+                "T260 那枚「保存在途时页面那一支被取消，收尾归这里」；实到 " +
+                occurrences(destination, "LaunchedEffect(") + " 处）：枚数就是这一族的档位表，" +
+                "长出第四枚 = 又开一路自动退栈，谁都没被点名。第三枚的形状判据（点火即消费排在退栈之前、" +
+                "判据只吃内核那一枚 claimedByDestination）在 " +
+                "ui/editor/EditorSaveChainTailReceiverGuardTest 逐层钉",
+            3,
             occurrences(destination, "LaunchedEffect("),
         )
     }
@@ -661,6 +670,13 @@ class CourseEditorDeleteExitReceiverGuardTest {
          *   `editor/-1`（新增）那一档更宽：`courseId >= 0` 直接为假，`courseMissing` 恒 false。
          *   ⚠️ 它仍然脆：任何让「保存之后那一行不再在屏上」的改法（合并整组、保存即删原行…）
          *   都会让它变成第二枚删除链 —— 那时本格会红，正确的收法照 T166 对删除链那一手。
+         *   **T260 已经落地的是这条登记的另一种收法**：这一支没有从盘上摘掉（页面活着时它照旧自己弹，
+         *   所以 `onBack(` 仍 1 处、本格仍在册），但脆的那一半补了背撑 —— 页面那一支被组合取消时
+         *   由目的地层按 VM 的结论旗认领退栈（`EditorSaveChainTailReceiverGuardTest` ③ 层），
+         *   写库在飞那一刻的闸门也不再只认组合本地的 `saving`（⑤ 层）。
+         *   本格与第 ① 层那格因此**不许**被当成「已搬走」而销账：册子判的是盘上还在不在，
+         *   还在就还在册 —— 谁真把这一支整体搬去不随组合取消的接收者上，那才是要连名册带
+         *   WriteChainReceiverWiringGuardTest 档 ⑫ 的 `onBackSites` 一起重判的那一天。
          * - [ICLASS_LOGIN] 的 `IClassSession.login(→onLoggedIn()`：**登录链**。它 await 的是网络登录
          *   （顺带把 cookie 落到本地），退栈那一手是 `onLoggedIn()` = `navigate("spoc_scan") +
          *   popUpTo("iclass_login") { inclusive = true }`。这一枚目的地**没有任何"数据没到就不渲染"
