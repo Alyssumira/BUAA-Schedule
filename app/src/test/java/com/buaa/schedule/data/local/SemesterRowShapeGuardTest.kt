@@ -733,6 +733,6 @@ class SemesterRowShapeGuardTest {
         const val SUCCESS_COPY = "showMessage(\"学期设置已保存\", isSuccess = true)"
 
         /** `semesters` 的每一条 SELECT（对照尺：改前只有 getByTermCode 一族没有 ORDER BY） */
-        val SELECT_QUERY = Regex("SELECT \\* FROM semesters[^\\"]*")
+        val SELECT_QUERY = Regex("SELECT \\* FROM semesters[^\"]*")
     }
 }
