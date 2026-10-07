@@ -226,7 +226,7 @@ internal enum class SecondEngineHandState {
     FailureTrace,
 
     /** 真的有一张码在闸门里（主力或兜底解出的原文） */
-    RealCode,
+    RealCode
 }
 
 /**
