@@ -268,7 +268,8 @@ private fun ConflictGroupRow(
             Text(
                 text = conflictCourseLine(course, timeSlots),
                 style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(top = 2.dp),
+                // 行距级微间距走在册 token（同值不同源那一格，#457）：这枚是明细行两行字之间的缝
+                modifier = Modifier.padding(top = DesignTokens.spaceMicro),
             )
         }
 
