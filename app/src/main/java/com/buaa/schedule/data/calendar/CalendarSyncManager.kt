@@ -10,6 +10,11 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import com.buaa.schedule.data.local.CalendarSyncEntity
 import com.buaa.schedule.data.repository.ScheduleRepository
+import com.buaa.schedule.domain.calendar.CalendarReclaimPlanner
+import com.buaa.schedule.domain.calendar.CalendarReclaimPlanner.InsertAftermath
+import com.buaa.schedule.domain.calendar.CalendarReclaimPlanner.InsertBatchLanding
+import com.buaa.schedule.domain.calendar.CalendarReclaimPlanner.MappingFlush
+import com.buaa.schedule.domain.calendar.CalendarReclaimPlanner.ReclaimPlan
 import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.schedule.ScheduleOccurrences
 import kotlinx.coroutines.Dispatchers
@@ -37,14 +42,39 @@ class CalendarSyncManager(
         val accessLevel: Int = CalendarContract.Calendars.CAL_ACCESS_NONE,
     )
 
+    /**
+     * 一次批量提交的结果。
+     *
+     * [orphanSuspects] 与 [rolledBack] 是 T265 新加的两本账，它们**不与** inserted/failed 互斥：
+     * 同一批课次可以既进 [failed] 又进 [orphanSuspects]（事件已经在用户日历上、我们却没有映射），
+     * 也可以既进 [failed] 又进 [rolledBack]（当场把自己刚写的收回来了，所以它没留在日历上）。
+     * 少了这两枚，屏上就只能念「N 个日程未写入」—— 而"N 个未写入"里有两种代价完全不同的事。
+     */
     data class ApplyResult(
         val inserted: Int,
         val updated: Int,
         val deleted: Int,
         val failed: Int,
+        /** 已经进到用户日历、却没有映射可定位的事件枚数（下次回收按所有权标记捞回来） */
+        val orphanSuspects: Int = 0,
+        /** 映射落库失败那批被当场撤回的枚数 */
+        val rolledBack: Int = 0,
     ) {
         val succeeded: Boolean get() = failed == 0
     }
+
+    /**
+     * 「移除已同步的日程」那一手的结果。
+     *
+     * @param orphansReclaimed 其中「映射表里没有、靠所有权标记才捞回来」的枚数（本卡题眼那批）
+     * @param copy 屏上该念哪一句（档由 domain 内核定，句子本身住在调用点）
+     */
+    data class RemoveOutcome(
+        val removed: Int,
+        val failed: Int,
+        val orphansReclaimed: Int,
+        val copy: CalendarReclaimPlanner.RemovalCopy,
+    )
 
     fun hasPermission(): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CALENDAR) ==
@@ -125,6 +155,8 @@ class CalendarSyncManager(
         var updated = 0
         var deleted = 0
         var failed = 0
+        var orphanSuspects = 0
+        var rolledBack = 0
 
         // 1) 删除（事件删除会级联删除其提醒）
         diff.toDelete.chunked(DELETE_BATCH).forEach { chunk ->
@@ -200,16 +232,19 @@ class CalendarSyncManager(
             }
             results.fold(
                 onSuccess = { applied ->
-                    val upserts = buildList {
-                        eventOpIndexes.forEachIndexed { i, opIndex ->
-                            val eventUriString = applied.getOrNull(opIndex)?.uri?.toString()
-                            val eventId = eventUriString?.substringAfterLast('/')?.toLongOrNull()
-                            val occurrence = chunk[i]
-                            if (eventId != null) {
-                                add(occurrence.toMapping(calendarId, eventId, now))
-                            } else {
-                                failed++
-                            }
+                    val named = mutableSetOf<Long>()
+                    val upserts = mutableListOf<CalendarSyncEntity>()
+                    var unnamed = 0
+                    eventOpIndexes.forEachIndexed { i, opIndex ->
+                        val eventUriString = applied.getOrNull(opIndex)?.uri?.toString()
+                        val eventId = eventUriString?.substringAfterLast('/')?.toLongOrNull()
+                        if (eventId != null) {
+                            named += eventId
+                            upserts += chunk[i].toMapping(calendarId, eventId, now)
+                        } else {
+                            // 事件已经在日历上了，而我们连它的 id 都点不出来 —— 这一档不猜（猜就是
+                            // 拿用户日历上的未知事件当写入目标），改由回收那一手按所有权标记捞回来。
+                            unnamed++
                         }
                     }
                     // ⚠️ 新增批次**必须**逐批立刻写映射，这是整个同步最关键的一点：
@@ -217,17 +252,54 @@ class CalendarSyncManager(
                     // 中途进程被杀（同步几百课次要十几秒，很容易被系统回收）
                     // 就会留下"日历里有事件、映射表为空"的状态，
                     // 下次同步因为查不到映射而把同样的课次再插一遍 —— 日历里全是重复事件。
-                    if (flushMappings(upserts, emptyList())) inserted += upserts.size
-                    else failed += upserts.size
+                    // T265 把那一窗口剩下的两档收口：落库真失败 ⇒ 当场撤回自己刚写的（乙），
+                    // 点不出名的那些 ⇒ 留痕交给按标记回收（甲）。
+                    val flush = when {
+                        upserts.isEmpty() -> MappingFlush.NotNeeded
+                        flushMappings(upserts, emptyList()) -> MappingFlush.Committed
+                        else -> MappingFlush.Failed
+                    }
+                    val aftermath = CalendarReclaimPlanner.aftermathOfInsertBatch(
+                        landing = InsertBatchLanding.Landed,
+                        attempted = chunk.size,
+                        namedEventIds = named,
+                        unnamedCount = unnamed,
+                        flush = flush,
+                    )
+                    val rollbackOk = aftermath is InsertAftermath.RollbackOwnWrites &&
+                        deleteOwnedEvents(aftermath.eventIds, "映射落库失败后的当场撤回")
+                    val tally = CalendarReclaimPlanner.tallyOf(aftermath, rollbackSucceeded = rollbackOk)
+                    inserted += tally.inserted
+                    failed += tally.failed
+                    orphanSuspects += tally.orphanSuspects
+                    rolledBack += tally.rolledBack
+                    if (tally.orphanSuspects > 0) {
+                        Log.w(
+                            TAG,
+                            "日历新增批次里 ${tally.orphanSuspects} 枚事件留在系统日历而本应用无法定位（" +
+                                "点不出 eventId 或撤回失败），下次「移除已同步的日程」会按所有权标记回收",
+                        )
+                    }
+                    if (tally.rolledBack > 0) {
+                        Log.i(TAG, "日历新增批次里 ${tally.rolledBack} 枚因映射落库失败被当场撤回，未留在用户日历上")
+                    }
                 },
                 onFailure = {
                     Log.w(TAG, "日历事件新增批次失败（${chunk.size} 条）", it)
-                    failed += chunk.size
+                    failed += CalendarReclaimPlanner.tallyOf(
+                        CalendarReclaimPlanner.aftermathOfInsertBatch(
+                            landing = InsertBatchLanding.Refused,
+                            attempted = chunk.size,
+                            namedEventIds = emptySet(),
+                            unnamedCount = 0,
+                            flush = MappingFlush.NotNeeded,
+                        ),
+                    ).failed
                 },
             )
         }
 
-        ApplyResult(inserted, updated, deleted, failed)
+        ApplyResult(inserted, updated, deleted, failed, orphanSuspects, rolledBack)
     }
 
     /**
@@ -235,6 +307,9 @@ class CalendarSyncManager(
      *
      * @return 是否确实落库。false 时调用方要把这批计入 failed：事件已经在日历里、
      * 映射却没有，下次同步查不到映射就会把同一批课次再插一遍（R5 F-43）。
+     * T265 给这一档接了后续动作：新增批次交回 false 时调用方**当场撤回自己刚写的那些**
+     * （[deleteOwnedEvents]），撤不动或点不出名的那些升格为 `orphanSuspects`，
+     * 由 [removeAllSyncedEvents] 按所有权标记回收。
      */
     private suspend fun flushMappings(
         upserts: List<CalendarSyncEntity>,
@@ -255,35 +330,115 @@ class CalendarSyncManager(
     }
 
     /**
-     * 移除本应用创建的全部日历事件，并且**只清理确认删除成功**的映射。
+     * 移除本应用创建的**全部**日历事件，并且**只清理确认删除成功**的映射。
+     *
+     * T265 改的是"范围从哪来"：改前那一版只认内存里的映射表（`repository.getCalendarSyncEntries()`），
+     * 于是"有事件、无映射"的那两批（eventId 解析不出 / 映射落库失败 / 批写与落库之间进程被杀）
+     * 永久留在用户日历上，而下一次同步因为查不到映射会把同批课次再插一遍。
+     * 现在先按所有权标记枚 provider（[CalendarOwnershipQuery]），映射表退成**第二来源与加速缓存**：
+     * - 标记问得回来 ⇒ 删「标记命中的 ∪ 映射记着的」，孤儿（标记有、映射无）一并捞回；
+     * - 标记问不回来（provider 拒 / 没权限没问 / 答了空集而映射却有货）⇒ **只删映射点得出名的那些**，
+     *   绝不退成"这个日历里的事件都归我删"，并把这一档交回屏上（[RemoveOutcome.copy]）；
+     * - 两本账都空 ⇒ 一枚都不碰（从没同步过的用户点"移除"，他自己的日程不许被动）。
      *
      * 失败的批次必须保留映射：一旦无条件清空，遗留的日历事件在映射丢失后
      * 再也定位不到、无法清理，且下次同步会因为“映射缺失”把同一课次重复插入。
      *
-     * @return 实际删除成功的事件数
+     * @param currentTargetCalendarId 界面上选中的目标日历（-1L = 没选）。只用于**报数**：
+     *   映射里落在别的日历上的那些枚数会被折进句子档，不参与、也不允许参与删除范围的收窄。
+     * @return 实际删除成功的事件数 + 孤儿账 + 该念哪一句
      */
-    suspend fun removeAllSyncedEvents(): Int = withContext(Dispatchers.IO) {
+    suspend fun removeAllSyncedEvents(currentTargetCalendarId: Long): RemoveOutcome = withContext(Dispatchers.IO) {
         val entries = repository.getCalendarSyncEntries()
+        val mappingEventIds = entries.mapTo(HashSet()) { it.calendarEventId }
+        val attempted = hasPermission()
+        val (marker, markerEventIds) = CalendarOwnershipQuery.fold(
+            rows = if (attempted) queryOwnedEventIdsOnce() else null,
+            attempted = attempted,
+        )
+        val plan = CalendarReclaimPlanner.planReclaim(marker, markerEventIds, mappingEventIds)
+        val eventIds: List<Long> = when (plan) {
+            is ReclaimPlan.ByOwnershipMarker -> plan.eventIds.toList()
+            is ReclaimPlan.RecordedOnly -> plan.eventIds.toList()
+            is ReclaimPlan.NothingOurs -> emptyList()
+        }.sorted()
+        Log.i(
+            TAG,
+            "日历回收起手：标记枚举=$marker（命中 ${markerEventIds.size} 枚）、映射记着 ${mappingEventIds.size} 枚 " +
+                "⇒ 本次要删 ${eventIds.size} 枚（其中 " +
+                "${if (plan is ReclaimPlan.ByOwnershipMarker) plan.orphansBeyondMappings else 0} 枚是映射外的孤儿）",
+        )
         var removed = 0
-        val removedOccurrenceIds = mutableListOf<String>()
-        entries.chunked(DELETE_BATCH).forEach { chunk ->
+        var failed = 0
+        val deletedEventIds = HashSet<Long>()
+        eventIds.chunked(DELETE_BATCH).forEach { chunk ->
             val ops = ArrayList<ContentProviderOperation>(chunk.size)
-            chunk.forEach { mapping ->
-                ops.add(
-                    ContentProviderOperation
-                        .newDelete(eventUri(mapping.calendarEventId))
-                        .build()
-                )
-            }
+            chunk.forEach { eventId -> ops.add(ContentProviderOperation.newDelete(eventUri(eventId)).build()) }
             if (applyBatch(ops)) {
                 removed += chunk.size
-                removedOccurrenceIds += chunk.map { it.occurrenceId }
+                deletedEventIds += chunk
             } else {
+                failed += chunk.size
                 Log.w(TAG, "日历事件删除批次失败（${chunk.size} 条），保留其映射以便下次重试")
             }
         }
-        repository.removeCalendarSyncEntries(removedOccurrenceIds)
-        removed
+        // 只清真删掉的那些映射（既有口径：失败批次保留映射以便下次重试）
+        val prunedOccurrenceIds = entries.filter { it.calendarEventId in deletedEventIds }.map { it.occurrenceId }
+        repository.removeCalendarSyncEntries(prunedOccurrenceIds)
+        val orphansReclaimed = deletedEventIds.count { it !in mappingEventIds }
+        if (plan is ReclaimPlan.RecordedOnly) {
+            Log.i(TAG, "日历回收按标记读不回来（${plan.reason}）：本次只删了映射记着的 $removed 枚，可能有孤儿留在用户日历上")
+        }
+        RemoveOutcome(
+            removed = removed,
+            failed = failed,
+            orphansReclaimed = orphansReclaimed,
+            copy = CalendarReclaimPlanner.removalCopy(
+                plan = plan,
+                deletedCount = removed,
+                failedCount = failed,
+                mappingsOutsideCurrentTarget = entries.count { it.calendarId != currentTargetCalendarId },
+            ),
+        )
+    }
+
+    /**
+     * 单次按所有权标记枚事件（契约与"刻意没有兜底第二遍"那三条见 [CalendarOwnershipQuery]）。
+     *
+     * 交回 null 表示"这一次没问到答案"（异常，或 cursor 都没给），**不是**"答了零枚"——
+     * 两者在 [CalendarOwnershipQuery.fold] 里是两档，而两档都不许扩大删除范围。
+     */
+    private fun queryOwnedEventIdsOnce(): List<Long>? = runCatching {
+        val ids = mutableListOf<Long>()
+        val cursor = context.contentResolver.query(
+            CalendarContract.Events.CONTENT_URI,
+            CalendarOwnershipQuery.projection,
+            CalendarOwnershipQuery.selection,
+            CalendarOwnershipQuery.selectionArgs(context.packageName),
+            null,
+        ) ?: error("Events 按所有权标记查询交回 null cursor")
+        cursor.use { while (it.moveToNext()) ids += it.getLong(0) }
+        ids
+    }.onFailure { Log.w(TAG, "按所有权标记枚举本应用创建的日历事件失败（本次只按映射表回收）", it) }.getOrNull()
+
+    /**
+     * 删掉点得出名的若干枚事件（回收那一手与"映射落库失败后当场撤回自己刚写的"共用这一把刀）。
+     *
+     * @return 是否**每一批**都删成了。false 时调用方要把这批升格成孤儿嫌疑 ——
+     *   撤回失败的撤回不许念成撤回成功（分档见 domain 内核 `CalendarReclaimPlanner.tallyOf`）。
+     */
+    private fun deleteOwnedEvents(eventIds: Set<Long>, reason: String): Boolean {
+        if (eventIds.isEmpty()) return true
+        var allSucceeded = true
+        eventIds.chunked(DELETE_BATCH).forEach { chunk ->
+            val ops = ArrayList<ContentProviderOperation>(chunk.size)
+            chunk.forEach { eventId -> ops.add(ContentProviderOperation.newDelete(eventUri(eventId)).build()) }
+            if (!applyBatch(ops)) allSucceeded = false
+        }
+        if (!allSucceeded) {
+            Log.w(TAG, "$reason：${eventIds.size} 枚里有一批删除失败，这些事件留在用户日历上等待按标记回收")
+        }
+        return allSucceeded
     }
 
     private fun eventValues(calendarId: Long, occurrence: com.buaa.schedule.domain.schedule.Occurrence): ContentValues =
@@ -304,6 +459,10 @@ class CalendarSyncManager(
             )
             put(CalendarContract.Events.EVENT_TIMEZONE, TimeZone.getDefault().id)
             put(CalendarContract.Events.AVAILABILITY, CalendarContract.Events.AVAILABILITY_BUSY)
+            // 所有权标记：这一枚列**不是装饰**。回收那一手（removeAllSyncedEvents →
+            // CalendarOwnershipQuery）按它等值枚回"本应用创建的那些"，所以写它一处、读它一处，
+            // 缺一处屏上那句「将删除本应用创建的全部日历事件」就兑不了（T265，台账 #372）。
+            // 只写不读 = 本卡病灶；只读不写 = 一台机器上再没有新事件带标记，回收从此永远枚不到东西。
             put(CalendarContract.Events.CUSTOM_APP_PACKAGE, context.packageName)
         }
 

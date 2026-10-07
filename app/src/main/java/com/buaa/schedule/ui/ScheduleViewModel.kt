@@ -22,6 +22,8 @@ import android.webkit.CookieManager
 import com.buaa.schedule.data.import.IcsParser
 import com.buaa.schedule.data.import.TextScheduleParser
 import com.buaa.schedule.data.share.ScheduleShareCodec
+import com.buaa.schedule.domain.calendar.CalendarReclaimPlanner
+import com.buaa.schedule.domain.calendar.CalendarReclaimPlanner.RemovalCopy
 import com.buaa.schedule.domain.editor.EditorSavePhase
 import com.buaa.schedule.domain.editor.EditorSaveStage
 import com.buaa.schedule.domain.model.Course
@@ -1729,11 +1731,30 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             _calendarSync.update { it.copy(syncing = true) }
             val result = suspendCatching { calendarSyncManager.apply(calendarId, pending, minutes) }.getOrNull()
+            // T265：失败那一堆数字里混着两种代价完全不同的事——「没写进去」与「写进去了但认不回来」。
+            // 后者要单独念一句（并把「按所有权标记回收」这条路指给用户），否则用户再点一次同步
+            // 只会往同一个日历上再插一批重复事件。分档住在 domain 内核，这里只做句子映射。
+            val verdict = result?.let {
+                CalendarReclaimPlanner.applyCopy(
+                    failed = it.failed,
+                    orphanSuspects = it.orphanSuspects,
+                    rolledBack = it.rolledBack,
+                )
+            }
             _calendarSync.update {
                 it.copy(
                     syncing = false,
                     message = when {
                         result == null -> AppMessage("同步失败：日历写入异常，请重试或检查日历权限", isError = true)
+                        verdict == CalendarReclaimPlanner.ApplyCopy.OrphansRecognisable -> AppMessage(
+                            "同步未完成：${result.orphanSuspects} 个日程已经进到你的日历里，本应用却认不出它们；" +
+                                "再点一次同步会重复插入，可点「移除已同步的日程」按所有权标记回收",
+                            isError = true,
+                        )
+                        verdict == CalendarReclaimPlanner.ApplyCopy.RolledBackOwnWrites -> AppMessage(
+                            "同步未完成：${result.rolledBack} 个日程写入后映射落库失败，已被本应用当场撤回，请重试",
+                            isError = true,
+                        )
                         result.succeeded -> AppMessage(
                             "同步完成：新增 ${result.inserted}，更新 ${result.updated}，删除 ${result.deleted}",
                             isSuccess = true,
@@ -1783,12 +1804,42 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         _calendarSync.update { it.copy(showRemoveConfirm = false) }
         viewModelScope.launch {
             _calendarSync.update { it.copy(syncing = true, message = null, permissionPermanentlyDenied = false) } // T110：起手成对清，与 :1488 同一枚仪式（这条链不经那个入口）
-            val removed = suspendCatching { calendarSyncManager.removeAllSyncedEvents() }.getOrNull()
+            // T265：目标日历 id 只拿去**报数**（映射里落在别的日历上的那些枚数会被折进句子档），
+            // 不参与也不允许参与删除范围的收窄 —— 收窄就会把旧目标日历上的那些留成孤儿。
+            val targetCalendarId = _calendarSync.value.targetId
+            val removed = suspendCatching { calendarSyncManager.removeAllSyncedEvents(targetCalendarId) }.getOrNull()
             _calendarSync.update {
                 it.copy(
                     syncing = false,
-                    message = removed?.let { n -> AppMessage("已移除 $n 个日程") }
-                        ?: AppMessage("移除失败：日历写入异常，请检查权限后重试", isError = true),
+                    message = removed?.let { outcome ->
+                        val n = outcome.removed
+                        when (outcome.copy) {
+                            // 只有「按所有权枚回来的都删掉了」这一档才配念那句承诺的完成时
+                            RemovalCopy.AllReclaimed -> AppMessage("已移除 $n 个日程")
+                            RemovalCopy.NothingWasOurs -> AppMessage(
+                                "没有找到本应用创建的日程，你在日历里自己的日程一枚都没被动过",
+                                isSuccess = true,
+                            )
+                            RemovalCopy.ReclaimedButMarkerBlind -> AppMessage(
+                                "已移除 $n 个日程，但这台机器的日历没让本应用认回自己创建的事件，" +
+                                    "可能还有认不出的日程留在日历里（本应用不会去猜它们）",
+                                isError = true,
+                            )
+                            RemovalCopy.BlindReclaimSpansOtherCalendars -> AppMessage(
+                                "已移除 $n 个日程；本应用没能按所有权标记认回事件，而你换过目标日历，" +
+                                    "旧日历上可能还留着认不出的日程",
+                                isError = true,
+                            )
+                            RemovalCopy.PartiallyReclaimed -> AppMessage(
+                                "已移除 $n 个日程，${outcome.failed} 个删除失败（映射已保留，可再点一次）",
+                                isError = true,
+                            )
+                            RemovalCopy.AllDeletesFailed -> AppMessage(
+                                "移除没成：${outcome.failed} 个日程一枚都没删掉，映射已保留，可再点一次",
+                                isError = true,
+                            )
+                        }
+                    } ?: AppMessage("移除失败：日历写入异常，请检查权限后重试", isError = true),
                 )
             }
         }

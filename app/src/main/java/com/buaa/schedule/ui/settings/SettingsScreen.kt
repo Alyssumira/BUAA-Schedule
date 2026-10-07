@@ -2002,7 +2002,20 @@ fun SettingsScreen(
             modifier = modal,
             onDismissRequest = { viewModel.dismissRemoveSyncedEvents() },
             title = { Text("移除已同步的日程") },
-            text = { Text("将删除本应用创建的全部日历事件，不影响课表数据。确定继续？") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceXS)) {
+                    Text("将删除本应用创建的全部日历事件，不影响课表数据。确定继续？")
+                    // T265：这句承诺以前兑不了 —— 删除范围只取自本应用的映射表，
+                    // 「有事件、无映射」那两批永远收不回。现在范围先按写进日历的所有权标记枚回来，
+                    // 所以这里把「按什么认 ours」念出来：范围既不是"这个日历里的事件"，也不是"标题像课表的日程"。
+                    Text(
+                        text = "「本应用创建的」按我们写进日历的所有权标记认领，不看你自己在日历里建的日程；" +
+                            "换过的旧目标日历上的那些也在范围内。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
             confirmButton = {
                 // 与「删除课程」「清空历史」同一口径：破坏性确认走 error 字色
                 TextButton(onClick = { viewModel.removeSyncedEvents() }) {
