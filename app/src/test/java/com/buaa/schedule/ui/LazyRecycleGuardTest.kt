@@ -49,9 +49,11 @@ class LazyRecycleGuardTest {
             !args.contains("toList()") && !args.contains("..totalWeeks"),
         )
         assertEquals(
-            "记住的列表只许一处：remember(totalWeeks) { (1..totalWeeks).toList() }",
+            "记住的列表只许一处：remember(totalWeeks) { weekChoicesFor(hasSemester, totalWeeks) }" +
+                "（T197 把来源换进内核，键仍是 totalWeeks —— 键与来源配对那笔账不许漂，" +
+                "改完记得同步 WeekNavigationAvailabilityWiringGuardTest 的第④层）",
             1,
-            occurrences(code, "remember(totalWeeks) { (1..totalWeeks).toList() }"),
+            occurrences(code, "remember(totalWeeks) { weekChoicesFor(hasSemester, totalWeeks) }"),
         )
         assertTrue(
             "items 读的不许是别的来源，必须是那枚记住的列表",

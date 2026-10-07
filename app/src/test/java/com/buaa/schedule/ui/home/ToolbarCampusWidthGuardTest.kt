@@ -31,7 +31,8 @@ import org.junit.Test
  *    这一排唯一能让宽的部件就是它，缩不动就轮到校区被顶出屏（装机实测：720px 宽时
  *    标题那一格从 449px 缩到 126px、校区仍是 233px 完整在屏）。
  * 5. `termSlot` 排在簇之前（同一件事的另一半：两端都先量，中间的份才是可让的那一份）；
- * 6. 调用点仍按 `selectedTab == 0` 决定簇画不画 —— 上面四档的前提是"哪一签有簇"，
+ * 6. 调用点仍按「页签 + 有没有学期」那一枚内核决定簇画不画（T197 之前只看 `selectedTab == 0`，
+ *    于是没设学期时也照给那 20 周的导航）—— 上面四档的前提是"哪一签有簇"，
  *    这一维漂了本文件全部按错的场景在核。
  */
 class ToolbarCampusWidthGuardTest {
@@ -115,18 +116,26 @@ class ToolbarCampusWidthGuardTest {
         assertTrue("termSlot 的调用点没了或不再排在周次簇之前：term@$termAt cluster@$clusterAt", termAt in 0 until clusterAt)
     }
 
-    /** ⑥ 调用点仍按页签决定簇画不画：本文件其余五档都以此为前提 */
+    /** ⑥ 调用点仍按「页签 + 有没有学期」那一枚内核决定簇画不画：本文件其余五档都以此为前提 */
     @Test
     fun callSiteStillGatesTheClusterOnTheWeekTab() {
         val home = blankComments(source(HOME_SCREEN))
         val sites = invocationArgumentLists(home, "ScheduleToolbarRow")
         assertEquals("HomeScreen 里 ScheduleToolbarRow 的调用点数应当恰好一处：${sites.size}", 1, sites.size)
-        val passed = Regex("""showWeekNav\s*=\s*([^\n,]*)""").findAll(sites[0]).map { it.groupValues[1].trim() }.toList()
-        assertEquals(
-            "第二行的周次簇不再由「selectedTab == 0」这一维决定画不画（今日页签不许有 ‹ 周次 ›，" +
-                "周课表页签必须有校区）：$passed",
-            listOf("selectedTab == 0"),
-            passed,
+        val passed = Regex("""showWeekNav\s*=\s*([^\n]+)""")
+            .findAll(sites[0]).map { it.groupValues[1].trim().removeSuffix(",") }.toList()
+        assertEquals("showWeekNav 的实参枚数不是恰好一处：$passed", 1, passed.size)
+        val said = passed[0]
+        assertTrue(
+            "第二行的周次簇不再由「页签 + 有没有学期」那一枚内核决定画不画（T197：没学期时那 20 周是硬写的，" +
+                "跳周清单与学期进度线都吃它）。两维一枚都不许掉 —— 今日页签不许有 ‹ 周次 ›，" +
+                "周课表页签必须有校区：实到 $said",
+            said.startsWith("shouldOfferWeekNavigation(") && said.contains("selectedTab") &&
+                said.contains("state.semester != null"),
+        )
+        assertFalse(
+            "showWeekNav 的实参里现写着合取（绕过内核在调用点各判一遍，改一处漏一处）：$said",
+            Regex("""showWeekNav\s*=\s*selectedTab[^,\n]*&&""").containsMatchIn(sites[0]),
         )
     }
 
