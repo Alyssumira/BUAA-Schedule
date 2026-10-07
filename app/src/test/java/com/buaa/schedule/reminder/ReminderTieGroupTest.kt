@@ -269,6 +269,20 @@ class ReminderTieGroupTest {
         )
     }
 
+    /**
+     * 推断链第 2 格的实测证据（不是引用记忆）：Kotlin 的 `minByOrNull` 在**并列**时返回
+     * 遇到顺序里的**第一个**最小键 —— 所以改前那一句 `.minByOrNull { it.triggerAtMillis }`
+     * 把"同一时刻两门课里谁被提醒"交给了候选列表的顺序，而那份顺序来自 `getDisplayCourses`
+     * 的数据库行序。本卡换成分组取整等，这条只留作改前行为的证据。
+     */
+    @Test
+    fun kotlinMinByOrNullKeepsTheFirstMinimumAndSilentlyDropsTheRest() {
+        val rows = listOf(9L to 1_000L, 2L to 1_000L, 7L to 1_000L)
+
+        assertEquals("并列时留下的是列表里第一个最小键（＝行序决定生死）", 9L, rows.minByOrNull { it.second }?.first)
+        assertEquals("最小键那一等其实有三家", 3, rows.count { it.second == 1_000L })
+    }
+
     private data class SlotCell(
         val name: String,
         val tiedSize: Int,
