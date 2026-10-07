@@ -160,6 +160,7 @@ object UpdateCheck {
         //    「未同意就把当前状态原样交回」排在 force 判据之前，于是设置页那颗「检查更新」
         //    对没同意过隐私的用户是彻底的 no-op —— 不弹窗、副标题不变、一条日志都不留，
         //    而同一个文件顶部正承诺「失败/无更新也要出声」。
+        //    改前逐字留此做取证：if (!FirstRun.privacyAccepted(context)) return _state.value
         //    出不出网由判据定，说不说话由档位定，两者不再互相顶掉。
         val admission = UpdateCheckGate.admit(
             privacyAccepted = FirstRun.privacyAccepted(context),
