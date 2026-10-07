@@ -746,21 +746,27 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     /** 兼容旧命名：仍用于课表管理页的“撤销删除”入口 */
     fun undoDeleteCourse() = undo()
 
+    /**
+     * 设置页「保存学期」。
+     *
+     * **T249/#461：这一跳只调仓储一次。** 改前这里是两枚独立事务
+     * （`renameSemesterCourses` 一枚、`saveSemester` 另一枚），中间进程被杀 ⇒ 旧学期行已删、
+     * 新学期行未插 ⇒ `semesters` 落回「没设学期」，开学日与总周数永久丢，而屏上一句话都没有。
+     * 现在两半合进 `ScheduleRepository.saveSemesterWithRename` 的同一枚 `db.withTransaction`，
+     * 「要不要改代码」也在那枚事务内判（库里那一枚行由仓储自己读，VM 不再隔着一枚事务猜它）。
+     *
+     * 拒绝档（新代码下已有别的课表）的文案与 `isError` 逐字未改，且仍然在**任何写库之前**返回：
+     * 合并事务被拒时一个字节都没写，所以这里也不补任何收尾刷新。
+     */
     fun saveSemester(semester: Semester) {
         viewModelScope.launch {
-            val old = repository.getCurrentSemester()
-            if (old != null && old.termCode != semester.termCode) {
-                // 改代码 = 给当前课表重命名：课程必须跟着改挂，否则 CourseFilter
-                // 按新学期代码一过滤，用户看到的是一保存课表就"空了"
-                if (!repository.renameSemesterCourses(old.termCode, semester.termCode)) {
-                    _importMessage.value = AppMessage(
-                        "学期代码 ${semester.termCode} 下已有另一份课表，请先切换学期再改代码",
-                        isError = true,
-                    )
-                    return@launch
-                }
+            if (!repository.saveSemesterWithRename(semester)) {
+                _importMessage.value = AppMessage(
+                    "学期代码 ${semester.termCode} 下已有另一份课表，请先切换学期再改代码",
+                    isError = true,
+                )
+                return@launch
             }
-            repository.saveSemester(semester)
             afterDataChangedInternal()
             showMessage("学期设置已保存", isSuccess = true)
         }

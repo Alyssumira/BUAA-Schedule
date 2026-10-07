@@ -205,6 +205,242 @@ class SemesterRowPolicyTest {
         )
     }
 
+    // ─────────────── ③ #461：合并事务的步骤表 ───────────────
+
+    @Test
+    fun `合并事务的步骤就是改前两枚事务的步骤按顺序拼接`() {
+        val old = row(id = 3L, termCode = OTHER, startDate = "2025-09-01")
+        val target = row(id = 0L, termCode = TERM, startDate = "2026-09-07", totalWeeks = 24)
+
+        val merged = planSemesterRenameSave(old, target, hasCoursesUnderNewCode = false)
+        assertTrue("termCode 变了就必须成计划（实到 $merged）", merged is SemesterRenameSavePlan.Apply)
+        merged as SemesterRenameSavePlan.Apply
+
+        assertEquals(
+            "合并后的写侧步骤必须**逐枚、按序**等于「改前第一枚事务（rename）+ 改前第二枚事务（saveSemester）」" +
+                "（实到 ${merged.steps}）：#461 的修法只消掉两枚事务之间的那格死亡窗口，" +
+                "不多写、不少写、不换序 —— 换序就是把课程改挂在了已删的行之后",
+            listOf(
+                SemesterRenameSaveStep.ReassignCourses(OTHER, TERM),
+                SemesterRenameSaveStep.DeleteRowsForTermCode(OTHER),
+                SemesterRenameSaveStep.DeleteRowsForTermCode(TERM),
+                SemesterRenameSaveStep.WriteSemesterRow(target),
+            ),
+            merged.steps,
+        )
+        val renameAlone = (planSemesterRename(OTHER, TERM, hasCoursesUnderNewCode = false) as SemesterRenamePlan.Apply)
+            .steps
+        val saveAlone = listOf(
+            SemesterRenameSaveStep.DeleteRowsForTermCode(TERM),
+            SemesterRenameSaveStep.WriteSemesterRow(target),
+        )
+        assertEquals(
+            "另一把尺复算：两枚各自算一遍再拼起来，必须与合并计划同形",
+            renameAlone + saveAlone,
+            merged.steps,
+        )
+    }
+
+    @Test
+    fun `termCode 没变时不判拒绝 也不动任何课程`() {
+        // 改前 VM 是 `if (old != null && old.termCode != semester.termCode)` 才进 rename 那一跳：
+        // 只改开学日 / 总周数时「新代码下已有课」这一判**根本不问**。合并之后这一档必须原样保住 ——
+        // 否则用户每学期改一次开学日就会被自己已有的课表拒掉。
+        val current = row(id = 8L, startDate = "2026-08-31", totalWeeks = 20)
+        val target = row(id = 0L, startDate = "2026-09-07", totalWeeks = 24)
+
+        val plan = planSemesterRenameSave(current, target, hasCoursesUnderNewCode = true)
+
+        assertTrue(
+            "termCode 没变 ⇒ 手里有课也不许拒（实到 $plan）。改前这一路压根不查课程表",
+            plan is SemesterRenameSavePlan.Apply,
+        )
+        plan as SemesterRenameSavePlan.Apply
+        assertEquals(
+            "步骤与 `saveSemester` 一字不差：收口 + 插新行，两枚",
+            listOf(
+                SemesterRenameSaveStep.DeleteRowsForTermCode(TERM),
+                SemesterRenameSaveStep.WriteSemesterRow(target),
+            ),
+            plan.steps,
+        )
+        assertEquals(
+            "没有 ReassignCourses 这一步（不许动课程）",
+            0,
+            plan.steps.filterIsInstance<SemesterRenameSaveStep.ReassignCourses>().size,
+        )
+    }
+
+    @Test
+    fun `库里还没有学期行时就是第一次设学期`() {
+        val target = row(id = 0L, termCode = OTHER, startDate = "2025-09-01")
+
+        val plan = planSemesterRenameSave(null, target, hasCoursesUnderNewCode = true) as SemesterRenameSavePlan.Apply
+
+        assertEquals(
+            "库里没有当前学期（用户还没设过）⇒ 没有「旧代码」可改挂，也没有可拒的理由（实到 ${plan.steps}）",
+            listOf(
+                SemesterRenameSaveStep.DeleteRowsForTermCode(OTHER),
+                SemesterRenameSaveStep.WriteSemesterRow(target),
+            ),
+            plan.steps,
+        )
+    }
+
+    @Test
+    fun `rename 被拒时不落新行也不写学期`() {
+        val old = row(id = 3L, termCode = OTHER)
+        val target = row(id = 0L, termCode = TERM)
+
+        val merged = planSemesterRenameSave(old, target, hasCoursesUnderNewCode = true)
+        val rename = planSemesterRename(OTHER, TERM, hasCoursesUnderNewCode = true)
+
+        assertEquals(
+            "新代码下已有别的课表 ⇒ 合并计划整组交回 Rejected（实到 $merged）：" +
+                "调用方据此返回 false 并念那一句文案，而库里一个字节都不许多写",
+            SemesterRenameSavePlan.Rejected,
+            merged,
+        )
+        assertEquals("rename 那一判同一口径（两枚写侧共用它，没有第二把尺）", SemesterRenamePlan.Rejected, rename)
+
+        val table = semesterTableOf(old)
+        runSemesterStepsInFakeTx(merged, table, throwAt = null)
+        assertEquals(
+            "拒绝档落下前后必须是同一份表（实到 ${table.rows}）：不落新行、不删旧行、不动学期",
+            listOf(old),
+            table.rows,
+        )
+        assertEquals("拒绝档一步都没排进台账", 0, table.appliedSteps)
+    }
+
+    @Test
+    fun `合并事务中途抛时两行都不动`() {
+        // 这一格钉的是「整组步骤只在 commit 那一刻落下」这一等形状：计划里不存在分步提交那一等，
+        // 所以任何一步抛在中间，落下的都是空集。
+        // ⚠️ 如实写明没做的那一半：Room 真库的回滚没有 JVM 缝可跑（零 Robolectric、零设备），
+        //    「真在事务里抛一次」归编排者装机；改前那两枚独立事务在这一档会留下「旧行已删、新行未插」，
+        //    那才是本卡要消灭的形状。
+        val sibling = row(id = 7L, termCode = OTHER, startDate = "2025-02-24", totalWeeks = 19)
+        val current = row(id = 9L, termCode = OTHER, startDate = "2025-09-01", totalWeeks = 20)
+        val target = row(id = 0L, termCode = TERM, startDate = "2026-09-07", totalWeeks = 24)
+        val plan = planSemesterRenameSave(current, target, hasCoursesUnderNewCode = false)
+        plan as SemesterRenameSavePlan.Apply
+        assertEquals("这一档是四枚步骤的合并计划（改前两枚事务各两枚）", 4, plan.steps.size)
+
+        val before = listOf(sibling, current)
+        val offenders = (1..4).mapNotNull { throwAt ->
+            val attempt = semesterTableOf(sibling, current)
+            runSemesterStepsInFakeTx(plan, attempt, throwAt = throwAt)
+            when {
+                attempt.rows != before -> "抛在第 $throwAt 步 ⇒ 库里落下 ${attempt.rows}"
+                attempt.appliedSteps != 0 -> "抛在第 $throwAt 步 ⇒ 却提交了 ${attempt.appliedSteps} 枚步骤"
+                else -> null
+            }
+        }
+        assertEquals(
+            "四枚步骤、四种抛点，一种都不许留下半成品，也不许多提交一枚步骤" +
+                "（实到偏差：" + offenders.joinToString("; ") + "）。" +
+                "红了说明合并计划里出现了「某一步自己就是一次提交」的形状 —— 那就是 #461 的死亡窗口换了个入口",
+            emptyList<String>(),
+            offenders,
+        )
+
+        // 对照：不抛时才整组落下（否则上面那层可以靠「永远不提交」空成立）
+        val happy = semesterTableOf(sibling, current)
+        runSemesterStepsInFakeTx(plan, happy, throwAt = null)
+        assertEquals("不抛时四枚步骤必须全部落下（对照格：上面那层不是靠空转绿的）", 4, happy.appliedSteps)
+        assertEquals(
+            "落下之后：同 termCode 的两枚旧行都被 termCode 收口清掉，只剩新行",
+            listOf(TERM),
+            happy.rows.map { it.termCode },
+        )
+        assertEquals("新行的内容是用户交进去的那一枚", TERM, happy.rows.single().termCode)
+        assertEquals("新行拿到自增 id（= 当前学期）", 10L, happy.rows.single().id)
+    }
+
+    @Test
+    fun `oldCode 与 newCode 相同时 rename 的产物与改前逐字同形`() {
+        // 卡面 §5：renameSemesterCourses 的调用方语义不许变。
+        // 改前 old == new 时它照样 reassign（空操作）+ 按 termCode 删旧行并返回 true —— 这里不另开一档
+        // 「不需要改代码」，因为那会改掉这一枚既有调用方的落库形状。
+        val plan = planSemesterRename(TERM, TERM, hasCoursesUnderNewCode = false) as SemesterRenamePlan.Apply
+
+        assertEquals(
+            "同代码的产物（实到 ${plan.steps}）",
+            listOf(
+                SemesterRenameSaveStep.ReassignCourses(TERM, TERM),
+                SemesterRenameSaveStep.DeleteRowsForTermCode(TERM),
+            ),
+            plan.steps,
+        )
+        assertEquals(
+            "同代码 + 新代码下有课 ⇒ 仍然按 rename 那一判拒（改前就是先查再拒，一步都不写）",
+            SemesterRenamePlan.Rejected,
+            planSemesterRename(TERM, TERM, hasCoursesUnderNewCode = true),
+        )
+    }
+
+    // ─────────────── 假库：只用来把「整组才落下」这件事跑成数据 ───────────────
+
+    /** 一枚假的库表 + 台账：步骤先排队，[commit] 才整组落下（对应一枚真事务的边界） */
+    private class FakeSemesterTable(rows: List<Semester>) {
+        val rows: MutableList<Semester> = rows.toMutableList()
+        val courseCodes: MutableList<String> = mutableListOf(OTHER, TERM)
+        private val pending = mutableListOf<SemesterRenameSaveStep>()
+        var appliedSteps = 0
+            private set
+
+        fun enqueue(step: SemesterRenameSaveStep) {
+            pending += step
+        }
+
+        /** 整组提交：排队期间任何一步抛在外面 ⇒ 这里一枚都不会落下 */
+        fun commit() {
+            val batch = pending.toList()
+            pending.clear()
+            batch.forEach { step ->
+                when (step) {
+                    is SemesterRenameSaveStep.ReassignCourses ->
+                        courseCodes.replaceAll { if (it == step.fromCode) step.toCode else it }
+
+                    is SemesterRenameSaveStep.DeleteRowsForTermCode ->
+                        rows.removeAll { it.termCode == step.termCode }
+
+                    is SemesterRenameSaveStep.WriteSemesterRow ->
+                        rows += step.semester.copy(id = (rows.maxOfOrNull { it.id } ?: 0L) + 1L)
+                }
+                appliedSteps++
+            }
+        }
+    }
+
+    private fun semesterTableOf(vararg rows: Semester) = FakeSemesterTable(rows.toList())
+
+    /**
+     * 按生产的形状把计划跑一遍：**整组步骤进同一枚事务，commit 只发生一次**。
+     *
+     * @param throwAt 第几枚步骤抛（null = 不抛）。抛在 commit 之前 ⇒ 台账整组作废，库里什么都没有。
+     */
+    private fun runSemesterStepsInFakeTx(
+        plan: SemesterRenameSavePlan,
+        table: FakeSemesterTable,
+        throwAt: Int?,
+    ) {
+        val steps = when (plan) {
+            SemesterRenameSavePlan.Rejected -> emptyList()
+            is SemesterRenameSavePlan.Apply -> plan.steps
+        }
+        try {
+            steps.forEachIndexed { index, step ->
+                table.enqueue(step)
+                if (index + 1 == throwAt) error("第 ${index + 1} 枚步骤抛")
+            }
+            table.commit()
+        } catch (_: IllegalStateException) {
+            // 事务抛 ⇒ 回滚：这里什么都不提交，等价于 `withTransaction` 的 catch + rollback
+        }
+    }
+
     private fun permutations(items: List<Semester>): List<List<Semester>> {
         if (items.size <= 1) return listOf(items)
         val head = items.first()

@@ -7,8 +7,14 @@ import com.buaa.schedule.data.backup.SemesterRowDecision
 import com.buaa.schedule.data.backup.decideSemesterRowForRestore
 import com.buaa.schedule.data.backup.indexBackupSemesterRows
 import com.buaa.schedule.data.local.AppDatabase
+import com.buaa.schedule.data.local.SemesterRenamePlan
+import com.buaa.schedule.data.local.SemesterRenameSavePlan
+import com.buaa.schedule.data.local.SemesterRenameSaveStep
 import com.buaa.schedule.data.local.SemesterRowBumpPlan
+import com.buaa.schedule.data.local.planSemesterRename
+import com.buaa.schedule.data.local.planSemesterRenameSave
 import com.buaa.schedule.data.local.planSemesterRowBump
+import com.buaa.schedule.data.local.semesterRenameSourceCode
 import com.buaa.schedule.data.local.toDomain
 import com.buaa.schedule.data.local.toEntity
 import com.buaa.schedule.data.undo.UndoManager
@@ -466,6 +472,12 @@ class ScheduleRepository(
     /**
      * 每个 termCode 只保留一行（旧行删除后新行 id 最大，保持
      * “最近保存的学期 = 当前学期”语义），避免重复导入累积重复行。
+     *
+     * **这一句从注释级升到写路级**（T249/#460）：它靠的不是数据库约束（`semesters` 没有 termCode
+     * 唯一索引），而是「写内容的每一跳都先 `deleteByTermCode` 再插一枚」—— 本文件里
+     * [saveSemester]、`replaceSemesterCoursesInTx`、[saveSemesterWithRename]、恢复那两枚
+     * 由 `getByTermCode == null` 闸住的 insert 全按这一形写。唯一不照这一形删的是
+     * [switchSemester]：那一跳不写新内容，按 termCode 删全部等于顺手吃掉用户从没看过的兄弟行。
      */
     suspend fun saveSemester(semester: Semester) {
         writeMutex.withLock {
@@ -482,13 +494,84 @@ class ScheduleRepository(
      * 设置页的学期代码是可编辑框，用户改代码的本意就是给当前课表换代码；
      * 只动 semesters 行会让课程仍挂旧代码，CourseFilter 一过滤，
      * 保存瞬间课表整体"消失"。新代码下已有别的课表时拒绝，防止两份课表搅成一份。
+     *
+     * T249/#461：这一枚的判据与写步骤都搬进了 `data/local/SemesterRowPolicy.kt`，
+     * 与 [saveSemesterWithRename] **共用同一份计划** —— 「新代码下已有别的课表就拒」不长出第二把尺。
+     * 签名、锁的位置、事务的边界、拒绝档的返回值一字未改（卡面 §5）。
      */
     suspend fun renameSemesterCourses(oldCode: String, newCode: String): Boolean = writeMutex.withLock {
         db.withTransaction {
-            if (courseDao.getBySemester(newCode).isNotEmpty()) return@withTransaction false
-            courseDao.reassignSemester(oldCode, newCode)
-            semesterDao.deleteByTermCode(oldCode)
-            true
+            when (
+                val plan = planSemesterRename(
+                    oldCode = oldCode,
+                    newCode = newCode,
+                    hasCoursesUnderNewCode = courseDao.getBySemester(newCode).isNotEmpty(),
+                )
+            ) {
+                SemesterRenamePlan.Rejected -> return@withTransaction false
+                is SemesterRenamePlan.Apply -> {
+                    applySemesterRowSteps(plan.steps)
+                    true
+                }
+            }
+        }
+    }
+
+    /**
+     * 设置页「保存学期」那一跳的**合并事务**（T249/#461）：需要改代码时，
+     * 「课程整体改挂 + 删旧学期行」与「写新学期行」在**同一枚** `db.withTransaction` 里跑完。
+     *
+     * 改前它是 VM 里的两枚独立事务（`renameSemesterCourses` 一枚、`saveSemester` 另一枚），
+     * 中间进程被杀 ⇒ 旧行已删、新行未插 ⇒ `semesters` 落回「没设学期」，
+     * 开学日与总周数永久丢，而屏上一句话都没有。合成一枚事务之后那个窗口不存在：
+     * 事务要么整组落下，要么一个字都不落。
+     *
+     * 「要不要改代码」由 [semesterRenameSourceCode] 定（库里那一枚存在且 termCode 变了），
+     * 判据本体在 `data/local/SemesterRowPolicy.kt`；库里那一枚是**在事务内读的**，
+     * 所以 VM 侧再也拿不到「读到旧值、写时已经不是」的那枚半成品。
+     *
+     * @return false = 新代码下已有别的课表被拒（**不落新行、不动学期、一个字节都没写**），
+     *   调用方保持那句用户可见文案；true = 已落库。
+     */
+    suspend fun saveSemesterWithRename(semester: Semester): Boolean = writeMutex.withLock {
+        db.withTransaction {
+            val current = semesterDao.getCurrent()?.toDomain()
+            val plan = planSemesterRenameSave(
+                currentRow = current,
+                target = semester,
+                hasCoursesUnderNewCode = semesterRenameSourceCode(current, semester.termCode) != null &&
+                    courseDao.getBySemester(semester.termCode).isNotEmpty(),
+            )
+            when (plan) {
+                SemesterRenameSavePlan.Rejected -> return@withTransaction false
+                is SemesterRenameSavePlan.Apply -> {
+                    applySemesterRowSteps(plan.steps)
+                    true
+                }
+            }
+        }
+    }
+
+    /**
+     * 把内核给出的写侧步骤**按列表顺序**逐枚落库；顺序就是 [planSemesterRename] /
+     * [planSemesterRenameSave] 里排好的顺序（先改挂课程、再删旧行、最后收口 + 插新行）。
+     *
+     * ⚠️ 这一枚函数自己不裹事务，也**不许被拆成两枚事务跑**：调用方必须在同一枚
+     * `db.withTransaction` 里把整组跑完 —— #461 的修法本体就落在这条约束上，
+     * 形状守卫 `data/local/SemesterRowShapeGuardTest` 按它钉写侧原子性。
+     */
+    private suspend fun applySemesterRowSteps(steps: List<SemesterRenameSaveStep>) {
+        steps.forEach { step ->
+            when (step) {
+                is SemesterRenameSaveStep.ReassignCourses ->
+                    courseDao.reassignSemester(step.fromCode, step.toCode)
+
+                is SemesterRenameSaveStep.DeleteRowsForTermCode ->
+                    semesterDao.deleteByTermCode(step.termCode)
+
+                is SemesterRenameSaveStep.WriteSemesterRow ->
+                    semesterDao.insert(step.semester.toEntity())
+            }
         }
     }
 

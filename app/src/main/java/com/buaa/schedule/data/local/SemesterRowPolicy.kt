@@ -177,6 +177,15 @@ internal sealed interface SemesterRenameSavePlan {
 }
 
 /**
+ * 「这一跳到底要不要改代码」：要则给出旧 termCode，不要则 null。**唯一一份**这一判。
+ *
+ * 库里没有学期行（用户还没设过学期）与 termCode 没变（只改开学日 / 总周数）两档都交 null ——
+ * 那时这一跳只是「写一枚学期行」，不该去动任何课程。
+ */
+internal fun semesterRenameSourceCode(currentRow: Semester?, newCode: String): String? =
+    currentRow?.termCode?.takeIf { it != newCode }
+
+/**
  * 「保存学期设置」这一跳的完整写侧计划（#461 的修法本体）：
  * 改代码需要的步骤 + 落新行的步骤，**一份列表、一枚事务**。
  *
@@ -197,7 +206,7 @@ internal fun planSemesterRenameSave(
         SemesterRenameSaveStep.DeleteRowsForTermCode(target.termCode),
         SemesterRenameSaveStep.WriteSemesterRow(target),
     )
-    val oldCode = currentRow?.termCode?.takeIf { it != target.termCode }
+    val oldCode = semesterRenameSourceCode(currentRow, target.termCode)
         ?: return SemesterRenameSavePlan.Apply(saveSteps)
     return when (val rename = planSemesterRename(oldCode, target.termCode, hasCoursesUnderNewCode)) {
         SemesterRenamePlan.Rejected -> SemesterRenameSavePlan.Rejected
