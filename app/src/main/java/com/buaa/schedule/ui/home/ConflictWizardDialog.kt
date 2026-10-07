@@ -16,13 +16,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
+import androidx.navigation.compose.activityViewModels
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.CourseSaveOptions
@@ -66,6 +66,13 @@ private fun Course.wizardKey(): String = if (id != 0L) id.toString() else "n:$na
  *   所以它不能再抄一遍这段（抄漏这一条正是最难查的那种漏）。
  * - `join` 而非 fire-and-forget：调用方要拿到落库结果才能决定这一行是标成「已应用」
  *   还是把按钮还原让用户重试。join 只等完成、不传播取消，所以对话框关了也不会打断写入。
+ * - T250（同一条规矩的另一半）：**等这枚 join 的那一手**——连同写完之后的记账
+ *   `onShiftEnd`——也不许长在 `ConflictGroupRow` 那一行的组合 scope 上。写在 `viewModelScope` 里
+ *   只保证「库里落了」，不保证「界面知道落了」：行一滚出 LazyColumn 视口就被 dispose，挂在它上面的
+ *   那一手连同 `job.join()` 那个等待点一起被取消，`onShiftEnd` 一行都不执行 ⇒ 按钮永久「写入中…」、
+ *   [ConflictWizardDialog] 那本「已应用过位移」的账永远记不上 ⇒ 连点把同一门课越挪越远
+ *   （就是 `:135-139` 那段注释自己承认过、却只把**状态**抬到弹窗层而没把**协程**抬上去的那笔账）。
+ *   现在这一手与本条同一枚接收者（`viewModel.viewModelScope`），协程的寿命不再等于一行的组合寿命。
  * - 写的是 [CourseSaveOptions.partialWeeks]，而作用域由 [ConflictShiftWeekScope.weeksToShift]
  *   算：**组周 ∩ target.weeks** 一起进 `copy`。只带 `periods` 的那一版（T131 之前）不动 `weeks`，
  *   于是 `updateCourse` 那一判恒假、这枚旗标空转，落库退成整行覆盖 —— 连不冲突的周一起被挪走，
@@ -128,6 +135,18 @@ fun ConflictWizardDialog(
     timeSlots: List<TimeSlot>,
     /** 调用方 [com.buaa.schedule.core.designsystem.ModalTransition] 给的进出场修饰符 */
     modifier: Modifier = Modifier,
+    /**
+     * 「写完之后的收尾」那一手的协程接收者来源（T250）：必须是 [ScheduleViewModel] 的 `viewModelScope`
+     * —— 与 [applyConflictShift] 里那枚 job **同一枚** scope，不许是行的组合 scope
+     * （行滚出 LazyColumn 视口即 dispose，见本文件 [applyConflictShift] KDoc 里 T250 那一条）。
+     *
+     * ⚠️ 这个默认值就是**生产接线本身**，不是给测试留的兜底：MainActivity 全站只建一枚
+     * Activity 作用域的 `ScheduleViewModel`（`MainActivity.kt:556`）并把**同一个实例**递进首页与统计页
+     * （`viewModel = viewModel`），所以这里取到的与调用方 `onApplyShift` 闭包里那一枚是同一个对象。
+     * 取 `activityViewModels()` 而不是 `viewModel()`：本对话框长在两页的 NavHost 目的地**里面**，
+     * 后者会落到 NavBackStackEntry 的 store 上、当场造出第二枚 `ScheduleViewModel`。
+     */
+    viewModel: ScheduleViewModel = activityViewModels(),
     /** 平移落库：挂起直到写完，返回 true 表示确实写进了库。第三个参数是那组冲突的周次。 */
     onApplyShift: suspend (Course, List<Int>, List<Int>) -> Boolean,
     onDismiss: () -> Unit,
@@ -166,6 +185,7 @@ fun ConflictWizardDialog(
                                 // 只有真的写进库才算「已应用」；失败要把按钮还给用户重试
                                 if (saved) shiftedCourses = shiftedCourses + id
                             },
+                            viewModel = viewModel,
                             onApplyShift = onApplyShift,
                         )
                     }
@@ -187,6 +207,8 @@ private fun ConflictGroupRow(
     pendingCourses: Set<String>,
     onShiftStart: (String) -> Unit,
     onShiftEnd: (String, Boolean) -> Unit,
+    /** 收尾那一手的协程接收者来源：与 [applyConflictShift] 那枚 job 同一个 `viewModelScope`（T250）。 */
+    viewModel: ScheduleViewModel,
     onApplyShift: suspend (Course, List<Int>, List<Int>) -> Boolean,
 ) {
     val target = group.courses.firstOrNull() ?: return
@@ -195,7 +217,6 @@ private fun ConflictGroupRow(
     // 避免连续点击把同一门课越挪越远
     val applied = courseKey in shiftedCourses
     val pending = courseKey in pendingCourses
-    val rowScope = rememberCoroutineScope()
     val suggestion = remember(group, allCourses, applied) {
         if (applied) null else CourseConflictResolution.suggestNearestFreeShift(target, allCourses)
     }
@@ -238,7 +259,13 @@ private fun ConflictGroupRow(
                         enabled = !pending,
                         onClick = {
                             onShiftStart(courseKey)
-                            rowScope.launch {
+                            // T250：接收者是 viewModel.viewModelScope —— 与 applyConflictShift 里那枚
+                            // job 同一枚（这一手等的正是那枚 job 的 join）。原先它挂在这一行的组合
+                            // scope 上：写库本身照样落库（那一枚 job 在 VM 作用域，不随行的 dispose
+                            // 而取消），但行一滚出 LazyColumn 视口就把这一手连同 join 一起取消
+                            // ⇒ onShiftEnd 永不执行 ⇒ 永久「写入中…」+「已应用过位移」那本账记不上
+                            //（重复位移保护形同虚设）。
+                            viewModel.viewModelScope.launch {
                                 onShiftEnd(courseKey, onApplyShift(target, suggestion.periods, group.weeks))
                             }
                         },
