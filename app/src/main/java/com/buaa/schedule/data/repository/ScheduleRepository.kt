@@ -147,7 +147,7 @@ class ScheduleRepository(
                 SemesterRowBumpPlan.NothingToSwitch -> return@withTransaction false
                 is SemesterRowBumpPlan.Bump -> {
                     plan.deleteIds.forEach { semesterDao.deleteById(it) }
-                    semesterDao.insert(plan.target.copy(id = 0L))
+                    semesterDao.insert(plan.target.copy(id = 0L).toEntity())
                     // 换学期后撤销栈里全是旧学期视图下的操作，pop 回来会插错学期
                     UndoManager.clear()
                     true
