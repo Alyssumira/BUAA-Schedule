@@ -202,6 +202,71 @@ internal data class SecondEngineLedger(
 )
 
 /**
+ * 闸门那份留痕的三种处境（T245）。写这一颗的理由：`handled != null` 那一把尺**量不出
+ * "手里有没有码"** —— 它把两种相反的东西折成了一枚 true。
+ *
+ * [DecodeFailurePayload] 按它自己的定义就是「没有原文」（ScanSubmissionGate.kt 里那一节
+ * 「失败回调拿不到原文（那次解码根本没产出东西），所以用一个真实 QR 载荷不可能等于的常量占位」，
+ * 现量在 `DecodeFailurePayload` 声明头上），可它同时又是提交闸门的**同档去重记号**。
+ * 两个用途对这枚占位要的东西是相反的：
+ * - 提交那一头要它继续拦：同一档失败不许每 [RescanCooldownMillis] ms 重投一次；
+ * - 补解这一头要它**不**算数：页上既无原文也无结果卡，兜底解出来的原文**投得出去**
+ *   （判据就是 [shouldSubmitScan] 的 `raw != last.payload` 那一支，而真实原文永远不等于占位）。
+ *
+ * 折成一枚布尔的下场就是本卡的病灶：一次瞬时 ML Kit 失败（`onFailure` 或同步抛，一帧就够）
+ * 把 [SecondEngineDecision.CodeInHand] 永久按在 `true` 上 —— 连 [SecondEngineReprobeFrameGap]
+ * 那一发复探也被 `!codeInHand` 挡死，于是这一轮绑定里后来的真糊码再也等不到补解。
+ * 占位该不该进「手里有码」的裁定与证据行号写在 T245 的收单报告里（甲档：不该）。
+ */
+internal enum class SecondEngineHandState {
+    /** 闸门是空的：这轮绑定还没放行过任何东西 */
+    Empty,
+
+    /** 只有失败留痕：解码器报了失败，手里没有原文，屏上也没有因此立起结果卡 */
+    FailureTrace,
+
+    /** 真的有一张码在闸门里（主力或兜底解出的原文） */
+    RealCode,
+}
+
+/**
+ * 闸门留痕 ⇒ [SecondEngineHandState] 的三档（纯 JVM、零 android import、零时钟，仓库口径：
+ * 时刻本来就在 [ScanHandled.atMillis] 里，这一颗不需要也不许自己去读钟）。
+ */
+internal fun secondEngineHandState(handled: ScanHandled?): SecondEngineHandState = when {
+    handled == null -> SecondEngineHandState.Empty
+    handled.payload == DecodeFailurePayload -> SecondEngineHandState.FailureTrace
+    else -> SecondEngineHandState.RealCode
+}
+
+/**
+ * 补解这一帧该不该按「手里已经有东西、投也投不出去」停下来。
+ * [secondEngineDecision] 与 [afterMissesReprobeAllowsReprobe] 的 `codeInHand` 参数**只许**
+ * 由这一颗喂（签名不许动是 T245 的红线，落点因此在调用点不在参数表）。
+ *
+ * 三档各答一件事：
+ * - [SecondEngineHandState.RealCode] ⇒ 停。闸门里那张码还没投出去（或刚投出去在冷却），
+ *   这时候补解只是再递一份原文进同一道闸门，白花一发；
+ * - [SecondEngineHandState.FailureTrace] ⇒ **不许停**。这是本卡修的那一条：占位不是原文，
+ *   屏上也没有卡，补出来的原文恰恰是这一轮唯一投得出去的东西。代价说清：如果失败发生在
+ *   结果卡**已经挂着**之后（handled 被失败那一支覆写成了占位），这一档会放行一发补解，
+ *   而那发解出的原文按 [shouldSubmitScan] 的 payload 分支确实会被递交 —— 这与相机闸门
+ *   「换一张码立刻放行」是同一条既定口径，不是新开的口子；
+ * - [SecondEngineHandState.Empty] ⇒ 屏上挂着结果卡时停（`awaitingUserAction` 由组合侧的
+ *   `LaunchedEffect(state)` 推进来，唯一含义是「Failed / Signed 那张结果卡正等用户按」）。
+ *
+ * ⚠️ 两条失败留痕那一支自己也会写 `awaitingUserAction = true`（钉在
+ * `ScanSubmissionGateTest` 的形状守卫里，不许删），所以那一位在 [SecondEngineHandState.FailureTrace]
+ * 这一档里**不能单独当证据** —— 它此时说的是「失败留痕按住了闸门」，不是「屏上有卡」。
+ */
+internal fun secondEngineCodeInHand(handled: ScanHandled?, awaitingUserAction: Boolean): Boolean =
+    when (secondEngineHandState(handled)) {
+        SecondEngineHandState.RealCode -> true
+        SecondEngineHandState.FailureTrace -> false
+        SecondEngineHandState.Empty -> awaitingUserAction
+    }
+
+/**
  * 这一帧要不要交给第二引擎补解。**唯一**的发火判据，四道上界全在这里，调用点不参与判断。
  *
  * @param ledger 补解账本（只由分析线程持有）

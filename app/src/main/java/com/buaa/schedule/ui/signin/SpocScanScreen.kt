@@ -1431,7 +1431,10 @@ private class QrCodeAnalyzer(
             ledger = secondEngineLedger,
             streak = seen.retryableStreak,
             frame = frame,
-            codeInHand = handled != null || awaitingUserAction,
+            // T245：这一位以前是 `handled != null || awaitingUserAction` —— 它把「闸门里有失败留痕」
+            // 读成了「手里有一张码」，于是一次瞬时 ML Kit 失败就把兜底整轮锁死（判据见
+            // [secondEngineCodeInHand]，三档分别钉在 ScanSecondEngineCodeInHandGuardTest 里）。
+            codeInHand = secondEngineCodeInHand(handled, awaitingUserAction),
             engineUsable = secondEngine.mayTry(),
         )
         reportSecondEngineStop(decision, frame)
