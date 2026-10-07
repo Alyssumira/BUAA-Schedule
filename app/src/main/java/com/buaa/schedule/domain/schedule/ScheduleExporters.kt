@@ -21,8 +21,8 @@ object ScheduleExporters {
     /** 导出 WakeUp 兼容 JSON。注意 WakeUp 的课程模型是 startNode+step 连续节次，
      *  非连续节次（如 1-2+9-10）按起始节连续段截断导出。
      *
-     *  导出的门数**可以少于**入参：一条节次都没有的课整条不写（见下面的 T27 注释），
-     *  调用方要按"写出去了几门"说话，不能拿 courses.size 报数。
+     *  导出的门数**可以少于**入参：一条节次都没有（T27）、一条周次都没有（T203/#237）的课整条不写，
+     *  调用方要按"写出去了几门"说话，不能拿 courses.size 报数；两档各几门见 [WakeUpDropTally.tally]。
      *
      *  不带 credit：WakeUp 的 courses schema 里没有学分这一列，多写未知键能不能被容忍
      *  取决于对方解析器（不受我们控制），而学分只有本应用的统计页用得上。 */
@@ -51,19 +51,19 @@ object ScheduleExporters {
         // 只是少一句「第1-2节」，这条链上它是**离开本应用的数据**：WakeUp 照单收下，
         // 用户在对方 App 里看到一节根本不存在的课，且我们无从收回。
         // 也不能换个猜测值顶上（第 0 节、-1 都是对方 schema 里的合法节点号）：
-        // 唯一诚实的做法是这一项不出场，与 T26 的 joinMeta 同口径。
-        // 调用方（ScheduleViewModel.exportWakeUpTo）负责把"少了几门"说给用户听。
+        // 唯一诚实的做法是这一项不出场，与 T26 的 joinMeta 同口径。空周次那一档（#237）也同此判据：
+        // 调用方（ScheduleViewModel.exportWakeUpTo）负责把"少了几门、各因哪一档"说给用户听。
         val courseArray = courses.mapNotNull { course ->
             val startNode = course.firstPeriodOrNull ?: return@mapNotNull null
             var step = 0
             while (course.periods.contains(startNode + step)) step++
             val weeks = course.weeks.sorted()
-            val startWeek = weeks.firstOrNull() ?: 1
-            val endWeek = weeks.lastOrNull() ?: startWeek
+            val startWeek = weeks.firstOrNull() ?: return@mapNotNull null // 改前是 `?: 1`：空周次造出"第 1-1 周"（#237）
+            val endWeek = weeks.last() // 上一行已判非空 ⇒ 改前那枚 `?: startWeek` 是不可达支（T193 那一族）
             val type = when {
-                weeks.all { it % 2 == 1 } && weeks.isNotEmpty() -> 1 // 单周
-                weeks.all { it % 2 == 0 } && weeks.isNotEmpty() -> 2 // 双周
-                else -> 0                                            // 每周
+                weeks.all { it % 2 == 1 } -> 1 // 单周；`&& weeks.isNotEmpty()` 同上已是死格，一并拆掉
+                weeks.all { it % 2 == 0 } -> 2 // 双周
+                else -> 0                       // 每周
             }
             """{"name":${jsonStr(course.name)},"teacher":${jsonStr(course.teacher ?: "")},""" +
                 """"position":${jsonStr(course.location ?: "")},"day":${course.dayOfWeek},""" +
