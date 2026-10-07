@@ -162,8 +162,13 @@ class LiveClassResyncerTest {
             val action = LiveClassResyncer.decide(window, millisOf(case.now))
             if (case.expectWindow) {
                 assertNotNull("${case.label}：这一档必须挑得出窗口（否则加严加到了正常课上）", window)
-                assertEquals("${case.label}：挑得出窗口就该补实况并补排下课铃", LiveClassResyncer.ResyncAction.StartLive(window), action)
-                assertEquals("${case.label}：补的那枚铃排在窗口终点上", window!!.endMillis, (action as LiveClassResyncer.ResyncAction.StartLive).window.endMillis)
+                assertTrue(
+                    "${case.label}：挑得出窗口就该交回 StartLive（补实况 + 补排下课铃），实到 $action",
+                    action is LiveClassResyncer.ResyncAction.StartLive,
+                )
+                val started = action as LiveClassResyncer.ResyncAction.StartLive
+                assertEquals("${case.label}：补实况的就是这一节的窗口", window, started.window)
+                assertEquals("${case.label}：补的那枚铃排在窗口终点上", window!!.endMillis, started.window.endMillis)
             } else {
                 assertNull(
                     "${case.label}：周课表画不到的那一周不许有实况，更不许有那枚会撤掉真课实况与勿扰的下课铃",

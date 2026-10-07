@@ -21,6 +21,77 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
+ * 实况收尾第一步（恢复勿扰）失败的留痕口（生产那一份）。
+ *
+ * 收成文件顶层的属性而不是写死在 `onFailure { Log.w(...) }` 里，理由与
+ * `ClassProgressScheduler.kt` 顶层那三枚 `LOG_*` 属性一字不差：
+ * `android.util.Log` 在本模块 JVM 单测里是抛 "not mocked" 的桩，写死就先崩在报告口之前，
+ * 那条"失败要念得出来"的断言会红得看不出原因；tag 与级别只此一份，失败原因由调用点给。
+ *
+ * 级别只许 `Log.w` 以上：这台机器上的 HyperOS 把 logcat 截在 Info，`Log.d` 写下去等于没写，
+ * 而这一格的后果是**整机停在完全静默**直到看门狗（下课 + 30 分钟）把铃声放回来。
+ *
+ * tag 写成字面量而不是伴生对象里那枚 `TAG`：顶层属性看不见类作用域的常量，
+ * 同一件事在 `ClassProgressScheduler.kt` 的顶层那两枚属性里已经付过并注明过一次
+ * （`logcat -d -s CourseFluidService` 的过滤条件因此一字不变）。
+ */
+private val LOG_LIVE_RESTORE_FAILURE: (Throwable) -> Unit = {
+    android.util.Log.w("CourseFluidService", "实况收尾恢复勿扰失败，只剩看门狗与冷启动自愈", it)
+}
+
+/** 实况收尾第二步（续排下一节窗口）失败的留痕口：见 [LOG_LIVE_RESTORE_FAILURE] 那一段的理由 */
+private val LOG_LIVE_RESCHEDULE_FAILURE: (Throwable) -> Unit = {
+    android.util.Log.w("CourseFluidService", "实况收尾续排下一节窗口失败", it)
+}
+
+/**
+ * 「窗口已过期也要先挂一帧前台通知」那一手失败的留痕口（Android 12+ 的契约要求）。
+ * 改前它只写了 `.onSuccess`：挂上没挂上没人念，而 `foregroundNotificationPosted` 判错一格
+ * 就是 onDestroy 抢清或漏清归属（同文件那三道保留）。
+ */
+private val LOG_FGS_CONTRACT_FAILURE: (Throwable) -> Unit = {
+    android.util.Log.w("CourseFluidService", "过期窗口的契约前台通知没挂上（停止流程照常，归属可能留在屏上）", it)
+}
+
+/** onDestroy 摘前台通知失败的留痕口：归属那一判仍然要跟着跑，所以它不许把后面带走 */
+private val LOG_STOP_FOREGROUND_FAILURE: (Throwable) -> Unit = {
+    android.util.Log.w("CourseFluidService", "onDestroy 摘前台通知失败（归属清理照常执行）", it)
+}
+
+/**
+ * 降级重排没递出去的留痕口（`reportLiveDegrade` 里那一手）。
+ *
+ * ⚠️ 只收异常本身，不许在这段里碰 `applicationContext` / `applicationScope` /
+ * `getSystemService` —— 它站在 `onFailure` 里，`LiveFgsDegradeWiringGuardTest` 第 ⑧ 档
+ * 按"凡碰框架的调用都必须落在某枚 runCatching 之内"数过这一条路。
+ */
+private val LOG_DEGRADE_RESCHEDULE_FAILURE: (Throwable) -> Unit = {
+    android.util.Log.w("CourseFluidService", "降级重排没递出去，这一档只剩屏幕上那条同 id 通知", it)
+}
+
+/**
+ * 实况收尾那两步的**纯 JVM 内核**（零 android、零时钟；[LiveFgsRetry.kt] 同一套路数）。
+ *
+ * 形状为什么必须是"两步各一枚兜底"而不是"整段一枚 runCatching"：第一步（恢复勿扰）
+ * 抛了原先会把第二步（续排下一节窗口）一起带走，而第二步恰恰是"下一节课还有实况"的唯一
+ * 指望；反过来第二步抛了也不该让已经静音的整机失去恢复。两半各一枚结论出口，
+ * 红了才知道死的是哪半条（#334 / #333 / #335 是同一族，三处一起收）。
+ *
+ * 内核本身不读钟、不碰 Context：那些都在调用点算好递进来，所以这张表在单测里量得到
+ * （成员版要先构造 Service，而 `Handler(Looper.getMainLooper())` 在单测里直接抛异常，
+ * 与本文件 [nextCourseFluidTickMs] 同一个理由）。
+ */
+internal fun runLiveWrapUpSteps(
+    restoreDnd: () -> Unit,
+    rescheduleWindow: () -> Unit,
+    onRestoreFailed: (Throwable) -> Unit,
+    onRescheduleFailed: (Throwable) -> Unit,
+) {
+    runCatching(restoreDnd).onFailure { onRestoreFailed(it) }
+    runCatching(rescheduleWindow).onFailure { onRescheduleFailed(it) }
+}
+
+/**
  * 课程实况前台服务（澎湃实况窗 / 流体云载体）。
  *
  * 纯 AOSP API 实现：specialUse 前台服务 + 常驻 ProgressStyle 通知。
@@ -97,14 +168,26 @@ class CourseFluidService : Service() {
      * ACTION_START 随后的 `enter()` 抵消掉（顺序一旦反过来就是"上课了却没静音"）。
      * 但**直接 return 也是错的**：ACTION_START 被省电策略吞掉时，课前岛在上课瞬间消失、
      * 整节课再也不出现，勿扰也不会静音 —— 那条广播恰恰是这条链上最不可靠的一环。
+     *
+     * ⚠️ 改前这里是一枚**没有 onFailure 的 `runCatching`**（#334，台账 #217 那本账里最贵的一格）：
+     * `restore` 挂了整机就停在「完全静默」，`logcat -d -s CourseFluidService` 一个字都不留，
+     * 只剩 `enter` 排的看门狗在「下课 + 30 分钟」把铃声/震动放回来，而现场取证读不出
+     * "恢复勿扰失败过"。两步现在各有一枚结论出口，且**互不连坐**（内核与表见
+     * [runLiveWrapUpSteps]，留痕口是文件顶层那两枚属性 —— 与本文件同族的理由写在
+     * `ClassProgressScheduler.kt` 顶层那几枚属性上：JVM 单测里 `android.util.Log` 是抛
+     * "not mocked" 的桩，写死就先崩在报告口之前）。
      */
     private fun finishLiveAndReschedule() {
         if (phase == LivePhase.BEFORE_CLASS) {
             recoverMissedClassStart()
             return
         }
-        runCatching { ClassProgressDnd.restore(applicationContext) }
-        ioScope.launch { ClassProgressScheduler.rescheduleNextWindow(applicationContext) }
+        runLiveWrapUpSteps(
+            restoreDnd = { ClassProgressDnd.restore(applicationContext) },
+            rescheduleWindow = { ioScope.launch { ClassProgressScheduler.rescheduleNextWindow(applicationContext) } },
+            onRestoreFailed = LOG_LIVE_RESTORE_FAILURE,
+            onRescheduleFailed = LOG_LIVE_RESCHEDULE_FAILURE,
+        )
     }
 
     /**
@@ -167,6 +250,11 @@ class CourseFluidService : Service() {
             }.onSuccess {
                 // 挂上过、下面立刻 stopForeground(REMOVE) 摘掉 ⇒ 这条实况确实已经不在屏上
                 foregroundNotificationPosted = true
+            }.onFailure {
+                // #334 同族：改前这里只有 `.onSuccess`，失败连一句都没有。而 `foregroundNotificationPosted`
+                // 正是 onDestroy 那三道保留的第一道 —— 这一手到底成没成读不出来，
+                // 归属是该抢清还是该留着就只能猜（猜错 = 把刚上岛的倒计时拆掉，或留一笔没人收的残账）。
+                LOG_FGS_CONTRACT_FAILURE(it)
             }
             stopForeground(STOP_FOREGROUND_REMOVE)
             finishLiveAndReschedule()
@@ -299,7 +387,11 @@ class CourseFluidService : Service() {
     override fun onDestroy() {
         isRunning = false
         handler.removeCallbacks(updater)
-        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }.onFailure {
+            // 摘不掉不代表可以不清归属：下面那三道保留照跑，但这一手失败必须念得出来
+            // （屏幕上到底还剩什么，是读这条链的残骸时唯一的问题；#334 同族第④格）
+            LOG_STOP_FOREGROUND_FAILURE(it)
+        }
         // stopForeground(REMOVE) 把通知摘掉之后，归属就不能再"保护"任何一节课 ——
         // 这条不变量写在 ReminderNotifications.cancelClassOngoing 的注释里，而这一格此前是漏的：
         // 服务被系统/ROM 掐掉、或 stopService 之后走到这里，通知已经随前台状态一起没了，
@@ -462,6 +554,12 @@ class CourseFluidService : Service() {
                 (app as? BUAAApplication)?.applicationScope?.launch {
                     ClassProgressScheduler.rescheduleNextWindow(app)
                 }
+            }.onFailure {
+                // 改前这一枚也是裸吞：`liveFgsDegraded action=armed` 那行刚刚念完"已经重排过了"，
+                // 递出去那一手却可能没成 —— 于是取证读到的是一句没有下游的承诺（#334 同族第⑤格）。
+                // 这里只收异常，不碰 Context / 作用域：那条路的框架调用一律要在 runCatching 之内
+                //（`LiveFgsDegradeWiringGuardTest` 第 ⑧ 档数的就是这一条）。
+                LOG_DEGRADE_RESCHEDULE_FAILURE(it)
             }
         }
 
