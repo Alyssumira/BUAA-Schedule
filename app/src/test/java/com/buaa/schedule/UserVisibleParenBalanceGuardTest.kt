@@ -137,20 +137,20 @@ class UserVisibleParenBalanceGuardTest {
         )
     }
 
-    // ─────────────── ③ WakeUp 那一句的形状：两枚、都在纯文案文件里 ───────────────
+    // ─────────────── ③ WakeUp 那一句的形状：四枚、都在纯文案文件里 ───────────────
 
     @Test
-    fun `WakeUp 导出那一句只有两枚且不在 VM 里`() {
+    fun `WakeUp 导出那一句只有四枚且不在 VM 里`() {
         val inCopy = tokensOf(WAKE_UP_COPY).filter { WAKEUP_LITERAL_HEAD in it.text }
         assertEquals(
-            "「WakeUp JSON 已导出」那句在 WakeUpExportCopy.kt 里恰好两枚（有缺失 / 无缺失各一枚），" +
-                "实到 " + inCopy.size + " 枚",
-            2,
+            "「WakeUp JSON 已导出」那句在 WakeUpExportCopy.kt 里恰好四枚（T181② 两枚 + T203 补的" +
+                "两档：无缺失 / 只缺节次 / 只缺周次 / 两档都有），实到 " + inCopy.size + " 枚",
+            4,
             inCopy.size,
         )
         for (token in inCopy) {
             assertEquals(
-                "那两枚各自都得闭合（实到 开 " + token.opens + " 枚 / 闭 " + token.closes + " 枚）：" +
+                "那四枚各自都得闭合（实到 开 " + token.opens + " 枚 / 闭 " + token.closes + " 枚）：" +
                     token.preview(),
                 token.opens,
                 token.closes,
