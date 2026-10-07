@@ -400,11 +400,14 @@ class SemesterRowPolicyTest {
             pending.clear()
             batch.forEach { step ->
                 when (step) {
-                    is SemesterRenameSaveStep.ReassignCourses ->
-                        courseCodes.replaceAll { if (it == step.fromCode) step.toCode else it }
+                    is SemesterRenameSaveStep.ReassignCourses -> {
+                        for (index in courseCodes.indices) {
+                            if (courseCodes[index] == step.fromCode) courseCodes[index] = step.toCode
+                        }
+                    }
 
                     is SemesterRenameSaveStep.DeleteRowsForTermCode ->
-                        rows.removeAll { it.termCode == step.termCode }
+                        rows.removeAll(rows.filter { it.termCode == step.termCode }.toSet())
 
                     is SemesterRenameSaveStep.WriteSemesterRow ->
                         rows += step.semester.copy(id = (rows.maxOfOrNull { it.id } ?: 0L) + 1L)
