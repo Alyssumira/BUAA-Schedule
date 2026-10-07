@@ -17,6 +17,13 @@ import org.junit.Test
  * 每一格把「为什么」写进 assertEquals 的消息里（本仓口径），失败消息同时把实到的结论与那一档的
  * `detail` 念出来。
  *
+ * T196③ 在这一张表上动了五格：**改判**一枚（「同一枚日期串并列两行（全 null）」由
+ * `Undetermined(AmbiguousEarliestStartDate)` 改判 `Resolved` —— 两行逐字同一枚串 = 一枚重复行被抄了两遍，
+ * 互相印证而不是互相打架），并列分档新加四枚（同序号同串 / 同序号异串 / 最早日期两行同串 / 两行异串）
+ * 外加一枚「重复行也要过交叉核对」。既有格子里 `最小序号被两行并列占着` 与
+ * `全 null 且最早那枚并列两枚不同串` 两枚**期望值一字未动**（它们本来就是「异串」那一等，
+ * T196③ 收的只是「同一枚串」那一等），理由写在各自的 `why` 与内核段首那一节里。
+ *
  * 两侧都有格子：
  * - 朝**宽**扭一次（把判据 2 末尾的交叉核对整段摘掉 ⇒ 序号与日期分家时"信序号那条"）⇒
  *   [交叉核对那一档] 与 [判据 2 的分家格] 红；
@@ -327,8 +334,76 @@ class BuaaFirstWeekPolicyTest {
                 BuaaWeekRow(null, "2026-09-07 00:00:00"),
                 BuaaWeekRow(null, "2026-09-07 00:00:00"),
             ),
+            expected = "Resolved(2026-09-07, EarliestStartDate)",
+            why = "T196③ 改了这一格的期望值，而**判据没换位置**：还是判据 3 那一条并列档，只是并列分成两档。" +
+                "两行逐字同一枚串 = 同一枚周次行被抄了两遍，它们说的是同一句话（互相印证），" +
+                "挑哪一行的结果都是「2026-09-07」，没有任何猜的成分进去 —— 而 T193 那一版把它判死，" +
+                "代价是教务一枚重复行就让首次导入整条挂死。原档那句「totalWeeks 已经不可信」搭的是" +
+                "另一格的账（`totalWeeks` 由调用点按 `weeks.size` 算，与这里挑哪一行无关，那笔在 #236），" +
+                "所以本卡只动这一枚 verdict。",
+            mutantDirection = "严（朝窄扭：并列一律不收 ⇒ 这一格红，就是 T196③ 要修的病）",
+        ),
+        Cell(
+            name = "最小序号两行 = 一枚重复行（同序号、同一枚日期串）",
+            rows = listOf(
+                BuaaWeekRow(1, "2026-09-07 00:00:00"),
+                BuaaWeekRow(1, "2026-09-07 00:00:00"),
+                BuaaWeekRow(2, "2026-09-14 00:00:00"),
+            ),
+            expected = "Resolved(2026-09-07, SerialNumber)",
+            why = "判据 2 那一等的良性重复行：serialNumber 相同**且日期串也相同** ⇒ 两行互相印证，" +
+                "收下并把 via 照实念成 SerialNumber（收下来之后交叉核对照跑，见下面那格）。",
+            mutantDirection = "严",
+        ),
+        Cell(
+            name = "同序号而日期串不同（日期段相同、时间尾巴不同）",
+            rows = listOf(
+                BuaaWeekRow(1, "2026-09-07 08:00:00"),
+                BuaaWeekRow(1, "2026-09-07 00:00:00"),
+                BuaaWeekRow(2, "2026-09-21 00:00:00"),
+            ),
+            expected = "Undetermined(AmbiguousSerialNumber)",
+            why = "「不许顺手放宽」那一格：两行都报「我是第 1 周」而各写了不同的串，就不是一枚行被抄两遍，" +
+                "谁也不印证谁 ⇒ 仍 Undetermined。这一格钉的是「同一枚」按 trim 后的**逐字**串算、" +
+                "不按裁掉尾巴的日期段算；把它放成 Resolved 的话 T193 登记的「minByOrNull 静默取第一个」" +
+                "就从这档回来了。",
+            mutantDirection = "宽",
+        ),
+        Cell(
+            name = "良性重复行而候选里有更早的一枚（重复行也过交叉核对）",
+            rows = listOf(
+                BuaaWeekRow(1, "2026-09-07 00:00:00"),
+                BuaaWeekRow(1, "2026-09-07 00:00:00"),
+                BuaaWeekRow(null, "2026-08-31 00:00:00"),
+            ),
+            expected = "Undetermined(SourcesDiverge)",
+            why = "T196③ 只改「并列」那一等，没改判据 2 的次序：重复行被收成一枚之后，" +
+                "序号那条仍要与「候选里最早的一枚」核对，分家就 Undetermined。" +
+                "有人把交叉核对搬到重复行判据**之前**、或干脆给重复行开后门跳过核对，这一格红。",
+            mutantDirection = "宽",
+        ),
+        Cell(
+            name = "最早日期两行同串（全 null，后面还跟着别的周）",
+            rows = listOf(
+                BuaaWeekRow(null, "2026-09-07 00:00:00"),
+                BuaaWeekRow(null, "2026-09-14 00:00:00"),
+                BuaaWeekRow(null, "2026-09-07 00:00:00"),
+            ),
+            expected = "Resolved(2026-09-07, EarliestStartDate)",
+            why = "判据 3 那一等的良性重复行，且重复的那两行**不相邻**（列表里隔了一周）：" +
+                "分档吃的是「这几行说的是不是同一句话」，不吃列表次序 —— 这一手要是靠" +
+                "`zipWithNext` 之类的相邻比较来实现就会在这里红。",
+            mutantDirection = "严",
+        ),
+        Cell(
+            name = "最早日期两行异串（一枚不带尾巴、一枚带 00:00:00）",
+            rows = listOf(
+                BuaaWeekRow(null, "2026-09-07"),
+                BuaaWeekRow(null, "2026-09-07 00:00:00"),
+            ),
             expected = "Undetermined(AmbiguousEarliestStartDate)",
-            why = "两行报同一个开学日 = 周次数据本身重复，totalWeeks 已经不可信，这里不猜。",
+            why = "与上面那格「同序号异串」同一口径的另一等：日期段一样而串不同 ⇒ 不是一枚行被抄两遍 ⇒ " +
+                "仍然 Undetermined，交出去的那枚串虽然看着合法，它押的是「哪一行才是第 1 周」这一猜。",
             mutantDirection = "宽",
         ),
     )

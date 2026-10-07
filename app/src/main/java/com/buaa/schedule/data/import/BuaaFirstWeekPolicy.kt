@@ -44,19 +44,57 @@ package com.buaa.schedule.data.import
  *    候选为空 ⇒ [BuaaFirstWeek.Undetermined]（[BuaaFirstWeek.UndeterminedReason.NoCandidateStartDate]）。
  *    纯空白 `"   "` 与 `""` 都不进候选 —— 它们是「没给日期」，不是「给了个能用的日期」。
  * 2. 候选里**存在** `serialNumber != null` 的行 ⇒ 按 `serialNumber` 最小取一枚（注释承诺的第一条）。
- *    - **并列 ⇒ Undetermined**（[BuaaFirstWeek.UndeterminedReason.AmbiguousSerialNumber]）：
- *      两行报同一个号就是数据本身坏了，`minByOrNull` 那种「静默取第一个最小键」正是本卡要消灭的猜法。
+ *    - **并列分两档**（T196③，口径见「并列那一等分两档」那一节）：两行给的日期串**逐字同一枚**
+ *      （一枚重复行，互相印证）⇒ 收下并继续走交叉核对；给了**两枚不同的串** ⇒ Undetermined
+ *      （[BuaaFirstWeek.UndeterminedReason.AmbiguousSerialNumber]）：那才是「数据本身坏了」，
+ *      `minByOrNull` 那种「静默取第一个最小键」正是本卡要消灭的猜法。
  *    - **交叉核对**：同一批候选里按 `startDate` 取「最早」的那一枚，若与 2 挑出的**不是同一枚**
  *      ⇒ Undetermined（[BuaaFirstWeek.UndeterminedReason.SourcesDiverge]）。两条来源分家 = 不可信，
  *      让调用点诚实失败；**不许**「信 serialNumber 那条」。这一条是本卡相对旧代码新增的判据，
  *      旧代码只有来源 2、且从不核对。
  * 3. 候选里**所有** `serialNumber` 都是 null ⇒ 按 `startDate` 最早取（注释承诺的第二条，
- *    旧代码从没实现过的那条）。要求「最早」**唯一**：并列 ⇒ Undetermined
- *    （[BuaaFirstWeek.UndeterminedReason.AmbiguousEarliestStartDate]）。
- *    **这一档就是病灶本身**：旧代码在这里回的是列表首行。
+ *    旧代码从没实现过的那条）。并列同样分两档（T196③，与判据 2 同一口径）：最早那一枚被
+ *    两行以上占着、而这些行给的是**同一枚日期串**（一枚重复行）⇒ 收；给了**两枚不同的串**
+ *    ⇒ Undetermined（[BuaaFirstWeek.UndeterminedReason.AmbiguousEarliestStartDate]）。
+ *    **判据 3 这一等就是病灶本身**：旧代码在这里回的是列表首行。
  * 4. 返回的串 = 挑中那一行 `startDate.trim().substringBefore(" ")` 的**原样** —— 内核里不 parse、
  *    不 `mondayOf`、不读时钟；认不认得这枚串是 T180 内核 `resolveBuaaSemesterStart` 的事，
  *    两判各管一段（本卡只管「挑哪一行」，那段管「这枚串能不能当锚点」）。
+ *
+ * ## 并列那一等分两档（T196③ 的裁定；逐字口径）
+ *
+ * T193 把**任何**并列一律判 [BuaaFirstWeek.Undetermined]。病灶：教务偶发返回一枚**重复行**
+ * （同一周给两遍，`serialNumber` 与 `startDate` 逐字相同），两行互相印证而不是互相打架，
+ * 按 T193 那一判它会让首次导入整条挂死 —— 而这一档的代价在 T196② 之前还要多白跑一轮逐周抓取。
+ * 于是并列按「这两行说的是不是同一枚日期」分两档，**判据 2（序号那条）与判据 3（最早日期那条）
+ * 两等口径一致**：
+ *
+ * | 并列的那一组 | 两行给的日期串 | 结论 |
+ * |---|---|---|
+ * | 同一枚 `serialNumber`（判据 2） | **同一枚**（trim 后逐字相同 = 一枚重复行） | [BuaaFirstWeek.Resolved]，`via = SerialNumber` |
+ * | 同一枚 `serialNumber`（判据 2） | 不同串（日期段不同，或同一天而时间尾巴不同） | [BuaaFirstWeek.Undetermined]（[BuaaFirstWeek.UndeterminedReason.AmbiguousSerialNumber]） |
+ * | 同一枚最早日期（判据 3） | **同一枚**（一枚重复行） | [BuaaFirstWeek.Resolved]，`via = EarliestStartDate` |
+ * | 同一枚最早日期（判据 3） | 不同串（时间尾巴不同） | [BuaaFirstWeek.Undetermined]（[BuaaFirstWeek.UndeterminedReason.AmbiguousEarliestStartDate]） |
+ *
+ * 三处要盯的口径，都**没有**跟着放宽：
+ * 1. 「同一枚」判的是 `startDate.trim()` 的**逐字**同一枚，不是「裁掉时间尾巴之后同一枚」。
+ *    日期段相同而尾巴不同（`2026-09-07 08:00:00` vs `2026-09-07 00:00:00`）在判据 2、判据 3
+ *    两等里都**仍然 Undetermined**：那是两行各自写着不同时刻的周次行，不是一枚行被抄了两遍，
+ *    谁也不印证谁。卡面那句「比较键（日期段）是否同一枚」在判据 3 这一等落不了地 ——
+ *    判据 3 的并列本来就是**按日期段算出来的**（`filter { it.dateKey == earliest }`），
+ *    拿日期段当分档键的话每一组并列都天生「同一枚」，[BuaaFirstWeek.UndeterminedReason.AmbiguousEarliestStartDate]
+ *    当场成了死支，而卡面 §4 又要点名「最早日期两行异串 ⇒ Undetermined」那一格。
+ *    所以这一格按**逐字串**分档实现，与 [BuaaFirstWeek.UndeterminedReason] 那两枚原因自己的措辞
+ *    （「被两枚以上**不同串**并列占着」）同口径；偏差如实记在回执。
+ * 2. **两条来源分家仍一律 Undetermined**：良性重复行收下来之后，判据 2 的交叉核对照旧要跑
+ *    （[(1, 2026-09-07), (1, 2026-09-07), (null, 2026-08-31)] 里那两行虽然互相印证，
+ *    却和候选里最早的那枚打架 ⇒ [BuaaFirstWeek.UndeterminedReason.SourcesDiverge]）。
+ * 3. `totalWeeks` 不在这一判的账里：它是 `weeks.size`，由调用点从原始行列表算，
+ *    重复行了不了一枚日期、也少不了一枚日期 —— T193 那一版把并列判死的理由写成「`totalWeeks`
+ *    已经不可信」是搭了另一格的账（那笔在 #236），本卡按「这两行是不是同一句话」重立判据。
+ *
+ * 收下来的重复行交出去的还是**那一枚日期段**（判据 4 的产物形状一个字节没变），
+ * 所以 T180 那一判 `resolveBuaaSemesterStart` 手里拿到的串与改前同形。
  *
  * ## 为什么串序就够、为什么不需要 parse
  *
@@ -106,13 +144,16 @@ internal sealed interface BuaaFirstWeek {
         /** 判据 1：没有任何一行带着非空白的 `startDate` */
         NoCandidateStartDate,
 
-        /** 判据 2：最小 `serialNumber` 被两行以上并列占着 */
+        /**
+         * 判据 2：最小 `serialNumber` 被两行以上并列占着，**而它们给的日期串不是同一枚**
+         * （T196③：同一枚串 = 一枚重复行 = 互相印证，那一等收进 [Resolved]，不占这一档）。
+         */
         AmbiguousSerialNumber,
 
         /** 判据 2 的交叉核对：序号那条与日期那条分家了 */
         SourcesDiverge,
 
-        /** 判据 3：最早日期被两枚以上不同串并列占着 */
+        /** 判据 3：最早日期被两枚以上**不同串**并列占着（同一枚串是重复行，收进 [Resolved]） */
         AmbiguousEarliestStartDate,
     }
 
@@ -156,7 +197,7 @@ internal fun resolveBuaaFirstWeek(rows: List<BuaaWeekRow>): BuaaFirstWeek {
     // 判据 1：候选 = startDate trim 之后非空的那些行；比较键就是最终要交出去的那枚串
     val candidates = rows.mapNotNull { row ->
         row.startDate?.trim()?.takeIf { it.isNotEmpty() }
-            ?.let { Candidate(serialNumber = row.serialNumber, dateKey = it.substringBefore(" ")) }
+            ?.let { Candidate(serialNumber = row.serialNumber, dateKey = it.substringBefore(" "), rawDate = it) }
     }
     if (candidates.isEmpty()) {
         return BuaaFirstWeek.Undetermined(
@@ -170,14 +211,17 @@ internal fun resolveBuaaFirstWeek(rows: List<BuaaWeekRow>): BuaaFirstWeek {
     if (numbered.isNotEmpty()) {
         val smallest = numbered.mapNotNull { it.serialNumber }.min()
         val holders = numbered.filter { it.serialNumber == smallest }
-        if (holders.size > 1) {
+        // 并列分两档（T196③）：这些行给的是**同一枚日期串**时，它们是同一枚周次行被抄了两遍
+        // （教务偶发的重复行），两行互相印证 ⇒ 收；给的是**两枚不同的串**才是「数据本身坏了」，
+        // 那一等谁也不印证谁，`minByOrNull` 的「静默取第一个最小键」正是本卡要消灭的猜法。
+        if (holders.size > 1 && !allSayTheSameDate(holders)) {
             return BuaaFirstWeek.Undetermined(
                 BuaaFirstWeek.UndeterminedReason.AmbiguousSerialNumber,
-                "serialNumber=$smallest 被 ${holders.size} 行并列占着（日期分别是 " +
-                    holders.joinToString("、") { "「${it.dateKey}」" } + "）",
+                "serialNumber=$smallest 被 ${holders.size} 行并列占着，而它们给的日期串不是同一枚（分别是 " +
+                    holders.joinToString("、") { "「${it.rawDate}」" } + "）",
             )
         }
-        val picked = holders.single()
+        val picked = holders.first()
         // 交叉核对：同一批候选按 startDate 串序取「最早」，与序号那条不是同一枚就不可信
         val earliest = candidates.minOf { it.dateKey }
         if (picked.dateKey != earliest) {
@@ -190,17 +234,28 @@ internal fun resolveBuaaFirstWeek(rows: List<BuaaWeekRow>): BuaaFirstWeek {
         return BuaaFirstWeek.Resolved(picked.dateKey, BuaaFirstWeek.Via.SerialNumber)
     }
 
-    // 判据 3：候选全都没号 ⇒ 走注释承诺的第二条（startDate 最早），且要求「最早」唯一
+    // 判据 3：候选全都没号 ⇒ 走注释承诺的第二条（startDate 最早），并列同样按「这些行是不是
+    // 同一枚串」分档（T196③，与判据 2 同一口径）：同一枚是重复行、收下；两枚不同串才是「最早」不唯一。
     val earliest = candidates.minOf { it.dateKey }
     val tied = candidates.filter { it.dateKey == earliest }
-    if (tied.size > 1) {
+    if (tied.size > 1 && !allSayTheSameDate(tied)) {
         return BuaaFirstWeek.Undetermined(
             BuaaFirstWeek.UndeterminedReason.AmbiguousEarliestStartDate,
-            "${rows.size} 行全无 serialNumber，而最早日期「$earliest」被 ${tied.size} 行并列占着",
+            "${rows.size} 行全无 serialNumber，而最早日期「$earliest」被 ${tied.size} 行并列占着，" +
+                "它们给的串不是同一枚（分别是 " + tied.joinToString("、") { "「${it.rawDate}」" } + "）",
         )
     }
     return BuaaFirstWeek.Resolved(earliest, BuaaFirstWeek.Via.EarliestStartDate)
 }
 
-/** 候选行：判据用得着的那两枚值。[dateKey] 非空由候选过滤保证，比较键与产物同一枚。 */
-private data class Candidate(val serialNumber: Int?, val dateKey: String)
+/**
+ * 并列的那几行有没有「说同一句话」：`startDate.trim()` 之后**逐字**同一枚才算。
+ *
+ * 刻意不比 [Candidate.dateKey]（裁掉时间尾巴的那枚比较键）：并列的键本身就是按日期段算出来的，
+ * 拿它当分档键的话每一组并列都天生「同一枚」，`AmbiguousEarliestStartDate` 那一档当场变成死支。
+ * 尾巴不同而日期段相同的两行也不是同一枚周次行 —— 它们是各写各的时刻，谁也不印证谁。
+ */
+private fun allSayTheSameDate(rows: List<Candidate>): Boolean = rows.map { it.rawDate }.distinct().size == 1
+
+/** 候选行：判据用得着的那两枚值 + 分并列那一等用的原串。[dateKey] 非空由候选过滤保证，比较键与产物同一枚。 */
+private data class Candidate(val serialNumber: Int?, val dateKey: String, val rawDate: String)
