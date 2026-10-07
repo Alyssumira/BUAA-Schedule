@@ -1,7 +1,6 @@
 package com.buaa.schedule.domain.schedule
 
 import com.buaa.schedule.domain.model.Course
-import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.toStartEndTimes
 import org.junit.Assert.assertEquals
@@ -50,7 +49,7 @@ class PeriodWindowsTest {
     private fun windowOf(vararg periods: Int): PeriodWindow =
         periodWindowsOf(course(periods.toList()), monday, defaultTimes).single()
 
-    // ---- 节次边界前后各 1 秒 ----
+            // ---- 节次边界前后各 1 秒 ----
 
     @Test
     fun classBecomesOngoingExactlyAtItsStartSecond() {
@@ -113,7 +112,7 @@ class PeriodWindowsTest {
         )
     }
 
-    // ---- 跨零点 ----
+            // ---- 跨零点 ----
 
     @Test
     fun midnightRolloverFlipsYesterdayToPastAndTodayToUpcoming() {
@@ -150,7 +149,7 @@ class PeriodWindowsTest {
         assertEquals(0L, minutesUntil(LocalTime.of(9, 0), LocalTime.of(8, 0)))
     }
 
-    // ---- 周末与假期（这天没课） ----
+            // ---- 周末与假期（这天没课） ----
 
     @Test
     fun courseWithoutPeriodsYieldsNoWindow() {
@@ -159,13 +158,12 @@ class PeriodWindowsTest {
 
     @Test
     fun holidayDayPlansNothing() {
-        val semester = Semester(termCode = "T", termName = "T", startDate = "2026-09-07", totalWeeks = 20)
         val plan = TodayPlanner.plan(
             courses = listOf(course(listOf(1, 2), dayOfWeek = 1)),
-            semester = semester,
             timeSlots = emptyList(),
-            today = LocalDate.of(2027, 2, 1), // 学期之外
+            today = LocalDate.of(2027, 2, 1),  // 学期之外
             now = LocalTime.of(8, 0),
+            scope = DayCourseScope.OutOfTerm,
         )
         assertEquals(0, plan.slots.size)
         assertNull(plan.ongoing)
@@ -174,13 +172,12 @@ class PeriodWindowsTest {
 
     @Test
     fun saturdayPlansNothingForWeekdayCourse() {
-        val semester = Semester(termCode = "T", termName = "T", startDate = "2026-09-07", totalWeeks = 20)
         val plan = TodayPlanner.plan(
             courses = listOf(course(listOf(1, 2), dayOfWeek = 1)),
-            semester = semester,
             timeSlots = emptyList(),
             today = saturday,
             now = LocalTime.of(8, 30),
+            scope = DayCourseScope.TermWeek(1),
         )
         assertEquals(0, plan.slots.size)
         assertNull(plan.ongoing)
@@ -196,7 +193,7 @@ class PeriodWindowsTest {
         )
     }
 
-    // ---- 节次时间未配置 ----
+            // ---- 节次时间未配置 ----
 
     @Test
     fun emptySlotTimesYieldEmptyWindowList() {
@@ -223,7 +220,7 @@ class PeriodWindowsTest {
         assertEquals(listOf(1..1), windows.map { it.segment })
     }
 
-    // ---- 段末下课时间缺失的兜底口径 ----
+            // ---- 段末下课时间缺失的兜底口径 ----
 
     @Test
     fun missingEndLooksBackToEarlierPeriodInSameSegment() {
@@ -253,7 +250,7 @@ class PeriodWindowsTest {
         }
     }
 
-    // ---- 迟到唤醒（闹钟比预定晚几分钟才投到） ----
+            // ---- 迟到唤醒（闹钟比预定晚几分钟才投到） ----
 
     @Test
     fun lateWakeUpStillSeesTheOngoingClass() {
@@ -289,7 +286,7 @@ class PeriodWindowsTest {
         }
     }
 
-    // ---- 分钟口径与"最迟什么时候必须重发一次" ----
+            // ---- 分钟口径与"最迟什么时候必须重发一次" ----
 
     @Test
     fun minutesCeilRoundsUpAndNeverGoesNegative() {
@@ -319,7 +316,7 @@ class PeriodWindowsTest {
         assertEquals(end, snapshotRedeadlineMillis(0L, end))
     }
 
-    // ---- 墙钟换算：唯一一份 ----
+            // ---- 墙钟换算：唯一一份 ----
 
     @Test
     fun epochMillisRoundTripIsStable() {

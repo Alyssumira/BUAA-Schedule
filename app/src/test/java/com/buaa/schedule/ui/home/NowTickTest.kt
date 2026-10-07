@@ -1,10 +1,10 @@
 package com.buaa.schedule.ui.home
 
 import com.buaa.schedule.domain.model.Course
-import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.TimeSlotProfile
 import com.buaa.schedule.domain.schedule.SlotStatus
+import com.buaa.schedule.domain.schedule.DayCourseScope
 import com.buaa.schedule.domain.schedule.TodayPlanner
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -26,12 +26,6 @@ import java.time.LocalTime
  */
 class NowTickTest {
 
-    private val semester = Semester(
-        termCode = "T",
-        termName = "T",
-        startDate = "2026-09-07", // 第 1 周周一
-        totalWeeks = 20,
-    )
     private val wednesday = LocalDate.of(2026, 9, 9) // 第 1 周周三
     private val monday = LocalDate.of(2026, 9, 7)
 
@@ -50,7 +44,7 @@ class NowTickTest {
         periods = listOf(3), // 09:50–10:35
     )
 
-    // ─────────────── 分钟步长：节次边界前后各 1 秒 ───────────────
+            // ─────────────── 分钟步长：节次边界前后各 1 秒 ───────────────
 
     @Test
     fun `边界前一秒 只等一秒就醒`() {
@@ -116,7 +110,7 @@ class NowTickTest {
         }
     }
 
-    // ─────────────── 迟到唤醒（Doze / 冻结后解冻） ───────────────
+            // ─────────────── 迟到唤醒（Doze / 冻结后解冻） ───────────────
 
     @Test
     fun `迟到唤醒按醒来那一刻算下一次 不连锁补醒`() {
@@ -149,7 +143,7 @@ class NowTickTest {
         }
     }
 
-    // ─────────────── 跨零点 ───────────────
+            // ─────────────── 跨零点 ───────────────
 
     @Test
     fun `分钟步长跨零点 前一秒只等一秒`() {
@@ -221,7 +215,7 @@ class NowTickTest {
         assertTrue(early.plusSeconds(delay / 1_000L).toLocalDate() > early.toLocalDate())
     }
 
-    // ─────────────── 两个步长同一条墙钟（日视图与周视图） ───────────────
+            // ─────────────── 两个步长同一条墙钟（日视图与周视图） ───────────────
 
     @Test
     fun `两个步长在同一个整分钟边界上对齐`() {
@@ -251,13 +245,13 @@ class NowTickTest {
         }
     }
 
-    // ─────────────── 叫醒之后翻面对得上：有课的一天 ───────────────
+            // ─────────────── 叫醒之后翻面对得上：有课的一天 ───────────────
 
     @Test
     fun `下课边界前后各一秒 今日安排翻面`() {
         val courses = listOf(morningCourse, lateMorningCourse)
-        val before = TodayPlanner.plan(courses, semester, TimeSlotProfile.DEFAULT, wednesday, LocalTime.of(9, 34, 59))
-        val after = TodayPlanner.plan(courses, semester, TimeSlotProfile.DEFAULT, wednesday, LocalTime.of(9, 35, 0))
+        val before = TodayPlanner.plan(courses, TimeSlotProfile.DEFAULT, wednesday, LocalTime.of(9, 34, 59), DayCourseScope.TermWeek(1))
+        val after = TodayPlanner.plan(courses, TimeSlotProfile.DEFAULT, wednesday, LocalTime.of(9, 35, 0), DayCourseScope.TermWeek(1))
 
         // requireNotNull 而非 JUnit assertNotNull：后者不产生智能转换，
         // 接一句 `!!` 就是把同一个判空抄两遍。为空时这里直接抛，测试照样红。
@@ -291,24 +285,28 @@ class NowTickTest {
     @Test
     fun `上课边界那一秒翻成进行中`() {
         val courses = listOf(morningCourse, lateMorningCourse)
-        val beforeStart = TodayPlanner.plan(courses, semester, TimeSlotProfile.DEFAULT, wednesday, LocalTime.of(9, 49, 59))
+        val beforeStart = TodayPlanner.plan(courses, TimeSlotProfile.DEFAULT, wednesday, LocalTime.of(9, 49, 59), DayCourseScope.TermWeek(1))
         assertNull(beforeStart.ongoing)
         assertEquals(1L, beforeStart.minutesToNext)
 
-        val atStart = TodayPlanner.plan(courses, semester, TimeSlotProfile.DEFAULT, wednesday, LocalTime.of(9, 50, 0))
+        val atStart = TodayPlanner.plan(courses, TimeSlotProfile.DEFAULT, wednesday, LocalTime.of(9, 50, 0), DayCourseScope.TermWeek(1))
         assertNotNull(atStart.ongoing)   // 开课那一秒含在内
         assertEquals(45L, atStart.minutesRemaining)
         assertEquals(1_000L, nextTickDelayMillis(LocalTime.of(9, 49, 59)))
     }
 
-    // ─────────────── 叫醒之后翻面对得上：没课 / 节次未配置 ───────────────
+            // ─────────────── 叫醒之后翻面对得上：没课 / 节次未配置 ───────────────
 
     @Test
     fun `这天没课时 唤醒不产出翻面 也不缩短延时`() {
         // 周一那天只有周三的课 → 空安排。空安排不是停止滴答的理由，
         // 但也不该让滴答变勤：没课的整天仍然只每分钟醒一次
         val empty = TodayPlanner.plan(
-            listOf(morningCourse), semester, TimeSlotProfile.DEFAULT, monday, LocalTime.of(9, 34, 59),
+    listOf(morningCourse),
+    TimeSlotProfile.DEFAULT,
+    monday,
+    LocalTime.of(9, 34, 59),
+    DayCourseScope.TermWeek(1),
         )
         assertEquals(0, empty.slots.size)
         assertNull(empty.ongoing)
@@ -325,10 +323,10 @@ class NowTickTest {
         // 用户没配节次表 → TodayPlanner 退到 TimeSlotProfile.DEFAULT；
         // 界面这一面的步长是"整分钟"，只要退路给的下课时间落在整分钟上就不会错拍
         val courses = listOf(morningCourse)
-        val emptySlots = TodayPlanner.plan(courses, semester, emptyList(), wednesday, LocalTime.of(9, 34, 59))
+        val emptySlots = TodayPlanner.plan(courses, emptyList(), wednesday, LocalTime.of(9, 34, 59), DayCourseScope.TermWeek(1))
         assertNotNull(emptySlots.ongoing)
         assertEquals(1L, emptySlots.minutesRemaining)
-        val atEnd = TodayPlanner.plan(courses, semester, emptyList(), wednesday, LocalTime.of(9, 35, 0))
+        val atEnd = TodayPlanner.plan(courses, emptyList(), wednesday, LocalTime.of(9, 35, 0), DayCourseScope.TermWeek(1))
         assertNull(atEnd.ongoing)
         assertEquals(MINUTE_TICK_MS, nextTickDelayMillis(LocalTime.of(9, 35, 0)))
     }
@@ -338,21 +336,24 @@ class NowTickTest {
         // 节次表只有第 1 节配了下课时间：第 1-2 节按段内回溯退成 08:00–08:45。
         // 界面必须正好在 08:45:00 翻面，与组件、闹钟链读同一个终点
         val timeSlots = listOf(TimeSlot(number = 1, startTime = "08:00", endTime = "08:45"))
-        val before = TodayPlanner.plan(listOf(morningCourse), semester, timeSlots, wednesday, LocalTime.of(8, 44, 59))
-        val after = TodayPlanner.plan(listOf(morningCourse), semester, timeSlots, wednesday, LocalTime.of(8, 45, 0))
+        val before = TodayPlanner.plan(listOf(morningCourse), timeSlots, wednesday, LocalTime.of(8, 44, 59), DayCourseScope.TermWeek(1))
+        val after = TodayPlanner.plan(listOf(morningCourse), timeSlots, wednesday, LocalTime.of(8, 45, 0), DayCourseScope.TermWeek(1))
         assertNotNull(before.ongoing)
         assertNull(after.ongoing)
         assertEquals(1_000L, nextTickDelayMillis(LocalTime.of(8, 44, 59)))
     }
 
     @Test
-    fun `没有学期时今日页为空 滴答照旧一分钟一步`() {
-        val plan = TodayPlanner.plan(listOf(morningCourse), null, TimeSlotProfile.DEFAULT, wednesday, LocalTime.of(9, 0))
-        assertEquals(0, plan.slots.size)
+    fun `没有学期时按星期几那一把尺排课 滴答照旧一分钟一步`() {
+        // T266 甲档：没设学期时今日页不再空转（改前这一格断言的是 0 个课次，
+        // 于是列表按星期几画着课、Hero 那句「今天没有更多课了」压在 14:00 的卡上）
+        val plan = TodayPlanner.plan(listOf(morningCourse), TimeSlotProfile.DEFAULT, wednesday, LocalTime.of(9, 0), DayCourseScope.WeekdayOnly)
+        assertEquals(1, plan.slots.size)
+        assertNotNull(plan.ongoing)
         assertEquals(MINUTE_TICK_MS, nextTickDelayMillis(LocalTime.of(9, 0)))
     }
 
-    // ─────────────── helpers ───────────────
+            // ─────────────── helpers ───────────────
 
     /**
      * 从 [start] 起「醒来 → 发布当下 → 再算下一次要等多久」的唤醒序列（含起点）。
@@ -373,7 +374,7 @@ class NowTickTest {
     }
 
     private fun statusOf(courses: List<Course>, now: LocalTime): SlotStatus =
-        TodayPlanner.plan(courses, semester, TimeSlotProfile.DEFAULT, wednesday, now)
+        TodayPlanner.plan(courses, TimeSlotProfile.DEFAULT, wednesday, now, DayCourseScope.TermWeek(1))
             .slots
             .first { it.segment.first() == 1 }
             .status

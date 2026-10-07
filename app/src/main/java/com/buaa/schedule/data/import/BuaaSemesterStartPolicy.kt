@@ -21,7 +21,8 @@ import java.time.LocalDate
  * 或者干脆 `startDate` 缺席留成一枚空串时，坏日期就原样进了 `Semester.startDate` 并落库。
  * 落库之后 `domain/model/Semester.kt` 的 `startLocalDate` 每次读都 parse 失败 ⇒ **恒 null**，
  * 沿这一枚 null 铺开的是整条**静默**链：周课表那一格 `SemesterWeekDates.mondayOf` 拿不到
- * 学期起点而返回 null、`TodayPlanner.plan` 起手 `?: return EMPTY`（今日页空）、
+ * 学期起点而返回 null、今日页那枚内核（`domain/schedule/TodayScreenRuler`）据此判成
+ * `DayCourseScope.OutOfTerm`（列表与 Hero 那扇门一起收 ⇒ 今日页空）、
  * `ReminderScheduler.rescheduleAll` 在 `semesterStart == null` 那一支直接 `cancelAll(context)`
  * 连带 `ClassProgressScheduler.cancelAll`（提醒与上下课铃整个撤掉）、桌面组件按读不到起点的
  * 那一档停在「假期中」，而 `ui/settings/SettingsScreen` 里 `startDate` 那枚

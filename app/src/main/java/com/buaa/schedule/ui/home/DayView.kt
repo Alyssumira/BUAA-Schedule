@@ -116,7 +116,9 @@ import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.model.toPeriodSegments
 import com.buaa.schedule.domain.model.weekdayLabel
 import com.buaa.schedule.domain.schedule.SlotStatus
+import com.buaa.schedule.domain.schedule.TodayHeroGate
 import com.buaa.schedule.domain.schedule.TodayPlanner
+import com.buaa.schedule.domain.schedule.TodayScreenRuler
 import com.buaa.schedule.domain.schedule.WeekCalculator
 import com.buaa.schedule.ui.SpecialDayBadge
 import com.buaa.schedule.ui.SpecialDayMark
@@ -593,25 +595,35 @@ private fun DayScreen(
     val isToday = date == today
     // 转场 lambda 不在组合期求值，读不到 LocalProvide，开关在这里读一次传进去（§2.7）
     val reduceMotion = LocalReduceMotion.current
+    // 「学期 + 周次」那把尺在这一屏只读这一次：改前 TodayPlanner 体内又算了一遍同一个周号，
+    // 于是同屏两处各读一把尺（#344）。周号现在当内核的入参递进去，Hero 与列表吃的是同一份。
     val week = semester?.let { s ->
         semesterStart?.let { start ->
             WeekCalculator.currentWeekOrNull(start, s.totalWeeks, date)
         }
     }
+    // 两把尺各自的命中集，都是**已算好的值**（内核的入参）：星期几那把 ⊇ 学期那把
+    val weekdayCourses = remember(date, courses) {
+        courses.filter { it.dayOfWeek == date.dayOfWeek.value }
+    }
+    val termWeekCourses = remember(weekdayCourses, week) {
+        if (week == null) emptyList() else weekdayCourses.filter { it.weeks.contains(week) }
+    }
+    // 走哪把尺由内核交回：完全没设学期 ⇒ 按星期几那把降级展示（手动课程对新用户仍可见，
+    // 而且 Hero 换同一把尺 ⇒ 句子不会再压在还挂着的卡上）；
+    // 学期在、开学日期解析失败或那一周取不到 ⇒ 两把尺都不放行（旧库脏数据那一档的既有形状：
+    // 列表不能再放行全部周次，否则"列表有课、Hero 与进度条全空"同屏打架）
+    val scope = remember(semester, week) {
+        TodayScreenRuler.scopeOf(hasSemester = semester != null, termWeek = week)
+    }
     // 全量过滤 + 排序按 (这一天, 课表) 记忆：改前它挂在组合期裸算，而 AnimatedContent
     // 转场那 140ms 里新旧两页每重组一次就走一遍 —— 转场期正是重组最密的时候
-    val dayCourses = remember(date, courses, semester, semesterStart, week) {
-        when {
-            // 完全没设学期：按星期几降级展示，手动课程对新用户仍可见
-            semester == null -> courses.filter { it.dayOfWeek == date.dayOfWeek.value }
-            // 学期在、开学日期却解析失败（旧库脏数据）：TodayPlanner 此时返回 EMPTY，
-            // 列表不能再放行全部周次，否则"列表有课、Hero 与进度条全空"同屏打架
-            semesterStart == null || week == null -> emptyList()
-            else -> courses.filter { it.dayOfWeek == date.dayOfWeek.value && it.weeks.contains(week) }
-        }.sortedBy { it.startPeriod }
+    val dayCourses = remember(scope, weekdayCourses, termWeekCourses) {
+        TodayScreenRuler.coursesFor(scope, weekdayCourses, termWeekCourses).sortedBy { it.startPeriod }
     }
-    val plan = remember(date, courses, semester, timeSlots, now) {
-        if (isToday) TodayPlanner.plan(courses, semester, timeSlots, date, now) else null
+    // 计划吃的就是列表那一批课 + 同一枚 scope：Hero 的课次不可能指向屏上没有的那张卡
+    val plan = remember(date, dayCourses, scope, timeSlots, now) {
+        if (isToday) TodayPlanner.plan(dayCourses, timeSlots, date, now, scope) else null
     }
     // 一行一段：一门跨午休的课（第1-2、9-10节）在列表与时间轴里是两块，
     // 每块的时间、状态、色块高度都以**自己那一段**为准。
@@ -622,12 +634,24 @@ private fun DayScreen(
     val rows = remember(dayCourses, plan, periodTimes, gapMinutes) {
         buildDayRows(dayCourses, plan, periodTimes, gapMinutes)
     }
+    // Hero 那扇门开不开、开了念哪一句，都由内核按「这一把尺 + 列表有没有卡 + 当前时刻落点」交回。
+    // 改前它是 `isToday && plan != null && dayCourses.isNotEmpty()` —— 门按**列表**那把尺开
+    // （星期几）、plan 却按**学期 + 周次**那把尺算，没设学期时同屏出现
+    // 「列表挂着 14:00 那张卡」＋「今天没有更多课了」这句谎话（#344 / T264-01）
+    val hero = remember(scope, dayCourses, isToday, plan) {
+        TodayScreenRuler.heroGateOf(
+            scope = scope,
+            isToday = isToday,
+            hasCards = dayCourses.isNotEmpty(),
+            plan = plan,
+        )
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Hero 只回答"今天的课上到哪了"：这一天一门课都没有时它没有落点，
         // 而下面那张空态卡说的就是同一件事——两张同屏是重复（M2）
-        if (isToday && plan != null && dayCourses.isNotEmpty()) {
-            TodayHero(plan, now)
+        if (hero is TodayHeroGate.Open) {
+            TodayHero(hero, now)
         }
 
         // 空态 ↔ 列表之间不做硬切：横滑换天时两层内容叠在同一格里淡入淡出。
@@ -1189,12 +1213,15 @@ private class DayTimelineBlock(
 /**
  * 当前/下一节课 Hero 摘要卡（仅今日显示）。
  *
+ * 它吃的是 [TodayScreenRuler.heroGateOf] 交回的那一档（[TodayHeroGate.Open]）：
+ * 念哪一句、拿哪个课次、还剩几分钟，全在这一档里，本卡没有第二处去读 plan 或读尺的地方。
+ *
  * 卡片底部那条时间带是这张卡唯一的图形表达：文字只说"下一节 14:00"，
  * 而"下午其实整段都空着""晚课后还有一节"这种全天的疏密，只能看形状。
  */
 @Composable
 private fun TodayHero(
-    plan: com.buaa.schedule.domain.schedule.TodayPlan,
+    hero: TodayHeroGate.Open,
     now: java.time.LocalTime,
 ) {
     GlassSurface(
@@ -1203,8 +1230,6 @@ private fun TodayHero(
         contentPadding = DesignTokens.spaceL,
         modifier = Modifier.fillMaxWidth().padding(top = DesignTokens.spaceS),
     ) {
-        val ongoing = plan.ongoing
-        val next = plan.next
         // GlassSurface 的内容容器是 Box，而 Box 的每个子节点都从 top-start 摆起：
         // 所以这个 lambda 里只能有**一个**顶层子节点，就是下面这个 Column——
         // 多行文本包 Column 是同一条规则，疏密带子当初被落在了外面，
@@ -1214,8 +1239,9 @@ private fun TodayHero(
                 verticalArrangement = Arrangement.spacedBy(DesignTokens.spaceMicro),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                when {
-                    ongoing != null -> {
+                when (hero) {
+                    is TodayHeroGate.Open.Ongoing -> {
+                        val ongoing = hero.slot
                         Text(
                             "正在上课",
                             style = MaterialTheme.typography.labelLarge,
@@ -1236,7 +1262,7 @@ private fun TodayHero(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        plan.minutesRemaining?.let {
+                        hero.minutesRemaining?.let {
                             Text(
                                 "还有 $it 分钟下课",
                                 style = MaterialTheme.typography.bodyMedium,
@@ -1244,7 +1270,8 @@ private fun TodayHero(
                             )
                         }
                     }
-                    next != null -> {
+                    is TodayHeroGate.Open.Next -> {
+                        val next = hero.slot
                         Text(
                             "下一节",
                             style = MaterialTheme.typography.labelLarge,
@@ -1265,7 +1292,7 @@ private fun TodayHero(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        plan.minutesToNext?.let {
+                        hero.minutesToNext?.let {
                             Text(
                                 "$it 分钟后开始",
                                 style = MaterialTheme.typography.bodyMedium,
@@ -1273,7 +1300,9 @@ private fun TodayHero(
                             )
                         }
                     }
-                    else -> {
+                    is TodayHeroGate.Open.NothingMore -> {
+                        // 这一档由内核核过两件事才许出声：列表有卡、且课次真的排完了（全部已结束）。
+                        // 改前它是「没学期」那一格的默认出口 —— 谎话压在还挂着的 14:00 卡上
                         Text(
                             "今天没有更多课了",
                             style = MaterialTheme.typography.titleMedium,
@@ -1283,14 +1312,14 @@ private fun TodayHero(
                 }
             }
             // 全天疏密一眼看得到：文字只能逐条报时刻，形状才回答"下午是不是空的"。
-            // 时间取自 TodayPlanner 已经算好的 slot，不再读一次 LocalTime.now()——
+            // 时间取自内核那一档带回来的 slot（它出自 TodayPlanner），不再读一次 LocalTime.now()——
             // 两处时钟口径分叉的话，这条带子和卡片上"还有 25 分钟下课"会互相矛盾。
             // 段间距仍由带子自己的 padding(top = spaceM) 提供：外层 Column 不设 arrangement，
             // 文本块与带子之间就正好是这一份 spaceM，不会和 spacedBy 叠成两倍。
-            if (plan.slots.isNotEmpty()) {
+            if (hero.slots.isNotEmpty()) {
                 TodayTimelineStrip(
                     segments = dayTimelineSegments(
-                        plan.slots.map {
+                        hero.slots.map {
                             Triple(
                                 it.start.hour * 60 + it.start.minute,
                                 it.end.hour * 60 + it.end.minute,
