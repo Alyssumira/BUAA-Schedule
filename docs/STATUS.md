@@ -5436,3 +5436,55 @@ T215 / T216 / T218 / T219 四枚代理自报**零枚**卡面点名的话术。�
 **T226 老实标了 8 条"零构建判不了"**（死规则真实总数与进包存活率、`sig-changed`/`name-gone` 一族、资源收缩 85 条、consumer keep 是否进生效规则集、android-37 那枚常量、`resolveActivity` 会不会被包可见性挡…）⇒ 台账里旧那句"51 条死规则 / 40.7% 进包 / 手写侧 0 死"**至今既不能证实也不能证伪**，Baseline Profile 那一节的账本现值仍未更新（要一次带产物的复测才写得动）。两枚代理都各扫过 8–9 块判为干净的地盘（keep↔反射 6 处规则来源 0 真病；manifest 15 条权限 + 6 receiver + 3 service + 2 provider 双向 0 命中；测试输入声明 286 枚**0 漏登记**；勿扰本体 `ClassProgressDnd`、`LiveFgsRetry`、`TomorrowPreviewReceiver`、`WakeLocks`、节假日 CAS 闸门四档出口全走 `Log.i` 都判干净）。
 
 **残余（第五批之后）**：未推枚数现算（本轮合并态为 **97**）；**发版仍未批**（tag `v0.1.1`）。装机待办新增：#332 与 #333/#334/#335（勿扰与实况的连坐各档）、T222 的"第 20 周那张卡"与对方日历幽灵日程、T223 的"真恢复一份坏日期备份"、T224 的"两句同屏 + 同名手动课并组后删一张卡"、T219 的组件越界崩溃（饿死那 5 秒窗）。#242 静止帧复验仍挂着。
+
+**第七批（10-07 深夜）· 四张代码卡落地 + 三臂只读审计入账 18 枚候选**
+
+顶端链（本轮我自己的 cherry-pick 落地，`--ff-only` 那条路在子代理并发期间不可用，已固定改用 cherry-pick）：
+`1323ddd`（第六批入账）→ `gate/1` 九枚（T227 四枚 + T230 五枚，两族文件零交集）→ `98d4aa3`/`ffa6b3a`（T243 两枚）→ T244 六枚 + T245 五枚 → `9a7b363`。
+
+| 卡 | 落了什么 | 门禁与读数 |
+| --- | --- | --- |
+| **T227**（崩点回收） | 提醒链五格：上课铃广播里附加能力与核心能力的**连坐**拆开（`runCatching` 逐段配留痕口）、实况收尾恢复勿扰不再裸吞、课前提醒的横幅不再排在实况之后共用兜底、实况重挂递进学期上界、倒计时归属判定不再跨一秒读两只钟。纯内核 `runLiveWrapUpSteps`（**本体在 `reminder/CourseFluidService.kt`，我上一趟把 needle 写在了 `ClassProgressScheduler.kt` 上、得 0 ⇒ 那是我的期望错，不是树的错**） | `gate-merged-gate1.log` 七步全 GREEN：clean / assembleRelease / test 趟 1 / lintDebug / test 趟 2 / benchmark / assembleDebug；`suites=295 tests=2282 failures=0 errors=0 skipped=0`（两趟独立 `--rerun-tasks`，时间戳各落在我自己的窗口内）；lint `errors=0 warnings=14`；**签名包 7,269,726 B**（单次全量 ⇒ 按口径只作读数，不立地板）；debug 包 52,024,996 B |
+| **T230**（崩点回收 + 我代提交收尾） | #339（release 专属裁剪缺「只在 release」那把尺）与 #340（发版脚本把三枚产物层守卫排在产物之前）两格；最后一枚纯注释改动（`app/build.gradle.kts` 里那段 KDoc 的第三行，旧写法 `…/release/*.apk` 的 `/*` 会开出一枚**嵌套块注释**，Kotlin 的块注释是嵌套的）由我在它崩点后代提交。**HEAD 从未坏过**：我一度用自己写的注释嵌套扫描器判它坏了，被一条独立窗口（文件 mtime + 20:24 的 BUILD SUCCESSFUL 日志）驳回 ⇒ 「自造的合成尺必须先过一遍对照物」再记一次账 | 同一趟 `gate/1` 里合验 |
+| **T243** | `WeekParser` 的 `clean` 多剥一枚「第」⇒ `第1-16周` 不再塌成 `[16]`（一门 16 周的课存成 1 周，编辑器周次框、文本导入第 6 列、教务路三处入口都能走进去）。表驱动 `WeekParserPrefixTest` 5 格 + 两侧变异自证（朝窄红 3 枚、朝宽红 2 枚，全落在新文件上） | 独立 worktree 门禁 GREEN；`@Test` 尺 2262⇒**2287**（+5，与我发卡前算的净增一致） |
+| **T244** | 把「不能当导航根」的判据从按前缀摘 `editor/` 推广成在册白名单 `ROOT_SAFE_START_ROUTES`（现值只有 `home`），其余落点一律走那条已验证过的「先清后跳」一次性 navigate ⇒ `startDestination` 恒为 `home`，**引导落点选「导入课表」后返回键在 导入页 ⇄ 首页 无限对倒、退不出应用**（#391）这一族从根上没了；`import` 页的 `onBack` 兜底不再无条件跳首页；引导出口把三枚 `requestedXxx` 作废（#392，第 0 问裁定=清，判据是 `MainActivity:184` 引导期间根本不组合消费方 + `LaunchRequestPolicy` 头部那句「不是用户此刻按下的事」）。三枚新守卫 14 格 | 交回 `tests=2301 skipped=0 failures=0`、lint `0 Error / 14 Warning`（地板守住）、包体 7,269,583 B |
+| **T245** | `ui/signin`：一次瞬时 ML Kit 失败留下的 `DecodeFailurePayload` 占位被 `codeInHand` 认成「手里有码」⇒ zxing-cpp 兜底在整轮 analyzer 生命周期里锁成 `CodeInHand`，而停痕念的是「闸门里已经有原文或结果卡正等用户按」（页上既无原文也无卡）。内核新增三档 `SecondEngineHandState` + `secondEngineCodeInHand`，接线只换那一位。它另挖出一件我卡面上没有的事：**锁是两处造成的** —— 两支失败出口把 `awaitingUserAction` 写成 `true` 却根本没立卡（`ScanSubmissionGateTest` ⑨ 钉着那形状，本卡只在补解这一头把它排除，其余读者仍会读到 `true` ⇒ 新挂账） | 交回 `tests=2294 failures=0 errors=0 skipped=0`、lint `0 errors, 14 warnings`、包体读数在门禁第 1 步（那一步跑在只动 `app/src/test` 的第④枚提交之前，它自己如实标了状态对应关系） |
+
+合并态权威门禁跑在 `9a7b363`（T244 与 T245 的文件面 `comm -12` = **0 枚交集** ⇒ 一批合入、只在合并态冷跑一次；日志 `gate-master-9a7b363.log`）：
+静态尺四把全中 —— `@Test=2308`（2287+14+7）、测试 `.kt=294`、`*Guard*=92`、读主源码的测试 `132`；docs 锚点尺 **267 / 588 / 146 / 24** 未动（本节写完后必须复跑，枚数只许因为我新增的锚点而涨）。
+
+**编排侧两处自己的错，点名订正（不删旧话）**：
+1. 上一趟合并对象门禁里 `needle runLiveWrapUpSteps` 期望写在了 `ClassProgressScheduler.kt` 上、实得 0 ⇒ 内核真身在 `CourseFluidService.kt`（`internal fun runLiveWrapUpSteps` 定义于其文件顶层）。**needle 的期望值是我手写的，写错文件与写错数字同级**，已把这条 needle 改到真身文件并另加一枚指回旧错的括号说明。
+2. 审计臂转抄来的一句「自家导出↔自家导入不互逆」被盘面对驳回：`WeekParser.toDisplayString` 交回的是 `"1-16周"`（不带「第」），本仓导出与本仓导入是**互逆**的；真实来源是教务页面与纸质课表把周次写成「第1-16周」。T243 的卡面把这条标成了「别写进档案」，它照办并在回执里核了 `IcsParser` 全树不调用 `WeekParser`（它的周次来自 RRULE）。
+
+**第六批 → 第七批之间的候选入账（#425–#442，共 18 枚，六项齐全，守卫说法一律带族别）**
+- T239 臂（补漏，10 枚）：#425 已由 T243 收口 · #426–#430 归 `ui/settings/SettingsScreen.kt` 与两枚纯内核（与第八批 C3 卡同文件面 ⇒ 必须并入 C3，不许另开卡）· #431 归 `ui/importing/SemesterStartFailureCopy.kt`（C6 地盘）· #432/#433 归 `ui/stats/StatsScreen.kt` 与 `WeekFreeGrid.kt`（并集档那一族，与 #398 同判据）· #442 新格（统计页冲突卡把组内配对周次的**并集**印成「第 1-16 周」，代理自报「薄」：两枚冲突测试未逐行读完 ⇒ 它没写「四家零格」）。
+- T242 臂（`ui/signin/**` 首扫，8 枚）：#434 已由 T245 收口（并把 `awaitingUserAction` 那半截新账挂回 #435 邻位）· #435（相册 `InputImage.fromFilePath` 在主线程同步读+解大图，**与 #290 同块不同病灶，代理已点名不是重报**）· #436/#437/#439/#440/#441 是注释与读数账（#438 是 CI 那族的第二证：产物层守卫 `assumeTrue(apk!=null)` 在 workflow 里因任务顺序**恒跳**，与 #343 同族）。
+- #403 **撤销候选**：`ImportScreen.kt:249` 横幅吃 `pending.conflictGroupCount`（`ScheduleViewModel` 类体派生），`:263` 明细行吃 `pairCount = conflicts.size`，两枚读数各带自己的量词（组 / 两两相撞）⇒ 不是「两处 UI 各取一种」。反向的新格另立 #442。
+
+**T229（崩点回收，与本批同段落地）**：四枚提交在 `.worktrees/T229` rebase 到 `9a7b363` 后 cherry-pick 进来（工作树干净、无 stash、`find app/src -newermt '-3 minutes'` = 0 枚 ⇒ 判死成立），净面 12 枚文件、与本批 T244/T245 文件面零交集。落的是 **#301**（教务缺节次不再折成第 1 节：与星期同一把尺整条丢，丢的条数进 `ParseOutcome.missingSectionCourses`；注释里点名同族先例 T27/T192/T28 与 `TextScheduleParser.parse` 那句 `?: return@forEachIndexed`）与 **#303**（备份提醒不再按 `courseKey` 归并：新增 205 行纯 JVM 配对内核 `BackupReminderPairing.kt`，两侧各自排定序后再配、每一枚结论自带 `Assignment.basis` 出处，"谁活下来"不再由两张无 ORDER BY 查询的行序决定）。**它的变异自证一律是「未验到」**（崩时没留下任何日志文件）⇒ 由我在合并对象上冷跑门禁 + **自己补一刀代表性变异**（#301 那一手：把"整条丢弃"摘回 `?: 1` 必须让 `BuaaMissingSectionGuardTest` 红），台账里这一档记成「编排者代证」，不写成代理已证。
+
+**未验到 / 押给编排者的清单**（本轮零 adb，模拟器被门禁占用）：#391 的返回键无限对倒装机复现（T244 的 §8 两档框架语义也在内）、#434 的一次瞬时失败在真实相机流里的频率、#344/#388/#416/#377 那批设备读数、以及「引导期间清掉三枚请求之后要不要给用户留一句痕迹」这一条产品判罚（T244 交回给我，未动盘）。
+
+**仍等他点头的两件**：push（本轮之后未推枚数一律现算，别引用本节任何数字）、发版（tag 停 `v0.1.1`）。
+**第八批候选入账（只读审计臂 T246 · 桌面组件族首扫，8 枚新号 #444–#451）**
+
+`widget/` 是今天唯一没被读过的大面：**25 枚文件 / 380,109 字节**（我发卡前写的 380,026 被这臂以 +83 的差驳回 ⇒ 我的字节尺也只在当场有效）。在册 widget 测试 24 枚，本臂一枚也未通读，所以它所有"未钉"的说法只用「枚目录 + 关键词」并全部带族别。
+
+| 号 | 一句话 | 强度 |
+| --- | --- | --- |
+| #444 | 「某天×某周有没有课」在 `widget/` 里各写一遍（本面 4 处、全仓 9 处，内核 `ScheduleOccurrences.build` 是第 10 处），且 `widget == null` 那一支在**两枚组件里给相反答案** | 齐全 |
+| #445 | 列表行五枚字段里只有 LOCATION 没做空白护栏（四枚有 `takeIf { it.isNotBlank() }`）⇒ 空白 location 交出 `""`、行首挂一个光秃秃的「·」；四条写入路里**只有备份恢复透传**；在册 `WidgetRowFieldsTest` 的函数名许的就是这条判据，自己却没覆盖那一枚字段 | 齐全（本臂最可复算的一格） |
+| #446 | 快照未命中那一轮画「今天没有课」而不是「还没有数据」 | **薄**：缺的那一步没写清 |
+| #447 | `resolveSystemWidgetColor` 的 `runCatching{…}.getOrNull()` 不验 `value.type` ⇒ 解析失败可能交 `0`（全透明黑）而 `?: backgroundColor` 不触发；同链 `resolvedBackground` 有 9 个调用点 | 齐全 |
+| #448 | `getViewAt` 每行重解析一次动态色，同一轮渲染内 5 处调用点各自判 `SDK_INT` ⇒ 对撞本仓成文口径「返回布尔后调用点各判一次也算违反」 | 齐全 |
+| #449 | `WidgetBinding.weekOffsetBase` 是**学期内**的事实却按**跨学期**存活：配置页两枚 `binding.copy(semesterCode = …)` 不失效 `weekOffset`，而 `effectiveWeekOffset` 的失效键只有周号、不含学期身份 ⇒ 换绑定的学期会带上上学期的翻周偏移落盘；`WidgetBindingStore` 那句「取值在写入前已由 clampWeekOffset 夹在学期内」被这两枚站点否掉 | 齐全（**派生字段铁律的又一枚 `copy()` 站点漏失**，同 T94 那一族：留在参数表而不点名 ⇒ T94 形状） |
+| #450 | `WidgetRefreshReceiver` 注释写「这里的 Boolean 同样不能丢」，**紧接下一行**就把返回值丢了；单参调用吃的还是 `BackgroundSync` 的 `NO_STEP_FAILURE = { _, _ -> }` ⇒ 改时间/换时区/刚授精确闹钟后重排失败既无留痕也无返回值。对照组 `ColdStartRebuild` 是认真接住的 | 齐全 |
+| #451 | 「快照还是不是今天」这一把尺在两枚文件里逐字节各写一遍 | **薄** |
+
+并入既有号的两条：**#414** 补上 widget 地盘的量账（`getString(R.string…)` **1** 枚 vs 中文字面量 **452** 枚；原句"全仓只有两枚接线点"在这一面实测是 1 —— 这臂驳了我清单里的 2 那枚数、未采纳）；**#404** 由本臂独立复算确认（`app/src/main` 只 2 处、`widget/` **0** 处 ⇒ 那句 KDoc 已是死话，改法是纯注释档）。
+
+**这一臂换过第二形才敢说"同源"**：周号判为无第二把尺（四枚 `currentWeekOrNull` 全是 `WeekCalculator` 转发），但日期×周次那一族是全仓各写一遍 —— 这正是本仓「一条"零命中"的普查必须用第二种形状再跑一次」那条规矩的一次应验。它登记的一次自纠也更值得记：它在候选里贴的那段 `find` 输出**被自己压行并混进一枚不存在的文件名**，随后在「纠 ①」里贴回了真实 15 行原样输出 ⇒ **代理贴来的凭据我要逐枚对盘，它自己发现的也算**。
+
+**下一臂的四手优先序**（本臂自己排的，尚未派）：`WidgetConfigActivity.kt` 后半段、五枚小 Provider 全文、`BackgroundSync` 与 `WidgetBackgroundRenderer` 那 9 枚 `runCatching` 的尾巴、`res/xml` ↔ `res/values/strings.xml` 两侧对照。
+
