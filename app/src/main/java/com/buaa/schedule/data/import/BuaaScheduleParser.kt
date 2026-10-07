@@ -8,10 +8,14 @@ import com.buaa.schedule.domain.schedule.WeekParser
 object BuaaScheduleParser {
 
     /**
-     * `parseArrangedListOutcome` 的薄壳：**只回 courses，两枚警告计数在这里丢掉**。
+     * `parseArrangedListOutcome` 的薄壳：**只回 courses，三枚警告计数在这里全部丢掉**。
      *
      * 静默刷新那一路（`BuaaWebSession.refreshSchedule`）今天走的就是这一枚 ⇒ 病灶 B「这几门课的周次是
      * 补出来的」那一格在那条路上没人念（台账 #238；册子钉在 `BuaaScheduleParserTotalWeeksGuardTest` 第 ③ 层）。
+     *
+     * ⚠️ **丢的只是报数，不是判据**：T229 #301 那一格「教务没给节次 ⇒ 整条丢弃」落点在
+     * [parseArrangedListOutcome] 的循环体里，薄壳委派给它 ⇒ **两条路（首次导入预览 / 静默刷新）行为一致**，
+     * 不需要各自再改一遍。要接上的是「`missingSectionCourses` 念不念」，不是「丢不丢」。
      *
      * @param totalWeeks 兜底周次上界；默认 `20` 无来源（台账 #236）—— 见下面那枚函数的同名参数
      */
@@ -22,6 +26,13 @@ object BuaaScheduleParser {
         val fallbackWeekCourses: Int = 0,
         /** 教师信息缺失的课程数 */
         val unknownTeacherCourses: Int = 0,
+        /**
+         * 缺节次而被**整条丢弃**的教务记录条数（T229 #301）。
+         *
+         * 与上面两枚不同：它们数的是**落库之后**的行，这一枚数的是**没有落库**的那些条
+         * （一节根本不存在的课不许变成第 1 节）。
+         */
+        val missingSectionCourses: Int = 0,
     )
 
     fun parseArrangedList(
@@ -36,6 +47,10 @@ object BuaaScheduleParser {
      * 一条教务排课记录可能包含多个 `教师[周次]` 片段（理论课/实验课拆分），
      * 这里按片段拆成多条 Course，并用 sourceGroupKey 关联同一门课。
      *
+     * **缺一律整条丢，不凭空造**（T229 #301）：星期几缺失、节次缺失、节次反序钳制后展开为空，
+     * 三样都是 `return@forEachIndexed`。节次那一手改前是 `?: 1`（造出一节不存在的课），现在与星期同尺，
+     * 丢的条数进 [ParseOutcome.missingSectionCourses]。
+     *
      * @param totalWeeks 学期总周数，缺教师周次片段那一条的兜底周次范围；默认 `20` **无来源**，两枚生产调用点都传满
      */
     fun parseArrangedListOutcome(
@@ -46,10 +61,23 @@ object BuaaScheduleParser {
         val weeksUpperBound = totalWeeks.coerceIn(1, CourseConstraints.MAX_TOTAL_WEEKS)
         val fallbackWeeks = (1..weeksUpperBound).toList()
         val result = mutableListOf<Course>()
+        var droppedNoSection = 0
         items.forEachIndexed { index, item ->
             val courseName = item.courseName ?: "未知课程"
+            // T229 #301：星期与节次**同一把尺** —— 缺哪一样都整条丢。
+            // 改前这里是两把尺：`dayOfWeek` 缺了 return，节次缺了折成第 1 节 ⇒ 一节根本不存在的课
+            // 画上周课表、排铃、被 ICS/WakeUp 导出；用户因为"课不对"手改过之后又被 isManualOverride
+            // 锁住，每轮重导都删不掉。同族先例的口径都是「没有依据就不落库」：
+            // T27（`startPeriod`）、T192（ICS `sectionOf`）、T28（编辑器回填），以及本层
+            // `TextScheduleParser.parse` 那句 `section.getOrNull(0) ?: return@forEachIndexed`。
             val day = item.dayOfWeek ?: return@forEachIndexed
-            val start = item.beginSection ?: 1
+            val start = item.beginSection
+            if (start == null) {
+                droppedNoSection++
+                return@forEachIndexed
+            }
+            // 缺 end 而有 start 是**有出处**的单节（教务的"本节次"写法），不是凭空造：
+            // PeriodRangeBoundsTest 的 `arranged(3, null)` 钉的就是这一等，不许跟着上面一起改成丢弃。
             val end = item.endSection ?: start
             // 钳制上限必须在展开前：教务接口返回的 endSection 如果是脏数据
             // （见过 2147483647 这类溢出值），`(start..end).toList()` 直接 OOM。
@@ -117,6 +145,7 @@ object BuaaScheduleParser {
             courses = merged,
             fallbackWeekCourses = merged.count { it.teacher == "未知教师" && it.weeks == fallbackWeeks },
             unknownTeacherCourses = merged.count { it.teacher == "未知教师" },
+            missingSectionCourses = droppedNoSection,
         )
     }
 

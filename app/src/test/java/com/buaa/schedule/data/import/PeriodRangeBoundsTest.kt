@@ -104,6 +104,17 @@ class PeriodRangeBoundsTest {
         assertEquals(listOf(3), parsePeriods(arranged(3, null)))
     }
 
+    /**
+     * T229 ①：上面那枚夹具的两节参数一直写成 `Int?`，而 `(null, null)` / `(null, 5)` 两格从没打过 ——
+     * 改前它们分别产出 `[1]` 与 `[1,2,3,4,5]`（凭空造出来的课），现在整条丢。
+     * 「缺 end 有 start」那一格（上面）保留、「缺 start」这一格丢弃：两等的区别是**有没有出处**。
+     */
+    @Test
+    fun buaaParserMissingStartSectionDropsWholeRow() {
+        assertTrue(BuaaScheduleParser.parseArrangedList(listOf(arranged(null, null)), "2026-2027-1", 20).isEmpty())
+        assertTrue(BuaaScheduleParser.parseArrangedList(listOf(arranged(null, 5)), "2026-2027-1", 20).isEmpty())
+    }
+
     @Test
     fun buaaParserNegativeSectionIsClampedToPeriodOne() {
         assertEquals(listOf(1, 2, 3), parsePeriods(arranged(-9, 3)))
