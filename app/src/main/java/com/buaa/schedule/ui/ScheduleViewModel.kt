@@ -1773,13 +1773,13 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     repository.getTimeSlots(),
                 )
             }
-            // 空节次的课不进导出件（T27），所以报数必须是"写出去了几门"而不是 courses.size：
-            // 后者会在丢掉课时仍然承诺"N 门课"，而对方 App 里少了哪几门用户无从知道。
-            // 这门课在课表网格上本来就画不出来（没有一段可画），所以这里不说就彻底没有下文。
-            val unplaceable = courses.count { it.periods.isEmpty() }
+            // 不进导出件的课有**两档**（T27 没有节次 / T203 没有周次），两档都得报数，且一门只落一档：
+            // 判据取 WakeUpDropTally 不在这里重拼一遍。报数只能是"写出去了几门"而不是 courses.size ——
+            // 后者会在丢掉课时仍然承诺"N 门课"，而对方 App 里少了哪几门用户无从知道（这些课在网格上本来就画不出来）。
+            val drops = com.buaa.schedule.domain.schedule.WakeUpDropTally.tally(courses)
             val written = withContext(Dispatchers.IO) { writeTextToUri(uriString, json) }
             showMessage(
-                if (written) wakeUpExportMessage(courses.size, unplaceable) else "导出失败：无法写入所选位置",
+                if (written) wakeUpExportMessage(courses.size, drops.noPeriodCourses, drops.noWeekCourses) else "导出失败：无法写入所选位置",
                 isError = !written,
             )
         }
