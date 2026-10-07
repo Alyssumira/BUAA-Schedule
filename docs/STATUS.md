@@ -5488,3 +5488,64 @@ T215 / T216 / T218 / T219 四枚代理自报**零枚**卡面点名的话术。�
 
 **下一臂的四手优先序**（本臂自己排的，尚未派）：`WidgetConfigActivity.kt` 后半段、五枚小 Provider 全文、`BackgroundSync` 与 `WidgetBackgroundRenderer` 那 9 枚 `runCatching` 的尾巴、`res/xml` ↔ `res/values/strings.xml` 两侧对照。
 
+## 10-07 深夜～10-08 晨：第十轮（六族落地分两批合入 → 五族只读审计交回 55 枚候选）
+
+### 29 我这句判断错了一次，形状值得记：六支「零提交」不是起跑就退，是被子代理 150 轮上限掐在半路
+
+10-07 夜里我一度派了六支（T246…T251），收单时读到 `ai/T246`…`ai/T251` 全部 `master..ai/<id>` = 0 枚、工作树干净，据此写成「起跑一步就退 ⇒ 重派安全」。这个结论**当场是错的，而且错得能验**：十几分钟后重读分支 ref，`ai/T249` 有 7 枚、`ai/T250` 有 8 枚、`ai/T253` 有 4 枚 —— 三支都在跑，它们的提交出现在我两次读数**之间**，被掐断的位置正好在变异自证或门禁段。三条教训合起来是本轮最值钱的账：
+
+1. **数成果只数分支 ref，且必须在合并那一刻再读一次**（在册那条又一次救了我）；工作树 `dirty=0` ＋分支 0 枚**不是死亡证据，只是「还没 commit」**。
+2. **掐断的落点有规律**：卡面把「①盘面核读 ②内核 ③表驱动 ④接线 ⑤守卫 ⑥变异自证 ⑦门禁」排成一串时，`./gradlew` 单趟 3～6 分钟、一轮一错地试，几趟就吃光 150 轮。本轮起新卡面加三条硬约束：**总 gradle 调用 ≤ 5 次**（首趟必带 `--continue` 一次收齐全部编译错）、**每完成一段立刻 commit**、**变异只做两侧各一次，不许第三臂、不许用别的语言复刻内核去单扭**（上一支就是在那一步烧光轮次）。
+3. **`T253` 那枚未落盘的改动不是成果**：它正把守卫扭坏做变异，卡死在半路。处置按在册规矩走 `git checkout -- <文件>`，撤回顾 `porcelain=0` 与 tip 未动 —— 「崩掉的代理先看 `git stash list`」那条本轮不适用（`git stash list` 全仓为空），盘上零痕迹是因为它把变异做在工作区而没提交。
+
+### 30 第一批 `gate/2`：T249 / T253 / T250 / T252 四族 23 枚，**零冲突**，我自己在合并对象上冷跑三步全绿
+
+四族按 T249 → T253 → T250 → T252 的顺序 cherry-pick 到 `gate/2`，`git cherry-pick master..ai/<id>` 全程零冲突（两支都动 `ui/ScheduleViewModel.kt` 却落在不同函数区间）。改动面 26 枚文件、全部在 `app/src/` 之下，main 侧只有九枚：`data/local/SemesterDao.kt`、`data/local/SemesterRowPolicy.kt`、`data/repository/ScheduleRepository.kt`、`domain/schedule/CourseGroupDeletionScope.kt`、`domain/schedule/IcsExportGate.kt`、`ui/ScheduleViewModel.kt`、`ui/course/CourseManagementScreen.kt`、`ui/home/ConflictWizardDialog.kt`、`ui/settings/IcsExportCopy.kt`。
+
+我这趟权威门禁（工区 `.worktrees/GATE2`，`--no-daemon` + in-process + `workers.max=1`，跑前 XML 枚数 = 0）：**`:app:assembleRelease` RC=0 `BUILD SUCCESSFUL in 5m 52s`、`app-release.apk` 7,278,952 B**；**`:app:testDebugUnitTest --rerun-tasks` RC=0 `BUILD SUCCESSFUL in 3m 44s`、314 枚 XML、tests 2,421 / failures 0 / errors 0 / skipped 0**，最新一枚内部 `timestamp` 落在我这一趟窗口内；**`:app:lintDebug` RC=0 `BUILD SUCCESSFUL in 4m 29s`**（这一步我只取到 `BUILD SUCCESSFUL`，error/warning 枚数当趟没从 XML 复算 ⇒ 该格标**未复算**，不拿代理自述顶）。合完 master = `782b1f0`，`git merge --ff-only` 快进、工作树干净。
+
+**#309 那条我自己复核过才认**（不采信代理回执）：基点 `cc44f7b` 上 `ui/ScheduleViewModel.kt` 的 `fun exportIcsTo` 拿到 `ExportResult("", 0, skipped)` 之后，全体只有一格 `if (result == null)` 当闸，随后无条件 `writeTextToUri(uriString, result.text)`，而里面用的是 `openOutputStream(uriString.toUri())` 单参重载（框架默认截断模式）⇒ 用户选中的 `.ics` 被写成 0 字节，同屏那句念「已导出 0 个日程」。修法采甲档：零课次不动那个文件。
+
+### 31 第二批 `gate/3`：T256 / T257 两支 9 枚，同一把冷门禁再全绿
+
+`gate/3` 合 T256（`WidgetRolloverGate` 六档＋跨天刷新哨兵）与 T257（`ScanFlightAdmission` 五档＋签到在飞闸门），main 侧五枚文件、两支不重叠，`git status --porcelain` 全程 0。我的权威读数：**`assembleRelease` RC=0 `BUILD SUCCESSFUL in 6m 1s`、APK 7,281,835 B**；**`testDebugUnitTest --rerun-tasks` RC=0 `BUILD SUCCESSFUL in 3m 43s`、318 枚 XML、tests 2,448 / failures 0 / errors 0 / skipped 0、无一枚 skipped 套件**；**`lintDebug` RC=0 `BUILD SUCCESSFUL in 4m 28s`**（同样只到 `BUILD SUCCESSFUL` 那一行，枚数**未复算**）。合完 master = `f5a0fde`，未推 158 枚。
+
+**T256 那道题眼是我先读出来再派下去的**：`widget/WidgetRefreshReceiver.kt` 的 `:95` 拿 `AtomicLong(0L)` 当「从没刷过」的哨兵，`:108` 比的却是 `SystemClock.elapsedRealtime()` —— 那把尺的零点正是开机瞬间，于是开机后 120_000 毫秒内到达的跨天广播与「刚刚刷过了」在判据里同形，全量刷新整条跳过且零日志，而 `:54` 那一手把下一次闹钟排到**明天**零点。代理把上界诚实收窄成 ≈12 小时（还有一条 `WidgetFallbackWorker` 的 12 小时周期可能捞回来），并**顺带交出同族两枚落点**：`ScheduleAppWidgetProvider.throttled` 的 `?: 0L` 配 1_500ms、`WidgetCommon.bootstrapBackgroundSync` 的 `lastBootstrapAt = 0L` 配 60_000ms（都落在同一刻度起点，判薄档，另立 #495 / #496）。
+
+### 32 五族只读审计交回 55 枚候选，全部只在报告与任务台账里，未动盘
+
+| 族 | 报告（`.tmp/dev-2026-10-07/`，未跟踪） | 行数 | 候选 | 工区 |
+| --- | --- | --- | --- | --- |
+| T251 教务登录与导入 UI | `t251-audit.md` | 666 | 12（最重 T251-05：渲染进程崩溃后把无会话的新 WebView 上缴 `retain`，`old.destroy()` 掉真登录过那枚） | `ai/T251` 零写入 |
+| T254 提醒 / 勿扰 / 实况 / 岛 | `t254-audit.md` | 460 | 15＝重 1 / 中 7 / 薄 7 | `ai/T254` porcelain 0 |
+| T255 签到链界面与提交状态机 | `t255-audit.md` | 711 | 8＝重 2 / 中 3 / 薄 3（#291 今天仍在） | `ai/T255` porcelain 0 |
+| T258 课程编辑器 | `t258-audit.md` | 487 | 10＝重 4 / 中 4 / 薄 2（最重 T258-04：转屏落在保存那几秒 ⇒ 课已入库而页面退回「添加课程」，再点保存插出第二门） | `ai/T258` porcelain 0 |
+| T259 检查更新与发版可达性 | `t259-audit.md` | 647 | 10＝重 1 / 中 3 / 薄 6 | `ai/T259` porcelain 0 |
+
+任务台账入账 #466…#477、#478…#487、#495…#503（薄档我按族并了条目，逐条原文行在各自报告里，没丢）。审计纪律这轮起了作用：T254 报「卡面自带的数与盘面对不上」（我说 `reminder/` 下 17 枚测试，实测 40 枚文件 / 258 枚 `@Test`）并按盘面走；T258 判 #381「半收／半在」——无 finally 的形状在且零尺，但**找不到可达的普通 thrower**，于是"双按钮死锁"标今天不可达；T259 判 #366 的"纯同号不提示"是 `ReleaseVersionContractTest` 的钉子不是洞，洞在**带后缀那一格零用例**。三支都自报过"我贴来的原文自己抄错过"的回改（T254 六处、T258 两条作废候选、T259 七条），报告里保留了初稿。
+
+**发版可达性那一节的答案要先给他**（它决定"我们修的这些到不到得了用户"）：按 `docs/RELEASE.md` 现格的「不传号」那条路走，发出去的是**又一个 `0.1.1`**，而唯一会拦同号的 `stampVersion`（`app/build.gradle.kts` 的裸 `:606-609` 那一手）恰在这一档不跑、意图核对两边同为 `0.1.1` 必绿 ⇒ 同号补救包对全体已装 `0.1.1` 永久不可见；反之号真涨（例如 `release.ps1 0.2.0`）且 Gitee 那侧的 Release 与公开附件由人手建好，则老用户**能**看到（`update/UpdateInfo.kt` 自 `v0.1.1` 起逐字节未变，复算 `git diff v0.1.1..HEAD --` 该文件零行）。缺的三格标在 `t259-audit.md` §4：`v0.1.1` 的 Release 当时有没有公开附件、列表接口的顺序与分页（那文件只有裸 `:74-75` 两行、无 `page` 参数）、今天产物的真实体积 —— 三格都要联网或要构建。**push 与发版本轮都未做，也没人替我批准过。**
+
+### 33 第三批 `gate/4`：T260 / T261 两支 12 枚，我的冷门禁全绿，`needle` 那一格先解释掉才合
+
+T260（编辑器保存链收尾）与 T261（更新链三处静默）按序 cherry-pick 到 `gate/4`，HEAD = `6929f1d`、12 枚、零冲突、`outside_app_src=0`；main 侧八枚文件（`MainActivity.kt`、`domain/editor/EditorSaveFinishing.kt`、`domain/update/UpdateCheckGate.kt`、`ui/ScheduleViewModel.kt`、`ui/editor/CourseEditorScreen.kt`、`ui/settings/SettingsScreen.kt`、`update/UpdateCheck.kt`、`update/UpdateDialog.kt`）。
+
+**我埋的那两枚自证 needle 有一枚落空了，而且是尺子取错地方、不是改动没进去**：`needle_save` 那枚 grep 取的是 `ui/editor/CourseEditorScreen.kt`，实到 0。当场查盘面 ⇒ 内核其实在**目的地层**被消费（`MainActivity.kt` 的裸 `:1027` 递已算好的值、`:1033` 判 `claimedByDestination`），编辑器那侧只接一枚 `onSaveTailReached` 回调（裸 `:107`），VM 侧五处命中 ⇒ 形状正是 ⓪ 问裁的乙档（收尾不挂在会被组合取消的 scope 上），**是 needle 挑错了文件**。这条记下来：卡面给的自证字面量要落"哪一层持有它"，否则下一趟我又会拿一枚 0 去怀疑一支好卡。
+
+我的权威读数：**`assembleRelease` RC=0 `BUILD SUCCESSFUL in 5m 52s`、APK 7,287,688 B**；**`testDebugUnitTest --rerun-tasks` RC=0 `BUILD SUCCESSFUL in 3m 39s`、322 枚 XML、tests 2,470 / failures 0 / errors 0 / skipped 0**，内部 `timestamp` 首尾两枚 `22:13:38.811Z` / `22:13:57.820Z` 全落在我这一趟窗口（起于 22:10:26Z）；**`lintDebug` RC=0 `BUILD SUCCESSFUL in 4m 24s`**（枚数仍标**未复算**）。合完 master = `6929f1d`，未推 170 枚。
+
+**T259-01 那三处静默收口成的三句话**（都在 JVM 层与源码形状层钉住，装机零验证）：未同意隐私点「检查更新」⇒ 弹窗「没有检查更新」并点名去哪格同意 + 一条 `Log.w`；一次失败后杀进程再进设置页 ⇒ 「上次检查失败，没有获得新版本 · 时间（点这里可直接重试）」（结果档 `update_last_outcome` 落偏好、UI 读它）；点过「忽略此版本」⇒ 设置页「版本」组多一行「恢复更新提醒 · 已忽略 vX · 点按撤销并立刻重查」，单向门拆掉。
+
+### 34 第六族只读审计 T262（备份 / 恢复 / 分享码 / Room 转换器）交回 10 枚：重 2 / 中 4 / 薄 4
+
+报告 `.tmp/dev-2026-10-07/t262-audit.md`（451 行），工区 `ai/T262` 全程 `porcelain=0`、零 gradle。最重的一枚是 #358 的完整机制（另立 #504）：**分享码与文件恢复两枚闸门都只数 `courses`，而 `timeSlots` 零上限、`isValidTimeSlot` 不钳 `number`、`TimeSlotEntity` 主键是 autoGenerate 的 `id`** ⇒ 一条码（4MB 解压顶约 8.3 万行）能把对方整张节次表 `deleteAll()` 后换成自己的几万行，而同一趟事务里的 `UndoManager.clear()` 当场拆掉唯一撤销把手，`TimeSlotDao` 只有四手、零「回滚上一版」路径，口令路还连预览都没有。第二条中档（#505）是同族两把尺：恢复时课程侧被丢的行有 `skippedInvalid` 并进文案，节次侧那一手 `filter` **连一枚计数字段都没有**。
+
+两条在册判读值得留在台账里：**#303 判已收**（T229② 写侧 `fragmentWeeks = course.weeks` / 读侧逐枚递 / 配对落点 / `unplaced` 进文案，`BackupReminderPairingGuardTest` 七枚点名查过 ⇒ 是钉子不是洞）；**#363 那个「发版人群零可达」今天仍成立且更宽**——判据窗口写清：盘面只有 `v0.1.0` / `v0.1.1` 两枚 tag，而压扁的初始提交里 `AppDatabase` 一落地就是 `version = 8` ⇒ 已发包首次建库即 v8，**不止 v1/v2，v3–v7 同样零可达**；形状本身仍不老实（链起点 3、`fallbackToDestructiveMigration` 全仓 0 处、地板无声明无兜底）⇒ 维持卫生档。它又一次自报卡面 pattern 对不上盘面（我说 `domain/backup/`，实现在 `data/backup/`；我说按 `*Convert*` 数测试，实际零枚该名测试）——**我给的数一律待复核，这条第 N 次应验**。
+
+### 35 在飞的与残余
+
+- `docs/TESTING.md` 与 README 现值那几格从第一批起就没跟，现值已涨到 **2,470 tests / 322 套件 / 104 枚 `*Guard*.kt` / 144 枚读 main 源码的测试**（前两枚是我自己三趟冷门禁的读数，后两枚由 T260/T261 与本轮合并态量）——归一张 docs 卡（#213 / #233 / #497 同族），不在这里改表格。- `docs/TESTING.md` 与 README 的现值那几格**从第一批起就没跟**（在册 #213 / #233 同族）：我这趟合并态读到的是 2,448 tests / 314 枚测试文件 / 318 套件 / 102 枚 `*Guard*.kt` / 142 枚读 main 源码的测试 / lint 0 error · 19 warning（后三枚数由 T260、T261 在 `f5a0fde` 上量，我的门禁只记到 `BUILD SUCCESSFUL`）—— 现值归一张 docs 卡，不在这里改表格。
+- 锚点重钉：T256 把 `WidgetRefreshReceiver.kt` 从 116 行改成 238 行 ⇒ `docs/AUDIT-BATTERY-2026-09-18.md` 六格与 `docs/PERFORMANCE_BATTERY_AUDIT.md` 那句「在 120s 内只放行一次全量刷新」的前提要改，另两枚测试注释里的死号在册（#497）。全仓锚点普查尺本轮复算 = **588**，一字未动（我这一节里所有指行都写成「文件名 与裸 `:NNN` 两处」，不带连写）。
+- 主仓根目录躺着两枚 JVM 崩溃日志 `hs_err_pid15712.log` / `replay_pid15712.log`（本地 01:24，正是 T249 / T250 / T253 那三支的窗口）⇒ 已挪进 `.tmp/dev-2026-10-07/` 留证据，主仓 porcelain 归 0。我那两趟权威门禁（18:32 与 20:28 UTC）都在这枚崩溃**之后**起跑，且各自核对过 XML 枚数与内部时间戳，不受它污染。
+- 装机残余：本批六族全部零 adb ⇒ 转屏那一秒的帧、跨天广播的 `Log.i`、更新链那三句话，都只有机制与形状层证据。
+
