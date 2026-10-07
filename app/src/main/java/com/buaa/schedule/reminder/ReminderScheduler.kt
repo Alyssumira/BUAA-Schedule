@@ -29,7 +29,8 @@ import java.time.ZoneId
  * 课程提醒调度器。
  *
  * 为每门启用提醒的课程计算“触发时间 = 下次上课时间 - 提前量”，
- * 从中选出最近的未来一次设置闹钟；课程表变化后重新调用 rescheduleAll 即可。
+ * 从中挑出**触发时刻最早的那一等**并各排一枚闹钟（并列是常态，不是一门课的运气）；
+ * 课程表变化后重新调用 rescheduleAll 即可。
  */
 object ReminderScheduler {
 
@@ -37,11 +38,33 @@ object ReminderScheduler {
     private const val DEFAULT_ADVANCE_MINUTES = 10
 
     /**
-     * 课前提醒闹钟的 requestCode（全仓库唯一一条，排与查共用它）。
+     * 课前提醒闹钟槽位窗口的**第一格** requestCode。
+     *
      * 写成常量而不是两处各写一个 `0`：判等靠的是 requestCode + Intent.filterEquals，
      * 两边对不上就是"查得到一条永远不存在的闹钟"这种查不出来的错。
+     *
+     * T205 起它的含义从"全仓库唯一一条闹钟"改成"一段连续槽位的第一格"：同一触发时刻并列
+     * [MAX_TIED_REMINDERS] 门课以内是每门一枚（[armTiedReminders]），槽位号只出现在
+     * [reminderSlotIntent] 这一格里 —— 排、撤、查三条路共用同一个 builder，
+     * requestCode 与 Intent 才可能在每一处都对得上。分成两份 builder（或者两份槽位算法）
+     * 就是这枚常量当初警告的那个坑：查的那一侧永远查不到排的那一侧。
      */
     private const val REQUEST_CODE_REMINDER = 0
+
+    /**
+     * 同一触发时刻最多排得出几枚闹钟（并列超过这个数时超出部分本轮排不出去，
+     * 但一定被 [armTiedReminders] 那句 `Log.w` 念出来，不再静默）。
+     *
+     * 代价要说清，这枚数是两笔账的乘数：
+     * - [cancelAll] 与 [hasPendingReminder] 每轮都要把 `[0, MAX_TIED_REMINDERS)` 这一段槽位
+     *   各查一遍（`FLAG_NO_CREATE` 只查不造），每加重排一次就多几趟 PendingIntent 查表；
+     * - 每枚闹钟响过之后 [ReminderReceiver] 都会自己跑一遍全量重排，并列 N 门就是 N 趟
+     *   （读库 + 选窗口）—— 这是"排多条闹钟"这条路的价，另一条路（一枚闹钟拉起、
+     *   接收侧把同一时刻的计划全念出来）要改的是接收侧，不在本模块的改权里。
+     * 取 4：撞节次在这台机器上的真实形状是 2 门（周三 3-4 节两门并排），3 门已是少数，
+     * 4 门以上属于"整周课表同一时刻全上"那种不存在的形状，再多就是白付查表趟数。
+     */
+    private const val MAX_TIED_REMINDERS = 4
 
     data class ReminderPlan(
         val course: Course,
@@ -52,12 +75,26 @@ object ReminderScheduler {
         val triggerAtMillis: Long,
         /** 这一次上课落在第几周：课前实况的「第 N 周」取它，与 [segment] 同为"这一次"的属性 */
         val week: Int,
-    )
+        /**
+         * 与这一条**同一触发时刻**并列的其余各门（不含自己）。
+         *
+         * 只有等首（[planTiedReminders] 交出来的那一条）这一格非空，伙伴自己那一格恒为
+         * `emptyList()`：两边互指会让 `toString()` 与 `equals()` 绕无穷圈，而
+         * [rescheduleAll] 返回给调用方的正是等首那枚，排查现场时会被打印。
+         * 要"本轮一起排出去的全部各门"请走 [armableTogether]，别自己拼顺序。
+         */
+        val sameInstantPartners: List<ReminderPlan> = emptyList(),
+    ) {
+
+        /** 等首 + 同刻伙伴 = 本轮该一起排出去的那一等（槽位不够时被挤掉的部分由 [armTiedReminders] 留痕） */
+        internal fun armableTogether(): List<ReminderPlan> = listOf(this) + sameInstantPartners
+    }
 
     /**
      * 重排课前提醒与上/下课铃。
      *
-     * @return 本轮排上的那一条课前提醒；null 表示本轮没有待触发的课前提醒
+     * @return 本轮排上的那**一等**课前提醒里的等首（[ReminderPlan.sameInstantPartners] 带着
+     *   一起排出去的其余各门，最多 [MAX_TIED_REMINDERS] 枚闹钟）；null 表示本轮没有待触发的课前提醒
      *   （没配学期 / 课表为空 / 学期已结束 / 提醒全关）。
      *   ⚠️ null **不等于**"课堂侧状态已经被收干净"：此刻正处在课堂窗口内（正在上课，
      *   或在数着一节还没开始的课的课前倒计时）时那道撤销会被跳过
@@ -147,19 +184,7 @@ object ReminderScheduler {
         if (alarmManager == null) {
             Log.w(TAG, "AlarmManager 不可用，跳过课前提醒排程（课堂铃清理照常执行）")
         } else {
-            val pendingIntent = createPendingIntent(context, plan)
-            // Android 12+ 精确闹钟是特殊权限（默认拒绝），未授予时降级为不精确闹钟，避免崩溃。
-            // canScheduleExactAlarms() 本身也可能抛 SecurityException（权限被运行期撤销），
-            // 因此整段调度都套上 runCatching 兜底，失败只是这一次不精确，不影响其余链路。
-            val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-                runCatching { alarmManager.canScheduleExactAlarms() }.getOrDefault(false)
-            runCatching {
-                if (canExact) {
-                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, plan.triggerAtMillis, pendingIntent)
-                } else {
-                    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, plan.triggerAtMillis, pendingIntent)
-                }
-            }.onFailure { Log.w(TAG, "调度课程提醒失败", it) }
+            armTiedReminders(context, alarmManager, plan)
         }
 
         // 上/下课铃与常驻通知（"课程进行中"）和「上课自动勿扰」是两个独立开关，
@@ -168,13 +193,82 @@ object ReminderScheduler {
         // 都不跑 —— 表现为上课自动勿扰"好像没用"。两个开关取函数开头读的那一份。
         if (classProgress || dndEnabled) {
             // 口径与下课铃广播共用 ClassProgressScheduler.rescheduleWindows
-            ClassProgressScheduler.rescheduleWindows(context, courses, semesterStart, timeSlots)
+            // 结论必须念：false = 本轮至少有一枚课堂铃"该排而没排上"，那一侧的具体原因由
+            // ClassProgressScheduler 自己的 `Log.w` 留痕，这里补的是整轮那一句结论
+            //（下课铃没排上 = 勿扰挂着没人解除，这条链的后果写在 #16 / T12 / T14 的账里）。
+            val bellsArmed = ClassProgressScheduler.rescheduleWindows(
+                context = context,
+                courses = courses,
+                semesterStart = semesterStart,
+                timeSlots = timeSlots,
+            )
+            if (!bellsArmed) {
+                Log.w(TAG, "本轮课堂铃没排上：勿扰与常驻通知的解除这一轮没有闹钟接手")
+            }
         } else {
             // 两个开关都关了：连常驻通知 / 勿扰遗留状态一起收干净，
             // 别留着一条不会再更新的通知或一个永不恢复的勿扰
             ClassProgressScheduler.cancelAll(context)
         }
         return plan
+    }
+
+    /**
+     * 把「同一触发时刻的那一等」一起排上：一门一枚闹钟，各占一段连续槽位。
+     *
+     * 为什么不是"只排头名"：并列在本仓是常态而不是异常（同一时刻几门课同时开课），
+     * 只取一枚就是让数据库行序决定"哪门课配得上被提醒"，而落榜那一门在下一次重排时
+     * 触发时刻已经过了（[planTiedReminders] 的 `triggerAt <= nowMillis` 那判），
+     * 这一节课它一声不响。
+     *
+     * `canScheduleExactAlarms()` 一次取好喂给每一枚槽位：它是问系统服务的，
+     * 并列三门就问三遍是白付趟数，而同一次重排里授权状态不会自己变。
+     */
+    private fun armTiedReminders(context: Context, alarmManager: AlarmManager, head: ReminderPlan) {
+        val tied = head.armableTogether()
+        val slotting = allocateReminderSlots(tied, MAX_TIED_REMINDERS)
+        if (slotting.droppedCount > 0) {
+            Log.w(
+                TAG,
+                "同一触发时刻并列 ${tied.size} 门课，槽位只有 $MAX_TIED_REMINDERS 枚：" +
+                    "本轮有 ${slotting.droppedCount} 门排不出去（这一节课它们没有课前提醒）",
+            )
+        }
+        val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            runCatching { alarmManager.canScheduleExactAlarms() }.getOrDefault(false)
+        slotting.armed.forEachIndexed { slot, plan ->
+            armOneReminder(context, alarmManager, plan, slot, canExact)
+        }
+    }
+
+    /**
+     * 一枚槽位排一门课的提醒。
+     *
+     * Android 12+ 精确闹钟是特殊权限（默认拒绝），未授予时降级为不精确闹钟，避免崩溃。
+     * `canScheduleExactAlarms()` 本身也可能抛 SecurityException（权限被运行期撤销），
+     * 因此整段调度都套上 runCatching 兜底，失败只是这一次不精确，不影响其余链路。
+     * 失败一定留痕并带上槽位与课程：并列时"哪一枚没排上"只能从这两格里认出来。
+     */
+    private fun armOneReminder(
+        context: Context,
+        alarmManager: AlarmManager,
+        plan: ReminderPlan,
+        slot: Int,
+        canExact: Boolean,
+    ) {
+        val pendingIntent = reminderSlotIntent(
+            context = context,
+            slot = slot,
+            plan = plan,
+            flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        runCatching {
+            if (canExact) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, plan.triggerAtMillis, pendingIntent)
+            } else {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, plan.triggerAtMillis, pendingIntent)
+            }
+        }.onFailure { Log.w(TAG, "调度课程提醒失败 slot=$slot course=${plan.course.id}", it) }
     }
 
     /**
@@ -316,14 +410,26 @@ object ReminderScheduler {
     ): ReminderPlan? = search(courses, semesterStart, timeSlots, reminders, now, now.toEpochMillis())
 
     /**
-     * 纯函数：挑选下一个应触发的提醒。
+     * 纯函数：挑出「下一个应触发的提醒」那一**等**的全部课程。
      *
      * - 按“触发时间”（上课时间 - 提前量）排序，而不是上课时间本身——
      *   不同课程提前量不同时，触发顺序和上课顺序可能不一致；
      * - 触发时间已过的候选直接跳过（哪怕课还没上），不补发陈旧提醒。
      *   这样上一次提醒触发后重新调度，会正确落到下一门课，链条不会中断。
+     * - **并列的那一等整体交出来**，不再只回头名：以前这里是 `.minByOrNull { it.triggerAtMillis }`，
+     *   而 Kotlin 的 `minByOrNull` 取的是**第一个**最小键，于是"两门课同一时刻开课"时
+     *   只有数据库行序排在前面的那门能被挑走，另一门等下一次重排时触发时刻已经过了 ⇒ 被上面
+     *   那条"已过即跳"判掉 ⇒ 这一节课它一声不响。判据过严同样是错：不并列的候选必须继续各排各的，
+     *   所以返回的是"最小键那一等"，不是"全部候选"。
+     *
+     * 零 android、零时钟：[now] / [nowMillis] / [zone] 全由参数给（本仓收单硬口径）。
+     *
+     * @return 等首在前的那一等（等首的 [ReminderPlan.sameInstantPartners] 带着其余各门）；
+     *   没有可排候选时是**空表**（不是 null —— 这条判据不再需要"空表还是 null"的第二档）。
+     *   次序按课程 id 升序，那只是**槽位分配**的稳定序：同一节课表重排两次落到同样的槽位上，
+     *   它不取舍任何一门课（取舍只有"触发时刻已过"与"提醒被关掉"两条）。
      */
-    fun planNextReminder(
+    fun planTiedReminders(
         courses: List<Course>,
         semesterStart: LocalDate,
         timeSlots: List<TimeSlot>,
@@ -331,11 +437,11 @@ object ReminderScheduler {
         now: LocalDateTime,
         nowMillis: Long,
         zone: ZoneId = ZoneId.systemDefault(),
-    ): ReminderPlan? {
+    ): List<ReminderPlan> {
         val slots = (if (timeSlots.isNotEmpty()) timeSlots else TimeSlotProfile.DEFAULT)
             .toStartEndTimes()
         val gapMinutes = periodGapMinutesOf(slots)
-        return courses.asSequence()
+        val candidates = courses.asSequence()
             .mapNotNull { course ->
                 val setting = reminders[course.id]
                 if (setting != null && !setting.enabled) return@mapNotNull null
@@ -355,43 +461,124 @@ object ReminderScheduler {
                     week = occurrence.week,
                 )
             }
-            .minByOrNull { it.triggerAtMillis }
+            .toList()
+        if (candidates.isEmpty()) return emptyList()
+        val earliest = candidates.minOf { it.triggerAtMillis }
+        val tied = candidates.filter { it.triggerAtMillis == earliest }.sortedBy { it.course.id }
+        val partners = tied.drop(1)
+        // 只有等首带伙伴（伙伴自己那格留空表，否则 toString/equals 互指绕无穷圈）
+        return listOf(tied.first().copy(sameInstantPartners = partners)) + partners
     }
+
+    /**
+     * 纯函数：并列那一等里本轮真排得上的有哪几枚、被槽位上限挤掉的是几门。
+     *
+     * 单独一格是为了让"槽位不够"这件事能被表驱动钉住：藏在排程那段里，JVM 侧既造不出
+     * Context 也读不到那句 `Log.w`，超限就只能等真机上去猜。
+     * 裁的是**表尾**（等首永远在第 0 格，槽位 0 一定用它），被裁掉的门数由调用方留痕。
+     */
+    internal fun allocateReminderSlots(tied: List<ReminderPlan>, maxSlots: Int): ReminderSlotting {
+        val safeMax = maxSlots.coerceAtLeast(0)
+        val armed = tied.take(safeMax)
+        return ReminderSlotting(armed = armed, droppedCount = tied.size - armed.size)
+    }
+
+    /** [allocateReminderSlots] 的结论：排得上的（按槽位序，0 起）与被槽位上限挤出去的门数 */
+    internal data class ReminderSlotting(val armed: List<ReminderPlan>, val droppedCount: Int)
+
+    /**
+     * 纯函数：挑选下一个应触发的提醒（= [planTiedReminders] 那一等的等首）。
+     *
+     * 保留这个形状是因为「本轮还有没有待触发的提醒」这种问句只要一个头名就够，
+     * 而一次重排的真排程要走 [planTiedReminders] 拿整等（少拿整等就是并列吃课那件事）。
+     */
+    fun planNextReminder(
+        courses: List<Course>,
+        semesterStart: LocalDate,
+        timeSlots: List<TimeSlot>,
+        reminders: Map<Long, ReminderSetting>,
+        now: LocalDateTime,
+        nowMillis: Long,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): ReminderPlan? = planTiedReminders(courses, semesterStart, timeSlots, reminders, now, nowMillis, zone)
+        .firstOrNull()
 
     fun cancelAll(context: Context) {
         val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
         // FLAG_NO_CREATE：只取"已存在"的那个来撤销。
         // 之前用 FLAG_UPDATE_CURRENT，等于每次取消都新建一个永不使用的 PendingIntent。
         // （PendingIntent 判等基于 Intent.filterEquals，不含 extras，因此这里不需要拼 extras）
-        existingPendingIntent(context)?.let { alarmManager.cancel(it) }
+        // 槽位要一整段一起撤：并列时一轮排出去的是好几枚，只撤第 0 格就是
+        // "重排过一遍，落榜那几门的旧闹钟还挂在系统里，到点念一节已经不存在的课"。
+        for (slot in reminderSlots()) {
+            existingReminderSlot(context, slot)?.let { alarmManager.cancel(it) }
+        }
     }
 
     /**
      * 课前提醒那条闹钟是否还挂着。用 [PendingIntent.FLAG_NO_CREATE] **只查不造**，
-     * 与 [cancelAll] 共用同一个 builder（同一份 requestCode + 同一个 Intent ——
+     * 与 [cancelAll] 共用同一个 builder（同一份 requestCode 槽位窗口 + 同一个 Intent ——
      * 判等靠 `Intent.filterEquals`，所以不必拼 extras）。
+     *
+     * 并列之后问的是"这一段槽位里**有没有**还挂着的"，不是"第 0 格挂着没有"：
+     * 只查第 0 格会把"另外几门还排着"读成"一条都没有"。
      *
      * 供冷启动判据的钥匙 2 用（`com.buaa.schedule.widget.ColdStartRebuild`）：
      * 那里写着"探得到 PI 逻辑上不等于闹钟还在排"这条实测反向事实，以及为什么
      * 在冷启动这个时点可以接受 —— 别在这里再写一遍。
      */
-    internal fun hasPendingReminder(context: Context): Boolean = existingPendingIntent(context) != null
+    internal fun hasPendingReminder(context: Context): Boolean =
+        reminderSlots().any { existingReminderSlot(context, it) != null }
 
-    private fun existingPendingIntent(context: Context): PendingIntent? = PendingIntent.getBroadcast(
-        context,
-        REQUEST_CODE_REMINDER,
-        baseIntent(context),
-        PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
-    )
+    /** 本模块的全部课前提醒槽位号：排、撤、查三条路共用这一份枚举（口径只在 [REQUEST_CODE_REMINDER] 一处） */
+    private fun reminderSlots(): IntRange = 0 until MAX_TIED_REMINDERS
+
+    /**
+     * 槽位 → [PendingIntent] 的**唯一** builder：[armOneReminder]（排）、
+     * [existingReminderSlot]（撤与查）都从这一格过。
+     *
+     * 判等靠 requestCode + `Intent.filterEquals`，而 `filterEquals` **不看 extras**，
+     * 所以"只查不造"那一面（[PendingIntent.FLAG_NO_CREATE]）传 null 当 plan 也能对上排出去的那一枚。
+     * 两处各拼一份 requestCode 与 Intent（或一处拼一处不拼）就是这枚常量当初警告的坑：
+     * 查的那一侧永远查不到排的那一侧，而且查不出错。
+     */
+    private fun reminderSlotIntent(
+        context: Context,
+        slot: Int,
+        plan: ReminderPlan?,
+        flags: Int,
+    ): PendingIntent {
+        val intent = baseIntent(context)
+        if (plan != null) intent.putExtras(preClassWindow(plan).toExtras())
+        return PendingIntent.getBroadcast(
+            context,
+            REQUEST_CODE_REMINDER + slot,
+            intent,
+            flags,
+        )
+    }
+
+    /** 只查不造的那一面：撤闹钟与「闹钟还挂着吗」都读它，槽位号与 Intent 与排出去的那一枚同源 */
+    private fun existingReminderSlot(context: Context, slot: Int): PendingIntent? =
+        reminderSlotIntent(
+            context = context,
+            slot = slot,
+            plan = null,
+            flags = PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+        )
 
     private fun baseIntent(context: Context): Intent = Intent(context, ReminderReceiver::class.java)
 
-    private fun createPendingIntent(context: Context, plan: ReminderPlan): PendingIntent {
+    /**
+     * 课前那一段的实况窗口：与上课铃共用一套 extras 序列化，才不会又只补齐其中一条链。
+     *
+     * 课前这一段进度条量的是"这段等待过去了多少"：收铃时刻就是上课时刻，
+     * 所以 start/end 先都填上课时间，真正开跑时由接收器把 start 改成"此刻"。
+     */
+    private fun preClassWindow(plan: ReminderPlan): ClassProgressScheduler.ClassWindow {
         val classStartMillis = plan.classStart
             .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        // 课前这一段实况量的是"这段等待过去了多少"：收铃时刻就是上课时刻，
-        // 所以 start/end 先都填上课时间，真正开跑时由接收器把 start 改成"此刻"。
-        val window = ClassProgressScheduler.ClassWindow(
+        return ClassProgressScheduler.ClassWindow(
             courseId = plan.course.id,
             courseName = plan.course.displayName,
             location = plan.course.location,
@@ -405,13 +592,6 @@ object ReminderScheduler {
             dayOfWeek = plan.classStart.dayOfWeek.value,
             colorArgb = courseColor(plan.course).toArgb(),
         )
-        val intent = baseIntent(context).apply { putExtras(window.toExtras()) }
-        return PendingIntent.getBroadcast(
-            context,
-            REQUEST_CODE_REMINDER,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
     }
 
     /**
@@ -420,7 +600,7 @@ object ReminderScheduler {
      * 必须按**节次段**枚举，口径与 [ClassProgressScheduler.planNextClassWindow] 一致。
      * 此前它只取整门课第一节课的时间，于是 `[1,2,9,10]` 这种跨午休的课：上午那段一上课，
      * 本周就再没有"晚于 now 的第一节"，挑到的下一次直接跳到**下周**——下午那节的课前提醒
-     * 整学期都不会发。节次文案同理，见 [createPendingIntent]。
+     * 整学期都不会发。节次文案同理，见 [preClassWindow]。
      *
      * 缺时间表时跳过该段，不兜底成 08:00：那会凭空造出一节 8 点的课，
      * 让一门没有任何时间信息的课每天早上被提醒一次（与课堂窗口同一取舍）。

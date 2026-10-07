@@ -51,6 +51,20 @@ private val LOG_RESCHEDULE_WINDOW_FAILURE: (Throwable) -> Unit = {
 }
 
 /**
+ * 排课堂铃失败的留痕口（生产那一份）。
+ *
+ * 级别只许 `Log.w` 以上：这台机器上的 HyperOS 把 logcat 截在 Info，`Log.d` 写下去等于没写，
+ * 而课堂铃失败的后果是**勿扰挂着不解除**（#16 / T14 那本账），这种事必须留得下痕迹。
+ *
+ * 与 [LOG_RESCHEDULE_WINDOW_FAILURE] 同理收成参数而不是写死在函数体里：`android.util.Log`
+ * 在本模块 JVM 单测里是抛 "not mocked" 的桩，写死就先崩在报告口之前，那条"失败要能被看见"
+ * 的断言会红得看不出原因。失败原因（哪一枚铃、哪一档）由调用点给，tag 与级别只此一份。
+ */
+private val LOG_BELL_ARM_FAILURE: (reason: String, error: Throwable) -> Unit = { reason, error ->
+    Log.w("ClassProgressScheduler", reason, error)
+}
+
+/**
  * 「课程进行中」常驻通知的调度。
  *
  * 在课程提醒（上课前）之外再加两个时刻：
@@ -63,7 +77,10 @@ private val LOG_RESCHEDULE_WINDOW_FAILURE: (Throwable) -> Unit = {
  */
 object ClassProgressScheduler {
 
-    private const val TAG = "ClassProgressScheduler"
+    // 日志 tag 的字面量写在文件顶层那两枚留痕口里（`LOG_RESCHEDULE_WINDOW_FAILURE` 与
+    // `LOG_BELL_ARM_FAILURE`）：它们是顶层属性，看不见 object 内的私有常量，
+    // 所以这里曾有一枚 `private const val TAG` 跟着排铃的日志一起变成死码。
+    // `logcat -d -s ClassProgressScheduler` 的过滤条件不变，仍是同一句字面量。
 
     data class ClassWindow(
         val courseId: Long,
@@ -272,20 +289,25 @@ object ClassProgressScheduler {
     /**
      * 按最新的「尚未结束的最早一次课」重排上/下课铃。
      *
-     * 用 [planNextClassWindow] 而不是课前提醒计划里的那门课：提醒的触发时刻是
-     * 「上课时间 − 提前量」，提前量大时最近的一节课会被判成"触发时间已过"而跳过，
+     * 用 [planNextClassWindow] 而不是课前提醒计划里的那门课：提醒的触发时间比上课时间早一个
+     * 提前量，提前量大时最近的一节课会被判成"触发时间已过"而跳过，
      * 于是上课铃落到再下一节课 —— 与「下一节课」组件、常驻通知的口径不一致。
      *
      * 另外：当最近一次课**还没开始**时，说明此刻没有课在进行。若此时仍挂着上一次的常驻通知
      * 或勿扰（典型场景：用户把正在上 / 刚上完的那门课删了，重排后直接跳到下周），
      * 必须先收干净，否则那条通知会一直留到下一节课下课、勿扰也会一直关着。
+     *
+     * @return 本轮**有没有**"该排而没排上"的课堂铃。false 只有一种来源：排铃那两手里至少
+     *   有一枚抛了异常（每一枚自己都已 `Log.w` 留痕）。挑不出课堂窗口是 true ——
+     *   那是"没有可排的铃"，不是"排失败"，把它记成失败会逼调用方去救一个不需要救的现场
+     *   （同一口径见 [rescheduleNextWindow] 那两条早退为什么不报失败）。
      */
     fun rescheduleWindows(
         context: Context,
         courses: List<Course>,
         semesterStart: LocalDate,
         timeSlots: List<TimeSlot>,
-    ) {
+    ): Boolean {
         // 先撤掉旧的两个闹钟，再按最新的「尚未结束的最早一次课」重排
         cancel(context)
         // 整次重排只读一次时钟：下面既要拿它选窗口、又要拿它判"课还没开始"，
@@ -299,7 +321,7 @@ object ClassProgressScheduler {
         )
         if (window == null) {
             cancelAll(context)
-            return
+            return true
         }
         if (window.startsAfter(now.toEpochMillis()) &&
             // 课前倒计时挂的就是这节即将到来的课（同一通知 id）。
@@ -313,7 +335,7 @@ object ClassProgressScheduler {
             ReminderNotifications.cancelClassOngoing(context)
             ClassProgressDnd.restore(context)
         }
-        schedule(context, window)
+        return schedule(context, window)
     }
 
     /**
@@ -407,16 +429,35 @@ object ClassProgressScheduler {
         val timeSlots: List<TimeSlot>,
     )
 
-    fun schedule(context: Context, window: ClassWindow) {
-        val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
-        scheduleClassStartBell(context, alarmManager, window.startMillis, startPendingIntent(context, window))
-        scheduleExactOrFallback(alarmManager, window.endMillis, endPendingIntent(context, window))
+    /**
+     * 双铃一起排（课堂窗口变了 / 冷启动重建）。
+     *
+     * @return 本轮有没有"该排而没排上"的课堂铃（判据与留痕都在 [armStartBell] 与 [armEndBell]）。
+     *   拿不到 AlarmManager 也是 false：铃确实没排上，答 true 就是假成功。
+     */
+    fun schedule(context: Context, window: ClassWindow): Boolean {
+        val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return false
+        val startArmed = scheduleClassStartBell(
+            context,
+            alarmManager,
+            window.startMillis,
+            startPendingIntent(context, window),
+        )
+        val endArmed = scheduleEndBell(alarmManager, window.endMillis, endPendingIntent(context, window))
+        // 两枚都要试，不许因为上课铃失败就跳下课铃：已经进去的勿扰只有下课铃能解除，
+        // 跳过它等于把"挂着不解除"这件事锁死在这一节课里。
+        return startArmed && endArmed
     }
 
-    /** 只排下课铃（上课铃触发后由接收器调用，撤常驻通知并恢复勿扰） */
-    fun scheduleEnd(context: Context, endMillis: Long) {
-        val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
-        scheduleExactOrFallback(alarmManager, endMillis, endPendingIntent(context, emptyWindow()))
+    /**
+     * 只排下课铃（上课铃触发后由接收器调用，撤常驻通知并恢复勿扰）。
+     *
+     * @return 这枚下课铃排上没有。false 的后果是**勿扰挂着不解除**（#16 / T12 / T14 那本账）；
+     *   原因已经在 [armEndBell] 里 `Log.w` 过，这里把结论带出去给调用方。
+     */
+    fun scheduleEnd(context: Context, endMillis: Long): Boolean {
+        val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return false
+        return scheduleEndBell(alarmManager, endMillis, endPendingIntent(context, emptyWindow()))
     }
 
     /**
@@ -427,26 +468,119 @@ object ClassProgressScheduler {
      *
      * 仍受 SCHEDULE_EXACT_ALARM 约束：未授权时降级 setAndAllowWhileIdle；
      * 个别 ROM 对 setAlarmClock 也抛异常时退回 setExactAndAllowWhileIdle。
+     * 三手 set 各自包进 runCatching：`alarmShowIntent(context)` 拿 Context 造意图也可能抛
+     * （ROM 禁用 MainActivity 那一档），裸着它会把兜底那一手一起跳过。
+     *
+     * @return 这一枚上课铃排上没有（档位与留痕见 [armStartBell]）。
      */
     private fun scheduleClassStartBell(
         context: Context,
         alarmManager: AlarmManager,
         atMillis: Long,
         pi: PendingIntent,
-    ) {
+    ): Boolean {
         val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
             runCatching { alarmManager.canScheduleExactAlarms() }.getOrDefault(false)
-        if (!canExact) {
-            runCatching { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, pi) }
-            return
-        }
-        runCatching {
-            alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(atMillis, alarmShowIntent(context)), pi)
-        }.recoverCatching {
-            Log.w(TAG, "setAlarmClock 失败，退回精确档重排上课铃", it)
-            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, pi)
-        }
+        return armStartBell(
+            canExact = canExact,
+            setPowerSave = { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, pi) },
+            setAlarmClock = {
+                alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(atMillis, alarmShowIntent(context)), pi)
+            },
+            setExactAsFallback = { alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, pi) },
+        )
     }
+
+    /**
+     * [scheduleClassStartBell] 的档位本体：**零 android、零时钟**，三手 set 与留痕口全是参数。
+     *
+     * 形状抄 [rescheduleNextWindow] 那枚内部重载（本模块单测没有 Robolectric，真跑一次排铃要设备，
+     * 而这张卡要钉的恰好是数得出来的那件事：省电档失败有没有被念、退回精确档再失败时
+     * 结论有没有被读成成功）。
+     *
+     * 三档：
+     * 1. 未授权精确闹钟（或 Android 11 以下）：只有省电档这一手，它抛了就是 false ——
+     *    此前这里是一枚裸 `runCatching` 直接 `return`，失败既不留痕也不带结论，
+     *    而它的后果是勿扰挂着不解除；
+     * 2. `setAlarmClock` 成功：true，一手都不许多试；
+     * 3. `setAlarmClock` 抛（个别 ROM 就这么干）：留痕 + 退回 `setExactAndAllowWhileIdle`，
+     *    **退回那一手自己也要留痕、也要带结论** —— [recoverCatching] 那种写法把返回值丢掉时，
+     *    两次失败读起来就像一次都没失败过。
+     *
+     * 整体仍然吞异常（不许向外抛）：这条链从广播回调里被调，抛出去就是把下课铃广播打崩，
+     * 而"这一枚没排上"已经由返回值与那句 `Log.w` 说完了。
+     */
+    internal fun armStartBell(
+        canExact: Boolean,
+        setPowerSave: () -> Unit,
+        setAlarmClock: () -> Unit,
+        setExactAsFallback: () -> Unit,
+        logFailure: (reason: String, error: Throwable) -> Unit = LOG_BELL_ARM_FAILURE,
+    ): Boolean {
+        if (!canExact) {
+            return armBellAttempt("省电档排上课铃失败：这一节的实况与自动勿扰都不会自己开始", setPowerSave, logFailure)
+        }
+        val clock = runCatching(setAlarmClock).onFailure {
+            logFailure("setAlarmClock 失败，退回精确档重排上课铃", it)
+        }
+        if (clock.isSuccess) return true
+        return armBellAttempt("退回精确档那一手也没排上课铃：这一轮的实况与勿扰没有闹钟接手", setExactAsFallback, logFailure)
+    }
+
+    /**
+     * 下课铃（精确档 + 省电档兜底），[schedule] 与 [scheduleEnd] 共用。
+     *
+     * 精确闹钟降级：Android 12+ 的 SCHEDULE_EXACT_ALARM 是特殊权限
+     * （Android 14+ 新装默认不授予），未授予时 `setExactAndAllowWhileIdle` 会抛
+     * `SecurityException`。此前这里没做守卫，异常会从广播回调里逃出去 ——
+     * 轻则上/下课铃静默失效，重则在 `ClassProgressReceiver` 里直接杀掉进程。
+     * 与 [ReminderScheduler] 的处理保持一致。
+     *
+     * @return 这一枚下课铃排上没有（档位与留痕见 [armEndBell]）。
+     */
+    private fun scheduleEndBell(alarmManager: AlarmManager, atMillis: Long, pi: PendingIntent): Boolean {
+        val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            runCatching { alarmManager.canScheduleExactAlarms() }.getOrDefault(false)
+        return armEndBell(
+            canExact = canExact,
+            setExact = { alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, pi) },
+            setPowerSave = { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, pi) },
+        )
+    }
+
+    /**
+     * [scheduleEndBell] 的档位本体：**零 android、零时钟**。
+     *
+     * 两档：授权了就试精确档（部分 ROM 即使授权也抛 SecurityException，省电策略收紧），
+     * 留痕后退回省电档；没授权就直接省电档。
+     * 与上课铃那两档同一条规矩：**兜底那一手的失败既要有 `Log.w`，也要进结论** ——
+     * 此前这两处都是裸 `runCatching`，下课铃排失败 = 勿扰挂着不解除，而 logcat 里零证据。
+     */
+    internal fun armEndBell(
+        canExact: Boolean,
+        setExact: () -> Unit,
+        setPowerSave: () -> Unit,
+        logFailure: (reason: String, error: Throwable) -> Unit = LOG_BELL_ARM_FAILURE,
+    ): Boolean {
+        if (!canExact) {
+            return armBellAttempt("省电档排下课铃失败：勿扰只能靠看门狗与冷启动自愈", setPowerSave, logFailure)
+        }
+        val exact = runCatching(setExact).onFailure {
+            logFailure("精确下课铃排程失败，退回非精确档", it)
+        }
+        if (exact.isSuccess) return true
+        return armBellAttempt("非精确档也没排上下课铃：勿扰只能靠看门狗与冷启动自愈", setPowerSave, logFailure)
+    }
+
+    /**
+     * 一次排铃尝试的**唯一**形状：`runCatching` 之后必须接 `onFailure`，结论由 `isSuccess` 带出去。
+     * 裸着一枚 `runCatching` 再 `return` 就是把失败读成成功（本卡的两格病灶都是这个形状）。
+     */
+    private fun armBellAttempt(
+        reason: String,
+        attempt: () -> Unit,
+        logFailure: (reason: String, error: Throwable) -> Unit,
+    ): Boolean = runCatching(attempt).onFailure { logFailure(reason, it) }.isSuccess
 
     /**
      * 闹钟图标点击时打开 App（setAlarmClock 的展示意图，固定复用一个）。
@@ -461,29 +595,6 @@ object ClassProgressScheduler {
             Intent(context, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-
-    /**
-     * 精确闹钟降级：Android 12+ 的 SCHEDULE_EXACT_ALARM 是特殊权限
-     * （Android 14+ 新装默认不授予），未授予时 `setExactAndAllowWhileIdle` 会抛
-     * `SecurityException`。此前这里没做守卫，异常会从广播回调里逃出去 ——
-     * 轻则上/下课铃静默失效，重则在 `ClassProgressReceiver` 里直接杀掉进程。
-     * 与 [ReminderScheduler] 的处理保持一致。
-     */
-    private fun scheduleExactOrFallback(alarmManager: AlarmManager, atMillis: Long, pi: PendingIntent) {
-        val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-            runCatching { alarmManager.canScheduleExactAlarms() }.getOrDefault(false)
-        if (canExact) {
-            // 部分 ROM 即使授权也抛 SecurityException（省电策略收紧），退到非精确档而不是让异常逃出广播
-            runCatching {
-                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, pi)
-            }.onFailure {
-                Log.w(TAG, "精确下课铃排程失败，退回非精确档", it)
-                runCatching { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, pi) }
-            }
-        } else {
-            runCatching { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, pi) }
-        }
-    }
 
     /**
      * 上/下课铃是否还挂着。用 FLAG_NO_CREATE 查询，不会顺手创建 PendingIntent。
