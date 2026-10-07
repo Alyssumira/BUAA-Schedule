@@ -478,12 +478,17 @@ private fun groupKeyOf(course: Course): String =
  *    占掉第 1 节、赢下整组的门面**，于是组名、教师、别名回退名全取自那枚"根本没有时间"的碎片。
  *    现改读 [Course.firstPeriodOrNull]：没有节次的碎片一律排在所有有节次的之后 ⇒
  *    组里只要还有一枚有节次的，没节次的那一枚就当不上门面。与
- *    `data/import/BuaaFirstWeekPolicy.kt:114-117` 那句「没号的行不参与『谁最小』的比较」同一叙述，
+ *    `data/import/BuaaFirstWeekPolicy.kt:112-115` 那句「没号的行不参与『谁最小』的比较」同一叙述，
  *    也与 T26/T27 定下的「缺的那一项不占位」同源。
  * 2. **`?: fragments.first()` 是不可达支**（`groupBy` 交出来的 value 必非空，`minByOrNull`
  *    在非空列表上必回非 null）—— 正是 T193 登记的第 2 条那一族：从未执行过的兜底把真退化盖住。
  *    这里不补第二枚兜底：列表真为空就让 `.first()` 当场响，与
  *    `domain/schedule/ScheduleExporters.kt:62` 那句「上一行已判非空 ⇒ 那枚 `?:` 是不可达支」同形。
+ *
+ * 「这一格真能碰到吗」按盘面读源码判的（零装机证据）：空节次的碎片有一条来路是
+ * `data/import/IcsParser.kt:175` 那句 `if (endSection < startSection) emptyList()` —— 结束早于开始的
+ * VEVENT 就落成空节次；而编辑器那一侧自 T28 起 `editorCanSave` 要求 `periods.isNotEmpty()`，
+ * 保存被禁用 ⇒ 「组里混着一枚没节次的碎片」是 ICS 导入的形状，不是臆造的输入。
  *
  * ## 并列在这一组里可能不可能（按 [groupKeyOf] 的键形判出来的，不是猜的）
  *
