@@ -79,15 +79,20 @@ import com.buaa.schedule.domain.model.joinMeta
 import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.model.unwrappedPeriodLabel
 import com.buaa.schedule.domain.model.weekdayLabel
+import com.buaa.schedule.domain.schedule.SemesterStats
 import com.buaa.schedule.ui.ScheduleViewModel
 import kotlinx.coroutines.launch
 
 /**
- * 课表管理总览页：按"同一门课"（sourceGroupKey）归并展示全部排课片段，
- * 提供 整门课改色 / 整门课删除 / 进入编辑器。
+ * 课表管理总览页：按"同一门课"归并展示全部排课片段，提供 整门课改色 / 整门课删除 / 进入编辑器。
  *
  * 为什么需要这页：课表网格上同一门课拆出的多个片段（如 1-8 周与 9-16 周各一段）
  * 分散在不同位置，用户很难意识到它们是同一门课，也改不到"整门课的颜色"。
+ *
+ * 「一门课」这把尺本页**不自己定义**：归并发生在 [SemesterStats.creditsByCourse]
+ * （见 [groupCourses]，T224 换源）。这一页从前带着全仓第二套定义
+ * （`manual:名称|星期|节次`），于是同一批数据在管理页页头念「2 门课」、在统计页念「1 门课 · 2 段排课」，
+ * 而那句「删除整门课」删完之后的那个下午，统计页那门课照旧在列。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -348,7 +353,10 @@ private fun CourseGroupCard(
 
             if (colorExpanded) {
                 Text(
-                    text = "颜色会应用到这门课的全部片段",
+                    text = groupColorScopeNote(
+                        fragmentCount = group.fragments.size,
+                        hasSourceGroupKey = primary.sourceGroupKey != null,
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -411,9 +419,54 @@ internal fun deleteGroupConfirmText(fragments: List<Course>, timeSlots: List<Tim
 }
 
 /**
- * 按"同一门课"归并：优先用 [Course.sourceGroupKey]（导入课程），
- * 手动课程没有 groupKey，用 名称+星期+节次 兜底，避免把同名不同时间的课并到一起。
- * 纯函数，便于单测。
+ * 调色板展开时那一句「点一颗色板会改到哪儿」（纯函数，可单测，见 `ui/course/CourseGroupColorScopeCopyTest`）。
+ *
+ * 改前它是一句**无条件**的「颜色会应用到这门课的全部片段」，而写库那一手是
+ * `updateCourse(primary, CourseSaveOptions(applyToGroup = true))`；VM 那一侧
+ * （`ui/ScheduleViewModel.kt` 里 `options.applyToGroup && course.sourceGroupKey != null` 那一判）
+ * 只给**有教务组键**的课铺整组 ⇒ 手动课程那一组只有门面这一枚片段改得到色，其余各段原地不动。
+ * T224 把归并换源到 [SemesterStats.creditsByCourse] 之后，手动组可以把同名课的不同天不同节并到
+ * 同一张卡上，这一格就从"偶尔对不上"长成"看得出来对不上" ⇒ 按档说实话，不改 VM（那是本卡红线）。
+ *
+ * **「设计如此」配开关**：让手动组也整组生效的那枚字段是 [Course.sourceGroupKey]
+ * （`domain/model/Course.kt`，写入方是 `data/import/BuaaScheduleParser.kt`）—— 给手动课程也登记一枚
+ * 组键，VM 那一判自己就成立，`CourseSaveOptions.applyToGroup` 一字不用改。代价：写侧要补一次赋值 +
+ * 一趟数据迁移，统计页「N 门课」与本页的门数会跟着一起重算（同名不同时的手动课从今往后本就并成一门）。
+ */
+internal fun groupColorScopeNote(fragmentCount: Int, hasSourceGroupKey: Boolean): String = when {
+    !hasSourceGroupKey && fragmentCount > 1 ->
+        "手动课程没有教务组键：颜色只会改当前那一段，另外 ${fragmentCount - 1} 段要逐段改"
+    !hasSourceGroupKey -> "颜色会改的是当前那一段排课"
+    fragmentCount > 1 -> "颜色会应用到这门课的全部 $fragmentCount 段排课"
+    else -> "颜色会应用到这门课那唯一的一段排课"
+}
+
+/**
+ * 归并 + 过滤 + 排序，交回页面上那一张张组卡。
+ *
+ * ## 归并这一步不在这里做（T224 换源）
+ *
+ * 改前这里写着 `.groupBy { groupKeyOf(it) }`，而 `groupKeyOf` 是**全仓第二套「一门课」的定义**，
+ * 逐字（改前那一枚键）：`"manual:${course.name}|${course.dayOfWeek}|${course.periods.joinToString(",")}"`。它带出的三句同屏矛盾：页头念「课表管理（2 门课）」、
+ * 确认框念「将删除这门课的全部 1 个片段」、按钮念「删除整门课」，而统计页按
+ * [SemesterStats.courseGroupKey] 那把尺只认 1 门 —— **删完之后那门课在统计页照旧在列**，
+ * 因为两套定义下它们不枚同一枚。`domain/schedule/SemesterStats.kt` 的 `creditsByCourse`
+ * 同文件那段（口径 1 结尾）早就明文禁过这一手：「界面上再 groupBy 一遍就是第二套『一门课』的定义」。
+ *
+ * 今天按 [SemesterStats.creditsByCourse] 走：它按 [SemesterStats.courseGroupKey] 归并一次、
+ * 并把**组内全部片段**（[SemesterStats.CourseCredit.fragments]）交出来，所以本页拿到的组
+ * 与统计页那本账是同一枚产物，页头那句「N 门课」与统计页的 `courseCount` 由构造保证相等。
+ *
+ * **代价（换源换来的，不是白拿的）**：
+ * 1. 手动课程从前按「名称+星期+节次」分，同名不同时间的两枚各占一张卡；现在它们并成一张卡
+ *    （教务口径下同名同周次就是一门课），于是"删一张卡"会删掉**同名课的全部片段**，
+ *    改色同理。撤销仍然只在提示条那颗按钮上（T127 那把闸一字未动）。
+ *    能把这一档改回去的字段是 [SemesterStats.courseGroupKey] 里那枚 `sourceGroupKey`
+ *    （`domain/model/Course.kt`）：手动课程没有它才退化成「学期|课程名」。要恢复"按时间分家"
+ *    得给手动课程也登记一枚组键（写侧 + 迁移 + 统计页的门数一起变），不是本页能顺手改的。
+ * 2. 组卡的门面（组名 / 教师 / 别名回退名）由 [primaryFragmentOf] 决定，而并入的片段现在
+ *    **跨星期跨节次**，那一族的四档次序（有节次 → 节次 → 星期 → id）从"偶尔用得上"变成
+ *    "每枚手动组都靠它"，T207 那枚守卫因此更不许放宽。
  */
 internal fun groupCourses(courses: List<Course>, query: String): List<CourseGroup> {
     val keyword = query.trim()
@@ -428,12 +481,12 @@ internal fun groupCourses(courses: List<Course>, query: String): List<CourseGrou
                 it.teacher?.contains(keyword, ignoreCase = true) == true
         }
     }
-    return filtered
-        .groupBy { groupKeyOf(it) }
-        .map { (key, fragments) ->
+    return SemesterStats.creditsByCourse(filtered)
+        .map { credit ->
+            val fragments = credit.fragments
             val primary = primaryFragmentOf(fragments)
             CourseGroup(
-                key = key,
+                key = credit.groupKey,
                 name = primary.name,
                 displayName = groupDisplayNameOf(fragments, primary),
                 teacher = primary.teacher,
@@ -463,10 +516,6 @@ internal data class CourseGroup(
     val fragments: List<Course>,
 )
 
-private fun groupKeyOf(course: Course): String =
-    course.sourceGroupKey
-        ?: "manual:${course.name}|${course.dayOfWeek}|${course.periods.joinToString(",")}"
-
 /**
  * 整组门面由哪一枚碎片供：[CourseGroup] 的 `name`、`teacher` 与门面名的兜底名都取自它。
  * 纯函数，可单测（表驱动见 `ui/course/CourseGroupPrimaryFragmentTest`）。
@@ -480,8 +529,8 @@ private fun groupKeyOf(course: Course): String =
  *    组里只要还有一枚有节次的，没节次的那一枚就当不上门面。与
  *    `data/import/BuaaFirstWeekPolicy.kt:112-115` 那句「没号的行不参与『谁最小』的比较」同一叙述，
  *    也与 T26/T27 定下的「缺的那一项不占位」同源。
- * 2. **`?: fragments.first()` 是不可达支**（`groupBy` 交出来的 value 必非空，`minByOrNull`
- *    在非空列表上必回非 null）—— 正是 T193 登记的第 2 条那一族：从未执行过的兜底把真退化盖住。
+ * 2. **`?: fragments.first()` 是不可达支**（[SemesterStats.creditsByCourse] 交出来的 `fragments`
+ *    必非空，`minByOrNull` 在非空列表上必回非 null）—— 正是 T193 登记的第 2 条那一族：从未执行过的兜底把真退化盖住。
  *    这里不补第二枚兜底：列表真为空就让 `.first()` 当场响，与
  *    `domain/schedule/ScheduleExporters.kt:62` 那句「上一行已判非空 ⇒ 那枚 `?:` 是不可达支」同形。
  *
@@ -490,16 +539,18 @@ private fun groupKeyOf(course: Course): String =
  * VEVENT 就落成空节次；而编辑器那一侧自 T28 起 `editorCanSave` 要求 `periods.isNotEmpty()`，
  * 保存被禁用 ⇒ 「组里混着一枚没节次的碎片」是 ICS 导入的形状，不是臆造的输入。
  *
- * ## 并列在这一组里可能不可能（按 [groupKeyOf] 的键形判出来的，不是猜的）
+ * ## 并列在这一组里可能不可能（按 [SemesterStats.courseGroupKey] 的键形判出来的，不是猜的）
  *
  * **可能，而且是常态**，两族键各有各的并列法：
  * - 导入组（`sourceGroupKey` 非空）：键是「学期|教学班|课序号」
  *   （`data/import/BuaaScheduleParser.kt:66-70`），**不含星期与节次** ⇒ 同组可以横跨几天几节；
  *   而同一条教务记录里「一个教师 × 一个周次段」拆出来的多枚片段（同文件的 `teacherWeekPairs`
  *   那一支，星期与节次都从外层同一个 `day`/`periods` 取）**必然**在这一档并列。
- * - 手动组（无 key，键是「manual:名称|星期|节次」）：键已经把星期与节次钉死 ⇒
- *   组内每一枚的 [Course.firstPeriodOrNull] 与 [Course.dayOfWeek] 都相等 ⇒ **整组并列**，
- *   "谁最先上"这一档在手动组里本来就是空转，门面只能由后续档定。
+ * - 手动组（无组键，T224 换源后退化成「学期|课程名」）：键同样**不含星期与节次**，
+ *   组里可以并着同名课在不同天不同节的片段。同名而第一枚节次相同（周一 1-2 与周一 1-2 分排
+ *   两个周次段，是最常见的手工录入形状）时**整组在这一档并列**，门面只能由后续档定；
+ *   节次不同时才由头两档比出来。换源前那一族键把星期与节次钉死、整组恒并列，
+ *   换源后这一档变成"同名同节次才并列" —— 结论没变：**并列是常态，次序必须有出处**。
  *
  * 所以并列需要一枚有出处的次序，四档（见 [primaryFragmentOrder]）：
  * **有没有节次 → 节次 → 星期 → 行 id**。前三档都是盘面上看得见的东西；末档 [Course.id] 是

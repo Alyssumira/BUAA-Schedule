@@ -1,6 +1,7 @@
 package com.buaa.schedule.ui.course
 
 import com.buaa.schedule.domain.model.Course
+import com.buaa.schedule.domain.schedule.SemesterStats
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -9,8 +10,19 @@ import org.junit.Test
  * 课表管理页的归并规则测试。
  *
  * 归并错了会直接把"另一门课"当成同一门课删掉/改色，因此：
- * - 导入课程（有 sourceGroupKey）必须按 key 归并；
- * - 手动课程（无 key）必须用 名称+星期+节次 兜底，避免同名不同时间的课被并组。
+ * - **归并这把尺全仓只有一份**（T224 换源）：本页吃 [SemesterStats.creditsByCourse]，
+ *   也就是统计页那枚 `courseCount` 的同一本账。本表每格都顺手核一次
+ *   「管理页归并出的组数 == 内核归并出的门数」，谁再在界面上 groupBy 一遍就红；
+ * - 导入课程（有 sourceGroupKey）按那枚组键归并；
+ * - 手动课程（无组键）按「学期|课程名」归并 —— 与统计页同一个口径。
+ *
+ * ⚠️ 换源换来的代价（不是漏网，是裁定）：改前这里有一条
+ * `keepsSameNameDifferentTimeApartForManualCourses`，判的是「同名不同时间的两枚手动课各占一张卡，
+ * 免得删一门误删另一门」。那一格与全站那一把尺矛盾（统计页把同名手动课数成 1 门，管理页念 2 门，
+ * 而「删除整门课」删完之后统计页那门课照旧在列）。今天按内核口径并成一张卡：
+ * **删一张卡 = 删掉同名课的全部片段**，改色同理；撤销仍只在提示条那颗按钮上（T127 那把闸）。
+ * 要改回去的字段是 `Course.sourceGroupKey`（手动课程没有它才退化成「学期|课程名」），
+ * 代价见 `ui/course/CourseManagementScreen.kt` 里 `groupCourses` 那段的第 1 条。
  */
 class CourseGroupingTest {
 
@@ -23,6 +35,7 @@ class CourseGroupingTest {
         groupKey: String? = null,
         teacher: String? = null,
         alias: String? = null,
+        semesterCode: String? = null,
     ) = Course(
         id = id,
         name = name,
@@ -32,6 +45,7 @@ class CourseGroupingTest {
         weeks = weeks,
         sourceGroupKey = groupKey,
         teacher = teacher,
+        semesterCode = semesterCode,
     )
 
     @Test
@@ -49,12 +63,27 @@ class CourseGroupingTest {
     }
 
     @Test
-    fun keepsSameNameDifferentTimeApartForManualCourses() {
-        // 手动添加的两门同名课：周几/节次不同 → 不能并组（否则删一门会误删另一门）
+    fun mergesSameNameDifferentTimeForManualCoursesNowThatOneRulerRules() {
+        // T224 换源：同名不同时间的手动课在管理页并成一张卡（统计页本来就把它们数成 1 门）。
+        // 代价如实钉在这格里 —— 删这张卡会带走两枚片段，"删一门"不再等于"删一格的课"。
+        val first = course(1, "自习", day = 1, periods = listOf(1, 2))
+        val second = course(2, "自习", day = 2, periods = listOf(1, 2))
+        val groups = groupCourses(listOf(first, second), query = "")
+        assertEquals("同名手动课应当并成门课那一枚组（与 SemesterStats 同尺）", 1, groups.size)
+        assertEquals("那张卡底下挂着两枚片段，删除会一起带走", 2, groups.single().fragments.size)
+        assertEquals("组键必须逐字是内核那把尺交回来的（不是本页再拼一遍）", SemesterStats.courseGroupKey(first), groups.single().key)
+        assertEquals("枚组键 = 学期|课程名（手动课没有 sourceGroupKey 的退化档）", "|自习", groups.single().key)
+    }
+
+    @Test
+    fun keepsSameNameFromDifferentSemestersApart() {
+        // 内核那把尺带学期前缀：上学期的重修课不该与本周期的同名课并成一枚
+        // （改前那一族的键不含学期，会并进来 —— 与 `ui/home/WeekChangeSummaryWiringGuardTest`
+        //   给周次异动摘要记的「学期前缀」那一格同口径）
         val groups = groupCourses(
             listOf(
-                course(1, "自习", day = 1, periods = listOf(1, 2)),
-                course(2, "自习", day = 2, periods = listOf(1, 2)),
+                course(1, "高数", day = 1, semesterCode = "2025-2026-1"),
+                course(2, "高数", day = 3, semesterCode = "2025-2026-2"),
             ),
             query = "",
         )

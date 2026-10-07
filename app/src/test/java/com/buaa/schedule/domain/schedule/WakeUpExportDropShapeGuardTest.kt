@@ -74,13 +74,17 @@ class WakeUpExportDropShapeGuardTest {
         const val VM_MESSAGE_CALL = "wakeUpExportMessage(courses.size, drops.noPeriodCourses, drops.noWeekCourses)"
         const val VM_OLD_HAND_TALLY = "courses.count { it.periods.isEmpty() }"
 
-        /** 文案四支（每支一条完整字面量，逐字节钉住） */
-        const val COPY_PLACED = "val placed = totalCourses - noPeriodCourses - noWeekCourses"
-        const val COPY_BRANCH_NONE = "noPeriodCourses == 0 && noWeekCourses == 0 -> \"WakeUp JSON 已导出（${'$'}placed 门课）\""
-        const val COPY_BRANCH_PERIOD = "noWeekCourses == 0 -> \"WakeUp JSON 已导出（${'$'}placed 门课；另有 ${'$'}noPeriodCourses 门没有节次、无法定位，未写入）\""
-        const val COPY_BRANCH_WEEK = "noPeriodCourses == 0 -> \"WakeUp JSON 已导出（${'$'}placed 门课；另有 ${'$'}noWeekCourses 门没有周次、无法定位，未写入）\""
-        const val COPY_BRANCH_BOTH = "else -> \"WakeUp JSON 已导出（${'$'}placed 门课；另有 ${'$'}noPeriodCourses 门没有节次、${'$'}noWeekCourses 门没有周次，都无法定位，未写入）\""
+        /** 文案四支（每支一条完整字面量，逐字节钉住；T224 起单位念「段排课」，形参名跟着改口） */
+        const val COPY_PLACED = "val placed = totalFragments - noPeriodFragments - noWeekFragments"
+        const val COPY_BRANCH_NONE = "noPeriodFragments == 0 && noWeekFragments == 0 -> \"WakeUp JSON 已导出（${'$'}placed 段排课）\""
+        const val COPY_BRANCH_PERIOD = "noWeekFragments == 0 -> \"WakeUp JSON 已导出（${'$'}placed 段排课；另有 ${'$'}noPeriodFragments 段没有节次、无法定位，未写入）\""
+        const val COPY_BRANCH_WEEK = "noPeriodFragments == 0 -> \"WakeUp JSON 已导出（${'$'}placed 段排课；另有 ${'$'}noWeekFragments 段没有周次、无法定位，未写入）\""
+        const val COPY_BRANCH_BOTH = "else -> \"WakeUp JSON 已导出（${'$'}placed 段排课；另有 ${'$'}noPeriodFragments 段没有节次、${'$'}noWeekFragments 段没有周次，都无法定位，未写入）\""
         const val COPY_LITERAL_HEAD = "WakeUp JSON 已导出"
+
+        /** T224 的单位词：这一句吃的三枚数全数在排课片段行上，「门」那一枚必须 0 处 */
+        const val COPY_UNIT = "段排课"
+        const val COPY_UNIT_DRIFT = "门课"
     }
 
     // ─────────────── ① 导出器：空周次那档真的走 return@mapNotNull null ───────────────
@@ -261,6 +265,28 @@ class WakeUpExportDropShapeGuardTest {
             "『没有周次』那半句只许长在周次那一支与两档那一支里（共 2 枚）。实到：" + occurrences(code, "没有周次"),
             2,
             occurrences(code, "没有周次"),
+        )
+        // T224：单位词这一格钉的是「门 / 段」这一族的回潮（三枚数全数在排课片段行上）
+        assertEquals(
+            "『段排课』在代码里恰好 4 枚（四支各一枚，枚住的正是「写出去的段数」那一格）。" +
+                "读到 <4 = 某一支又漂回旧单位；实到：" + occurrences(code, COPY_UNIT),
+            4,
+            occurrences(code, COPY_UNIT),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数（抹注释后）**：代码里一枚「门课」都不许有 —— 这一句吃的数是片段行枚数，" +
+                "念「门」就与统计页那句「N 门课 · M 段排课」两把尺（T224 第四处）。\n" +
+                "复算：把 " + COPY + " 的注释抹成空格后 grep -c '门课'（应为 0；含注释的原文里它还在，" +
+                "那是 KDoc 抄的改前原文）\n  实到枚数：" + occurrences(code, COPY_UNIT_DRIFT) +
+                "；含注释原文：" + occurrences(source(COPY), COPY_UNIT_DRIFT),
+            0,
+            occurrences(code, COPY_UNIT_DRIFT),
+        )
+        assertTrue(
+            "反套套逻辑：改前那两句「$COPY_UNIT_DRIFT」必须在**注释**里留痕（KDoc 讲的就是旧单位）。" +
+                "读到 0 说明下面那枚 0 是「注释被删干净」而不是「代码改对了」。实到：" +
+                occurrences(source(COPY), COPY_UNIT_DRIFT),
+            occurrences(source(COPY), COPY_UNIT_DRIFT) >= 1,
         )
     }
 

@@ -75,7 +75,16 @@ import kotlin.math.roundToInt
  */
 
 /**
- * 每周的课量：`counts[i]` = 第 i+1 周有多少门课。
+ * 每周的课量：`counts[i]` = 第 i+1 周有**几段排课**在上课。
+ *
+ * 单位是"段"不是"门"，这一条由入参形状说了算：`courses: List<Set<Int>>` 交进来的就是
+ * 「一条排课片段 → 它出现的周次集合」，**表达不出「门」这枚单位**（同门课的两个片段
+ * 在这里是两行，谁都归并不了）。全站那一把尺是
+ * [com.buaa.schedule.domain.schedule.SemesterStats.courseGroupKey]，要按门数就得先在
+ * domain 侧归并再把每门课的周次交进来 —— 归并这一手不在本文件里做（文件头第三条硬规则）。
+ * 调用点（`ui/home/HomeScreen.kt` 的 `courseWeeks = visibleCourses.map { it.weeks.toSet() }`）
+ * 递的正是逐片段的周次集合，所以今天这一枚数是片段数，读屏那一句也跟着念段（T224 第五处：
+ * 此前它念「第 3 周，22 门课」，而统计页同批数据说 22 是段、18 才是门）。
  *
  * 抽成纯函数是为了能在 JVM 里钉住"数字从哪来"——图形的绘制不好断言，而这里
  * 有两个真实坑：周次集合可以从中间起排（`WeekParser` 允许 {3,4,5}），
@@ -93,11 +102,24 @@ fun weekCourseCounts(courses: List<Set<Int>>, totalWeeks: Int): IntArray {
 }
 
 /**
+ * 周次密度条那一根的读屏文案（纯函数，可单测；与 [ganttRowDescription] / [heatGridDayDescription] 同族）。
+ *
+ * 单位钉成「段排课」而不是「门课」：这一根柱子的高度吃的是 [weekCourseCounts] 交回的**片段数**
+ * （入参 `List<Set<Int>>` 表达不出"门"，见那里的说明）。改前那一行逐字是
+ * `contentDescription = "第 $week 周，$count 门课" + if (isCurrent) "，当前教学周" else ""`，
+ * 而统计页同批数据说 22 是段、18 才是门（T224 第五处：读屏那句把片段数念成了门）。
+ * 措辞与取数在这里同源：`count` 只能是那一枚 IntArray 的一项，不许调用方另塞一枚"门数"。
+ */
+fun weekDensityBarDescription(week: Int, count: Int, isCurrent: Boolean): String =
+    "第 $week 周，$count 段排课" + if (isCurrent) "，当前教学周" else ""
+
+/**
  * 周次密度条：一周一根柱子，高度 = 这一周的课量。
  *
  * 用在「跳转到周次」里替代纯文字清单：原来的 19 行 `Text` 只能表达"第 N 周"，
  * 看不出第 12 周之后整个学期就空了、也看不出哪一周课最多。柱子一次说完这两件事。
  *
+ * - 高度与读屏那句数的都是**段排课**（见 [weekDensityBarDescription] 的单位裁定）；
  * - 当前教学周 = `primary` 实心，正在浏览的那周 = 描一圈 `onSurface`。
  *   两个语义不同不能混用，否则"我在看第几周"和"现在是第几周"会读成一件事；
  * - 零课的那周仍然画一根极矮的素色柱：留白会被读成"这里没画"，而"那周真的没课"
@@ -149,8 +171,11 @@ fun WeekDensityStrip(
                         .fillMaxHeight()
                         .clickable { onWeekSelected(week) }
                         .semantics {
-                            contentDescription = "第 $week 周，$count 门课" +
-                                if (isCurrent) "，当前教学周" else ""
+                            contentDescription = weekDensityBarDescription(
+                                week = week,
+                                count = count,
+                                isCurrent = isCurrent,
+                            )
                         },
                     contentAlignment = Alignment.BottomCenter,
                 ) {
@@ -984,9 +1009,9 @@ fun WeekFreeHeatGrid(
 /**
  * 学期负载跨周趋势：横轴周次、纵轴该周上课分钟数的面积 + 折线。
  *
- * 与 [WeekDensityStrip] 的分工不一样：那张画的是"每周有几门课"（计数，用来跳周次），
- * 这张画的是"每周上多少分钟"（时长，用来看出学期什么时候塌下去）。
- * 三门 45 分钟的课和一门 45 分钟的课在计数条上是两根一样的柱子，在这里差三倍高。
+ * 与 [WeekDensityStrip] 的分工不一样：那张数的是"这一周有几段排课"（计数，用来跳周次 ——
+ * 一段 45 分钟与一段 3 小时在那儿同样算一段），这张画的是"每周上多少分钟"（时长，用来看出学期什么时候塌下去）。
+ * 三门 45 分钟的课和一门 45 分钟的课在这里差三倍高。
  *
  * - 峰值周实心点标出来（只标一个"最"，与 [DayLoadBars] 同一口径）；
  * - 结课周在轴底打小旗（`endings` 来自内核，只有真的有课在那一周结束时才有旗，

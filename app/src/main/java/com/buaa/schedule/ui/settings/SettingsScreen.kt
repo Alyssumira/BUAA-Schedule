@@ -98,6 +98,7 @@ import com.buaa.schedule.core.designsystem.swatchPlaceholderColor
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlotProfile
 import com.buaa.schedule.domain.schedule.CourseConstraints
+import com.buaa.schedule.domain.schedule.SemesterStats
 import com.buaa.schedule.domain.schedule.SmartPeriods
 import com.buaa.schedule.domain.schedule.isValidTimeSlot
 import com.buaa.schedule.data.import.IClassSession
@@ -192,6 +193,14 @@ fun SettingsScreen(
     ),
 ) {
     val state by viewModel.uiState.collectAsState()
+    // 这一页要念「几门课」，就得从全站那一把尺取数：`SemesterStats.summarize` 交回的
+    // `courseCount`（按 courseGroupKey 归并后的门数）与 `fragmentCount`（排课片段数）是统计页
+    // 同一枚产物的两格具名读数。改前这两行直接拿 `state.courses.size` 念「门」，
+    // 而同屏的 Snackbar 与统计页念的是另一把尺（T224：数字没错、两句出自两把尺）。
+    // 与 `ui/stats/StatsScreen.kt` 同一写法：判据在 domain 算完，界面只负责念。
+    val courseCounts = remember(state.courses, state.semester, state.timeSlots) {
+        SemesterStats.summarize(state.courses, state.semester, state.timeSlots)
+    }
     val semester = state.semester
     var termCode by remember(semester) { mutableStateOf(semester?.termCode ?: "") }
     var termName by remember(semester) { mutableStateOf(semester?.termName ?: "") }
@@ -531,7 +540,10 @@ fun SettingsScreen(
             SettingsRow(
                 icon = Icons.Filled.School,
                 title = "课表管理",
-                summary = "查看、编辑、删除全部课程（当前 ${state.courses.size} 门）",
+                summary = courseManagementRowSummary(
+                    courseCount = courseCounts.courseCount,
+                    fragmentCount = courseCounts.fragmentCount,
+                ),
                 showChevron = true,
                 onClick = onOpenCourseManagement,
             )
@@ -1592,7 +1604,7 @@ fun SettingsScreen(
             item(key = "exportWakeUp") {
                 SettingsRow(
                     title = "导出 WakeUp 兼容 JSON",
-                    summary = "把当前课表导出为 WakeUp 课程表可导入的文件（${state.courses.size} 门课）",
+                    summary = wakeUpExportRowSummary(courseCounts.fragmentCount),
                     onClick = {
                         if (state.courses.isEmpty()) {
                             settingsScope.launch {
@@ -2189,3 +2201,32 @@ private fun formatLastCheck(epochMillis: Long): String =
                 ),
             )
     }
+
+/**
+ * 「课表管理」那一行的摘要（纯函数，可单测；表驱动见 `ui/course/CourseUnitTwoRulersTableTest`）。
+ *
+ * 改前这一格写的是「（当前 ${state.courses.size} 门）」—— 一句把**排课片段数**念成「门」的话：
+ * 一条 Course 只是一个排课片段，18 门课在库里是 22 段（`domain/schedule/SemesterStats.kt` 文件头口径 1）。
+ * 于是同一批数据在设置页念 22、在统计页念「18 门课 · 22 段排课」、在课表管理页页头念第三枚数，
+ * 三句各自成立却互相打脸（T224 第三处）。
+ *
+ * 现在两枚数都从 [SemesterStats.summarize] 那一本账取，且**两枚都念**：门数与统计页的
+ * `courseCount` 同源，段数与统计页的 `fragmentCount` 同源，这一行也顺带说出了点进去会看到什么
+ * （管理页页头那句「N 门课」吃的正是同一把尺，见 `ui/course/CourseManagementScreen.kt`）。
+ */
+internal fun courseManagementRowSummary(courseCount: Int, fragmentCount: Int): String =
+    "查看、编辑、删除全部课程（当前 $courseCount 门课 · $fragmentCount 段排课）"
+
+/**
+ * 「导出 WakeUp 兼容 JSON」那一行的摘要（纯函数，可单测）。
+ *
+ * 改前念「（${state.courses.size} 门课）」—— 又是片段数戴着「门」的单位。这一行与它下面那颗按钮
+ * 是同屏的两句：点完 toast 念 [wakeUpExportMessage] 那句「已导出 N 段」，两句话必须同尺，
+ * 否则用户看到的就是「先说 22 门课、点完说 20 门课」而说不出少掉的那两枚是什么。
+ *
+ * ⚠️ 这里的段数吃的是 `uiState.courses`，而导出那一趟吃的是 `repository.getDisplayCourses(semester)`
+ * （`ui/ScheduleViewModel.kt` 的 `exportWakeUpTo`，本卡红线不许改）：两枚都是**片段数**、单位不再打架，
+ * 但"预览数 = 实际导出数"要等同学期同筛选才成立 ⇒ 已按跨卡配合登记。
+ */
+internal fun wakeUpExportRowSummary(fragmentCount: Int): String =
+    "把当前课表导出为 WakeUp 课程表可导入的文件（$fragmentCount 段排课）"

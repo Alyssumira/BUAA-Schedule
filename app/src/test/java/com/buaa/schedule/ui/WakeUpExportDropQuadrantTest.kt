@@ -80,7 +80,7 @@ class WakeUpExportDropQuadrantTest {
             weeks = listOf(1, 2, 3),
             expectExported = true,
             expectDrop = null,
-            expectClause = "WakeUp JSON 已导出（1 门课）",
+            expectClause = "WakeUp JSON 已导出（1 段排课）",
         ),
         Cell(
             label = "只缺节次（T27 那一档）",
@@ -88,7 +88,7 @@ class WakeUpExportDropQuadrantTest {
             weeks = listOf(1, 2, 3),
             expectExported = false,
             expectDrop = WakeUpDrop.NO_PERIOD,
-            expectClause = "WakeUp JSON 已导出（0 门课；另有 1 门没有节次、无法定位，未写入）",
+            expectClause = "WakeUp JSON 已导出（0 段排课；另有 1 段没有节次、无法定位，未写入）",
         ),
         Cell(
             label = "只缺周次（#237 本卡那一档）",
@@ -96,7 +96,7 @@ class WakeUpExportDropQuadrantTest {
             weeks = emptyList(),
             expectExported = false,
             expectDrop = WakeUpDrop.NO_WEEK,
-            expectClause = "WakeUp JSON 已导出（0 门课；另有 1 门没有周次、无法定位，未写入）",
+            expectClause = "WakeUp JSON 已导出（0 段排课；另有 1 段没有周次、无法定位，未写入）",
         ),
         Cell(
             label = "都缺（一门只算一次）",
@@ -104,7 +104,7 @@ class WakeUpExportDropQuadrantTest {
             weeks = emptyList(),
             expectExported = false,
             expectDrop = WakeUpDrop.NO_PERIOD,
-            expectClause = "WakeUp JSON 已导出（0 门课；另有 1 门没有节次、无法定位，未写入）",
+            expectClause = "WakeUp JSON 已导出（0 段排课；另有 1 段没有节次、无法定位，未写入）",
         ),
     )
 
@@ -115,7 +115,7 @@ class WakeUpExportDropQuadrantTest {
         for (cell in quadrants) {
             val json = wakeUp(listOf(course(name = cell.label, periods = cell.periods, weeks = cell.weeks)))
             assertEquals(
-                "「${cell.label}」：periods=${cell.periods}、weeks=${cell.weeks} ⇒ 导出件里该有几门课。" +
+                "「${cell.label}」：periods=${cell.periods}、weeks=${cell.weeks} ⇒ 导出件里该有几段排课。" +
                     "\n实到整串：$json",
                 if (cell.expectExported) 1 else 0,
                 exportedEntries(json),
@@ -164,7 +164,7 @@ class WakeUpExportDropQuadrantTest {
             val c = course(name = cell.label, periods = cell.periods, weeks = cell.weeks)
             assertEquals("「${cell.label}」应记进哪一档", cell.expectDrop, WakeUpDropTally.wakeUpDrop(c))
             assertEquals(
-                "「${cell.label}」：判据与导出器的出场与否必须同判（不同判 = 报数与写出来的门数错配）",
+                "「${cell.label}」：判据与导出器的出场与否必须同判（不同判 = 报数与写出来的段数错配）",
                 cell.expectExported,
                 WakeUpDropTally.wakeUpDrop(c) == null,
             )
@@ -183,12 +183,12 @@ class WakeUpExportDropQuadrantTest {
         )
         val counts = WakeUpDropTally.tally(courses)
         // "两档都缺"那一门只落 NO_PERIOD：2 门缺节次 + 1 门都缺 = 3，不是 4
-        assertEquals("没有节次那一档（含两档都缺的那门）", 3, counts.noPeriodCourses)
+        assertEquals("没有节次那一档（含两档都缺的那门，一门只落一档）", 3, counts.noPeriodCourses)
         assertEquals("没有周次那一档（不含两档都缺的那门）", 1, counts.noWeekCourses)
-        assertEquals("总丢下 4 门（绝不重复计数）", 4, counts.droppedCourses)
-        assertEquals("导出件真写出 2 门", 2, exportedEntries(wakeUp(courses)))
+        assertEquals("总丢下 4 段（绝不重复计数）", 4, counts.droppedCourses)
+        assertEquals("导出件真写出 2 段", 2, exportedEntries(wakeUp(courses)))
         assertEquals(
-            "报数的账必须与导出件对得上：courses.size - 丢下的 = 写出去的门数",
+            "报数的账必须与导出件对得上：courses.size − 丢下的段数 = 写出去的段数",
             courses.size - counts.droppedCourses,
             exportedEntries(wakeUp(courses)),
         )
@@ -221,8 +221,8 @@ class WakeUpExportDropQuadrantTest {
         )
         val counts = WakeUpDropTally.tally(courses)
         assertEquals(
-            "3 门真课出场、2 门因节次被丢、1 门因周次被丢（那句话整体端出来）",
-            "WakeUp JSON 已导出（3 门课；另有 2 门没有节次、1 门没有周次，都无法定位，未写入）",
+            "3 段真课出场、2 段因节次被丢、1 段因周次被丢（那句话整体端出来）",
+            "WakeUp JSON 已导出（3 段排课；另有 2 段没有节次、1 段没有周次，都无法定位，未写入）",
             wakeUpExportMessage(courses.size, counts.noPeriodCourses, counts.noWeekCourses),
         )
         assertEquals(3, exportedEntries(wakeUp(courses)))
@@ -232,12 +232,12 @@ class WakeUpExportDropQuadrantTest {
     fun `没有缺失的那一句一个字节都没动过`() {
         // T181② 钉过的两支之一：本卡补第二档不许把它顺手改掉
         assertEquals(
-            "WakeUp JSON 已导出（18 门课）",
-            wakeUpExportMessage(totalCourses = 18, noPeriodCourses = 0, noWeekCourses = 0),
+            "WakeUp JSON 已导出（18 段排课）",
+            wakeUpExportMessage(totalFragments = 18, noPeriodFragments = 0, noWeekFragments = 0),
         )
         assertEquals(
-            "WakeUp JSON 已导出（4 门课；另有 1 门没有节次、无法定位，未写入）",
-            wakeUpExportMessage(totalCourses = 5, noPeriodCourses = 1, noWeekCourses = 0),
+            "WakeUp JSON 已导出（4 段排课；另有 1 段没有节次、无法定位，未写入）",
+            wakeUpExportMessage(totalFragments = 5, noPeriodFragments = 1, noWeekFragments = 0),
         )
     }
 
@@ -324,7 +324,7 @@ class WakeUpExportDropQuadrantTest {
         assertEquals("这门课只落周次那一档，不落节次那一档", 0, counts.noPeriodCourses)
         assertEquals(1, counts.noWeekCourses)
         assertEquals(
-            "WakeUp JSON 已导出（0 门课；另有 1 门没有周次、无法定位，未写入）",
+            "WakeUp JSON 已导出（0 段排课；另有 1 段没有周次、无法定位，未写入）",
             wakeUpExportMessage(1, counts.noPeriodCourses, counts.noWeekCourses),
         )
         assertEquals(0, exportedEntries(wakeUp(listOf(restored))))

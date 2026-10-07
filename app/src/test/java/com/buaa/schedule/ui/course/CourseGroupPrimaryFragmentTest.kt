@@ -1,6 +1,7 @@
 package com.buaa.schedule.ui.course
 
 import com.buaa.schedule.domain.model.Course
+import com.buaa.schedule.domain.schedule.SemesterStats
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
@@ -14,7 +15,7 @@ import org.junit.Test
  * 1. `Course.startPeriod` 把空节次兜底成 **1**（它自己的 KDoc 就写着「别拿它当位置用」），
  *    于是**一门没有节次的碎片凭空占掉第 1 节、赢下整组的门面** —— 组名、教师、门面名
  *    全取自那枚"根本没有时间"的碎片；
- * 2. `?: fragments.first()` 是不可达支（`groupBy` 的 value 必非空）。
+ * 2. `?: fragments.first()` 是不可达支（归并内核交出来的 `fragments` 必非空）。
  *
  * 现判据（[primaryFragmentOf]）：**没有节次的碎片不参与"谁最先上"的比较**，四档
  * 有没有节次 → 节次 → 星期 → 行 id。本表逐档摆格子，每格都同时核对
@@ -22,13 +23,17 @@ import org.junit.Test
  *
  * ## 「并列可能不可能」这一格的判定（依据写在测试里，不靠卡面口径）
  *
- * 读 [groupKeyOf] 的键形就能判死，两族键各有各的并列法，**并列是常态而不是假风险**：
+ * 读那一把尺的键形就能判死。**T224 换源之后全站只有一枚键**
+ * （[com.buaa.schedule.domain.schedule.SemesterStats.courseGroupKey]：有组键就是「学期|教务组键」，
+ * 手动课退化成「学期|课程名」），两族键各有各的并列法：
  * - 导入组（`sourceGroupKey` 非空）：键是「学期|教学班|课序号」，**不含星期与节次** ⇒
  *   同组可跨几天几节；而同一条教务记录里「一个教师 × 一个周次段」拆出的多枚片段
  *   星期与节次全同 ⇒ **节次档必然并列**（下面 R4/R5 两格）。
- * - 手动组（键是「manual:名称|星期|节次」）：键已经把星期与节次钉死 ⇒
- *   组内每一枚的节次与星期都相等 ⇒ **整组并列**（R6 那一格连带把那枚"不可能"钉死：
- *   手动组里"靠节次分出胜负"不可能，因为节次本身就在键里）。
+ * - 手动组（无组键，键 = 「学期|课程名」）：同样不含星期与节次 ⇒ 并进来的片段可以不同天不同节；
+ *   而"同一门手动课分两个周次段录两次"（R3/R6 那两格的形状）时节次与星期全同 ⇒
+ *   **节次档并列**，门面只能由后续档（星期 → id）定。
+ *   换源前那一族手动键是「manual:名称|星期|节次」，把星期与节次钉进键里、整组恒并列；
+ *   换源后"整组恒并列"不再由键形保证，但**并列仍是常态** —— 四档次序一枚都不许多、一枚都不许少。
  *
  * 只做源码级判据（JVM，无 Robolectric、无设备、不读时钟）。
  */
@@ -82,8 +87,9 @@ class CourseGroupPrimaryFragmentTest {
 
     /**
      * 并列档的**根据**（不是"我们假设有并列"）：并列那几格里，参与比较的键逐枚相等，
-     * 而 `groupKeyOf` 交出的键也相等（读 [CourseGroup.key]，它是同一枚键的原样端出），
-     * ⇒ 并列由键形造成，只能由后续档（星期 → id）收口。
+     * 而那一把尺交出的键也相等（读 [CourseGroup.key]，T224 换源后它就是
+     * [com.buaa.schedule.domain.schedule.SemesterStats.courseGroupKey] 的原样端出），
+     * ⇒ 并列由「键不含星期与节次」造成，只能由后续档（星期 → id）收口。
      */
     @Test
     fun `并列那一档的键真的相等 依据是键形而不是猜测`() {
@@ -104,13 +110,24 @@ class CourseGroupPrimaryFragmentTest {
             val days = pair.map { it.dayOfWeek }.distinct()
             assertEquals("${pair.first().name}：节次档并列（firstPeriodOrNull 相等）", 1, periods.size)
             assertEquals("${pair.first().name}：星期档也并列", 1, days.size)
-            // 手动组的键把星期与节次钉死 ⇒ 「靠节次在手动组里分出胜负」这一档**不可能**
-            assertEquals("手动组里两枚的 startPeriod 也相等（列序那把尺比不出东西）", pair[0].startPeriod, pair[1].startPeriod)
+            // 这两枚并列在节次档上 ⇒ 「靠节次分出胜负」在这一格里空转，门面只能由后续档定
+            assertEquals("${pair.first().name}：两枚的 startPeriod 也相等（列序那把尺比不出东西）", pair[0].startPeriod, pair[1].startPeriod)
         }
-        assertEquals("导入组的键就是 sourceGroupKey 原样（不含星期与节次 ⇒ 并列来自片段而非键）", "G1", importedGroup.key)
+        // 键逐字 = 内核那把尺（学期前缀 + 组键 / 退化名），本页不再自己拼键：这是"换源"的可复核形式
         assertEquals(
-            "手动组的键形 = 名称|星期|节次 ⇒ 组内节次与星期由键锁死（这一格是「手动组里靠节次分胜负不可能」的依据）",
-            "manual:自习|1|1,2",
+            "导入组的键就是 courseGroupKey 原样（不含星期与节次 ⇒ 并列来自片段而非键）",
+            SemesterStats.courseGroupKey(importedPair.first()),
+            importedGroup.key,
+        )
+        assertEquals("导入组那一族的键形 = 学期|组键（空学期退化成 |G1）", "|G1", importedGroup.key)
+        assertEquals(
+            "手动组的键就是 courseGroupKey 原样（T224 换源：不再是 manual:名称|星期|节次）",
+            SemesterStats.courseGroupKey(manualPair.first()),
+            manualGroup.key,
+        )
+        assertEquals(
+            "手动组那一族的键形 = 学期|课程名 ⇒ 键不含星期与节次，并列是数据造成的",
+            "|自习",
             manualGroup.key,
         )
 
@@ -229,7 +246,7 @@ class CourseGroupPrimaryFragmentTest {
             ),
             // R3 整组都没节次（手动组）：头两档比不出东西 ⇒ 星期也并列，由 id 收口（改前吃列表序）
             Case(
-                label = "R3 组内全部没节次（手动组：键把星期与节次都钉死了）",
+                label = "R3 组内全部没节次（手动组：同名三枚排在同一天，头两档比不出东西）",
                 fragments = listOf(
                     untimed(id = 9, name = "自习", day = 2, teacher = "辛"),
                     untimed(id = 5, name = "自习", day = 2, teacher = "己"),
@@ -277,9 +294,9 @@ class CourseGroupPrimaryFragmentTest {
                 expectedTeacher = "王",
                 expectedDisplayName = "高数",
             ),
-            // R6 手动组：键把星期与节次钉死 ⇒ 整组并列
+            // R6 手动组：同名课分两个周次段各录一次 ⇒ 星期与节次全同，整组在节次档并列
             Case(
-                label = "R6 手动组整组并列（键含星期与节次）",
+                label = "R6 手动组整组并列（同名同天同节次、只有周次段不同）",
                 fragments = listOf(
                     course(id = 21, name = "自习", day = 1, periods = listOf(1, 2), weeks = (1..8).toList(), teacher = "甲"),
                     course(id = 22, name = "自习", day = 1, periods = listOf(1, 2), weeks = (9..16).toList(), teacher = "乙"),

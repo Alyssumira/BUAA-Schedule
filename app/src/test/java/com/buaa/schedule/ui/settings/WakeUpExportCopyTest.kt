@@ -18,9 +18,16 @@ import org.junit.Test
  * 那一档 ⇒ 空周次的课整条不进导出件之后，"已导出 N 门课"仍是多的。现在四支：
  * 无缺失 / 只缺节次 / 只缺周次 / 两档都有，每一支的数字只跟着自己那一档出场。
  *
+ * **T224 把单位念对**：这一句吃的三枚数全数在**排课片段行**上（一条 Course = 一段排课，
+ * `ScheduleExporters.toWakeUpJson` 一条写出一条），此前却一律念「门课」⇒ 设置页那一格先说 22 门课、
+ * 点完 toast 说 20 门课，而统计页同一批数据说「18 门课 · 22 段排课」。今天四支都念「段排课 / N 段没有…」，
+ * **数字一枚没动**，动的是单位词与参数名（`totalFragments` / `noPeriodFragments` / `noWeekFragments`）。
+ * 每格都同时核对两件事：单位词一枚「门」都不许出现（下面是那一格），以及括号配平（另一格）。
+ *
  * 四支都逐字钉，两侧各一格：
- * - 朝宽（把右括号摘掉）⇒ [每一支都闭合] 与逐字那两格同时红；
- * - 朝严（把"另有 N 门没有节次"那一支无条件端出来）⇒ 零节次缺失那一格的逐字断言红。
+ * - 朝宽（把右括号摘掉）⇒ [每一支的括号都必须闭合] 与逐字那两格同时红；
+ * - 朝严（把"另有 N 段没有节次"那一支无条件端出来）⇒ 零节次缺失那一格的逐字断言红；
+ * - 朝漂（把单位词写回「门课」）⇒ [四支的措辞逐字钉住] 与「单位词只许段」那格同时红。
  */
 class WakeUpExportCopyTest {
 
@@ -43,7 +50,7 @@ class WakeUpExportCopyTest {
             total = 18,
             noPeriod = 0,
             noWeek = 0,
-            expected = "WakeUp JSON 已导出（18 门课）",
+            expected = "WakeUp JSON 已导出（18 段排课）",
             expectMentionsNoPeriod = false,
             expectMentionsNoWeek = false,
         ),
@@ -52,7 +59,7 @@ class WakeUpExportCopyTest {
             total = 5,
             noPeriod = 1,
             noWeek = 0,
-            expected = "WakeUp JSON 已导出（4 门课；另有 1 门没有节次、无法定位，未写入）",
+            expected = "WakeUp JSON 已导出（4 段排课；另有 1 段没有节次、无法定位，未写入）",
             expectMentionsNoPeriod = true,
             expectMentionsNoWeek = false,
         ),
@@ -61,7 +68,7 @@ class WakeUpExportCopyTest {
             total = 9,
             noPeriod = 3,
             noWeek = 0,
-            expected = "WakeUp JSON 已导出（6 门课；另有 3 门没有节次、无法定位，未写入）",
+            expected = "WakeUp JSON 已导出（6 段排课；另有 3 段没有节次、无法定位，未写入）",
             expectMentionsNoPeriod = true,
             expectMentionsNoWeek = false,
         ),
@@ -70,7 +77,7 @@ class WakeUpExportCopyTest {
             total = 2,
             noPeriod = 2,
             noWeek = 0,
-            expected = "WakeUp JSON 已导出（0 门课；另有 2 门没有节次、无法定位，未写入）",
+            expected = "WakeUp JSON 已导出（0 段排课；另有 2 段没有节次、无法定位，未写入）",
             expectMentionsNoPeriod = true,
             expectMentionsNoWeek = false,
         ),
@@ -80,7 +87,7 @@ class WakeUpExportCopyTest {
             total = 5,
             noPeriod = 0,
             noWeek = 1,
-            expected = "WakeUp JSON 已导出（4 门课；另有 1 门没有周次、无法定位，未写入）",
+            expected = "WakeUp JSON 已导出（4 段排课；另有 1 段没有周次、无法定位，未写入）",
             expectMentionsNoPeriod = false,
             expectMentionsNoWeek = true,
         ),
@@ -89,7 +96,7 @@ class WakeUpExportCopyTest {
             total = 7,
             noPeriod = 0,
             noWeek = 2,
-            expected = "WakeUp JSON 已导出（5 门课；另有 2 门没有周次、无法定位，未写入）",
+            expected = "WakeUp JSON 已导出（5 段排课；另有 2 段没有周次、无法定位，未写入）",
             expectMentionsNoPeriod = false,
             expectMentionsNoWeek = true,
         ),
@@ -98,16 +105,16 @@ class WakeUpExportCopyTest {
             total = 6,
             noPeriod = 1,
             noWeek = 2,
-            expected = "WakeUp JSON 已导出（3 门课；另有 1 门没有节次、2 门没有周次，都无法定位，未写入）",
+            expected = "WakeUp JSON 已导出（3 段排课；另有 1 段没有节次、2 段没有周次，都无法定位，未写入）",
             expectMentionsNoPeriod = true,
             expectMentionsNoWeek = true,
         ),
         Cell(
-            label = "两档全缺（写出去 0 门）",
+            label = "两档全缺（写出去 0 段）",
             total = 3,
             noPeriod = 1,
             noWeek = 2,
-            expected = "WakeUp JSON 已导出（0 门课；另有 1 门没有节次、2 门没有周次，都无法定位，未写入）",
+            expected = "WakeUp JSON 已导出（0 段排课；另有 1 段没有节次、2 段没有周次，都无法定位，未写入）",
             expectMentionsNoPeriod = true,
             expectMentionsNoWeek = true,
         ),
@@ -120,6 +127,24 @@ class WakeUpExportCopyTest {
                 "「${cell.label}」：total=${cell.total}、noPeriod=${cell.noPeriod}、noWeek=${cell.noWeek}",
                 cell.expected,
                 wakeUpExportMessage(cell.total, cell.noPeriod, cell.noWeek),
+            )
+        }
+    }
+
+    @Test
+    fun `单位词只许段排课 一句都不许念门`() {
+        // T224 那一半：这一句吃的数是排课片段枚数，念「门」就是与统计页两把尺
+        for (cell in cells) {
+            val text = wakeUpExportMessage(cell.total, cell.noPeriod, cell.noWeek)
+            assertEquals(
+                "「${cell.label}」那句里的「门」必须 0 枚（导出件的数吃的是片段行，门是另一把尺）。" +
+                    "实到那句：$text",
+                0,
+                text.count { it == '门' },
+            )
+            assertTrue(
+                "「${cell.label}」那句必须把写出去的枚数念成「段排课」。实到那句：$text",
+                text.contains("${cell.total - cell.noPeriod - cell.noWeek} 段排课"),
             )
         }
     }
@@ -157,10 +182,10 @@ class WakeUpExportCopyTest {
                 assertFalse("零缺失那句不许出现『另有』：$text", text.contains("另有"))
             } else {
                 if (cell.noPeriod > 0) {
-                    assertTrue("没节次那档要把门数说死：$text", text.contains("另有 ${cell.noPeriod} 门没有节次"))
+                    assertTrue("没节次那档要把段数说死：$text", text.contains("另有 ${cell.noPeriod} 段没有节次"))
                 }
                 if (cell.noWeek > 0) {
-                    assertTrue("没周次那档要把门数说死：$text", text.contains("${cell.noWeek} 门没有周次"))
+                    assertTrue("没周次那档要把段数说死：$text", text.contains("${cell.noWeek} 段没有周次"))
                 }
             }
             // 一句 Snackbar 至多一个「另有」：两档都有缺失时也是同一句里并列，不是第二本册子
@@ -174,13 +199,13 @@ class WakeUpExportCopyTest {
     }
 
     @Test
-    fun `报的门数是写出去的那几门不是课程总数`() {
-        // T27：没有节次的课整条不进导出件 ⇒ 括号里那个数只能是"写出去了几门"
-        val text = wakeUpExportMessage(totalCourses = 7, noPeriodCourses = 2, noWeekCourses = 0)
-        assertTrue("应报 5 门（实际那句：$text）", text.startsWith("WakeUp JSON 已导出（5 门课"))
-        assertFalse("不许把 7 门报成写出去了 7 门：$text", text.contains("（7 门课"))
-        // T203：两档各减一次（两档互斥，所以减两次不会把同一门减两遍）
-        val both = wakeUpExportMessage(totalCourses = 7, noPeriodCourses = 2, noWeekCourses = 3)
-        assertTrue("两档都缺时要报 2 门（实际那句：$both）", both.startsWith("WakeUp JSON 已导出（2 门课"))
+    fun `报的段数是写出去的那几段不是片段总数`() {
+        // T27：没有节次的片段整条不进导出件 ⇒ 括号里那个数只能是"写出去了几段"
+        val text = wakeUpExportMessage(totalFragments = 7, noPeriodFragments = 2, noWeekFragments = 0)
+        assertTrue("应报 5 段（实际那句：$text）", text.startsWith("WakeUp JSON 已导出（5 段排课"))
+        assertFalse("不许把 7 段报成写出去了 7 段：$text", text.contains("（7 段排课"))
+        // T203：两档各减一次（两档互斥，所以减两次不会把同一段减两遍）
+        val both = wakeUpExportMessage(totalFragments = 7, noPeriodFragments = 2, noWeekFragments = 3)
+        assertTrue("两档都缺时要报 2 段（实际那句：$both）", both.startsWith("WakeUp JSON 已导出（2 段排课"))
     }
 }

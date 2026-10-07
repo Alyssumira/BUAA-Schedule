@@ -140,7 +140,10 @@ class CourseManagementImportMessageWiringGuardTest {
         val lines = raw.split('\n').let { if (it.last().isBlank()) it.dropLast(1) else it }.map { it.trim() }
         assertEquals(
             "这一页今天仍是 ${PAGE_LINES} 行（T134 判「不动 main」、T124a 搬走那一枚协程的接收者后" +
-                "本格重钉到现值；谁再插谁删都要先让这一格红、再把第 ①②⑤ 层的落点判据一起重钉）。\n" +
+                "本格重钉到现值、T224 把归并换源到 `SemesterStats.creditsByCourse` 后再重钉一次：" +
+                "文件头 +4 行、import +1 行 ⇒ 十八枚整体 +5，册子之后才长的 `groupCourses` 与" +
+                "`groupColorScopeNote` 那一族注释不参与这一枚偏移。" +
+                "谁再插谁删都要先让这一格红、再把第 ①②⑤ 层的落点判据一起重钉）。\n" +
                 "复算：wc -l app/src/main/java/$PAGE",
             PAGE_LINES,
             lines.size,
@@ -585,28 +588,33 @@ class CourseManagementImportMessageWiringGuardTest {
         // `:181` 那一行由 `scope.launch {` 改成 `viewModel.viewModelScope.launch {` ⇒ 181 起整体 +5。
         // T170 又在这一页的 `items(groups, …)` 那一枚调用点上给组卡与尾部垫高各加了一枚
         // contentType（+8 行落在 :172 那一处、+4 行落在尾部 `item { Spacer }` 那一处）
-        // ⇒ 组卡那一枚协程起整体 +8、ModalTransition 起整体 +12；逐字原文一字未动，
-        // 下面这十八枚行号按现盘重钉（复算：wc -l = 468，逐枚 awk 'NR==行号'）。
-        const val PAGE_LINES = 542
+        // ⇒ 组卡那一枚协程起整体 +8、ModalTransition 起整体 +12；逐字原文一字未动。
+        // T224 把归并换源到 SemesterStats.creditsByCourse：文件头 KDoc +4 行、import +1 行 ⇒
+        // 这十八枚逐字原文仍然一字未动，行号整体 +5（`groupCourses` 与 `groupColorScopeNote` 那两处
+        // 改动都落在本册子末档 244 之后，所以偏移是同一个常数，不是逐枚重量的）。
+        // 下面这十八枚行号按现盘重钉（复算：wc -l = 593，逐枚 awk 'NR==行号'）。
+        // ⚠️ 本行注释此前写着「wc -l = 468」而常量是 542 —— 那是 T170 之后的注释没跟上 T207 的插行，
+        // 本轮一并重钉（枚数与逐字判据一格未减）。
+        const val PAGE_LINES = 593
         val ANCHORS = listOf(
-            99 to "val state by viewModel.uiState.collectAsState()",
-            105 to "val snackbarHostState = remember { SnackbarHostState() }",
-            109 to "Scaffold(",
-            110 to "snackbarHost = { SnackbarHost(snackbarHostState) },",
-            194 to "viewModel.viewModelScope.launch {",
-            195 to "viewModel.updateCourse(",
-            196 to "primary.copy(colorIndex = index, customColorArgb = null),",
-            219 to "ModalTransition(payload = pendingDelete) { group, modal ->",
-            227 to "confirmButton = {",
-            230 to "pendingDelete = null",
-            231 to "scope.launch {",
-            232 to GROUP_READ_VERDICT,
-            233 to "val result = snackbarHostState.showSnackbar(",
-            234 to GROUP_MESSAGE_EXPRESSION,
-            235 to GROUP_GATED_LABEL,
-            236 to GROUP_DURATION,
-            238 to GROUP_PERFORMED,
-            239 to GROUP_UNDO,
+            104 to "val state by viewModel.uiState.collectAsState()",
+            110 to "val snackbarHostState = remember { SnackbarHostState() }",
+            114 to "Scaffold(",
+            115 to "snackbarHost = { SnackbarHost(snackbarHostState) },",
+            199 to "viewModel.viewModelScope.launch {",
+            200 to "viewModel.updateCourse(",
+            201 to "primary.copy(colorIndex = index, customColorArgb = null),",
+            224 to "ModalTransition(payload = pendingDelete) { group, modal ->",
+            232 to "confirmButton = {",
+            235 to "pendingDelete = null",
+            236 to "scope.launch {",
+            237 to GROUP_READ_VERDICT,
+            238 to "val result = snackbarHostState.showSnackbar(",
+            239 to GROUP_MESSAGE_EXPRESSION,
+            240 to GROUP_GATED_LABEL,
+            241 to GROUP_DURATION,
+            243 to GROUP_PERFORMED,
+            244 to GROUP_UNDO,
         )
     }
 }
