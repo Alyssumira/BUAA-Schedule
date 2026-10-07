@@ -78,8 +78,11 @@ sealed interface UpdateCheckVerdict {
     val trigger: UpdateCheckTrigger
 
     /**
-     * 值不值得弹窗打断用户。自动检查只有「发现新版本」才出声（否则每天第一次打开都要被
-     * 一个网络错误打断），手动检查那一侧无论哪一档都要给反馈。
+     * 值不值得弹窗打断用户。同一个档位名在两侧要说不同的话：
+     * **自动**那一手只有「发现新版本」才出声（否则每天第一次打开都要被一个网络错误打断，
+     * 而未同意隐私的用户每次冷启动都要被一句"没同意"打断）；
+     * **手动**那一手除了「正在转圈」那一档，每一档都必须给反馈——
+     * 这是本卡的不变量，改前正是它被整段跳过（台账 #501）。
      */
     val announces: Boolean
         get() = when (this) {
@@ -88,10 +91,18 @@ sealed interface UpdateCheckVerdict {
             is SuppressedByIgnore -> trigger == UpdateCheckTrigger.Manual
             is NothingNewer -> trigger == UpdateCheckTrigger.Manual
             is CheckFailed -> trigger == UpdateCheckTrigger.Manual
-            is HeldByThrottle, is RunCheck -> false
+            // 「手动那一下绝不静默」是不变量：这一档在今天的调用点上只可能由自动那一手走到
+            // （每日节流里 force 永远放行，那把尺住在 shouldCheckToday，本文件不重抄第二把），
+            // 真走到手动这一格就说明调用点把结论递错了 —— 宁可念一句「今天已经查过」，
+            // 也不许把它折成"按了没反应"，那正是本卡第 1 处病灶的形状。
+            is HeldByThrottle -> trigger == UpdateCheckTrigger.Manual
+            is RunCheck -> false
         }
 
-    /** 准入通过：该出网查一次（调用点据此把状态摆成「正在检查」） */
+    /**
+     * 准入通过：该出网查一次（调用点据此把状态摆成「正在检查」——那是手动那一手唯一的
+     * 非说话型反馈，也是 [announces] 里唯一为假的手动档）。
+     */
     data class RunCheck(
         override val trigger: UpdateCheckTrigger,
     ) : UpdateCheckVerdict
@@ -99,17 +110,19 @@ sealed interface UpdateCheckVerdict {
     /**
      * 被隐私闸门挡下：这一手**根本没出网**。
      *
-     * 手动那一下必须念 [copy]（改前正是这一档整段静默、零日志）；自动那一下不打断用户，
+     * 手动那一下必须念 [spoken]（改前正是这一档整段静默、零日志）；自动那一下不打断用户，
      * 但调用点仍要留一条读得到的痕迹。
      */
     data class BlockedByPrivacy(
         override val trigger: UpdateCheckTrigger,
-        val copy: UpdateCopy,
+        val spoken: UpdateCopy,
     ) : UpdateCheckVerdict
 
     /**
-     * 被每日节流压掉：今天已经成功查过一次（只有自动那一手会走到这里，手动永远放行）。
-     * [lastOutcome] 带着上一手的结果档，所以设置页那一行说的是实话而不是「一切正常」。
+     * 被每日节流压掉：今天已经成功查过一次（今天的调用点上只有自动那一手会走到这里，
+     * 手动那一手在 `shouldCheckToday` 里就放行了，本文件不重抄那把尺）。
+     * [lastOutcome] 带着上一手的结果档，所以设置页那一行说的是实话而不是「一切正常」；
+     * 那一行念的话由 [UpdateCheckGate.restingLine] 一处写完，本档不另存一份副本。
      */
     data class HeldByThrottle(
         override val trigger: UpdateCheckTrigger,
@@ -131,7 +144,7 @@ sealed interface UpdateCheckVerdict {
     data class SuppressedByIgnore(
         override val trigger: UpdateCheckTrigger,
         val version: String,
-        val copy: UpdateCopy,
+        val spoken: UpdateCopy,
     ) : UpdateCheckVerdict
 
     /** 查成功了，Gitee 上没有比当前更新的版本 */
