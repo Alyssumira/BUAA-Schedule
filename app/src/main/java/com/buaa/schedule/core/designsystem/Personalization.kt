@@ -31,7 +31,14 @@ object Personalization {
      * 用户仍可在设置页一键关闭。
      */
     var glassTier by mutableIntStateOf(DEFAULT_GLASS_TIER)
-    var cardAlpha by mutableFloatStateOf(0.88f)
+
+    /**
+     * 用户「卡片透明度」偏好，定义域 [MIN_CARD_ALPHA]..[MAX_CARD_ALPHA]（0.3–1.0，滑条那一档）。
+     *
+     * 盘上读数必须经 [cardAlphaFromDisk] 才进得来（[load]），运行期唯一的写入口是设置页那根
+     * 滑块（`valueRange` 交出的也是这一档）—— 见文件末那句"定义域只许有一把尺"的注释。
+     */
+    var cardAlpha by mutableFloatStateOf(DEFAULT_CARD_ALPHA)
     var wallpaperUri: String? by mutableStateOf(null)
 
     /**
@@ -107,6 +114,22 @@ object Personalization {
     const val MIN_WEEK_CORNER = 0f
     const val MAX_WEEK_CORNER = 24f
 
+    /**
+     * 「卡片透明度」的定义域（0.3–1.0），**全站这一枚偏好只许有这一把尺**：
+     * 左端 = 设置页那根滑条声明的 `valueRange = 0.3f..1f` 的下界（运行期唯一的写入口），
+     * 右端 = 同一根滑条的上界；周视图课程卡那根线性映射今天把同两个端点写成字面量
+     * （`((cardAlpha - 0.3f) / 0.7f).coerceIn(0f, 1f)`，`0.7f` 就是 1.0 − 0.3），
+     * 那两枚字面量与本卡这枚常量的一致性由 `GlassAlphaRangeSingleSourceGuardTest` 钉住
+     * （本卡只许改这颗文件，所以对齐走守卫、不走替换）。
+     * 四类玻璃表面（面板 / 底栏 / FAB / 菜单）经 [DesignTokens.cardAlphaScale] 吃这枚值，
+     * 那一家自己的饱和点是 0.1584–1.1（= 0.18×0.88 与 1.25×0.88），
+     * 把定义域夹在 0.3–1.0 不会在任何一段上造出死区，也不改动任何一格合法档位的读数。
+     */
+    const val MIN_CARD_ALPHA = 0.3f
+
+    /** [MIN_CARD_ALPHA] 的另一头：1.0 = 各表面按自己的材质档位画满，再往右没有档 */
+    const val MAX_CARD_ALPHA = 1f
+
     const val DEFAULT_BLUR_DP = 0f
     /**
      * 面板上的 tint 太实就等于一块不透明灰板（真机反馈「大块玻璃太多了有点丑」），
@@ -115,6 +138,13 @@ object Personalization {
     const val DEFAULT_PANEL_BLUR_DP = 12f
     const val DEFAULT_BRIGHTNESS = 1f
     const val DEFAULT_ZOOM = 1f
+
+    /**
+     * 「卡片透明度」的默认档，也是 [DesignTokens.cardAlphaScale] 里那枚除数
+     * （「默认 = 1.0 倍」就是这么来的：0.88 / 0.88 = 1）。两处字面量必须同值，
+     * 那一家不归本卡改，所以由 `GlassAlphaRangeSingleSourceGuardTest` 钉住对齐。
+     */
+    const val DEFAULT_CARD_ALPHA = 0.88f
     const val DEFAULT_USE_SYSTEM_WALLPAPER = true
     const val DEFAULT_USE_DYNAMIC_COLOR = false
     const val DEFAULT_GLASS_TIER = DesignTokens.GLASS_TIER_STANDARD
@@ -152,7 +182,7 @@ object Personalization {
             hasLegacy -> DesignTokens.GLASS_TIER_STANDARD
             else -> DEFAULT_GLASS_TIER
         }
-        cardAlpha = prefs.getFloat("glass_alpha", 0.88f)
+        cardAlpha = prefs.getFloat("glass_alpha", DEFAULT_CARD_ALPHA).cardAlphaFromDisk()
         wallpaperUri = prefs.getString("wallpaper_uri", null)
         // 老版本没有这个键：默认改为"跟随桌面壁纸"，与新版一致
         useSystemWallpaper = prefs.getBoolean("wallpaper_use_system", DEFAULT_USE_SYSTEM_WALLPAPER)
@@ -268,3 +298,49 @@ object Personalization {
         save(context)
     }
 }
+
+/**
+ * 盘上那枚 `glass_alpha` → [Personalization.cardAlpha] 的唯一落点：
+ * 有限数夹进 [Personalization.MIN_CARD_ALPHA]..[Personalization.MAX_CARD_ALPHA]，
+ * NaN 与 ±∞ 回 [Personalization.DEFAULT_CARD_ALPHA]（与"键不存在"那一档交出同一个数）。
+ *
+ * ## 为什么这枚夹取写在读盘处，不写在六处消费点
+ *
+ * 消费侧一共六家，它们各自的夹取**都只夹"倍率乘出来的表面 alpha"，不夹这枚输入**，
+ * 而且没有一家能挡住 NaN（`Float.coerceIn` 对 NaN 两次比较都是 false ⇒ 原样穿出，
+ * 实测钉在 `GlassAlphaDiskClampTest` 的 NaN 那一格）：
+ * - `GlassSurface`（面板）→ `DesignTokens.cardAlphaScale(userAlpha)` → `glassSurfaceAlpha`
+ *   的 `coerceIn(floor.coerceAtMost(0.96f), 0.96f)`；
+ * - `LiquidBottomTabs`（底栏）→ 同一家 `cardAlphaScale` → `bottomBarSurfaceAlpha` 的
+ *   `coerceIn(floor.coerceAtMost(0.60f), 0.60f)`；
+ * - `LiquidFab` → `cardAlphaScale` → `(0.30f * alphaScale).coerceIn(0.08f, 0.55f)`；
+ * - `LiquidMenu` → `cardAlphaScale` → `(material.surfaceAlpha * alphaScale).coerceIn(0.08f, 0.5f)`；
+ * - `WeekView`（课程卡 tintAlpha）→ `((cardAlpha - 0.3f) / 0.7f).coerceIn(0f, 1f)`；
+ * - `SettingsScreen`（滑条 + 预览 + 那句百分数）→ `valueRange = 0.3f..1f`。
+ *
+ * 前四家的倍率在 0.1584–1.1 之外饱和、第五家在 0.3–1.0 之外饱和、第六家干脆声明了这一档
+ * 定义域 —— **六家合起来的合法输入就是 0.3–1.0，唯一且同一条**（底栏那 0.60 是"乘完之后"的
+ * 天花板，不是对输入的第二个定义域，别把它读成"两套区间"）。所以夹在输入侧不改变任何一格
+ * 合法档位的读数：0.3–1.0 之内的数原样穿过，之外的数在六家那里本来就已经被饱和掉。
+ * 反过来，把夹取摊到六处消费点要复制六份区间字面量（正是本卡要治的"两把尺各量各的"），
+ * 而且 `cardAlpha` 本身仍是 `public var`，任何一处新写入都能再塞进越界值。
+ * 按本仓派生字段铁律：这枚值是 f(盘上同一批参数) 的**边界清洗**，落点就该在边界上。
+ *
+ * ## 老数据那一格
+ *
+ * 偏好文件可能被手改过、也可能由旧版本写过别的档。改完之后**第一次读盘不崩**由两件事保证：
+ * 送进 `coerceIn` 的区间端点是两枚编译期常量（`MIN_CARD_ALPHA < MAX_CARD_ALPHA` 恒成立，
+ * 于是 T22 那一族 `Cannot coerce value to an empty range` 在这条链上没有载体 ——
+ * 空区间那枚 FATAL 的成因是被**反解**出来的下限越过天花板，不是这里的字面量），
+ * 且交出去的数永远落在 0.3–1.0，不再往下游送 NaN/∞。钉在 `GlassAlphaDiskClampTest` 的
+ * 「毒档全扫一遍都不抛」那一格。
+ *
+ * internal + 顶层函数：`Personalization` 是持 Compose State 的单例，本模块没有 Robolectric，
+ * 只有抽成顶层纯函数才让 JVM 单测跑得动这张表。
+ */
+internal fun Float.cardAlphaFromDisk(
+    min: Float = Personalization.MIN_CARD_ALPHA,
+    max: Float = Personalization.MAX_CARD_ALPHA,
+    fallback: Float = Personalization.DEFAULT_CARD_ALPHA,
+): Float = if (isFinite()) coerceIn(min, max) else fallback
+
