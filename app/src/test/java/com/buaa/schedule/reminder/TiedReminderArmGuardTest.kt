@@ -94,9 +94,10 @@ class TiedReminderArmGuardTest {
     }
 
     /**
-     * **读形状 + 抹注释找锚点**：课堂铃两枚档位本体里的每一枚 `runCatching` 都必须被链接住
-     * （`.onFailure` / `.recoverCatching` / `.getOrDefault` / `.isSuccess` 之一），
-     * 不许出现"裸着一枚 runCatching 然后 return" —— 那正是病灶 B 第①格的形状。
+     * **读形状 + 抹注释找锚点**：课堂铃两枚档位本体里的每一枚 `runCatching` 都必须被链接住，
+     * 而且**排铃那一手必须接 `.onFailure` / `.recoverCatching`**（只有读授权那一问允许
+     * `.getOrDefault(false)` 的保守默认值）。裸着一枚 `runCatching` 再 `return` 是病灶 B 第①格，
+     * 接了 `.isSuccess` 却不接 `onFailure` 是它的另一半 —— 结论有了、logcat 里还是零证据。
      *
      * 必须先抹注释：这两条链的 KDoc 里**谈到了** `runCatching` 与 `Log.`（口径说明），
      * 不抹就会把散文当证据。
@@ -289,7 +290,14 @@ class TiedReminderArmGuardTest {
 
     /**
      * 找出 body 里每一枚"裸着的 runCatching"：跳过它自己的 `{...}` 或 `(...)` 之后，
-     * 下一个非空字符必须是 `.`，并且那一段链上必须出现消费结论的写法之一。
+     * 下一个非空字符必须是 `.`（链式消费结论）。
+     *
+     * 两档判据（口径要分开，否则"用 `.isSuccess` 消费掉但不留痕"这种形状会被放行，
+     * 而它恰恰就是病灶 B 的另一半：结论有了、logcat 里还是零证据）：
+     * - **排铃那一手**（块体里没有 `canScheduleExactAlarms`）：链上必须出现
+     *   `.onFailure` 或 `.recoverCatching`，这是"失败要能被看见"；
+     * - **读授权那一问**（块体里就是 `canScheduleExactAlarms()`）：允许保守默认值
+     *   （`.getOrDefault(false)` 判成"不能精确"，随后那一手仍会留痕），只要求结果被消费掉。
      */
     private fun bareRunCatching(name: String, body: String): List<String> {
         val offenders = mutableListOf<String>()
@@ -321,11 +329,17 @@ class TiedReminderArmGuardTest {
                 offenders += "$name：runCatching 的块没配平（@$at）"
                 continue
             }
+            val guarded = body.substring(i, index + 1)
             val after = body.substring(index + 1).trimStart()
             if (!after.startsWith(".")) {
                 offenders += "$name：裸着的 runCatching，后面直接是「${after.take(16).replace("\n", "⏎")}」（@$at）"
-            } else if (CHAIN_HANDLES.none { after.startsWith(it) }) {
-                offenders += "$name：runCatching 的链上没人消费结论「${after.take(24).replace("\n", "⏎")}」（@$at）"
+            } else if (guarded.contains(EXACT_ALARM_QUERY)) {
+                if (CHAIN_HANDLES.none { after.startsWith(it) }) {
+                    offenders += "$name：读授权那一步连结果都没人接「${after.take(24).replace("\n", "⏎")}」（@$at）"
+                }
+            } else if (LOG_CHAIN.none { after.startsWith(it) }) {
+                offenders += "$name：排铃那一手的 runCatching 没接 onFailure/recoverCatching" +
+                    "（结论可以被消费，但失败必须留痕）「${after.take(24).replace("\n", "⏎")}」（@$at）"
             }
         }
     }
@@ -363,6 +377,12 @@ class TiedReminderArmGuardTest {
         const val DECLARATION = "private const val REQUEST_CODE_REMINDER"
         const val LOOK_UP_CALL = "existingReminderSlot("
         const val RUN_CATCHING = "runCatching"
+
+        /** 读授权那一问（允许保守默认值，不许无人接结果） */
+        const val EXACT_ALARM_QUERY = "canScheduleExactAlarms"
+
+        /** 排铃那一手必须接的链：留痕（onFailure）或"失败后换一手再试并留痕"（recoverCatching） */
+        val LOG_CHAIN = listOf(".onFailure", ".recoverCatching")
 
         /** object 成员缩进就是 4 格，比它深的还函数体里 */
         const val SIBLING_INDENT = 4
