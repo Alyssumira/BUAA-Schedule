@@ -1,10 +1,13 @@
 package com.buaa.schedule.ui.signin
 
 import java.io.File
+import java.security.MessageDigest
+import java.util.Properties
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.fail
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -267,6 +270,104 @@ class ScanSecondEngineWiringGuardTest {
         assertTrue("release 还在用 legacy packaging（.so 压缩入库）：", script.contains("useLegacyPackaging = true"))
     }
 
+    // ---- ④b′ 那六条排除挂在**谁**身上（台账 #339：release 专属裁剪的"只在 release"那把尺）----
+
+    /**
+     * ④b 比的是那六个文件名字符串；这一条比的是"这段排除长在谁的接收者上"。
+     *
+     * 少了这一条会留下什么：把 `excludes.addAll` 那一格挂到 `selector().all()` 或第二枚
+     * `onVariants` 上、或者把 `variant.` 这个显式接收者省掉搬到别处 —— **六条文件名字面一字不动**，
+     * 于是 ④b 与 `BarhopperNativeLibProbeTest` ⑤ 全绿、编译全绿、门禁三步全绿，而 debug 包从此
+     * 只剩 arm64：x86_64 模拟器的扫码页永远只能走降级分支，本仓全部装机验收都在那台 AVD 上跑
+     * ⇒ 验收链自己先瞎掉。这一族已经付过一次钱（裁剪一度对 debug 也生效），
+     * `app/build.gradle.kts` 那句"只能写在这里"的散文说的也是同一件事 —— 散文不是尺，这一条才是。
+     *
+     * 钉法（四家点名）：**读形状**（花括号/圆括号配平取 `androidComponents` → `onVariants` → 闭包体
+     * 三层区间）+ **数出现次数**（`onVariants` 恰一枚、两枚成员各恰一处）+ **抹注释找锚点**
+     * （脚本注释里就写着 `androidComponents`、`buildTypes.release`、"lib/x86 加目录通配"这些反例，
+     * 不抹注释就会把散文数进去）；字符串字面量**必须留着**，因为锚点 `withBuildType("release")`
+     * 的内容就在字面量里，用 [blankCommentsAndLiterals] 那一把会把它抹平。
+     */
+    @Test
+    fun jniLibsTrimHangsOnTheReleaseVariantReceiver() {
+        val code = commentsOutKeepingLiterals(readRepoFile(BUILD_SCRIPT))
+        val components = topLevelBlock(code, "androidComponents")
+        val inComponents = code.substring(components.first, components.last + 1)
+        val variantCalls = indexOfAll(inComponents, "onVariants(")
+        assertEquals(
+            "androidComponents 里只许一枚 onVariants（多一枚就有第二个变体也挂上了裁剪，而 ④b 那六个文件名" +
+                "看不见这件事）：实到 ${variantCalls.size} 枚",
+            1,
+            variantCalls.size,
+        )
+        val callAt = components.first + variantCalls[0]
+        val selectorOpen = code.indexOf('(', callAt)
+        val selectorClose = matchingParen(code, selectorOpen)
+        val selector = code.substring(selectorOpen, selectorClose + 1).replace(" ", "")
+        assertTrue(
+            "选择器不再是 selector().withBuildType(\"release\")，实到 $selector：换成 all() / withBuildType(\"debug\") " +
+                "就等于对 debug 包一起裁，模拟器上的扫码页永远走降级分支（那正是这一格付过的钱）",
+            selector.contains("selector().withBuildType(\"release\")"),
+        )
+        assertFalse("选择器里出现了 all()（对所有变体生效＝debug 也裁）：$selector", Regex("""\ball\(\)""").containsMatchIn(selector))
+
+        val bodyOpen = code.indexOf('{', selectorClose)
+        val bodyClose = matchingBrace(code, bodyOpen)
+        val header = code.substring(selectorClose + 1, minOf(bodyOpen + 40, code.length))
+        val param = Regex("""\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*->""").find(header)?.groupValues?.get(1)
+        checkNotNull(param) { "onVariants 之后不是 { 参数 -> 那一形，接收者链没起点可认：$header" }
+
+        for (needle in listOf(EXCLUDES_NEEDLE, LEGACY_PACKAGING_NEEDLE)) {
+            val hits = indexOfAll(code, needle)
+            assertEquals(
+                "$BUILD_SCRIPT 里 $needle 应恰好一处（多出来的那一处挂在谁的接收者上没人核对过），实到 ${hits.size} 处",
+                1,
+                hits.size,
+            )
+            val at = hits[0]
+            assertTrue(
+                "$needle 不在 release variant 的闭包里（它在 androidComponents 块${if (at in components) "内" else "外"}、" +
+                    "在 onVariants 闭包${if (at in (bodyOpen + 1)..bodyClose) "内" else "外"}）：" +
+                    "写进顶层 android.packaging、或写进 buildTypes.release 的花括号里沿隐式接收者链静默绑到外层，" +
+                    "两种都编译得过、行为都等于顶层 ⇒ debug 只剩 arm64",
+                at in (bodyOpen + 1)..bodyClose,
+            )
+            val lineStart = code.lastIndexOf('\n', at) + 1
+            val receiver = code.substring(lineStart, at).trim()
+            assertEquals(
+                "$needle 的接收者链应当是闭包参数 \"$param.\"（由 release 那一枚 onVariants 给出），实到 \"$receiver\"：" +
+                    "把显式接收者省掉，AGP 会沿外层接收者链绑到 android.packaging —— 编译不报错、门禁不红，" +
+                    "只有 debug 包的 ABI 少三档",
+                "$param.",
+                receiver,
+            )
+        }
+
+        // 反向钉一：顶层 android.packaging {} 里不许出现 jniLibs（裁剪只能挂在 release variant 上）
+        val android = topLevelBlock(code, "android")
+        val androidBody = code.substring(android.first, android.last + 1)
+        val packagingBlocks = indexOfAll(androidBody, "packaging {")
+        assertTrue("顶层 android 块里找不到 packaging { 那一格：形状改了要回来重钉（扫不到等于这条没跑）", packagingBlocks.isNotEmpty())
+        for (hit in packagingBlocks) {
+            val open = android.first + androidBody.indexOf('{', hit)
+            val close = matchingBrace(code, open)
+            assertFalse(
+                "顶层 android.packaging 里出现了 jniLibs —— 那是对**所有**变体裁剪，" +
+                    "debug 包只剩 arm64，x86_64 模拟器扫码永远降级：\n" + code.substring(open, close + 1),
+                code.substring(open, close + 1).contains("jniLibs"),
+            )
+        }
+        // 反向钉二：buildTypes 块里不许出现 packaging 成员（"只能写在这里"那句散文的构造性版本）
+        val buildTypes = topLevelBlock(code, "buildTypes")
+        val buildTypesBody = code.substring(buildTypes.first, buildTypes.last + 1)
+        assertFalse(
+            "buildTypes 块里出现了 packaging：AGP 的 BuildType 没有这个成员，写进去会沿隐式接收者链" +
+                "静默绑到外层 android.packaging（编译不报错、行为等于顶层），" +
+                "表现就是改完 debug 包照样只剩 arm64",
+            buildTypesBody.contains("packaging"),
+        )
+    }
+
     // ---- ④c–④e 反向钉：T65 撤走的东西不许回来 ----
 
     /** ④c 手电/补光一族在扫码这一页零命中（产品决策 2026-09-22：场景不用，永久撤走） */
@@ -357,18 +458,18 @@ class ScanSecondEngineWiringGuardTest {
      * 这一条的存在理由与 `BarhopperNativeLibProbeTest` ⑤ 相反：那条防的是清单漂走，
      * 这条防的是"清单对了但没生效"（写进 `android{}` 顶层、或版本目录被别的变体覆盖那一类）。
      *
-     * ⚠️ 没有 release 产物时 assumeTrue 跳过 ⇒ 门禁顺序必须先跑 `:app:assembleRelease`
-     *（仓库口径：跳过数记在门禁里，跳了就不是绿）。
+     * ⚠️ 产物从哪来、能不能算本轮：走 [releaseApkForArtifactLayer] —— 日常门禁里没有产物就跳
+     *   （单测不该去拉起 release 构建），而 `release.ps1` 的最后一步带着
+     *   `-PbuaaRequireReleaseArtifacts` 重跑本类 ⇒ 那时跳不过去：缺产物、产物不是本轮的（自证条的
+     *   SHA-256 / runId / 包内版本任一格对不上）都当场红。台账 #340 之前这一步排在产物**之前**，
+     *   于是兜底那颗 .so 压没压缩、zxingcpp/BarcodeReader 在不在 dex 这两格，发版路径上从没被读过。
      */
     @Test
     fun releaseApkShipsEachDecoderLibraryForArm64Only() {
-        val apk = releaseApk()
-        assumeTrue(
-            "没有 :app:assembleRelease 的产物（app/build/outputs/apk/release/\u002a.apk），产物层无从判断" +
-                "—— 脚本层那两条（④a/④b）才是这条链的下限",
-            apk != null,
+        val apk = releaseApkForArtifactLayer(
+            "脚本层那三条（④a、④b，以及钉接收者链的那一枚）才是这条链的下限",
         )
-        val entries = ZipFile(requireNotNull(apk)).use { zip ->
+        val entries = ZipFile(apk).use { zip ->
             zip.entries().toList().filter { it.name.startsWith("lib/") && it.name.endsWith(".so") }
         }
         check(entries.isNotEmpty()) { "release 包里一个 .so 都没有：ABI 剪枝伤及无辜了（连 graphics.path 都没了）" }
@@ -575,6 +676,230 @@ class ScanSecondEngineWiringGuardTest {
         }
         return String(out)
     }
+
+    // ---- 构建脚本文本形状工具（#339 的接收者链用）----
+
+    /**
+     * 抹注释、**字符串字面量原样保留**（与 [blankCommentsAndLiterals] 的分工：那一把把字面量也抹平，
+     * 而这里的锚点 `withBuildType("release")` 的内容就长在字面量里）。
+     * 注释里的 `androidComponents`、`buildTypes.release`、"lib/x86 加目录通配"那几处反例说明必须抹掉，
+     * 否则"数出现次数"会把散文数进账里（本仓的尺子栽过这一手）。
+     */
+    private fun commentsOutKeepingLiterals(src: String): String {
+        val out = src.toCharArray()
+        var i = 0
+        while (i < out.size) {
+            when {
+                src.startsWith("//", i) -> {
+                    val nl = src.indexOf('\n', i).let { if (it < 0) out.size else it }
+                    for (k in i until nl) if (out[k] != '\n') out[k] = ' '
+                    i = nl
+                }
+
+                src.startsWith("/*", i) -> {
+                    var depth = 1
+                    var j = i + 2
+                    while (j < out.size && depth > 0) {
+                        when {
+                            src.startsWith("/*", j) -> { depth++; j += 2 }
+                            src.startsWith("*/", j) -> { depth--; j += 2 }
+                            else -> j++
+                        }
+                    }
+                    for (k in i until j.coerceAtMost(out.size)) if (out[k] != '\n') out[k] = ' '
+                    i = j
+                }
+
+                src.startsWith("\"\"\"", i) -> {
+                    val end = src.indexOf("\"\"\"", i + 3).let { if (it < 0) out.size else it + 3 }
+                    i = end
+                }
+
+                out[i] == '"' || out[i] == '\'' -> {
+                    val quote = out[i]
+                    var j = i + 1
+                    while (j < out.size) {
+                        when {
+                            src[j] == '\\' -> j += 2
+                            src[j] == quote -> { j++; break }
+                            src[j] == '\n' -> break
+                            else -> j++
+                        }
+                    }
+                    i = j
+                }
+
+                else -> i++
+            }
+        }
+        return String(out)
+    }
+
+    /** 顶层 `name { ... }` 的花括号区间；0 枚或多于 1 枚都抛（多一枚就有第二个挂点，链无从核对） */
+    private fun topLevelBlock(code: String, name: String): IntRange {
+        val hits = Regex("\\b$name\\s*\\{").findAll(code).map { it.range.first }.toList()
+        check(hits.size == 1) {
+            "$BUILD_SCRIPT 顶层的 $name 块找到 ${hits.size} 枚，只许 1 枚：拆成两枚（比如再来一个 androidComponents）" +
+                "就意味着有第二个地方也能挂 jniLibs 裁剪，而这一条守卫看不见那一枚"
+        }
+        val open = code.indexOf('{', hits[0])
+        return open..matchingBrace(code, open)
+    }
+
+    /** 从 [openAt] 的 `{` 配平到对应 `}`；不配平就抛 —— 静默返回 -1 会让区间判断退化成"没比也算过" */
+    private fun matchingBrace(code: String, openAt: Int): Int {
+        check(code[openAt] == '{') { "锚点 $openAt 不是左花括号" }
+        var depth = 0
+        for (index in openAt until code.length) {
+            when (code[index]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return index
+                }
+            }
+        }
+        throw IllegalStateException("第 $openAt 个花括号没配平：脚本形状改了，接收者链要重看")
+    }
+
+    private fun matchingParen(code: String, openAt: Int): Int {
+        check(code[openAt] == '(') { "锚点 $openAt 不是左圆括号" }
+        var depth = 0
+        for (index in openAt until code.length) {
+            when (code[index]) {
+                '(' -> depth++
+                ')' -> {
+                    depth--
+                    if (depth == 0) return index
+                }
+            }
+        }
+        throw IllegalStateException("第 $openAt 个圆括号没配平")
+    }
+
+    private fun indexOfAll(haystack: String, needle: String): List<Int> {
+        val hits = ArrayList<Int>()
+        var from = 0
+        while (true) {
+            val at = haystack.indexOf(needle, from)
+            if (at < 0) return hits
+            hits += at
+            from = at + 1
+        }
+    }
+
+    private val EXCLUDES_NEEDLE = "packaging.jniLibs.excludes.addAll"
+    private val LEGACY_PACKAGING_NEEDLE = "packaging.jniLibs.useLegacyPackaging"
+
+    // ---- 产物层入口与自证条（#340，与 ReleaseForensicLogSurvivalTest 同一口径）----
+
+    /** 发版路径（release.ps1 最后一步带 -PbuaaRequireReleaseArtifacts）时缺产物 / 不是本轮的都当场红 */
+    private val releaseArtifactsRequired: Boolean
+        get() = System.getProperty(PROPERTY_REQUIRE_ARTIFACTS) == "true"
+
+    /**
+     * 产物层"读不到证据"的唯一出口（本文件的跳过只发生在这里）。与
+     * `ReleaseForensicLogSurvivalTest.missingArtifact` 同一口径：日常门禁跳，发版路径红。
+     */
+    private fun missingArtifact(reason: String, floor: String): Nothing {
+        if (releaseArtifactsRequired) {
+            fail(
+                "$reason\n—— 发版路径上这一格**不许跳过**（$PROPERTY_REQUIRE_ARTIFACTS 已命中）：" +
+                    "兜底那颗 .so 是不是 DEFLATED、zxingcpp/BarcodeReader 还在不在 release dex，" +
+                    "跳过了就一个字都没读到。$floor"
+            )
+        }
+        assumeTrue("$reason —— $floor", false)
+        throw IllegalStateException("unreachable")
+    }
+
+    /**
+     * 产物层该读的那一枚 release APK，并核 `:app:releasePackage` 写下的自证条。
+     *
+     * 旧读法 `sortedBy { it.name }.firstOrNull()` 在 signed 与 unsigned 并存时拿的是 **unsigned**
+     * 那一枚（`-` 是 0x2D、`.` 是 0x2E），真要发出去的包从没被读过；而且 build/ 里躺着上一轮残留时
+     * 它读的还是上一轮。自证条把这两格一起收掉：读它指的那枚文件、复算它的 SHA-256、
+     * 对本轮 runId 与包内版本（同一把尺，口径与 `ReleaseForensicLogSurvivalTest` 一致）。
+     */
+    private fun releaseApkForArtifactLayer(floor: String): File {
+        val root = findRepoRoot()
+        val provenance = readProvenance(root)
+        if (provenance == null) {
+            if (releaseArtifactsRequired) {
+                missingArtifact(
+                    "本轮没有 :app:releasePackage 写的自证条（$PROVENANCE_FILE）：这一趟没打出产物，" +
+                        "产物层只能去读 build/ 里剩着的那一枚，而它是不是本轮的没有东西能证明",
+                    floor,
+                )
+            }
+            return releaseApk() ?: missingArtifact("没有 :app:assembleRelease 的产物（app/build/outputs/apk/release 下的 .apk）", floor)
+        }
+        val relative = provenance.getProperty(KEY_APK)?.trim().orEmpty()
+        if (relative.isEmpty()) missingArtifact("自证条里没有 $KEY_APK 这一项（$PROVENANCE_FILE）", floor)
+        val apk = File(root, relative)
+        if (!apk.isFile) missingArtifact("自证条指着 $relative，可它不在盘上（$PROVENANCE_FILE 是旧的？）", floor)
+        val problems = ArrayList<String>()
+        val recordedSha = provenance.getProperty(KEY_APK_SHA)?.trim().orEmpty()
+        val actualSha = sha256Of(apk)
+        if (recordedSha.isEmpty()) {
+            problems += "自证条里没有 $KEY_APK_SHA"
+        } else if (!recordedSha.equals(actualSha, ignoreCase = true)) {
+            problems += "APK 字节与自证条不符（侧车 ${recordedSha.take(16)}… / 复算 ${actualSha.take(16)}…）" +
+                "⇒ 手里这枚不是 :app:releasePackage 当时交出来的那一枚"
+        }
+        val expectedRun = System.getProperty(PROPERTY_RUN_ID).orEmpty()
+        val recordedRun = provenance.getProperty(KEY_RUN_ID)?.trim().orEmpty()
+        if (expectedRun.isNotEmpty() && recordedRun != expectedRun) {
+            problems += "APK 出自另一轮（自证条 runId=\"$recordedRun\" / 本轮=\"$expectedRun\"）"
+        }
+        if (provenance.getProperty(KEY_BUILT_BY)?.trim() != BUILT_BY) {
+            problems += "自证条不是 $BUILT_BY 写的（builtBy=${provenance.getProperty(KEY_BUILT_BY)}）"
+        }
+        if (provenance.getProperty(KEY_AAPT2)?.trim() != "ok") {
+            problems += "包内版本这一格根本没读过（aapt2=${provenance.getProperty(KEY_AAPT2)}）"
+        }
+        for ((key, gradleKey) in listOf(KEY_VERSION_NAME to "VERSION_NAME", KEY_VERSION_CODE to "VERSION_CODE")) {
+            val recordedValue = provenance.getProperty(key)?.trim().orEmpty()
+            val inTree = gradleProperty(root, gradleKey)
+            if (recordedValue.isEmpty() || recordedValue != inTree) {
+                problems += "APK 里的 $key=\"$recordedValue\" 与 gradle.properties 的 $gradleKey=\"$inTree\" 对不上"
+            }
+        }
+        if (problems.isNotEmpty()) missingArtifact("本轮产物自证不成立：\n" + problems.joinToString("\n"), floor)
+        return apk
+    }
+
+    private fun readProvenance(root: File): Properties? {
+        val file = File(root, PROVENANCE_FILE)
+        if (!file.isFile) return null
+        val props = Properties()
+        for (line in file.readLines()) {
+            val at = line.indexOf('=')
+            if (at <= 0 || line.startsWith("#")) continue
+            props.setProperty(line.substring(0, at).trim(), line.substring(at + 1).trim())
+        }
+        return props
+    }
+
+    private fun gradleProperty(root: File, key: String): String =
+        File(root, "gradle.properties").takeIf { it.isFile }?.readLines()
+            ?.firstOrNull { it.startsWith("$key=") }
+            ?.substringAfter('=')?.trim().orEmpty()
+
+    private fun sha256Of(file: File): String =
+        MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { byte -> "%02x".format(byte) }
+
+    private val PROVENANCE_FILE = "app/build/release-provenance/release-artifact.properties"
+    private val PROPERTY_REQUIRE_ARTIFACTS = "buaa.requireReleaseArtifacts"
+    private val PROPERTY_RUN_ID = "buaa.releaseRunId"
+    private val KEY_APK = "apk"
+    private val KEY_APK_SHA = "apkSha256"
+    private val KEY_RUN_ID = "runId"
+    private val KEY_BUILT_BY = "builtBy"
+    private val KEY_AAPT2 = "aapt2"
+    private val KEY_VERSION_NAME = "versionName"
+    private val KEY_VERSION_CODE = "versionCode"
+    private val BUILT_BY = ":app:releasePackage"
 
     private fun occurrences(haystack: String, needle: String): Int {
         var count = 0
