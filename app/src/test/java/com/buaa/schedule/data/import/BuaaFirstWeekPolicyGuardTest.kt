@@ -25,15 +25,18 @@ import org.junit.Test
  * 2. [病灶不回潮] `BuaaInPageFetcher.kt` 里 `minByOrNull { it.serialNumber ?: Int.MAX_VALUE }`
  *    恰好 0 处 —— 并且**结构探测器**（`minByOrNull { …serialNumber… }` 或「列表首行当第 1 周」）
  *    也 0 处：后者连「摘掉 `?: Int.MAX_VALUE` 只留键」那等改名版一起拦。
- * 3. [同族册子] 全 `app/src/main` 的同一枚字面针恰好 1 处、落点册子 `{BuaaScheduleParser.kt=1}`
- *    —— 那是 §3 的另案（零生产调用方的死入口），本卡不动它，枚数钉住，将来谁再长一枚就红。
+ * 3. [同族册子] 全 `app/src/main` 的同一枚字面针恰好 **0 处**（T193 那版是 1，落点
+ *    `{BuaaScheduleParser.kt=1}`；T216 把那一枚换成调真路内核 ⇒ 册子归零，这一格从"单文件尺"
+ *    升成"全仓尺"，将来谁再长一枚就红）。
  * 4. [裁剪只有一处] 见该层注释（这一层的期望枚数与卡面给的数字不同，理由写在消息里）。
  * 5. [内核纯度 + 接线] 内核零 android、零时钟、零 parse、零 import；调用点对内核的调用恰好 1 处、
  *    入参映射恰好 1 处、两档日志各在各自的分支里、`runCatching` 外壳与四档早返回原样还在。
  * 6. [反套套逻辑] 探测器必须**认得**改前那一形原文（内联样例抓到 1 处），同时**不误伤**盘上合法的
  *    `Color.kt:225` / `CourseWeekSpans.kt:92` 两形与 `maxByOrNull`（各 0 处）。
  *    本仓口径：不许拿「grep 没匹配到」当「全绿」。
- * 7. [另案那处一个字节没动] `parseTermWeeks` 仍是原样（`?: return null` 那一枚诚实兜底还在）。
+ * 7. [T193 留给下一张卡的那一处另案] **本层从「钉原样」改成钉「新形状」**（T216，卡面 §1 点名要写明
+ *    这一手）：`parseTermWeeks` 不再自己判「谁第 1 周」，改为把 DTO 映射成壳再交 [KERNEL_FN_ANCHOR]，
+ *    挑不出那一档仍直书 `return null`。守卫没删、没 `@Ignore`，换掉的只有判据。
  *
  * 本守卫只读源码，**不证明**运行时行为：判据本体各档由 `BuaaFirstWeekPolicyTest` 钉；
  * 「教务页面真回一批没号的行时用户看到什么」归编排者装机。
@@ -100,37 +103,42 @@ class BuaaFirstWeekPolicyGuardTest {
         )
     }
 
-    // ─────────────── ③ 同族写法的册子：全 main 恰好 1 处 ───────────────
+    // ─────────────── ③ 同族写法的册子：全 main 归零（T216 重钉） ───────────────
+    //
+    // **这一层的期望枚数被 T216 改过**：T193 那版钉的是「全 main 恰好 1 处、落点
+    // `{BuaaScheduleParser.kt=1}`」，那一枚就是当时留给下一张卡的另案（零生产调用方的第二路
+    // 「周列表→学期」）。T216 把那一处换成调真路内核之后，同族针在全 `app/src/main` 归零 ——
+    // 于是这一格从"单文件尺"升成"全仓尺"：第 ② 层管 fetchSemesterInfo 那一枚不许回潮，
+    // 这一格管**任何**文件都不许再长一枚。两格仍是互为备份（探测器版与字面针版各一头）。
 
     @Test
-    fun `同族写法全 main 一枚不多 落点册子钉死`() {
+    fun `同族写法全 main 已经归零 再长一枚就红`() {
         val byFile = readMainSources()
 
         assertEquals(
-            "全 app/src/main 的 `$LESION_NEEDLE` 恰好 1 处（实到 " +
+            "全 app/src/main 的 `$LESION_NEEDLE` 必须 0 处（实到 " +
                 occurrencesOfAll(byFile, LESION_NEEDLE) + " 处，册子 " + ledger(byFile, LESION_NEEDLE) +
-                "）。卡面在 7bed35a 上算好的三枚数（判据定义 1 / 调用点 0 / 全 main 同族 1）里" +
-                "这一格是第三枚：剩下那一枚在 `BuaaScheduleParser.parseTermWeeks` —— " +
-                "普查显示它零生产调用方（只有 `BuaaTermWeeksParserTest` 在叫），属「死入口」另案，" +
-                "本卡不动它；枚数与落点一起钉，将来谁再长一枚就红",
-            1,
+                "）。T193 那版钉的是 1 处（`BuaaScheduleParser.parseTermWeeks` 那一枚另案，" +
+                "普查零生产调用方）；T216 把那一处换成调 `resolveBuaaFirstWeek` ⇒ 期望改判成 0，" +
+                "守卫本体一字没删。今天再有人写「只按 serialNumber 挑第 1 周」，不管长在哪个文件里都红",
+            0,
             occurrencesOfAll(byFile, LESION_NEEDLE),
         )
         assertEquals(
-            "那一枚的落点册子必须是 `{BuaaScheduleParser.kt=1}`（实到 " + ledger(byFile, LESION_NEEDLE) +
-                "）：内核如果改用 `minByOrNull { it.serialNumber ?: Int.MAX_VALUE }` 那一形，" +
-                "这一格会红 —— 但那正是第 ② 层拦的东西，两格互为备份",
-            listOf(SCHEDULE_PARSER_NAME),
+            "那一枚字面针的落点册子必须是空册子（实到 " + ledger(byFile, LESION_NEEDLE) +
+                "）：T193 钉的是 `{BuaaScheduleParser.kt=1}`，T216 之后任何非空册子都算回潮",
+            emptyList<String>(),
             filesHolding(byFile, LESION_NEEDLE),
         )
         val structural = byFile.entries.toList()
             .sortedBy { it.key }
             .filter { firstWeekPickLesions(it.value).isNotEmpty() }
         assertEquals(
-            "结构探测器在全 app/src/main 也只许 1 处（实到 " + structural.size + " 处，册子 " +
+            "结构探测器在全 app/src/main 也必须 0 处（实到 " + structural.size + " 处，册子 " +
                 structural.joinToString(prefix = "{", postfix = "}") { "${it.key}=${firstWeekPickLesions(it.value).size}" } +
-                "）：探测器比字面针宽，这一格是「换个写法躲针」那一档的备份",
-            1,
+                "）：探测器比字面针宽，这一格拦的是「换个写法躲针」（摘掉 `?: Int.MAX_VALUE` 的改名版、" +
+                "直接拿列表首行当开学日）—— 归零之后它与第 ② 层合起来才是全仓尺",
+            0,
             structural.size,
         )
     }
@@ -381,39 +389,114 @@ class BuaaFirstWeekPolicyGuardTest {
             firstWeekPickLesions(legitMax).size,
         )
 
-        // 盘上那枚合法的 minByOrNull 用法仍在（否则上面的负对照就自证为空）
+        // 盘上那几枚合法的 minByOrNull 用法仍在（否则上面的负对照就自证为空）
         val byFile = readMainSources()
         val legitOnDisk = occurrencesOfAll(byFile, "minByOrNull")
         assertTrue(
-            "盘上的 `minByOrNull` 至少还有 5 处（实到 $legitOnDisk 处）：探测器是在一片合法用法里" +
-                "挑出那一枚病灶，不是在全仓空转 —— 盘上只剩病灶那一枚的话第 ② 层的 0 就没东西可拦了",
-            legitOnDisk >= 5,
+            "盘上抹注释后的 `minByOrNull` 至少还有 4 处（实到 $legitOnDisk 处）：探测器是在一片合法用法里" +
+                "挑出那一枚病灶，不是在全仓空转 —— 盘上只剩病灶那一枚的话第 ②③ 层的 0 就没东西可拦了。" +
+                "T193 那版这枚尺是 5（病灶那一枚自己也算在内），T216 把 `BuaaScheduleParser` 那枚换成" +
+                "调真路内核 ⇒ 盘上少一枚，地板跟着降到 4（今天实到 4：Color / CourseWeekSpans / " +
+                "ClassProgressScheduler / StatsEntryPolicy 各一枚，都与序号无关）",
+            legitOnDisk >= 4,
         )
     }
 
-    // ─────────────── ⑦ 同族第二处（死入口）一个字节没动 ───────────────
+    // ─────────────── ⑦ 那处另案：从「钉原样」改钉「新形状」（T216） ───────────────
+    //
+    // T193 在 `parseTermWeeks` 那一处留了个另案，把这层的期望**逐字钉成原样**（同族针 1 处 +
+    // `?: return null` 那枚诚实兜底），好让下一张卡改它时一定撞红。T216 就是那张卡：那一处今天
+    // 改成「DTO → 壳的映射 + 调真路内核 + 挑不出直书 return null」。
+    // ⇒ 本层按卡面 §1 的要求**换判据、不换守卫**：不删、不 `@Ignore`，把原来钉"原样"的三格改成
+    // 钉"新形状"，并且用四种钉法各钉一头（逐字节 / 数出现次数 / 读形状 / 抹注释找锚点）。
+    // 没被钉住的那一格也写明：`?: return null` 那枚字面兜底今天在该文件只剩 2 处（`extractCampus`
+    // 与 `extractLocation` 各一枚），它已经不是 parseTermWeeks 的兜底 —— 兜底换了形状，就换针。
 
     @Test
-    fun `parseTermWeeks 那处另案仍是原样 兜底仍是诚实的 return null`() {
-        val parser = blankCommentsKeepingLiterals(source(SCHEDULE_PARSER))
+    fun `parseTermWeeks 那处另案已换成调真路内核 挑不出照旧直书 return null`() {
+        val raw = source(SCHEDULE_PARSER)
+        val parser = blankCommentsKeepingLiterals(raw)
 
+        // 钉法①（逐字节）：函数头、DTO→壳 那一手、Undetermined 那一档，三行一个字都不许漂
+        for (needle in listOf(
+            PARSE_TERM_WEEKS_SIGNATURE,
+            WEEK_ROW_MAPPING,
+            UNDETERMINED_FALLBACK,
+        )) {
+            assertEquals(
+                "**钉法 = 逐字节**：`$needle` 在 `$SCHEDULE_PARSER` 必须恰好一处（实到 " +
+                    occurrences(parser, needle) + " 处）。这三行是 T216 给那处另案立的新形状 —— " +
+                    "改一个字（把内核调用换成自己挑行、把 Undetermined 那一档换成 `?: 兜底日期`）当场红",
+                1,
+                occurrences(parser, needle),
+            )
+        }
+
+        // 钉法②（数出现次数）：函数本身一处、对内核的调用一处、自己不复刻的判据零处
         assertEquals(
-            "`fun parseTermWeeks(` 在 `$SCHEDULE_PARSER` 恰好一处（实到 " +
-                occurrences(parser, "fun parseTermWeeks(") + " 处）：本卡的交付里不许出现对它的改动" +
-                "（普查显示零生产调用方，属「死入口」另案）",
+            "**钉法 = 数出现次数**：`fun parseTermWeeks(` 在 `$SCHEDULE_PARSER` 恰好一处（实到 " +
+                occurrences(parser, "fun parseTermWeeks(") + " 处）。T193 那版这一格钉的是「原样不许动」，" +
+                "T216 之后钉的是「这一路还在，但它只是真路内核的一层薄壳」—— 悄悄删掉它也算改形状",
             1,
             occurrences(parser, "fun parseTermWeeks("),
         )
         assertEquals(
-            "它那枚同族写法必须还是原样一处（实到 " + occurrences(parser, LESION_NEEDLE) + " 处）",
+            "**钉法 = 数出现次数**：解析器对内核的调用 `resolveBuaaFirstWeek(` 恰好一处（实到 " +
+                occurrences(parser, "resolveBuaaFirstWeek(") + " 处）：0 处 = 那一判被复刻回第二本，" +
+                "2 处 = 同一次抓取被两把尺量（第 ① 层那枚「定义唯一」还是 1，这里数的是调用）",
             1,
+            occurrences(parser, "resolveBuaaFirstWeek("),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数**：解析器里 `minByOrNull` 必须 0 处（实到 " +
+                occurrences(parser, "minByOrNull") + " 处）—— 这就是「从钉原样改成钉新形状」那一手：",
+            0,
+            occurrences(parser, "minByOrNull"),
+        )
+
+        // 钉法③（读形状）：花括号配平切出函数体，体里既不许有序号键也不许有列表首行
+        val body = braceBodyFrom(parser, parser.indexOf('{', parser.indexOf(PARSE_TERM_WEEKS_SIGNATURE)))
+        for (needle in listOf("minByOrNull", FIRST_ROW_DIRECT, FIRST_ROW_SAFE, "?: weeks.first()", "indexOfFirst")) {
+            assertEquals(
+                "**钉法 = 读形状**：`parseTermWeeks` 体内 `$needle` 必须 0 处（实到 " +
+                    occurrences(body, needle) + " 处）：这一判的两条来源与并列分档都在内核里，" +
+                    "壳里再挑一次就是第二本判据（第 ②③ 层那两把全仓尺也在这儿等着）",
+                0,
+                occurrences(body, needle),
+            )
+        }
+        assertEquals(
+            "**钉法 = 读形状**：体内对 `resolveBuaaFirstWeek(` 的调用必须真在体内（实到 " +
+                occurrences(body, "resolveBuaaFirstWeek(") + " 处）：只在参数默认值或注释里挂个名字不算接线",
+            1,
+            occurrences(body, "resolveBuaaFirstWeek("),
+        )
+
+        // 钉法④（抹注释找锚点）：这枚文件的 KDoc **逐字引用着改前那一形**，含注释的原文里有 1 处、
+        // 抹注释之后的代码里 0 处 —— 两枚数一起钉，才既不让守卫把自己钉红、也不让回潮藏在注释旁边。
+        assertEquals(
+            "**钉法 = 抹注释找锚点**：`$LESION_NEEDLE` 在**含注释**的原文里恰好 1 处（实到 " +
+                occurrences(raw, LESION_NEEDLE) + " 处）—— 那一处是 KDoc 里「改前是什么形状」的逐字引文，" +
+                "删了引文这格会红，把引文搬进代码那格也会红（下面第 ③ 格管代码侧）",
+            1,
+            occurrences(raw, LESION_NEEDLE),
+        )
+        assertEquals(
+            "**钉法 = 抹注释找锚点**：同一枚针在**抹注释后**的代码里必须 0 处（实到 " +
+                occurrences(parser, LESION_NEEDLE) + " 处）：T193 那版这一格钉的是 1（另案原样），" +
+                "T216 之后代码侧归零、注释侧留档",
+            0,
             occurrences(parser, LESION_NEEDLE),
         )
-        val honestFallback = occurrences(parser, "?: return null")
-        assertTrue(
-            "它的兜底必须是诚实的 `?: return null`（实到 $honestFallback 处）：与 `?: weeks.first()` " +
-                "的区别就在这儿 —— 挑不出就说挑不出",
-            honestFallback >= 1,
+
+        // 另两格：这枚壳的诚实兜底不换位置；同名册子那枚常量还得被用得上（防漂移的锚点自查）
+        assertEquals(
+            "**钉法 = 数出现次数**：`return null` 在 parseTermWeeks 体内恰好 3 处（实到 " +
+                occurrences(body, "return null") + " 处）：空列表 / 内核 Undetermined / 学期号不唯一，" +
+                "三档各一枚，谁都别把它换成猜出来的日期 —— 改前那枚诚实兜底（`?: return null`）换了形状，" +
+                "但「挑不出就说挑不出」那一判一个字没改",
+            3,
+            occurrences(body, "return null"),
         )
     }
 
@@ -617,11 +700,20 @@ class BuaaFirstWeekPolicyGuardTest {
         const val KERNEL_NAME = "BuaaFirstWeekPolicy.kt"
         const val FETCHER = "com/buaa/schedule/data/import/BuaaInPageFetcher.kt"
         const val SCHEDULE_PARSER = "com/buaa/schedule/data/import/BuaaScheduleParser.kt"
-        const val SCHEDULE_PARSER_NAME = "BuaaScheduleParser.kt"
 
-        /** 判据本体与病灶那枚字面针（卡面 §4 的 1 / 0 / 1 三枚数） */
+        /** 判据本体与病灶那枚字面针（卡面 §4 的 1 / 0 / 1 三枚数；T216 之后第三枚改判成 0） */
         const val KERNEL_FN_ANCHOR = "fun resolveBuaaFirstWeek("
         const val LESION_NEEDLE = "minByOrNull { it.serialNumber ?: Int.MAX_VALUE }"
+
+        /**
+         * T216 第 ⑦ 层「新形状」那三枚逐字节针（改前钉的是「原样不许动」，见该层注释）。
+         *
+         * 三行合起来就是那处另案今天的样子：一层薄壳 —— 自己认得 DTO，但**不自己判**第 1 周，
+         * 判不出时直书 `return null`。任何一行漂了，都说明有人在壳里重新立判据或换了兜底形状。
+         */
+        const val PARSE_TERM_WEEKS_SIGNATURE = "fun parseTermWeeks(items: List<BuaaTermWeekDto>): Semester? {"
+        const val WEEK_ROW_MAPPING = "resolveBuaaFirstWeek(items.map { BuaaWeekRow(it.serialNumber, it.startDate) })"
+        const val UNDETERMINED_FALLBACK = "is BuaaFirstWeek.Undetermined -> return null"
 
         /** 时间尾巴裁剪的两形针（安全调用版与裸调用版） */
         const val CUT_NEEDLE_SAFE = "?.substringBefore(\" \")"

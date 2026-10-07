@@ -8,12 +8,12 @@ import com.buaa.schedule.domain.schedule.WeekParser
 object BuaaScheduleParser {
 
     /**
-     * 将北航本科生/本研教育管理系统返回的 arrangedList 转换为 Course 列表。
+     * `parseArrangedListOutcome` 的薄壳：**只回 courses，两枚警告计数在这里丢掉**。
      *
-     * 一条教务排课记录可能包含多个 `教师[周次]` 片段（理论课/实验课拆分），
-     * 这里按片段拆成多条 Course，并用 sourceGroupKey 关联同一门课。
+     * 静默刷新那一路（`BuaaWebSession.refreshSchedule`）今天走的就是这一枚 ⇒ 病灶 B「这几门课的周次是
+     * 补出来的」那一格在那条路上没人念（台账 #238；册子钉在 `BuaaScheduleParserTotalWeeksGuardTest` 第 ③ 层）。
      *
-     * @param totalWeeks 学期总周数，缺少教师周次信息时的兜底周次范围
+     * @param totalWeeks 兜底周次上界；默认 `20` 无来源（台账 #236）—— 见下面那枚函数的同名参数
      */
     /** 解析结果：课程 + 供导入预览展示的兜底警告计数 */
     data class ParseOutcome(
@@ -36,7 +36,7 @@ object BuaaScheduleParser {
      * 一条教务排课记录可能包含多个 `教师[周次]` 片段（理论课/实验课拆分），
      * 这里按片段拆成多条 Course，并用 sourceGroupKey 关联同一门课。
      *
-     * @param totalWeeks 学期总周数，缺少教师周次信息时的兜底周次范围
+     * @param totalWeeks 学期总周数，缺教师周次片段那一条的兜底周次范围；默认 `20` **无来源**，两枚生产调用点都传满
      */
     fun parseArrangedListOutcome(
         items: List<BuaaCourseDto>,
@@ -208,21 +208,38 @@ object BuaaScheduleParser {
     }
 
     /**
-     * 将北航 getTermWeeks 返回的周列表转换为 Semester。
+     * 将北航 getTermWeeks 返回的周列表转换为 Semester —— **另一路、未接线**（台账 #238 病灶 A，T216 裁定）。
      *
-     * 返回 null 表示数据不完整（没有第一周或周数为 0）。
+     * 先把调用面说清：全 `app/src/main` 对本函数的调用点 **0 处**（只有 `BuaaTermWeeksParserTest` 在叫）。
+     * 真路是 `BuaaInPageFetcher.fetchSemesterInfo`，它把同一批行自己喂给内核、组的是 `SemesterInfo`
+     * 而不是 `Semester`，不经过这里。三解里选的是 ②「换成调真路内核」；不选 ①「连 DTO 侧一起删」的理由
+     * 写在 T216 回执（删它要连坐一枚既有测试文件，超出本卡白名单），枚数由守卫钉。
+     *
+     * 「哪一行算第 1 周」这一判**不再在这里复刻**：DTO → [BuaaWeekRow] 的映射由本调用点做（与真路
+     * 同一手），判据本体全仓只有一份 [resolveBuaaFirstWeek]。改前这里是那一判的第二枚写法，而且是
+     * T193 判死的那一形（逐字留档，守卫按「注释里 1 处、代码里 0 处」两把尺钉它）：
+     * `val first = items.minByOrNull { it.serialNumber ?: Int.MAX_VALUE } ?: return null`
+     * —— 序号全缺时每行的键都算成同一枚 ⇒ 并列 ⇒ 回**列表首行**，首行只要日期读得通就被当「第 1 周」
+     * 用，而它完全可能是第 8 周。
+     *
+     * 返回 null = 挑不出，**不猜**：空列表、内核每一档 Undetermined、学期号在这批行里不唯一，三样都算。
+     * 周数那一格照旧是行数（与真路 `weeks.size` 同口径；「重复行也占一格」那笔账在台账 #236，本卡不重立）。
      */
     fun parseTermWeeks(items: List<BuaaTermWeekDto>): Semester? {
         if (items.isEmpty()) return null
-        val first = items.minByOrNull { it.serialNumber ?: Int.MAX_VALUE } ?: return null
-        val startDate = first.startDate
-            ?.substringBefore(" ")
-            ?.takeIf { it.isNotBlank() }
-            ?: return null
-        val term = first.term ?: return null
+        val first = resolveBuaaFirstWeek(items.map { BuaaWeekRow(it.serialNumber, it.startDate) })
+        val startDate = when (first) {
+            is BuaaFirstWeek.Resolved -> first.startDate
+            // 诚实兜底还是 return null：挑不出就说挑不出（守卫第 ⑦ 层钉的就是这一手）
+            is BuaaFirstWeek.Undetermined -> return null
+        }
+        // term 同样不猜。改前取的是"挑中那一行的 term"，而那一行正是上面判出来的 ⇒ 换个更严的说法重立：
+        // 这批行里非空 term 去重后**恰好一枚**才认，两枚以上 = 数据自己分家，取哪一枚都是猜。
+        val terms = items.mapNotNull { it.term }.distinct()
+        if (terms.size != 1) return null
         return Semester(
-            termCode = term,
-            termName = term,
+            termCode = terms.first(),
+            termName = terms.first(),
             startDate = startDate,
             totalWeeks = items.size,
         )
