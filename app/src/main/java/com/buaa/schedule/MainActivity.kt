@@ -201,6 +201,26 @@ class MainActivity : ComponentActivity() {
                     ) {
                         OnboardingScreen(
                             onFinished = { startRoute ->
+                                // 三枚一次性导航请求在这里作废（T244③，台账 #392）。
+                                // 判据是从盘上读出来的，不是猜的：
+                                // 1) 生产方是用户的一次点击 —— 那三枚 extra 全部由
+                                //    PendingIntent.getActivity 带出（组件格子 / 组件行 / 通知按钮，
+                                //    册子在 core/LaunchRequestPolicy.kt 的文件头）；
+                                // 2) 但引导期间这三棵状态**没有消费方** —— 消费方 BUAAScheduleApp
+                                //    连同它体内那三枚 LaunchedEffect 都挂在下面 if (onboardingDone)
+                                //    那一支上，引导没走完就整棵不组合，请求因此在 Activity 字段里躺了一整趟；
+                                // 3) 引导页自己零句交代 —— OnboardingScreen.kt 全文对这三枚请求、
+                                //    对 EXTRA_ROUTE / EXTRA_COURSE_ID / 星期几那两把键都不持引用，
+                                //    屏上没有任何一处告诉用户"外面还排着一笔"。
+                                // 于是用户在屏上唯一一次看得见的选择，就是他现在选的这一站落点；
+                                // 出引导那一帧去认领一笔他从未被提示过的排队请求，等于把他刚从
+                                // 自己选的页面上拽走 —— 台账 #392 报的就是这一帧。
+                                // 清掉也与内核同一口径：core/LaunchRequestPolicy.kt 认的是
+                                // "再落一次"都不是用户此刻按下的事，这一趟引导就是同一档。
+                                // 次序要紧：清在三棵子树换脸之前，第一帧才读不到旧值。
+                                requestedCourseId.value = null
+                                requestedRoute.value = null
+                                requestedDayOfWeek.value = null
                                 onboardingDone = true
                                 pendingStartRoute.value = startRoute
                                 // 从欢迎页/隐私页就点跳过的人不会经过自检步，权限在这里补
