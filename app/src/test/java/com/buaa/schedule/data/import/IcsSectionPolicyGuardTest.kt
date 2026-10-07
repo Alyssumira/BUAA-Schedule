@@ -22,8 +22,10 @@ import org.junit.Test
  * ## 五层钉子
  *
  * 1. [病灶不回潮]：`return previous?.number ?: 1` 在 `app/src/main` 恰好 **0** 处，
- *    而它的**形状**（节次那一句：`.number` / `startSection` / `endSection` 后面挂 `?: 1`）全树 0 处；
- *    `sectionOf` 这个名也 0 处（拆干净了才算拆）。
+ *    而它的**形状**（节次那一句：`.number` / `beginSection` / `startSection` / `endSection`
+ *    后面挂 `?: 1`）全树 0 处；`sectionOf` 这个名也 0 处（拆干净了才算拆）。
+ *    T229 把 `beginSection` 收进这一层：`BuaaScheduleParser.parseArrangedListOutcome`
+ *    那一枚折成「第 1 节」的兜底已修，尺子跟着收紧，不许留「注释说会抓而尺不抓」。
  * 2. [判据只有一份、调用点恰好两处]：`fun resolveIcsPeriod(` 全 main 1 处；
  *    `IcsParser.kt` 里对它的调用 2 处，且逐字分别是 `startTime` 与 `endTime` 那一枚 ——
  *    少一枚就是有一侧还在自己算节次。
@@ -48,6 +50,7 @@ class IcsSectionPolicyGuardTest {
     private companion object {
         const val POLICY = "com/buaa/schedule/data/import/IcsSectionPolicy.kt"
         const val PARSER = "com/buaa/schedule/data/import/IcsParser.kt"
+        const val BUAA_PARSER = "com/buaa/schedule/data/import/BuaaScheduleParser.kt"
         const val VIEW_MODEL = "com/buaa/schedule/ui/ScheduleViewModel.kt"
         const val REPOSITORY = "com/buaa/schedule/data/repository/ScheduleRepository.kt"
         const val COURSE = "com/buaa/schedule/domain/model/Course.kt"
@@ -78,13 +81,19 @@ class IcsSectionPolicyGuardTest {
         const val LEGIT_START_PERIOD = "periods.minOrNull() ?: 1"
 
         /**
-         * 「节次那一句」那一形：节次号的取值（`.number`）或本卡那两枚局部 val
-         * （`startSection` / `endSection`）后面挂一枚 `?: 1` 兜底。
+         * 「节次那一句」那一形：节次号的取值（`.number`）、本卡那两枚局部 val
+         * （`startSection` / `endSection`）或教务 DTO 的那两枚字段（`beginSection` / `endSection`）
+         * 后面挂一枚 `?: 1` 兜底。
          *
-         * 刻意**不写宽**：`beginSection ?: 1`（`BuaaScheduleParser`）、`startPeriod … ?: 1`
-         * （`Course`）这些同族但别卡的既有用法不能被抓出来 —— 卡面明令「别把整族杀了」。
+         * T229 收紧：`beginSection` 也进来了。改前这一行自述「`beginSection ?: 1`
+         * （`BuaaScheduleParser`）……不能被抓出来 —— 卡面明令别把整族杀了」，而那一枚兜底
+         * 正是 T229 ① 修掉的病灶 ⇒ 注释说会抓而尺不抓的那一格不许留（卡面点名要处理）。
+         * 族里**仍然不抓**的只剩 `Course.startPeriod` 那一枚（T27 判定要保留、
+         * `ui/EmptyPeriodPlacementTest` 钉着），与本卡无关。
          */
-        val PERIOD_FALLBACK = Regex("""(?:\.number\b|startSection\b|endSection\b)\s*\?:\s*1\b""")
+        val PERIOD_FALLBACK = Regex(
+            """(?:\.number\b|beginSection\b|startSection\b|endSection\b)\s*\?:\s*1\b""",
+        )
     }
 
     // ─────────────── ① 病灶不回潮 ───────────────
@@ -109,11 +118,37 @@ class IcsSectionPolicyGuardTest {
             literalHits.size,
         )
         assertEquals(
-            "「节次那一句挂 `?: 1`」那一形（`.number ?: 1` / `startSection ?: 1` / `endSection ?: 1`）" +
-                "在 app/src/main 必须 0 处，病灶不许换个名字回潮。实到 " + shapeHits.size +
+            "「节次那一句挂 `?: 1`」那一形（`.number ?: 1` / `beginSection ?: 1` / " +
+                "`startSection ?: 1` / `endSection ?: 1`）在 app/src/main 必须 0 处，" +
+                "病灶不许换个名字回潮。实到 " + shapeHits.size +
                 " 处：\n  " + shapeHits.joinToString("\n  "),
             0,
             shapeHits.size,
+        )
+        // T229 ①：把这一格从"全树扫"里单独点出教务那一路，免得它以后又被"整树 0"那一句盖过去
+        val buaa = blankCommentsKeepingLiterals(source(BUAA_PARSER))
+        val buaaHits = indexOfAllByRegex(buaa, PERIOD_FALLBACK).map { lineAt(buaa, it).trim() }
+        assertEquals(
+            "`$BUAA_PARSER` 里挂 `?: 1` 的节次那一句必须 0 处（实到 " + buaaHits.size +
+                " 处：${buaaHits.joinToString()}）：这一枚是 T229 ① 修掉的落点 —— 星期缺失整条丢、" +
+                "节次缺失折成第 1 节 = **同一行数据两把尺**。它回潮就是" +
+                "「一节根本不存在的课画上周课表、排铃、被导出，用户手改过还被 isManualOverride 锁住」",
+            0,
+            buaaHits.size,
+        )
+        assertEquals(
+            "`$BUAA_PARSER` 里 `val start = item.beginSection` 必须还在、且不挂兜底（实到 " +
+                occurrences(buaa, "val start = item.beginSection") + " 处）：" +
+                "换成 `?: 1` 上面那格会红，换成 `!!` 是另一种死法（非空断言 = 把缺字段折成崩溃），" +
+                "两形都要挡 ⇒ 逐字钉这一句的前半截",
+            1,
+            occurrences(buaa, "val start = item.beginSection"),
+        )
+        assertEquals(
+            "`$BUAA_PARSER` 里 `!!` 必须 0 处（实到 " + occurrences(buaa, "!!") +
+                " 处）：把 `?: 1` 换成非空断言不是修法，是把「静默造出一节假课」换成「教务送一个缺字段就崩」",
+            0,
+            occurrences(buaa, "!!"),
         )
     }
 
@@ -200,6 +235,23 @@ class IcsSectionPolicyGuardTest {
                 " 处 —— 0 处说明探测器空转，第 ① 层那句「全树 0 命中」是假的绿）",
             1,
             hitsOf(blankCommentsKeepingLiterals(oldSectionOf)).size,
+        )
+
+        // T229 新收进来的那一枚：教务导入的 `beginSection ?: 1` 改前原文（BuaaScheduleParser 的循环头三行）
+        val oldBuaaArrangedHead = """
+            val courseName = item.courseName ?: "未知课程"
+            val day = item.dayOfWeek ?: return@forEachIndexed
+            val start = item.beginSection ?: 1
+            val end = item.endSection ?: start
+        """.trimIndent()
+        assertEquals(
+            "探测器必须把改之前 `$BUAA_PARSER` 里那一枚 `beginSection ?: 1` 抓出来（实到 " +
+                hitsOf(blankCommentsKeepingLiterals(oldBuaaArrangedHead)).size +
+                " 处）：这一枚是 T229 ① 才收进尺子的，收进来却抓不到 = 第 ① 层那句「全树 0 命中」" +
+                "对教务那一路是假的绿。挨着的 `endSection ?: start` 不许一起被算成命中" +
+                "（缺 end 有 start 是**有出处**的单节，不是凭空造第 1 节）",
+            1,
+            hitsOf(blankCommentsKeepingLiterals(oldBuaaArrangedHead)).size,
         )
 
         // 合法一：`extractInterval` 的 INTERVAL 缺省值（RFC 5545 规定 ≥1），与节次无关
