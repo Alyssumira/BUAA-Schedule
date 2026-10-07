@@ -115,7 +115,7 @@ class CourseUnitSingleSourceGuardTest {
             "**钉法 = 逐字节**：冲突指纹那一枚 `" + FINGERPRINT_LITERAL + "` 必须逐字 1 处 —— " +
                 "它带着同样的竖线长相，但归并的是「同一处冲突」；把它当成「第二套一门课的定义」删掉，" +
                 "冲突条目就再也对不回同一枚指纹了。0 处 = 有人为了过本守卫把它改了（那是放宽，不是修）。\n" +
-                "复算：grep -n 'v:\\${course.name}' app/src/main/java/com/buaa/schedule/domain/schedule/CourseConflictResolution.kt",
+                "复算：grep -n 'v:\${course.name}' app/src/main/java/com/buaa/schedule/domain/schedule/CourseConflictResolution.kt",
             1,
             occurrences(code, FINGERPRINT_LITERAL),
         )

@@ -419,7 +419,7 @@ internal fun deleteGroupConfirmText(fragments: List<Course>, timeSlots: List<Tim
 }
 
 /**
- * 调色板展开时那一句「点一颗色板会改到哪儿」（纯函数，可单测，见 `ui/course/CourseGroupColorScopeCopyTest`）。
+ * 调色板展开时那一句「点一颗色板会改到哪儿」（纯函数，可单测，格子在 `ui/course/CourseUnitTwoRulersTableTest`）。
  *
  * 改前它是一句**无条件**的「颜色会应用到这门课的全部片段」，而写库那一手是
  * `updateCourse(primary, CourseSaveOptions(applyToGroup = true))`；VM 那一侧
