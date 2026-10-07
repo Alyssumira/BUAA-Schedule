@@ -38,9 +38,10 @@ import com.buaa.schedule.domain.model.Semester
  *
  * ## 这一判「同 termCode 只有一行」升到哪一级（第 0 问的裁定落在代码上的那半）
  *
- * 库里已经有的重复行（若有）本卡不猜、也不迁移：**写路级收口** —— 每一枚**写内容**的
- * （`saveSemester` / `replaceSemesterCoursesInTx` / 合并事务）都在同一趟里
- * `deleteByTermCode(termCode)` 再插一枚；只有「顶成当前学期」那一跳（不写新内容）按 id 精确删。
+ * 库里已经有的重复行（若有）本卡不猜、也不迁移：**写路级收口** —— 每一枚**写内容**的跳
+ * （`saveSemester` / `replaceSemesterCoursesInTx` / `saveSemesterWithRename` / 恢复那两枚由
+ * `getByTermCode == null` 闸住的 insert）都在同一趟里 `deleteByTermCode(termCode)` 再插一枚；
+ * 只有「顶成当前学期」那一跳（不写新内容）按 id 精确删。
  *
  * 表驱动单测 `SemesterRowPolicyTest`（同 termCode 两行交出哪一枚 / 兄弟行不被吃掉 /
  * 拒绝档零步骤 / 中途抛 ⇒ 提交集为空）+ 形状与接线守卫 `SemesterRowShapeGuardTest`。
