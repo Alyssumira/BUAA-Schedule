@@ -172,6 +172,8 @@ object EditorSaveFinishing {
     fun readout(stage: EditorSaveStage?, myRequestId: Long): EditorSaveReadout {
         val mine = myRequestId != EditorSaveSentinel.NO_REQUEST && stage?.requestId == myRequestId
         val phase = stage?.phase
+        // 「页面那一支到底报到过没有」只从这一枚旗上取一次，下面两档共用同一个读法（不在档位里各写一遍）
+        val tailReported = stage?.tailReported == true
         return when {
             stage != null && !mine -> EditorSaveReadout(
                 writeOutcome = EditorWriteOutcome.ForeignConclusion,
@@ -188,13 +190,13 @@ object EditorSaveFinishing {
             phase == EditorSavePhase.Landed -> EditorSaveReadout(
                 writeOutcome = EditorWriteOutcome.Landed,
                 saveInFlight = false,
-                tailScopeCancelled = stage?.tailReported != true,
+                tailScopeCancelled = !tailReported,
             )
 
             phase == EditorSavePhase.Failed -> EditorSaveReadout(
                 writeOutcome = EditorWriteOutcome.Failed,
                 saveInFlight = false,
-                tailScopeCancelled = stage?.tailReported != true,
+                tailScopeCancelled = !tailReported,
             )
 
             else -> EditorSaveReadout(

@@ -224,7 +224,7 @@ class EditorSaveChainTailReceiverGuardTest {
         val code = blankCommentsKeepingLiterals(source(MAIN_ACTIVITY))
         val lambdaHits = indexOfAll(code, ON_SAVE_ANCHOR)
         assertEquals("$FILE_ACTIVITY 里 `$ON_SAVE_ANCHOR` 恰好一处（取块的宿主）：", 1, lambdaHits.size)
-        val lambda = braceBodyFrom(code, code.indexOf('{', lambdaHits.first()))
+        val lambda = braceBodyFrom(code, code.indexOf('{', lambdaHits.first())).body
         assertEquals("体内 `$MINT_ID` 恰好一处（领号）：实到 " + occurrences(lambda, MINT_ID) + " 处", 1, occurrences(lambda, MINT_ID))
         assertEquals("体内 `$RAISE_FLAG` 恰好一处（立旗）：实到 " + occurrences(lambda, RAISE_FLAG) + " 处", 1, occurrences(lambda, RAISE_FLAG))
         assertEquals(
