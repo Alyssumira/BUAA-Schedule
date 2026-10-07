@@ -120,6 +120,7 @@ import com.buaa.schedule.BuildConfig
 import com.buaa.schedule.R
 import com.buaa.schedule.core.FirstRun
 import com.buaa.schedule.core.openExternalUrl
+import com.buaa.schedule.domain.update.UpdateCheckGate
 import com.buaa.schedule.update.AUTHOR_GITEE_URL
 import com.buaa.schedule.update.AUTHOR_GITHUB_URL
 import com.buaa.schedule.update.PROJECT_GITEE_URL
@@ -1757,6 +1758,10 @@ fun SettingsScreen(
             }
 
             val pendingUpdate = remember(updateState) { UpdateCheck.pendingUpdateVersion(context) }
+            // 「忽略此版本」的回读 + 撤销入口（T261 第 3 处静默）。
+            // 尺与 pendingUpdate 同一把：只在被忽略的那一版**确实比已装的新**时才出现，
+            // 装上之后这一行自己就消失，不需要谁去清偏好。
+            var ignoredUpdate by remember(updateState) { mutableStateOf(UpdateCheck.ignoredVersion(context)) }
             val updateSummary = remember(updateState, pendingUpdate) {
                 describeUpdateState(context, updateState, pendingUpdate)
             }
@@ -1774,6 +1779,23 @@ fun SettingsScreen(
                 trailing = { if (pendingUpdate != null) PendingUpdateDot() },
                 onClick = { settingsScope.launch { UpdateCheck.check(context, force = true) } },
             )
+            }
+            if (ignoredUpdate != null) {
+            item(key = "restoreIgnoredUpdate") {
+            SettingsRow(
+                icon = Icons.Filled.NotificationsActive,
+                title = "恢复更新提醒",
+                summary = "已忽略 v$ignoredUpdate · 点按撤销忽略并立刻重新检查一次",
+                showChevron = true,
+                onClick = {
+                    ignoredUpdate = null
+                    settingsScope.launch {
+                        UpdateCheck.restoreIgnored(context)
+                        UpdateCheck.check(context, force = true)
+                    }
+                },
+            )
+            }
             }
             }
 
@@ -2156,6 +2178,12 @@ private fun AboutHeader() {
  *
  * [pending] 是"发现了但还没装"——用户点「稍后」把弹窗关掉之后状态会回到 Idle，
  * 但红点和这一行必须继续提醒，否则更新就永久丢了（当天不会再自动弹）。
+ *
+ * 走到最后那一格时（进程刚起来、状态还是 Idle）念的话由
+ * `domain/update/UpdateCheckGate.kt` 的 restingLine 按**上一手结果档**分三档写：
+ * 改前这里只有一枚时间戳，失败与成功在屏上同形（T261 第 2 处静默）。
+ * [UpdateUiState.Blocked] 那一格念的是判据交下来的那一句原话——弹窗与这一行同源，
+ * 「根本没出网」与「查到的正是被忽略那一版」都不许再折成静默。
  */
 private fun describeUpdateState(context: Context, state: UpdateUiState, pending: String?): String {
     val last = formatLastCheck(UpdateCheck.lastCheckAt(context))
@@ -2164,12 +2192,14 @@ private fun describeUpdateState(context: Context, state: UpdateUiState, pending:
         state is UpdateUiState.NeedsInstallPermission -> "已下载 v${state.info.version}，等待授权安装"
         state is UpdateUiState.InstallBlocked -> "已下载 v${state.info.version}，但签名与本机不兼容"
         state is UpdateUiState.Downloading -> if (state.percent >= 0) "下载中 ${state.percent}%" else "准备下载…"
+        // 被挡那一手（隐私没同意 / 正是被忽略那一版）：念判据自己交下来的那句，与弹窗同一句
+        state is UpdateUiState.Blocked -> state.message
         state is UpdateUiState.UpToDate -> "已是最新版本 · 上次检查 $last"
         // 失败不占当天配额：半小时后就允许重试，所以这里说"可重试"而不是"今天查过了"
         state is UpdateUiState.Failed -> "上次检查失败：${state.message}（稍后可重试）"
         state is UpdateUiState.Checking -> "正在检查…"
         pending != null -> "发现新版本 v$pending，待更新"
-        else -> "每天第一次打开自动检查 · 上次检查 $last"
+        else -> UpdateCheckGate.restingLine(UpdateCheck.lastOutcome(context), last)
     }
 }
 

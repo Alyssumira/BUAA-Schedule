@@ -2,16 +2,22 @@ package com.buaa.schedule.update
 
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import com.buaa.schedule.BuildConfig
 import com.buaa.schedule.core.FirstRun
 import com.buaa.schedule.core.openExternalUrl
+import com.buaa.schedule.domain.update.UpdateCheckGate
+import com.buaa.schedule.domain.update.UpdateCheckTrigger
+import com.buaa.schedule.domain.update.UpdateCheckVerdict
+import com.buaa.schedule.domain.update.UpdateLastOutcome
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -39,6 +45,16 @@ sealed interface UpdateUiState {
     data class UpToDate(val manual: Boolean) : UpdateUiState
     data class Failed(val message: String, val manual: Boolean) : UpdateUiState
 
+    /**
+     * 这一手没有拿到可安装的更新，但它有自己那一句话要说。
+     *
+     * 两档走到这里：被隐私闸门挡下（**根本没出网**）、查到的最新版正是用户忽略过的那一版。
+     * 改前这两档都直接把旧状态原样交回，于是「检查更新」对未同意隐私的用户是彻底的 no-op，
+     * 而「忽略此版本」写进偏好后再没有任何地方回读它（T261 的第 1 与第 3 处静默）。
+     * 话由 `domain/update/UpdateCheckGate.kt` 一处写完，弹窗正文与设置页那一行念同一句。
+     */
+    data class Blocked(val title: String, val message: String, val manual: Boolean) : UpdateUiState
+
     /** [totalBytes] 取自下载响应的 Content-Length：接口不给附件体积，只能下起来才知道 */
     data class Downloading(val info: UpdateInfo, val percent: Int, val totalBytes: Long = 0L) : UpdateUiState
 
@@ -54,12 +70,14 @@ sealed interface UpdateUiState {
      * 手动检测两者都要反馈，判据是 [manual]。
      * 已经下好的包（[NeedsInstallPermission] / [InstallBlocked]）无论何时都要弹窗：
      * 那是用户付了流量换来的结果，静默掉等于白下。
+     * [Blocked] 与 [Failed] / [UpToDate] 同一口径：**手动那一手必须出声**（T261 第 1 处静默）。
      */
     val visible: Boolean
         get() = when (this) {
             is Available, is Downloading, is NeedsInstallPermission, is InstallBlocked -> true
             is UpToDate -> manual
             is Failed -> manual
+            is Blocked -> manual
             Idle, Checking -> false
         }
 }
@@ -83,6 +101,17 @@ object UpdateCheck {
     private const val KEY_SKIPPED = "update_skipped_version"
     private const val KEY_FAILURE_AT = "update_last_failure_at"
     private const val KEY_PENDING = "update_pending_version"
+
+    /**
+     * 上一手的**结果档**（T261 第 2 处静默）。改前偏好里只有两枚时间戳，
+     * 进程一死，失败与成功在设置页那一行念的是同一句话——时间戳说不出"那一次成没成"。
+     * 落档之后同一枚 [KEY_LAST_AT] 才不再歧义：成功档下的它就是成功时刻。
+     */
+    private const val KEY_LAST_OUTCOME = "update_last_outcome"
+    private const val OUTCOME_SUCCEEDED = "succeeded"
+    private const val OUTCOME_FAILED = "failed"
+
+    private const val TAG = "UpdateCheck"
 
     private const val MAX_REDIRECTS = 5
     private const val APK_HEAD_BYTES = 8
@@ -121,15 +150,56 @@ object UpdateCheck {
 
     /** 每天第一次打开应用查一次；force（手动检查）不受限 */
     suspend fun check(context: Context, force: Boolean): UpdateUiState {
-        // 全应用只有这里出网，所以隐私门放在这一层而不是每个调用方：
-        // 引导页、设置页、冷启动三条路径共用同一个闸口，漏不掉。
-        if (!FirstRun.privacyAccepted(context)) return _state.value
         val store = prefs(context)
         val today = LocalDate.now().toString()
         val now = System.currentTimeMillis()
-        if (!shouldCheckToday(store.getString(KEY_LAST_DAY, null), store.getLong(KEY_FAILURE_AT, 0L), today, now, force)) {
-            return _state.value
+        val trigger = if (force) UpdateCheckTrigger.Manual else UpdateCheckTrigger.Automatic
+        // 全应用只有这里出网，所以隐私闸放在这一层而不是每个调用方：
+        // 引导页、设置页、冷启动三条路径共用同一个闸口，漏不掉。
+        // ⚠️ 隐私是**递给判据的一枚输入**，不是一道 return（T261 第 1 处静默）：改前那一手
+        //    「未同意就把当前状态原样交回」排在 force 判据之前，于是设置页那颗「检查更新」
+        //    对没同意过隐私的用户是彻底的 no-op —— 不弹窗、副标题不变、一条日志都不留，
+        //    而同一个文件顶部正承诺「失败/无更新也要出声」。
+        //    出不出网由判据定，说不说话由档位定，两者不再互相顶掉。
+        val admission = UpdateCheckGate.admit(
+            privacyAccepted = FirstRun.privacyAccepted(context),
+            trigger = trigger,
+            throttleAllowsCheck = shouldCheckToday(
+                store.getString(KEY_LAST_DAY, null),
+                store.getLong(KEY_FAILURE_AT, 0L),
+                today,
+                now,
+                force,
+            ),
+            lastOutcome = readOutcome(store),
+        )
+        if (admission !is UpdateCheckVerdict.RunCheck) {
+            val next = when (admission) {
+                is UpdateCheckVerdict.BlockedByPrivacy -> {
+                    val copy = admission.spoken
+                    if (force) {
+                        Log.w(TAG, "检查更新被隐私闸门挡下（用户手动按下，已出声）：" + copy.message)
+                    } else {
+                        Log.i(TAG, "检查更新被隐私闸门挡下（自动触发，按合规要求不弹窗、只留痕）")
+                    }
+                    UpdateUiState.Blocked(copy.title, copy.message, manual = force)
+                }
+
+                is UpdateCheckVerdict.HeldByThrottle -> {
+                    Log.i(TAG, "跳过本次检查（每日节流）：上一手结果档=" + admission.lastOutcome)
+                    _state.value
+                }
+
+                // 那四档不会从 admit 里出来；留着是为了 when 穷尽，原样交回而不伪装成任何一种结果
+                is UpdateCheckVerdict.RunCheck, is UpdateCheckVerdict.NewVersionFound,
+                is UpdateCheckVerdict.SuppressedByIgnore, is UpdateCheckVerdict.NothingNewer,
+                is UpdateCheckVerdict.CheckFailed,
+                -> _state.value
+            }
+            _state.value = next
+            return next
         }
+
         val current = _state.value
         // 正在下载、以及"包已下好等用户处理"的两种状态都不该被一次后台检查覆盖：
         // 后者一旦被改写成 UpToDate，用户手里的安装包就再没有入口了。
@@ -139,24 +209,52 @@ object UpdateCheck {
 
         _state.value = UpdateUiState.Checking
         val outcome = runCatching { fetchReleases() }
-        val skipped = if (force) null else store.getString(KEY_SKIPPED, null)
-        val next = outcome.fold(
-            onSuccess = { releases ->
-                pickLatestUpdate(releases, BuildConfig.VERSION_NAME, skipped)
-                    ?.let { UpdateUiState.Available(it, manual = force) }
-                    ?: UpdateUiState.UpToDate(manual = force)
-            },
-            onFailure = { UpdateUiState.Failed(readable(it), manual = force) },
+        val newestInfo = outcome.getOrNull()?.let { pickLatestUpdate(it, BuildConfig.VERSION_NAME, null) }
+        val verdict = UpdateCheckGate.present(
+            trigger = trigger,
+            // 「忽略此版本」从此是**判据的一枚输入**，不再是选版本时那一层静默过滤
+            //（T261 第 3 处静默）：被忽略的那一版有自己的档位与那句话，撤销落在设置页「版本」那一组。
+            // 顺带改掉的是"忽略了最新版就被 nag 上一个更旧的版本"那一形——
+            // 交回旧号会让用户以为新的已经装上了，宁可说一句"这一版被你忽略了"。
+            ignoredVersion = store.getString(KEY_SKIPPED, null),
+            newestAboveInstalled = newestInfo?.version,
+            failureReason = outcome.exceptionOrNull()?.let { readable(it) },
         )
+        val next = when (verdict) {
+            is UpdateCheckVerdict.NewVersionFound -> UpdateUiState.Available(
+                requireNotNull(newestInfo) { "判据交出了版本号，却没有对应的 release" },
+                manual = force,
+            )
+
+            is UpdateCheckVerdict.SuppressedByIgnore -> {
+                Log.i(TAG, "最新版 v${verdict.version} 已被用户忽略：${verdict.spoken.message}")
+                UpdateUiState.Blocked(verdict.spoken.title, verdict.spoken.message, manual = force)
+            }
+
+            is UpdateCheckVerdict.NothingNewer -> UpdateUiState.UpToDate(manual = force)
+
+            is UpdateCheckVerdict.CheckFailed -> {
+                Log.w(TAG, "检查更新失败（manual=$force）：${verdict.reason}")
+                UpdateUiState.Failed(verdict.reason, manual = force)
+            }
+
+            // 准入那一手的三档不会从 present 里出来；同上，原样交回
+            is UpdateCheckVerdict.RunCheck, is UpdateCheckVerdict.BlockedByPrivacy,
+            is UpdateCheckVerdict.HeldByThrottle,
+            -> _state.value
+        }
         // "今天查过了"只在**成功**时落下；失败改记时间戳，隔 FAILURE_RETRY_MILLIS 再试。
         // 以前失败也算查过：断网时打开一次应用，当天剩下的每次启动都再也查不到更新。
+        // 两档都要落下**结果档**：这是设置页那一行在进程死后唯一还能读出"那一次成没成"的东西。
         store.edit {
             putLong(KEY_LAST_AT, now)
             if (next is UpdateUiState.Failed) {
                 putLong(KEY_FAILURE_AT, now)
+                putString(KEY_LAST_OUTCOME, OUTCOME_FAILED)
             } else {
                 putString(KEY_LAST_DAY, today)
                 remove(KEY_FAILURE_AT)
+                putString(KEY_LAST_OUTCOME, OUTCOME_SUCCEEDED)
             }
             if (next is UpdateUiState.Available) putString(KEY_PENDING, next.info.version)
         }
@@ -164,7 +262,55 @@ object UpdateCheck {
         return next
     }
 
-    /** 「忽略此版本」：记下版本号，之后自动检测不再提示它（手动检查仍会提示） */
+    /**
+     * 上一手的结果档（成功 / 失败 / 从没查过）。
+     *
+     * 设置页那一行在状态还是 Idle（进程刚起来）时读它 —— 改前那里只有一枚时间戳，
+     * 失败与成功在屏上同形（T261 第 2 处静默）。
+     */
+    fun lastOutcome(context: Context): UpdateLastOutcome = readOutcome(prefs(context))
+
+    /**
+     * 用户「忽略此版本」留下的版本号，只在它确实比已装版本新时交回
+     * （与 [pendingUpdateVersion] 同一把尺：装上之后这一格自己就消失，不需要谁去清）。
+     */
+    fun ignoredVersion(context: Context): String? {
+        val version = prefs(context).getString(KEY_SKIPPED, null) ?: return null
+        return version.takeIf { compareVersions(it, BuildConfig.VERSION_NAME) > 0 }
+    }
+
+    /**
+     * 撤销「忽略此版本」：把偏好里那一枚记录清掉，返回被撤销的版本号（本来就没有就返回 null）。
+     *
+     * 改前 [KEY_SKIPPED] 全仓只有定义 / 读 / 写三处命中，零清除路径、UI 零回读 ——
+     * 点一次「忽略此版本」就再也没有任何办法让它重新提示（T261 第 3 处静默）。
+     */
+    fun restoreIgnored(context: Context): String? {
+        val store = prefs(context)
+        val version = store.getString(KEY_SKIPPED, null)
+        if (version == null) {
+            Log.i(TAG, "撤销「忽略此版本」：本来就没有忽略记录（重复点按或已随装好而失效）")
+            return null
+        }
+        store.edit { remove(KEY_SKIPPED) }
+        Log.i(TAG, "已撤销「忽略此版本」：v$version 会随下一次检查重新提示")
+        return version
+    }
+
+    private fun readOutcome(store: SharedPreferences): UpdateLastOutcome =
+        when (store.getString(KEY_LAST_OUTCOME, null)) {
+            OUTCOME_SUCCEEDED -> UpdateLastOutcome.Succeeded
+            OUTCOME_FAILED -> UpdateLastOutcome.Failed
+            else -> UpdateLastOutcome.Never
+        }
+
+    /**
+     * 「忽略此版本」：记下版本号，之后自动检测不再提示它；手动检查那一手念的是
+     * 「这一版被你忽略了、到「设置 → 版本」里可以撤销」，不再把它当成新版本弹一遍。
+     *
+     * 这一手必须有对偶（[restoreIgnored]）：改前偏好里写进去就再没有清除路径、界面也从不回读，
+     * 点一次就是一扇单向门（T261 第 3 处静默）。
+     */
     fun ignore(context: Context, info: UpdateInfo) {
         prefs(context).edit {
             putString(KEY_SKIPPED, info.version)
@@ -172,6 +318,7 @@ object UpdateCheck {
         }
         pendingInstall = null
         _state.value = UpdateUiState.Idle
+        Log.i(TAG, "用户忽略 v${info.version}：不再提示它，撤销落点是设置页「版本」那一组的「恢复更新提醒」")
     }
 
     fun dismiss() {

@@ -73,6 +73,15 @@ fun UpdateDialog(
                 onDismiss = onDismiss,
                 onOpenReleasePage = onOpenReleasePage,
             )
+            is UpdateUiState.Blocked -> SimpleDialog(
+                // 话由 domain/update/UpdateCheckGate.kt 一处写完，弹窗与设置页那一行念同一句：
+                // 「根本没出网」与「查到的正是被忽略那一版」各有各的那一句，不许再折成静默
+                title = shown.title,
+                body = shown.message,
+                modifier = modal,
+                onDismiss = onDismiss,
+                onOpenReleasePage = onOpenReleasePage,
+            )
             is UpdateUiState.UpToDate -> SimpleDialog(
                 title = "已是最新版本",
                 body = "当前 v$currentVersion，Gitee 上没有更新的版本。",

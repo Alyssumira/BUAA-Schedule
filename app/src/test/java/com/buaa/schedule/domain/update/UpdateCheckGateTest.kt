@@ -318,18 +318,20 @@ class UpdateCheckGateTest {
             UpdateCheckGate.present(UpdateCheckTrigger.Automatic, NEWER, NEWER, null),
             UpdateCheckGate.present(UpdateCheckTrigger.Automatic, null, null, null),
             UpdateCheckGate.present(UpdateCheckTrigger.Automatic, null, null, "连接超时"),
+            UpdateCheckGate.present(UpdateCheckTrigger.Automatic, null, NEWER, null),
         )
         val silent = autoVerdicts.filter { !it.announces }
         assertEquals(
-            "自动那一侧必须**存在**静默档位（否则每天第一次打开都要被网络错误打断，" +
-                "那是把七档又折回一档的另一种写法）。实到静默枚数：" + silent.size,
+            "自动那一侧六枚结论里必须**恰好五枚**静默（唯一出声的是「发现新版本」）——" +
+                "多一枚就是每天第一次打开都要被网络错误打断，少一枚就是新版本被咽掉。" +
+                "实到静默枚数：" + silent.size,
             5,
             silent.size,
         )
 
         val tiers = (manualVerdicts + autoVerdicts +
             UpdateCheckGate.admit(true, UpdateCheckTrigger.Manual, true, UpdateLastOutcome.Failed)
-            ).map { it::class.simpleName }.distinct().sorted()
+            ).mapNotNull { it::class.simpleName }.distinct().sorted()
         assertEquals(
             "内核交出的档位必须恰好七档（折成一枚 Boolean 是 1 档，把两档并一是 6 档）：实到 $tiers",
             listOf(
