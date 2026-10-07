@@ -20,12 +20,62 @@ import com.buaa.schedule.reminder.ReminderNotifications
  */
 object ReminderGuidance {
 
-    /** 精确闹钟是否可用（Android 12+ 为特殊权限，默认拒绝） */
+    /**
+     * 精确闹钟是否可用（Android 12+ 为特殊权限，默认拒绝）。
+     *
+     * 判据本体在 [canScheduleExactAt]：这一层只做三件事 —— 把系统版本号当参数交给判据、
+     * 取系统服务、把「读授权」这一手包成 [ExactAlarmReading]。`Build.VERSION` 因此**只出现在调用点**，
+     * 「服务拿不到 ⇒ 不可用」那一档能在纯 JVM 上摆表断言（`ui/settings/ReminderGuidanceExactAlarmTest`）。
+     *
+     * 改前两格（T207）：
+     * 1. `?: return true` —— 拿不到 `AlarmManager` 时答「**可用**」。调度侧五家全是反的
+     *    （逐家点名见 [canScheduleExactAt]）⇒ 设置页那行可以写着「精确闹钟 / 提醒将准时触发」，
+     *    而实际一条闹钟都没排上：同一枚事实两本口径。
+     * 2. `manager.canScheduleExactAlarms()` **裸调**（无 `runCatching`）—— 调度侧全都包着，
+     *    说明这枚调用在本仓的既有判断里是会抛的（部分 ROM 抛 `SecurityException`）⇒ 设置页整页崩。
+     * 两处现在都跟着调度侧走：**判不出来就说不行**（报忧不报喜）。
+     */
     fun canScheduleExact(context: Context): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
-        val manager = context.getSystemService(AlarmManager::class.java) ?: return true
-        return manager.canScheduleExactAlarms()
+        // 版本闸门留在调用点：`canScheduleExactAlarms()` 是 API 31 才有的方法，低版本连方法都没有，
+        // 必须短路掉 —— 判据本体自己不许读 Build.VERSION（见 [canScheduleExactAt]）。
+        // 这一档交出去的是「什么都没读到」，答案由判据的 SDK 档给（恒可用），与调度侧
+        // `Build.VERSION.SDK_INT < Build.VERSION_CODES.S || …` 的短路次序同值。
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return canScheduleExactAt(Build.VERSION.SDK_INT, ExactAlarmReading.Unreadable)
+        }
+        val manager = runCatching { context.getSystemService(AlarmManager::class.java) }.getOrNull()
+        val reading = if (manager == null) {
+            // 服务都不在 ⇒ 任何一档闹钟都排不上，这一手在界面上就是「不可用」
+            ExactAlarmReading.Unreadable
+        } else {
+            runCatching {
+                if (manager.canScheduleExactAlarms()) ExactAlarmReading.Granted else ExactAlarmReading.Denied
+            }.getOrDefault(ExactAlarmReading.Unreadable)
+        }
+        return canScheduleExactAt(Build.VERSION.SDK_INT, reading)
     }
+
+    /**
+     * 「这台机器现在能不能排精确闹钟」的唯一口径。纯函数：不吃 `Context`、不读 `Build.VERSION`，
+     * 所以三档都能在 JVM 上逐档摆表断言。
+     *
+     * 三档：
+     * - `sdkInt < 31`：Android 12 以下压根没有这枚特殊权限 ⇒ 恒 true。次序与调度侧同形
+     *   （`Build.VERSION.SDK_INT < Build.VERSION_CODES.S || 读授权`，SDK 档在前）；
+     * - [ExactAlarmReading.Unreadable]：拿不到 `AlarmManager`、或读授权时系统抛 ⇒ **false**。
+     *   改前这一档答 true，而排程一侧从来没有排上任何东西；
+     * - [ExactAlarmReading.Granted] 才 true，[ExactAlarmReading.Denied] false。
+     *
+     * 同一条口径在调度侧的五枚落点（本仓 `*Guard*` 逐家点名，改动任一家都要回来重钉）：
+     * `reminder/ReminderScheduler.kt:155`、`reminder/ClassProgressScheduler.kt:438` 与同文件
+     * `:474`（两家两处，全仓实到五处而非卡面说的四处）、`reminder/ClassProgressDnd.kt:187`、
+     * `reminder/TomorrowPreviewReceiver.kt:197`，一律
+     * `runCatching { alarmManager.canScheduleExactAlarms() }.getOrDefault(false)`；
+     * 第五家 `reminder/CourseFluidService.kt:408-412` 把「服务拿不到」与「读数抛」一起包进
+     * 同一枚 `runCatching { … }.getOrDefault(false)`（`?: return@runCatching false`）⇒ 同向。
+     */
+    internal fun canScheduleExactAt(sdkInt: Int, reading: ExactAlarmReading): Boolean =
+        if (sdkInt < API_ANDROID_12) true else reading == ExactAlarmReading.Granted
 
     /**
      * 当前能否发出通知（含"渠道被用户关掉"的情况）。
@@ -69,6 +119,14 @@ object ReminderGuidance {
 
     /** 该权限随 Android 17（API 37）引入；compileSdk 36 还没有 `VERSION_CODES` 常量可用 */
     private const val API_POST_PROMOTED_PERMISSION = 37
+
+    /**
+     * Android 12（API 31）= `Build.VERSION_CODES.S`：`SCHEDULE_EXACT_ALARM` 这枚特殊权限的起点。
+     *
+     * [canScheduleExactAt] 是纯 JVM 判据（表驱动单测没有 android.jar 的运行时），所以这里写常数、
+     * 不在判据里引 `Build.VERSION_CODES`；调用点那一层继续用 `Build.VERSION_CODES.S`（值同源）。
+     */
+    private const val API_ANDROID_12 = 31
 
     private const val PERMISSION_POST_PROMOTED = "android.permission.POST_PROMOTED_NOTIFICATIONS"
 
@@ -208,4 +266,22 @@ object ReminderGuidance {
             )
         }
     }
+}
+
+/**
+ * 系统对「这台机器能不能排精确闹钟」给出的三种答法（[ReminderGuidance.canScheduleExactAt] 的输入面）。
+ *
+ * [Unreadable] 单独一档是必须的：改前「拿不到服务」被并进了「可用」那一侧（`?: return true`），
+ * 于是设置页那句「提醒将准时触发」可以在一条闹钟都没排上的机器上亮着。现在它与「系统抛」同档，
+ * 一律按**不可用**答 —— 与调度侧五家的 `runCatching { … }.getOrDefault(false)` 同口径。
+ */
+internal enum class ExactAlarmReading {
+    /** Android 12+ 的特殊权限已授予 */
+    Granted,
+
+    /** 系统明确没授予（用户没在「精确闹钟」授权页里打开） */
+    Denied,
+
+    /** 判不出来：拿不到 `AlarmManager`，或读授权时系统抛（部分 ROM 的 `SecurityException`） */
+    Unreadable,
 }
