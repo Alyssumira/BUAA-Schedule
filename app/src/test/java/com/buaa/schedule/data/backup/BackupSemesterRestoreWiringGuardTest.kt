@@ -38,7 +38,7 @@ import org.junit.Test
  * 7. [口令那条链没有第二套序列化口径] —— **数出现次数**：`ScheduleShareCodec` 仍只做
  *    JSON ↔ deflate ↔ Base64，`BackupData(` 构造 0 处（它只搬运，不裁剪字段）。
  *
- * ## T223 追加的三把（卡面 §3 点名的①②③，逐格点名）
+ * ## T223 追加的三把 + T223b 补的一道门（卡面 §3 点名的①②③，逐格点名）
  *
  * 8. [主学期「就地兜底一枚日历值」那一形全树 0 处]（`主学期就地兜底一枚日历值那一形在全树零命中`）——
  *    **先抹注释再数出现次数**：`?: fallbackStartDate` / `val safeSemester` /
@@ -557,6 +557,84 @@ class BackupSemesterRestoreWiringGuardTest {
         )
     }
 
+    // ─────────────── ⑤″ T223b：两条路递给内核的四份实参必须各有出处 ───────────────
+
+    /**
+     * ⑤′ 数的是「两条路都调同一枚内核」；这一格数的是**递进去的那四份实参从哪儿来** ——
+     * 卡面 §1 那句「库里那一行 vs 备份那一枚的次序」要真的由调用点把两样都交给判据才成立。
+     * 少交一样，判据就永远看不见竞争的那一方，而两条路的调用点形状一模一样、⑤′ 照样绿：
+     * - 主学期不递库里那一行（`existingRow = null`）⇒ 备份的日期认不出来时结论从
+     *   [SemesterRowDecision.KeepExistingInDb] 退成 [SemesterRowDecision.Rebuild]，当前学期那一枚
+     *   好日期被一个猜的值 delete+insert 顶掉 —— 本卡的病灶换了个入口重新进来，而且这一档
+     *   **表驱动单测抓不到**（判据本身没错，错在没人把库里的行递给它）；
+     * - 不递周次证据（`observedMaxWeek = null`）⇒ 补建那一等永远标 NO_BASIS、周数退成 1，
+     *   「这批课上到第 16 周 ⇒ 这学期至少 16 周」那枚有出处的下界就此消失，而文案一字不变 ⇒ 静默；
+     * - 不递配对好的备份行（`backupRow = null`）⇒ 备份明明带着开学日却说成「压根没带这一 termCode」，
+     *   文案念出来的来历（NOT_IN_BACKUP）与真实来历（BACKUP_DATE_UNREADABLE 之外那一档）对不上。
+     *
+     * 钉法：两枚体内各三枚实参**逐字 + 数出现次数**（恰好一处），外加整个仓储层
+     * `existingRow = null` / `backupRow = null` / `observedMaxWeek = null` 各 0 处 —— 内核那三枚参数都是
+     * **必填**（没有默认值，与 ④′c 那一格同一口径），所以唯一的蒙法就是拿 null 或常量喂进去，
+     * 这一层把那道门也关上。
+     */
+    @Test
+    fun `两条路递给内核的四份实参都来自库里与备份的配对 不许拿 null 蒙`() {
+        val code = blankCommentsKeepingLiterals(source(REPOSITORY))
+        val historyBody = braceBodyFrom(
+            code,
+            code.indexOf('{', indexOfAll(code, REPLACE_ANCHOR).first() + REPLACE_ANCHOR.length),
+        )
+        val mainBody = braceBodyFrom(
+            code,
+            code.indexOf('{', indexOfAll(code, RESTORE_TX_ANCHOR).first() + RESTORE_TX_ANCHOR.length),
+        )
+        for (needle in listOf(
+            MAIN_EXISTING_ARG to "主学期必须把**库里**那一枚学期行当参数递给内核 —— 不递 = 判据看不见竞争者，" +
+                "坏日期档从「库里那一行一个字都不动」退成「补建一枚猜的并顶掉它」（本卡病灶换了入口）",
+            MAIN_BACKUP_ARG to "主学期必须把**配对好的备份行**递进去 —— 不递 = 备份明明带了开学日却被说成" +
+                "「压根没带」，文案念出来的开学日来历（NOT_IN_BACKUP）与真实来历不符",
+            MAIN_WEEKS_ARG to "主学期必须把这批课程里出现过的最大周次递进去 —— 不递 = 补建那一等永远标 " +
+                "NO_BASIS、周数退成 1，那枚有出处的下界消失而文案一字不变（静默）",
+        )) {
+            assertEquals(
+                "主学期那一路体内 `${needle.first}` 恰好一处（实到 " +
+                    occurrences(mainBody, needle.first) + " 处）：${needle.second}",
+                1,
+                occurrences(mainBody, needle.first),
+            )
+        }
+        for (needle in listOf(
+            HISTORY_EXISTING_ARG to "历史学期必须把库里那一行递进去（T204 那一路的「同机恢复无损」全靠它）",
+            HISTORY_BACKUP_ARG to "历史学期必须把配对到的备份行递进去（T204 病灶 1A：备份本来带着真实开学日）",
+            HISTORY_WEEKS_ARG to "历史学期必须把周次证据递进去（同一枚下界，与主学期同一口径）",
+        )) {
+            assertEquals(
+                "历史学期那一路体内 `${needle.first}` 恰好一处（实到 " +
+                    occurrences(historyBody, needle.first) + " 处）：${needle.second}",
+                1,
+                occurrences(historyBody, needle.first),
+            )
+        }
+        for (needle in listOf(ARG_NULL_EXISTING, ARG_NULL_BACKUP, ARG_NULL_WEEKS)) {
+            assertEquals(
+                "仓储层里 `$needle` 必须 0 处（实到 " + occurrences(code, needle) +
+                    " 处）：内核那三枚参数都是必填、没有默认值，所以「不表态」的唯一写法就是拿 null/常量" +
+                    "喂进去 —— 一旦成立，判据表每一格照样对、⑤′ 也照样绿，坏的正是**调用点**这一层" +
+                    "（本仓「判据与消费侧必须同源」那一族的另一头）",
+                0,
+                occurrences(code, needle),
+            )
+        }
+        assertEquals(
+            "两条路的体内 `getByTermCode(` 各恰好一处（历史学期 " +
+                occurrences(historyBody, "getByTermCode(") + " 处、主学期 " +
+                occurrences(mainBody, "getByTermCode(") + " 处）：库里有没有那一枚学期行始终由调用点去问、" +
+                "当参数递给判据（判据本体不碰 Room，见 ④ 层同一格）。少一枚 = 那一侧不再知道库里有什么",
+            2,
+            occurrences(historyBody, "getByTermCode(") + occurrences(mainBody, "getByTermCode("),
+        )
+    }
+
     // ─────────────── ④ 内核纯度：零 android、零时钟、判据只有一份 ───────────────
 
     @Test
@@ -1036,6 +1114,21 @@ class BackupSemesterRestoreWiringGuardTest {
 
         /** 主学期那一支「库里已有 + 备份认不出来」的落点动作（一个字节都不写那一行） */
         const val MAIN_KEEP_ACTION = "is SemesterRowDecision.KeepExistingInDb -> replaceCoursesOnlyInTx(mainCode, mainImported)"
+
+        /**
+         * ⑤″：两条路递给内核的那四份实参（逐字锚点）。内核那三枚「从哪儿来」的参数都是**必填**，
+         * 所以调用点唯一的蒙法就是换一枚 null / 常量进去 —— 下面六枚钉"真的从出处来"，
+         * 那三枚 `… = null` 钉"蒙不过去"。
+         */
+        const val MAIN_EXISTING_ARG = "existingRow = semesterDao.getByTermCode(mainCode)?.toDomain(),"
+        const val MAIN_BACKUP_ARG = "backupRow = mainBackupRow,"
+        const val MAIN_WEEKS_ARG = "observedMaxWeek = mainImported.flatMap { it.weeks }.maxOrNull(),"
+        const val HISTORY_EXISTING_ARG = "existingRow = semesterDao.getByTermCode(semesterCode)?.toDomain(),"
+        const val HISTORY_BACKUP_ARG = "backupRow = backupRow,"
+        const val HISTORY_WEEKS_ARG = "observedMaxWeek = imported.flatMap { it.weeks }.maxOrNull(),"
+        const val ARG_NULL_EXISTING = "existingRow = null"
+        const val ARG_NULL_BACKUP = "backupRow = null"
+        const val ARG_NULL_WEEKS = "observedMaxWeek = null"
 
         /** 「两问的结论」在内核里的唯一落点：第一问的条件（T223 逐字节钉住它） */
         const val MAIN_SEMESTER_CONDITION =
