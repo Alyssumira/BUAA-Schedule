@@ -252,7 +252,26 @@ object BuaaInPageFetcher {
         return SemesterFetchOutcome(allCourses, succeeded, failed.toList())
     }
 
-    /** 抓取学期周数与开学日（getTermWeeks 每行为一周，含 startDate/endDate） */
+    /**
+     * 抓取学期周数与开学日（getTermWeeks 每行为一周，含 startDate/endDate）。
+     *
+     * **这一趟有静默重试，且吃的是课表那一圈同一份预算**（T196①：`MAX_ATTEMPTS_PER_WEEK` 含首次共
+     * 两次 + `RETRY_DELAY_MS`，不新开一枚预算数）。改前它只 `fetch` 一次，而课表那三趟有重试额度 ——
+     * 同一枚「弱网抖动 / 教务瞬时超时」的解释在两侧不对称。
+     *
+     * 为什么这一趟比课表那一趟更该重试（本卡的理由，不是优化）：T180 之后这条链的下游是**闸门不是兜底**。
+     * 首次导入那一路（`ui/importing/BuaaLoginScreen.kt` 的 `resolveBuaaSemesterStart`）认不出开学日就
+     * 报错返回、不动课表；静默刷新那一路（`BuaaWebSession.kt` 的 `refreshSchedule`）认不出就
+     * `Result.failure`。两边都没有「拿别的日期顶一下」那一手 —— 所以**一次瞬时抖动 = 整趟导入失败**，
+     * 而且用户在 `fetchState` 上看着它跑完二十周才发现（T196② 之前那一轮空转还是白花的时间）。
+     *
+     * 与课表那一圈唯一多出来的一手：重试之前先 `ensureActive()`。这一趟跑在导入协程里，
+     * 用户取消或页面离开时不该再多等那 [RETRY_DELAY_MS] 毫秒。（课表那一圈没有这一手 ——
+     * 那是另一格的账，本卡不顺手修，也不照抄它的缺。）
+     *
+     * 运行期「抖一次真能救回来」这一档**没验**：`fetch` 要 WebView 页面上下文，JVM 造不出、
+     * 本卡零 adb ⇒ 由静态守卫 `SemesterInfoRetryGuardTest` 钉形状，实屏归编排者装机。
+     */
     suspend fun fetchSemesterInfo(
         webView: WebView,
         termCode: String,
@@ -261,15 +280,31 @@ object BuaaInPageFetcher {
         // 仍按白名单过滤一次：畸形取值不应该有机会改变脚本语义。
         val safeTermCode = termCode.takeIf { TERM_CODE_PATTERN.matches(it) }
             ?: return SemesterInfo(20, null)
-        val raw = fetch(webView, "GET", "/jwapp/sys/homeapp/api/home/getTermWeeks.do?termCode=$safeTermCode", "")
-            ?: return SemesterInfo(20, null)
+        // 弱网抖动 / 教务瞬时超时是这一趟失败的主因（见上面的 KDoc），一次超时就判「这个学期没有开学日」
+        // 等于把整趟导入判死。语义与课表那一圈同一份预算：含首次共 MAX_ATTEMPTS_PER_WEEK 次尝试，
+        // 两次之间退避 RETRY_DELAY_MS；一圈只有这一枚 fetch，不长第二本预算。
+        var raw: String? = null
+        var attempt = 0
+        while (raw == null && attempt < MAX_ATTEMPTS_PER_WEEK) {
+            if (attempt > 0) {
+                currentCoroutineContext().ensureActive()
+                delay(RETRY_DELAY_MS)
+            }
+            attempt++
+            raw = fetch(
+                webView, "GET",
+                "/jwapp/sys/homeapp/api/home/getTermWeeks.do?termCode=$safeTermCode", "",
+            )
+        }
+        val response = raw ?: return SemesterInfo(20, null)
         return runCatching {
-            val resp = json.decodeFromString<BuaaTermWeeksResponse>(raw)
+            val resp = json.decodeFromString<BuaaTermWeeksResponse>(response)
             val weeks = resp.datas.orEmpty()
             if (weeks.isEmpty()) return SemesterInfo(20, null)
             // 第 1 周只认两条判据：serialNumber 最小、startDate 最早（判据本体 resolveBuaaFirstWeek）。
             // 两条判据分家、或各自被两行并列占着时判不出 ⇒ Undetermined，这一格把 firstWeekMonday
-            // 回成 null，让下游两路各自的诚实失败链去拦（BuaaLoginScreen:183 / BuaaWebSession:400-404）。
+            // 回成 null，让下游两路各自的诚实失败链去拦（首次导入那一路的 :169 那一枚闸门 /
+            // 静默刷新那一路的 :400-404）。
             // 旧写法 `minByOrNull { it.serialNumber ?: Int.MAX_VALUE } ?: weeks.first()` 只实现了第一条，
             // 而第二枚兜底是**不可达支**（上一行已保证 weeks 非空）；真正会走到的退化是 serialNumber
             // 全为 null 时键全体并列，minByOrNull 于是回**列表首行** —— 教务只是没给序号，
