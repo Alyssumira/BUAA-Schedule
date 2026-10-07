@@ -5,6 +5,10 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import com.buaa.schedule.domain.widget.WidgetRolloverActionKind
+import com.buaa.schedule.domain.widget.WidgetRolloverClaim
+import com.buaa.schedule.domain.widget.WidgetRolloverGate
+import com.buaa.schedule.domain.widget.WidgetRolloverSentinel
 import com.buaa.schedule.reminder.WakeLocks
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,8 +52,50 @@ class WidgetRefreshReceiver : BroadcastReceiver() {
                         // ACTION_MIDNIGHT_REFRESH 都落到这里，各跑一遍"全学期快照 sync +
                         // 组件重绘"。自排那条是对抗 ROM 的兜底（它同样可能吞掉系统广播），
                         // 两条都留，但重复的那次全量刷新没有意义。
-                        if (claimRolloverRefresh()) {
-                            BackgroundSync.refreshWidgets(context)
+                        //
+                        // 改前那一手逐字留在这里做取证（源码形状守卫按"代码里 0 处、注释里 1 处"
+                        // 双向复算，拿它证明下面这个 `when` 不是把结论折成一枚 Boolean）：
+                        // ```
+                        // if (claimRolloverRefresh()) { BackgroundSync.refreshWidgets(context) }
+                        // ```
+                        // 那一形的病是"没刷过"与"刚刚刷过"共用同一枚 `0L`，开机后窗口之内的
+                        // 真跨天被整段跳过而一句话不说。分档判据住在
+                        // `domain/widget/WidgetRolloverGate.kt`，这里只按档位分派。
+                        when (val claim = claimRolloverRefresh(rolloverActionKind(action))) {
+                            is WidgetRolloverClaim.GrantedFirstClaim,
+                            is WidgetRolloverClaim.GrantedAfterWindow -> {
+                                BackgroundSync.refreshWidgets(context)
+                                Log.i(TAG, "跨天全量刷新放行: ${rolloverClaimTrace(claim)}")
+                            }
+
+                            is WidgetRolloverClaim.SentinelContradiction -> {
+                                // 旗与哨兵互相打脸 = 领取这一族的形状病了，不是今天真的没课要画。
+                                // 宁可多刷一遍，也不许把真跨天咽掉，所以这一档照刷且必须告警。
+                                BackgroundSync.refreshWidgets(context)
+                                Log.w(TAG, "跨天刷新哨兵自相矛盾 仍按放行处理: ${rolloverClaimTrace(claim)}")
+                            }
+
+                            is WidgetRolloverClaim.SuppressedAsDuplicate -> {
+                                // 去重本业：同窗口内的重复那一条。跳过全量刷新，续排照常，
+                                // 但这一手要说得出话（HyperOS 把 logcat 截在 Info 级 ⇒ Log.i）
+                                Log.i(
+                                    TAG,
+                                    "跨天全量刷新被去重压掉 同窗口内的重复: ${rolloverClaimTrace(claim)}",
+                                )
+                            }
+
+                            is WidgetRolloverClaim.SuppressedClockInverted -> {
+                                // 递进来的读数倒退：拿错尺的形状，不是"刚刚刷过"，不许共用那一句
+                                Log.w(
+                                    TAG,
+                                    "跨天全量刷新跳过 单调钟读数倒退: ${rolloverClaimTrace(claim)}",
+                                )
+                            }
+
+                            is WidgetRolloverClaim.NotRolloverAction -> {
+                                // 外面的 `if` 已经拦掉非时间类动作；走到这里就是接线错了
+                                Log.w(TAG, "非跨天动作走到了配额领取处: ${rolloverClaimTrace(claim)}")
+                            }
                         }
                         BackgroundSync.scheduleWidgetMidnight(context)
                     }
@@ -89,28 +135,104 @@ class WidgetRefreshReceiver : BroadcastReceiver() {
         /**
          * 跨天全量刷新的去重窗口。两个信号（系统 DATE_CHANGED、自排零点闹钟）
          * 正常都在 00:00±几十秒内到达，留足余量又不至于长到让真实的数据变化被吞掉。
+         *
+         * ⚠️ 这一枚窗口只许拿来比"距离上一次领取"，不许拿来比"距离开机"：
+         * 判据本体在 `domain/widget/WidgetRolloverGate.kt`，那一侧的短路（从没领过 ⇒ 放行）
+         * 排在窗口比较之前。
          */
         private const val ROLLOVER_SUPPRESS_MS = 120_000L
 
-        private val lastRolloverAt = java.util.concurrent.atomic.AtomicLong(0L)
+        /**
+         * 与判据同源的「没有上一次」哨兵。这里只是别名 —— 本文件不许另写一枚负数字面量，
+         * 否则刻度与判据两头各有一套「从没刷过」。
+         */
+        private const val NEVER_CLAIMED_MILLIS = WidgetRolloverSentinel.NEVER_CLAIMED_MILLIS
 
         /**
-         * 领取这一次跨天刷新的"全量刷新"配额；已被领走则返回 false。
+         * 上一次领取跨天刷新配额的时刻（`elapsedRealtime` 刻度）。
+         *
+         * 初始值是 [NEVER_CLAIMED_MILLIS]（`-1L`），**不是 `0L`**：
+         * 改前写的是 `java.util.concurrent.atomic.AtomicLong(0L)`，而 `elapsedRealtime()`
+         * 是"开机以来的毫秒数"、开机那一刻恰好从 0 起走 ⇒ "从没刷过"与"刚刚在开机那一瞬
+         * 刷过"在类型上不可区分，于是开机后 [ROLLOVER_SUPPRESS_MS] 之内到达的那四条广播
+         * 全被窗口判据当成重复而整段跳过（且改前那一支一条日志都不留）。
+         * `-1L` 落在这只钟取不出来的那一侧，所以它只可能表示"没有上一次"。
+         */
+        private val lastRolloverAt = java.util.concurrent.atomic.AtomicLong(NEVER_CLAIMED_MILLIS)
+
+        /** 把落到这条链上的动作归成判据认得的五档 */
+        private fun rolloverActionKind(action: String): WidgetRolloverActionKind = when (action) {
+            ACTION_MIDNIGHT_REFRESH -> WidgetRolloverActionKind.SelfMidnightAlarm
+            Intent.ACTION_DATE_CHANGED -> WidgetRolloverActionKind.SystemDateChanged
+            Intent.ACTION_TIME_CHANGED -> WidgetRolloverActionKind.SystemTimeChanged
+            Intent.ACTION_TIMEZONE_CHANGED -> WidgetRolloverActionKind.SystemTimezoneChanged
+            else -> WidgetRolloverActionKind.NotRollover
+        }
+
+        /**
+         * 领取这一次跨天刷新的"全量刷新"配额，交回判据的分档结论（**不许折成 Boolean**）。
          *
          * 计时用 `elapsedRealtime`（单调）而不是墙上时钟：用户改时间本身就会
          * 以 `ACTION_TIME_CHANGED` 走到这个分支，拿被改的时钟判窗口等于判不出来。
+         * 判据不吃钟：读数在这里现取，当参数递进去。
          *
          * ⚠️ 必须 CAS：DATE_CHANGED 与自排零点闹钟恰恰都在 00:00±几十秒到达，
          * 各自起的 IO 协程用 @Volatile 的"先读后写"会双双领到配额，全学期快照
-         * 与 6 个组件重绘跑两遍。
+         * 与 6 个组件重绘跑两遍。哨兵只有这一枚、写入只有这一手，
+         * `hasEverRefreshed` 由它现推 —— 别让旗标与时间戳分居两枚字段，那样又会各说一套。
          */
-        private fun claimRolloverRefresh(): Boolean {
+        private fun claimRolloverRefresh(actionKind: WidgetRolloverActionKind): WidgetRolloverClaim {
             val now = android.os.SystemClock.elapsedRealtime()
             while (true) {
                 val prev = lastRolloverAt.get()
-                if (now - prev < ROLLOVER_SUPPRESS_MS) return false
-                if (lastRolloverAt.compareAndSet(prev, now)) return true
+                val claim = WidgetRolloverGate.decide(
+                    actionKind = actionKind,
+                    nowElapsedRealtime = now,
+                    lastClaimedAt = prev,
+                    windowMillis = ROLLOVER_SUPPRESS_MS,
+                    hasEverRefreshed = prev != NEVER_CLAIMED_MILLIS,
+                )
+                val commitAt = rolloverCommitAtOrNull(claim) ?: return claim
+                if (lastRolloverAt.compareAndSet(prev, commitAt)) return claim
             }
+        }
+
+        /**
+         * 这一档要不要把哨兵推到新的读数；`null` = 没占着配额，哨兵一格都不许动。
+         * 六档逐枚点名、不带 `else`：判据新增一档时这里必须跟着表态。
+         */
+        private fun rolloverCommitAtOrNull(claim: WidgetRolloverClaim): Long? = when (claim) {
+            is WidgetRolloverClaim.GrantedFirstClaim -> claim.claimedAtElapsedRealtime
+            is WidgetRolloverClaim.GrantedAfterWindow -> claim.claimedAtElapsedRealtime
+            is WidgetRolloverClaim.SentinelContradiction -> claim.nowElapsedRealtime
+            is WidgetRolloverClaim.SuppressedAsDuplicate,
+            is WidgetRolloverClaim.SuppressedClockInverted,
+            is WidgetRolloverClaim.NotRolloverAction -> null
+        }
+
+        /** 取证行：把档位与它据以判断的读数原样念出来（Info/Warn 两级，release 里不许被削掉） */
+        private fun rolloverClaimTrace(claim: WidgetRolloverClaim): String = when (claim) {
+            is WidgetRolloverClaim.GrantedFirstClaim ->
+                "action=${claim.actionKind} 本进程首次领取 nowElapsed=${claim.claimedAtElapsedRealtime}"
+
+            is WidgetRolloverClaim.GrantedAfterWindow ->
+                "action=${claim.actionKind} 出窗放行 nowElapsed=${claim.claimedAtElapsedRealtime} " +
+                    "距上次领取=${claim.elapsedSinceLastClaimMillis}ms"
+
+            is WidgetRolloverClaim.SuppressedAsDuplicate ->
+                "action=${claim.actionKind} 距上次领取=${claim.elapsedSinceLastClaimMillis}ms " +
+                    "窗口=${claim.windowMillis}ms"
+
+            is WidgetRolloverClaim.SuppressedClockInverted ->
+                "action=${claim.actionKind} nowElapsed=${claim.nowElapsedRealtime} " +
+                    "lastClaimed=${claim.lastClaimedAt}"
+
+            is WidgetRolloverClaim.SentinelContradiction ->
+                "action=${claim.actionKind} hasEverRefreshed=${claim.hasEverRefreshed} " +
+                    "lastClaimed=${claim.lastClaimedAt} nowElapsed=${claim.nowElapsedRealtime}"
+
+            is WidgetRolloverClaim.NotRolloverAction ->
+                "action=${claim.actionKind}"
         }
     }
 }
