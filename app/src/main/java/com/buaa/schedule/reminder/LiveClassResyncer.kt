@@ -39,17 +39,25 @@ object LiveClassResyncer {
             // 服务在跑就说明上课铃正常送达（或上一轮已补过），直接退出，避免每次进前台都查库
             if (CourseFluidService.isRunning) return
             val window = nextWindow(context)
-            when (val action = decide(window, System.currentTimeMillis())) {
+            // 一次判断一只钟（#338）：decide 与下面那条"是不是还在数这节课"共用这一次读数。
+            // 此前谓词自己在体内读真钟，而这里已经有一只钟 —— 两次读数之间是查库与整轮
+            // 窗口搜索（毫秒到几十毫秒级），跨秒那一瞬两处会先掉个儿：注入的那只说还在数、
+            // 真钟说已经开始 ⇒ 刚上岛的课前倒计时被当成遗留收掉（勿扰同点被放开）。
+            val nowMillis = System.currentTimeMillis()
+            when (val action = decide(window, nowMillis)) {
                 ResyncAction.ClearLeftovers -> {
                     // "课还没开始"不等于遗留：正为数着这节课的课前倒计时就挂在岛上，
                     // 判据与 rescheduleWindows 共用，口径不能两边各写一份。
                     // 取哪一格是上课时刻也不各写一份：这里的 window 是
                     // planNextClassWindow 那种"start=上课 / end=下课"的课堂计划窗口，
                     // 一律走 ReminderNotifications.classStartOf（写侧那一型走 countdownAnchorOf）。
+                    // 与那一处的分工也不同：这里时间判还得留着 —— ClearLeftovers 也包含
+                    // "这一节已经结束"那一档，只看归属会让下课铃被吞的遗留永远收不掉（R5 F-11）。
                     val countingDown = window != null &&
                         ReminderNotifications.isCountingDownTo(
                             window.courseId,
                             ReminderNotifications.classStartOf(window),
+                            nowMillis,
                         )
                     if (!countingDown) {
                         ClassProgressDnd.restore(context)

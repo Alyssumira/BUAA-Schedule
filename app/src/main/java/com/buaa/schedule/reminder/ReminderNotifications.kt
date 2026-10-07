@@ -74,7 +74,8 @@ object ReminderNotifications {
      * 「渠道已经建过」的进程内门闩（写法同 `ScanChainWarmUp.claim`）。
      *
      * [ensureChannels] 全仓有 7 枚调用点，其中三枚串在同一条通知下发链上
-     * （课前提醒的 `notifyCourse` → `startLiveWindow` → `postClassOngoing`），
+     * （课前提醒那一条广播里：`startLiveWindow` → `postClassOngoing` → `notifyCourse`，
+     * 次序按 `ReminderReceiver.onReceive` 盘面，T227 分兜之后仍是这一手），
      * 于是**一次课前闹钟唤醒**改前要连跑 3 遍：9 趟 `createNotificationChannel` binder
      * + 3 趟 prefs 读，而闹钟叫醒的往往正是冷进程。
      *
@@ -278,9 +279,13 @@ object ReminderNotifications {
      * 「课堂计划窗口」（[ClassProgressScheduler.planNextClassWindow] 那种
      * `startMillis = 上课` / `endMillis = 下课`）里上课时刻的取法（**唯一一份**）。
      *
-     * 用它的三格：`ClassProgressScheduler.rescheduleWindows`、[LiveClassResyncer.resync]、
-     * `ReminderScheduler.shouldTakeDownClassProgress`（前与后在本卡不许动的两枚文件里，
-     * 现按 `window.startMillis` 逐字取，由守卫钉住同口径；跨卡收口见回执）。
+     * 盘面读数（T227 现量，别再照旧文按"三格"找）：真正调这一枚的只有**一格** ——
+     * [LiveClassResyncer.resync]。另外两处读侧拿的是同型窗口、按裸 `window.startMillis`
+     * 逐字取：`ClassProgressScheduler.rescheduleWindows`（T227 起走 `ownsCountdownTo`，
+     * 时间判改由它自己那只注入的 `now` 判）与 `ReminderScheduler.shouldTakeDownClassProgress`
+     * （经 seam 的 `countingDownTo` 谓词）。这两格今天同值、由
+     * `CountdownOwnershipAnchorGuardTest` 第 ② 层逐字钉着传法，把它们收进这一枚取法
+     * 是台账 #266 那笔跨卡账（要同批重钉那层的两侧册子），本卡没有顺手改。
      *
      * 与 [countdownAnchorOf] 同值的**唯一**凭据就是上面那两格造窗形状：一枚是"课前实况窗口"
      * 的 end、一枚是"课堂计划窗口"的 start，同一节课的同一个上课时刻。
@@ -288,29 +293,53 @@ object ReminderNotifications {
     internal fun classStartOf(window: ClassProgressScheduler.ClassWindow): Long = window.startMillis
 
     /**
-     * 屏上的实况是不是"正在数这节即将到来的课"。
+     * 屏上的实况是不是"正在数这节即将到来的课"—— **两只钟**那一版的入口，只许给
+     * 手里没有注入读数的调用方（UI、以及拿不到同一只钟的展示侧）。
      *
-     * [ClassProgressScheduler.rescheduleWindows] 与 [LiveClassResyncer] 共用的判据：
+     * [ClassProgressScheduler.rescheduleWindows] 与 [LiveClassResyncer] 以前共用这一枚：
      * 二者都会把"课还没开始"当成下课铃被吞的遗留来收，少了这一步区分，
-     * 课前倒计时刚上岛就会被拆掉。课程 id 与开课毫秒必须同时对上、
+     * **课前倒计时刚上岛就会被拆掉**。课程 id 与开课毫秒必须同时对上、
      * 且课还没开始才算数 —— 课被删或改时间后重排自然对不上，照常回收。
+     *
+     * ⚠️ 它在**体内**读真钟。一条链上如果已经有一只钟（`rescheduleWindows` 的 `now`、
+     * `LiveClassResyncer` 的 `nowMillis`），这里再读一只就是"一次判断两只钟"：两次读数之间
+     * 隔着那轮 `课程数 × 剩余周次 × 节次` 的全量搜索（毫秒到几十毫秒级），跨秒那一瞬两处
+     * 会各说各话 —— 注入的那只说还没开始、这只说已开始，守卫当场失效，拆掉的恰恰是
+     * "这一节正要开始、勿扰正要生效"的那一秒（#265/#338，T206 已在 `ReminderScheduler`
+     * 那一处按同一口径收过口）。链上请走 [isCountingDownTo] 的三枚参数版
+     * （时间由调用点递）或 [ownsCountdownTo]（只判归属）。
      *
      * ⚠️ 第二个参数是**上课时刻**：调用方拿的是课堂计划窗口时要走 [classStartOf]，
      * 拿的是课前实况窗口时要走 [countdownAnchorOf]（两型不同格、同一枚时刻，见
      * [countdownClassStart]）。
      */
     fun isCountingDownTo(courseId: Long, classStartMillis: Long): Boolean =
-        countdownCourseId == courseId &&
-            countdownClassStart == classStartMillis &&
-            classStartMillis > System.currentTimeMillis()
+        isCountingDownTo(courseId, classStartMillis, System.currentTimeMillis())
+
+    /**
+     * 同一条判据的**纯 JVM 内核**：归属 + 时间两判，钟由调用点递进来（零 android、零时钟读数）。
+     *
+     * 与两枚参数版同值，区别只在"那只钟在谁手上"；[ownsCountdownTo] 是它去掉时间那一判的后半。
+     * 三格合起来才是完整口径：归属对上了而课已开始 ⇒ false（遗留照收，R5 F-11），
+     * 课还没开始而归属对不上 ⇒ false（课被删/改时间，照常回收）。
+     *
+     * ⚠️ 第二个参数的口径同两枚参数版（[classStartOf] / [countdownAnchorOf] 二选一）。
+     */
+    fun isCountingDownTo(courseId: Long, classStartMillis: Long, nowMillis: Long): Boolean =
+        ownsCountdownTo(courseId, classStartMillis) && classStartMillis > nowMillis
 
     /**
      * 课前倒计时的**归属**是否还挂在这节课上 —— [isCountingDownTo] 去掉时间那一判。
      *
      * 调用场景是"倒计时数到上课铃的那一秒"：此刻 `classStart > now` 必然为假，
-     * 用 [isCountingDownTo] 判"上课铃到没到"会得到永远相同的答案，等于没有守卫。
+     * 用带时间判的那两枚去判"上课铃到没到"会得到永远相同的答案，等于没有守卫。
      * 归属是清得掉的（ACTION_START 以 IN_CLASS 重新下发实况时归零），所以只有它能区分
      * "广播处理过了"与"广播被省电策略吞了"。
+     *
+     * ⚠️ 它与上面那两枚**不是同值函数的两个名字**，不许合并成一枚：一枚只判归属、
+     * 一枚还判时间，链上各自缺的就是对方那一半（`ReminderScheduler` 的接线与
+     * `CourseFluidService` 的补救读归属，遗留清理与倒计时无效化读时间）。
+     * 由 `CountdownClockSingleReadGuardTest` 按"体里读不读钟 + 各自枚数"钉住。
      *
      * ⚠️ 第二个参数的口径同 [isCountingDownTo]：`ReminderScheduler` 的生产接线传的是
      * `window.startMillis`（课堂计划窗口），`CourseFluidService` 传的是

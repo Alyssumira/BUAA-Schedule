@@ -373,7 +373,14 @@ object ClassProgressScheduler {
             // ReminderReceiver 自己触发的重排会在倒计时下发后一秒内把它拆掉 ——
             // 这正是"课中能上岛、课前倒计时上不了岛"剩下的那条机制级根因。
             // 课被删/时间被改时归属对不上，照常回收，R5 F-11 的清理语义不变。
-            !ReminderNotifications.isCountingDownTo(window.courseId, window.startMillis)
+            //
+            // 只判**归属**（#338，与 ReminderScheduler 那条接线同一口径）：上面那判刚刚用
+            // 这只注入的 `now` 说过"课还没开始"，再让谓词自己回体内读一只真钟就是
+            // "一次判断两只钟"—— 两次读数之间隔着上面那轮全量窗口搜索（毫秒到几十毫秒级），
+            // 跨秒那一瞬两处会先掉个儿：注入的 now 说还没开始、真钟说已开始 ⇒ 守卫当场失效，
+            // 当场拆掉的恰恰是"这一节正要开始、勿扰正要生效"的那一秒。
+            // 时间判没有丢，它归上面那句 startsAfter(now.toEpochMillis())。
+            !ReminderNotifications.ownsCountdownTo(window.courseId, window.startMillis)
         ) {
             CourseFluidService.stop(context)
             ReminderNotifications.cancelClassOngoing(context)

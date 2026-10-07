@@ -132,18 +132,30 @@ class CountdownOwnershipAnchorGuardTest {
             occurrences(resyncer, CLASS_START_CALL),
         )
         assertEquals(
-            "`ClassProgressScheduler.rescheduleWindows` 那一读必须仍逐字传 `$PLAN_READ_OLD`（实到 " +
-                occurrences(progress, PLAN_READ_OLD) + " 处）。⚠️ **跨卡那一格**：T205 之后这里若改成 " +
+            "`ClassProgressScheduler.rescheduleWindows` 那一读必须仍逐字传 `$PLAN_READ`（实到 " +
+                occurrences(progress, PLAN_READ) + " 处）。⚠️ **跨卡那一格**：T205 之后这里若改成 " +
                 "`ReminderNotifications.classStartOf(window)`，本层要与第 ① 层那把尺一起重钉 —— " +
-                "两侧传法任何一枚单独改动都会让本层红（本卡要的正是这个：改一侧必须回答另一侧同不同口径）",
+                "两侧传法任何一枚单独改动都会让本层红（本卡要的正是这个：改一侧必须回答另一侧同不同口径）。\n" +
+                "T227 #338 改的是**谓词**而不是取格：那一条链上已经有一只注入的 `now` 判过" +
+                "\"课还没开始\"，谓词再回体内读一只真钟就是两只钟（跨秒掉个儿 ⇒ 刚生效的勿扰被拆），" +
+                "所以这一处换成只判归属的那枚 —— 时间判没丢，它在同一条 `&&` 上的 `startsAfter(now...)` 里。",
             1,
-            occurrences(progress, PLAN_READ_OLD),
+            occurrences(progress, PLAN_READ),
         )
         assertEquals(
             "`ReminderScheduler.shouldTakeDownClassProgress` 那一读必须仍逐字传 `$SEAM_READ_OLD`（实到 " +
                 occurrences(scheduler, SEAM_READ_OLD) + " 处）：同一枚跨卡格，理由与上面那格一字不差",
             1,
             occurrences(scheduler, SEAM_READ_OLD),
+        )
+        // T227 #338 的加严：两枚"课堂计划窗口 + 体内读真钟"的组合形一律 0 处
+        //（今天盘面两处链上读侧都改成了只判归属 / 递进来的钟，病灶不许换个字段名回来）
+        assertEquals(
+            "`$PLAN_READ_TWO_CLOCK` 那一形全 app/src/main 必须 0 处（实到 " +
+                mainOccurrences(PLAN_READ_TWO_CLOCK) + " 处）：那是\"调用点已经有一只钟、谓词又回体内" +
+                "读一只\"的形状 —— 跨秒那一瞬两处先掉个儿，拆掉的是刚生效的勿扰与刚上岛的倒计时",
+            0,
+            mainOccurrences(PLAN_READ_TWO_CLOCK),
         )
 
         // 课前实况窗口那一型（end = 上课）：服务侧两处都走具名取法
@@ -640,7 +652,9 @@ class CountdownOwnershipAnchorGuardTest {
 
         // ---- ② 读侧 ----
         const val CLASS_START_CALL = "ReminderNotifications.classStartOf(window),"
-        const val PLAN_READ_OLD = "isCountingDownTo(window.courseId, window.startMillis)"
+        // T227 #338：课堂铃链那一读改走只判归属的那枚谓词（时间判在同一条 && 上的 startsAfter 里）
+        const val PLAN_READ = "ownsCountdownTo(window.courseId, window.startMillis)"
+        const val PLAN_READ_TWO_CLOCK = "isCountingDownTo(window.courseId, window.startMillis)"
         const val SEAM_READ_OLD = "countingDownTo(window.courseId, window.startMillis)"
         const val SERVICE_READ = "ownsCountdownTo(window.courseId, anchor)"
 
