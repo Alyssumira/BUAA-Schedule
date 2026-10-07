@@ -89,7 +89,24 @@ object LiveClassResyncer {
         Log.d(TAG, "课堂窗口内补起课程实况：${window.courseName}")
     }
 
-    /** 此刻「尚未结束的最早一次课」，含正在上的这一节；口径与调度器完全一致 */
+    /**
+     * 此刻「尚未结束的最早一次课」，含正在上的这一节；口径与调度器完全一致。
+     *
+     * "完全一致"到今天为止才真是这句话：排铃那两条链（`rescheduleWindows` 与
+     * `shouldTakeDownClassProgress`）一直显式递学期上界，这一枚却吃了
+     * `planNextClassWindow` 的默认值那一档（= 明说不判上界）。默认值是**展示侧**的
+     * 历史包袱，而这里是一枚会排闹钟的调用点 —— [startLive] 紧随其后就 `scheduleEnd`
+     * 补一枚下课铃，那枚铃到点撤的是全仓唯一那枚课堂实况通知 id 并恢复勿扰
+     * （`ReminderNotifications.NOTIFY_ID_CLASS_PROGRESS` + `ClassProgressReceiver.ACTION_END`）。
+     * 于是 `totalWeeks` 少报时，一节**周课表上根本画不到**的课能靠"打开 App"补起实况，
+     * 并把另一节真课的实况与勿扰一起拆掉（#332，T214/#263 那本账的跨卡残账）。
+     *
+     * 取不到的那一档照 [com.buaa.schedule.domain.schedule.TermWeekGate] 的三条口径答：
+     * 没有学期行 / 学期起始日解析不出来 ⇒ 上面两枚 `?: return null`，判不出就是不挑窗口
+     * （走 ClearLeftovers 收干净）；学期行在但 `totalWeeks` 是脏值 ⇒ 由判据裁掉越界周次。
+     * 这里**不许**退到不判上界那一档：排铃侧宁漏的代价是"少挂一次实况"，
+     * 而误挂的代价是"把真课的勿扰拆了"。
+     */
     private suspend fun nextWindow(context: Context): ClassProgressScheduler.ClassWindow? {
         val repository = context.scheduleRepository()
         val semester = repository.getCurrentSemester() ?: return null
@@ -99,6 +116,7 @@ object LiveClassResyncer {
             semesterStart = semesterStart,
             timeSlots = repository.getTimeSlots(),
             now = LocalDateTime.now(),
+            totalWeeks = semester.totalWeeks,
         )
     }
 

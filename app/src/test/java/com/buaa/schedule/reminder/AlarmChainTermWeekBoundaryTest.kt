@@ -208,9 +208,14 @@ class AlarmChainTermWeekBoundaryTest {
     }
 
     /**
-     * 展示侧那三处旧调用点（`widget/WidgetCommon.kt` 两处 + `reminder/LiveClassResyncer.kt` 一处）
-     * 走的是**不带 totalWeeks 形参**的那一形：本卡不动它们，形状必须与改前逐字一致，
+     * 展示侧那两枚旧调用点（`widget/WidgetCommon.kt` 的「下一节课」两处）走的是**不带 totalWeeks
+     * 形参**的那一形：本卡不动它们（白名单外），形状必须与改前逐字一致，
      * 否则"跨卡那一格"就没法单独验收。
+     *
+     * T227 #332 之后这一格里已经没有 `reminder/` 的调用点了：实况重挂那一枚补上了学期上界
+     * （它挑完窗口就排下课铃，从来不是展示侧），册子由
+     * `TermWeekGateSingleSourceGuardTest` 第 ④ 层（全仓五处）与第 ⑧ 层（按目录，`reminder/`
+     * 恰三处且全部带 bound）一起钉着。
      */
     @Test
     fun displaySideCallersKeepTheirCurrentShape() {

@@ -26,12 +26,19 @@ import org.junit.Test
  *    都在 ClassProgressScheduler：1 定义 + 1 默认值；ReminderScheduler 恰 0 处）+
  *    **逐字节**（rescheduleWindows 那一格是无默认值的必填参数）+ **读形状**（两处调用块里必须有 `totalWeeks =`）；
  * 4. [displaySideResidueIsNamedNotHidden] —— **数出现次数（全 main 册子 + 读形状取实参）**：
- *    `planNextClassWindow(` 的调用恰五处，带 bound 的两处都在 reminder/ 那两条链上，
- *    不判上界的三处逐枚点名（跨卡那一格的账，不许藏着）；
+ *    `planNextClassWindow(` 的调用恰五处，带 bound 的三处都在 `reminder/`（课堂铃链、勿扰判据、
+ *    前台校准），不判上界的只剩展示侧那一处宿主的两枚「下一节课」（T227 #332 把实况重挂那一枚
+ *    从这一格里摘出去了 ⇒ 这本册子跟着变窄，不是变松）；
  * 5. [semesterRowIsTheOnlySourceOfTheBound] —— **逐字节**（`val totalWeeks = semester?.totalWeeks` 恰一处、
  *    接线传 `totalWeeks = semester.totalWeeks,`、缝上那一格是 `val totalWeeks: Int?,`）+ **数出现次数**；
  * 6. [probeRecognisesThePreFixShape] —— **抹注释找锚点**：改前那几形喂进同一把尺各数到该数的值，
- *    写在 KDoc 里的引用抹完必须 0 处（防「锚点拼错的假绿」）。
+ *    写在 KDoc 里的引用抹完必须 0 处（防「锚点拼错的假绿」）；
+ * 7. 第 ⑦ 层（`alarmChainsAndTheConflictAndExportSidesResolveToOneSymbol`）钉搬家后只有一枚符号；
+ * 8. [everyCallSiteInsideReminderPassesTheTermBound] —— **数出现次数（按目录，抹注释）+ 读形状**：
+ *    `reminder/` 目录里 `planNextClassWindow(` 的调用块**全部**带 bound，且该目录里
+ *    `UNBOUNDED_TOTAL_WEEKS` 的枚数恰等于默认值声明那一枚（= 没有一处调用点拿它当实参）。
+ *    这一层是 T227 #332 的加严：第 ③ 层原先只点名两枚文件，实况重挂那枚"会排闹钟却吃默认值"
+ *    的调用点因此被第 ④ 层写死成"展示侧历史包袱"而一直绿着。
  */
 class TermWeekGateSingleSourceGuardTest {
 
@@ -207,38 +214,70 @@ class TermWeekGateSingleSourceGuardTest {
 
     @Test
     fun displaySideResidueIsNamedNotHidden() {
-        val calls = mutableListOf<String>()
-        for (file in mainSources()) {
-            val code = withoutComments(file.text)
-            var from = 0
-            while (true) {
-                val at = code.indexOf(PLAN_CALL, from)
-                if (at < 0) break
-                from = at + PLAN_CALL.length
-                val lineStart = code.lastIndexOf('\n', at) + 1
-                if (code.substring(lineStart, at).contains("fun ")) continue // 定义那一句不算调用
-                val close = matchingParen(code, code.indexOf('(', at))
-                    ?: error("planNextClassWindow 调用的括号没配平：${file.relative}")
-                val args = code.substring(at + PLAN_CALL.length, close)
-                val verdict = if (args.contains("totalWeeks")) WITH_BOUND else WITHOUT_BOUND
-                calls += "${file.relative} -> $verdict"
-            }
-        }
-        val register = calls.sorted().joinToString(separator = "\n")
+        val register = planCallLedger().joinToString(separator = "\n")
         assertEquals(
             "**钉法 = 数出现次数（全 main 册子 + 读形状取实参）**：planNextClassWindow 的调用点恰五处 —— " +
-                "带 bound 的两处必须都在 reminder/ 那两条链上（课堂铃链 rescheduleWindows、勿扰判据 " +
-                "shouldTakeDownClassProgress），不判上界的三处是展示侧的历史包袱：WidgetCommon 两枚「下一节课」" +
-                "＋ LiveClassResyncer 一枚实况重挂。它们要收得动本卡白名单外的文件 ⇒ 已写进回执「需要跨卡配合」，" +
+                "带 bound 的三处必须都在 `reminder/`（课堂铃链 rescheduleWindows、勿扰判据 " +
+                "shouldTakeDownClassProgress、前台校准 LiveClassResyncer.nextWindow：那一枚会补排" +
+                "下课铃，所以它从来不是「展示侧」，T214 把它记错档、T227 #332 收的就是这一格）。" +
+                "不判上界的只剩展示侧那一枚宿主的两处「下一节课」（`widget/WidgetCommon.kt`）：" +
+                "它们要收得动本卡白名单外的文件 ⇒ 已写进回执「需要跨卡配合」，" +
                 "不许在这里顺手改（顺手改会把展示行为一起挪走）。\n实到册子：\n$register",
             listOf(
-                "$LIVE_RESYNCER_FILE -> $WITHOUT_BOUND",
                 "$SCHEDULER_FILE -> $WITH_BOUND",
                 "$REMINDER_FILE -> $WITH_BOUND",
+                "$LIVE_RESYNCER_FILE -> $WITH_BOUND",
                 "$WIDGET_FILE -> $WITHOUT_BOUND",
                 "$WIDGET_FILE -> $WITHOUT_BOUND",
             ).sorted().joinToString(separator = "\n"),
             register,
+        )
+    }
+
+    // ─────────────── ⑧ reminder/ 整个目录不许有"不判上界"的调用点（T227 加严） ───────────────
+
+    /**
+     * 第 ③ 层点名两枚文件、第 ④ 层数全仓五处，两把尺都放走了「第三枚会排闹钟的调用点」：
+     * `reminder/LiveClassResyncer.kt` 挑窗口时吃默认值，`startLive` 却照样 `scheduleEnd`
+     * 补一枚下课铃，而那枚铃到点撤的是全仓唯一那枚课堂实况通知 id 并恢复勿扰（#332）。
+     * 这一层因此**按目录**数，不认文件名单：`reminder/` 里凡是排铃/挂勿扰/挂实况的调用点
+     * 一律不许拿"不判上界"那一档当实参，也不许在实参位上出现 UNBOUNDED。
+     */
+    @Test
+    fun everyCallSiteInsideReminderPassesTheTermBound() {
+        val reminderDir = mainSources().filter { it.relative.startsWith(REMINDER_DIR) }
+        assertTrue("`reminder/` 下一枚 .kt 都没读到，路径不对：${reminderDir.size}", reminderDir.isNotEmpty())
+
+        val ledger = planCallLedger(REMINDER_DIR).joinToString(separator = "\n")
+        assertEquals(
+            "**钉法 = 数出现次数（按目录）+ 读形状**：`reminder/` 目录里 planNextClassWindow 的调用块" +
+                "必须恰三处且**全部带 bound**（不判上界 0 处）。少一处 = 有条链又被摘掉判据；" +
+                "多一枚「不判上界」= 有一枚会排铃/挂勿扰/挂实况的调用点退回病灶本行" +
+                "（第 ④ 层那本全仓册子只会跟着一起红，这两把尺互为备份）。\n实到：\n$ledger",
+            listOf(
+                "$LIVE_RESYNCER_FILE -> $WITH_BOUND",
+                "$SCHEDULER_FILE -> $WITH_BOUND",
+                "$REMINDER_FILE -> $WITH_BOUND",
+            ).sorted().joinToString(separator = "\n"),
+            ledger,
+        )
+
+        // UNBOUNDED 那一档在 `reminder/` 里只许剩下"默认值声明"那一枚字面量，实参位上一处都不许有
+        val unboundedInReminder = reminderDir.sumOf { occurrences(withoutComments(it.text), "UNBOUNDED_TOTAL_WEEKS") }
+        val defaultDeclarations = reminderDir.sumOf { occurrences(withoutComments(it.text), UNBOUNDED_DECLARATION) }
+        assertEquals(
+            "**钉法 = 数出现次数（抹注释，按目录）**：`reminder/` 里 UNBOUNDED_TOTAL_WEEKS 的枚数必须" +
+                "恰等于「默认值声明」的枚数（今天是一枚，长在 planNextClassWindow 的签名上）。" +
+                "多出来的每一枚都是有人把「不判上界」当实参递进了排铃/实况那条链 —— " +
+                "那正是 #332 的形状（实到总计 $unboundedInReminder 处、默认值声明 $defaultDeclarations 处）",
+            defaultDeclarations,
+            unboundedInReminder,
+        )
+        assertEquals(
+            "**钉法 = 数出现次数**：默认值声明本身只许一枚（长在本文件签名上；第 ③ 层另按逐字节钉它）。" +
+                "两枚 = 又长出第二个不判上界的入口（实到 $defaultDeclarations 处）",
+            1,
+            defaultDeclarations,
         )
     }
 
@@ -356,6 +395,34 @@ class TermWeekGateSingleSourceGuardTest {
             0,
             occurrences(withoutComments(quotedInComment), BOUND_EXPRESSION),
         )
+
+        // 第 ④⑧ 层那枚判档自己也要两头各喂一形：只报「册子五处」而判档把病灶读成合格，
+        // 就是 T214 那一格能一直绿的真正原因（它把会排闹钟的调用点写死成了"展示侧"）。
+        val preFixResyncerArgs = """
+            courses = repository.getDisplayCourses(semester),
+                semesterStart = semesterStart,
+                timeSlots = repository.getTimeSlots(),
+                now = LocalDateTime.now(),
+        """.trimIndent()
+        assertEquals(
+            "判档必须认得改前那一形（四枚实参、没有学期上界 ⇒ 「不判上界」；实到 " +
+                boundVerdict(preFixResyncerArgs) + "）",
+            WITHOUT_BOUND,
+            boundVerdict(preFixResyncerArgs),
+        )
+        assertEquals(
+            "判档必须认得今天那一形（多一行 `totalWeeks = semester.totalWeeks` ⇒ 「带 bound」；实到 " +
+                boundVerdict("$preFixResyncerArgs\n            totalWeeks = semester.totalWeeks,") + "）",
+            WITH_BOUND,
+            boundVerdict("$preFixResyncerArgs\n            totalWeeks = semester.totalWeeks,"),
+        )
+        assertEquals(
+            "把「不判上界」那一档当**实参**递进来必须仍判成「不判上界」（实到 " +
+                boundVerdict("totalWeeks = TermWeekGate.UNBOUNDED_TOTAL_WEEKS") + "）—— " +
+                "这一形原先被判成「带 bound」，是第 ③④ 两层一起放走病灶的那只手",
+            WITHOUT_BOUND,
+            boundVerdict("totalWeeks = TermWeekGate.UNBOUNDED_TOTAL_WEEKS"),
+        )
     }
 
     // ─────────────── ⑦ 搬家之后：排铃侧与冲突/导出侧引用的是**同一枚符号** ───────────────
@@ -430,7 +497,8 @@ class TermWeekGateSingleSourceGuardTest {
             .filter { occurrences(withoutComments(readMainSource(it)), "TermWeekGate.") > 0 }
         assertEquals(
             "**钉法 = 数出现次数（全 main 册子）**：除这五侧之外不许再有第六枚文件引用 `TermWeekGate.`" +
-                "（组件与实况那几处走的是展示侧那把尺 + UNBOUNDED 那一档，跨卡那一格已登记）。实到多出：\n" +
+                "（组件那两处「下一节课」走的是展示侧那把尺 + UNBOUNDED 那一档，跨卡那一格已登记；" +
+                "实况重挂那一枚 T227 #332 起改为递学期行自己的 totalWeeks，不引用判据符号）。实到多出：\n" +
                 extra.joinToString(separator = "\n") { "  $it" }.ifEmpty { "（无）" },
             "",
             extra.joinToString(separator = "\n"),
@@ -438,6 +506,48 @@ class TermWeekGateSingleSourceGuardTest {
     }
 
     // ---------------- 源码核对小工具（与本仓守卫同一套写法）----------------
+
+    /**
+     * `planNextClassWindow(` 的调用册子（第 ④ 层数全仓、第 ⑧ 层按目录数同一把尺）。
+     *
+     * [under] 非空时只收那一层目录之下的文件 —— 第 ⑧ 层要的就是"别按文件名单数"，
+     * 否则往 `reminder/` 里再塞一枚不吃 bound 的调用点就会绕过点名式的那把尺。
+     * 判据是**读形状**取实参表（配平括号），不是看那一行像不像；定义那一句（前面有 `fun`）不算调用。
+     */
+    private fun planCallLedger(under: String? = null): List<String> {
+        val calls = mutableListOf<String>()
+        for (file in mainSources()) {
+            if (under != null && !file.relative.startsWith(under)) continue
+            val code = withoutComments(file.text)
+            var from = 0
+            while (true) {
+                val at = code.indexOf(PLAN_CALL, from)
+                if (at < 0) break
+                from = at + PLAN_CALL.length
+                val lineStart = code.lastIndexOf('\n', at) + 1
+                if (code.substring(lineStart, at).contains("fun ")) continue // 定义那一句不算调用
+                val close = matchingParen(code, code.indexOf('(', at))
+                    ?: error("planNextClassWindow 调用的括号没配平：${file.relative}")
+                val args = code.substring(at + PLAN_CALL.length, close)
+                calls += "${file.relative} -> ${boundVerdict(args)}"
+            }
+        }
+        return calls.sorted()
+    }
+
+    /**
+     * 实参表算不算「带了学期上界」—— 第 ④⑧ 两层共用的那一枚判档。
+     *
+     * ⚠️ T227 顺手收紧的一手：原先只看实参表里有没有 `totalWeeks` 这个词，于是
+     * `totalWeeks = TermWeekGate.UNBOUNDED_TOTAL_WEEKS` 那一形会被判成「带 bound」——
+     * 而那恰好是把病灶换了个写法递回链上（第 ③ 层 KDoc 自己写着"传这一枚就是把自己退回病灶本身"）。
+     * 现在两形分开判，第 ⑥ 层两头各喂一次自证。
+     */
+    private fun boundVerdict(arguments: String): String = when {
+        arguments.contains("UNBOUNDED_TOTAL_WEEKS") -> WITHOUT_BOUND
+        arguments.contains("totalWeeks") -> WITH_BOUND
+        else -> WITHOUT_BOUND
+    }
 
     private class SourceFile(val relative: String, val text: String)
 
@@ -568,6 +678,9 @@ class TermWeekGateSingleSourceGuardTest {
         const val WEEK_CALCULATOR_FILE = "com/buaa/schedule/domain/schedule/WeekCalculator.kt"
         const val LIVE_RESYNCER_FILE = "com/buaa/schedule/reminder/LiveClassResyncer.kt"
         const val WIDGET_FILE = "com/buaa/schedule/widget/WidgetCommon.kt"
+
+        /** 第 ⑧ 层按目录数的那一层：排铃 / 挂勿扰 / 挂实况三条链都住在这里 */
+        const val REMINDER_DIR = "com/buaa/schedule/reminder/"
 
         // T222 搬家之后的新宿主 + 并尺那三侧（第 ⑦ 层逐枚点名）
         const val KERNEL_FILE = "com/buaa/schedule/domain/schedule/TermWeekGate.kt"

@@ -234,12 +234,16 @@ object ClassProgressScheduler {
      * 于是"上课进行中"会跳到再下一节，与本类下课铃撤销本次通知的口径不一致。
      * 纯函数，可单测。
      *
-     * @param totalWeeks 学期总周数，喂给 [TermWeekGate.isInTermWeek]：**排铃两条链必须显式递它**
-     *   （`rescheduleWindows` 与 `ReminderScheduler.shouldTakeDownClassProgress`，守卫第 ③④ 层数调用点）。
+     * @param totalWeeks 学期总周数，喂给 [TermWeekGate.isInTermWeek]：**`reminder/` 目录下每一枚
+     *   调用点都必须显式递它**（课堂铃链 `rescheduleWindows`、勿扰判据
+     *   `shouldTakeDownClassProgress`、前台校准 `LiveClassResyncer.nextWindow` 三枚，
+     *   守卫 `reminder/TermWeekGateSingleSourceGuardTest` 第 ③④⑧ 层按目录数调用块）。
      *   默认值 [TermWeekGate.UNBOUNDED_TOTAL_WEEKS] = "这一处调用方明说不判上界"，
-     *   它今天只属于展示侧那三处没收进来的调用点（改它们要动本卡白名单外的
-     *   `widget/WidgetCommon.kt` 与 `reminder/LiveClassResyncer.kt` ⇒ 回执「需要跨卡配合」那一节），
+     *   T227 之后它**只**属于展示侧那一处历史包袱（`widget/WidgetCommon.kt` 的两枚「下一节课」，
+     *   改它们要动本卡白名单外的文件 ⇒ 回执「需要跨卡配合」那一节），
      *   **不是**第二枚"默认值"：拿不到学期行的排铃侧传的是 null，那一档答"不在学期内"。
+     *   ⚠️ 会排闹钟的调用点一律不许吃默认值：`LiveClassResyncer.startLive` 补的那枚下课铃
+     *   到点撤的是全仓唯一那枚课堂实况通知 id 并恢复勿扰（#332）。
      */
     fun planNextClassWindow(
         courses: List<Course>,

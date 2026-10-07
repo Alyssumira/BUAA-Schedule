@@ -2,7 +2,9 @@ package com.buaa.schedule.reminder
 
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.schedule.TermWeekGate
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,10 +17,12 @@ import java.time.ZoneId
  *
  * 「下课铃被 ROM 吞掉」是本应用最难复现的一类故障：手机停在勿扰 + 一条滑不掉的常驻通知，
  * 一直等到下一节课上课铃。这里把决策从 Android 依赖里拆出来测，
- * 保证三条回归都被守住：
+ * 保证四条回归都被守住：
  * 1. 此刻没有课在进行（含空课表）→ 收遗留，而不是原地 return；
  * 2. 只有真的在课堂窗口内才补实况；
- * 3. 一次课结束后，「尚未结束的最早一次课」会顺到下一节 —— 下课铃续排的依据。
+ * 3. 一次课结束后，「尚未结束的最早一次课」会顺到下一节 —— 下课铃续排的依据；
+ * 4. （T227 #332）挑窗口时递了学期上界 ⇒ 周课表画不到的那一周既不冒实况、也不补那枚
+ *    会撤掉真课实况与勿扰的下课铃；界内那一周两档同解，加严没有伤到正常课。
  */
 class LiveClassResyncerTest {
 
@@ -114,5 +118,74 @@ class LiveClassResyncerTest {
 
         assertEquals("大学物理", window?.courseName)
         assertEquals(millisOf(LocalDateTime.of(2026, 9, 7, 10, 0)), window?.startMillis)
+    }
+
+    /**
+     * T227 #332：前台校准挑窗口时**必须**递学期上界，因为 [LiveClassResyncer] 挑中之后
+     * 紧接着就 `scheduleEnd` 补一枚下课铃 —— 而那枚铃到点撤的是全仓唯一那枚课堂实况通知 id
+     * 并恢复勿扰。不判上界时，一节**周课表上画不到**的课能靠"打开 App"补起实况，
+     * 并把另一节真课的实况与勿扰一起拆掉（T214/#263 那本账的跨卡残账）。
+     *
+     * 表驱动两侧：同一批输入，越界那一周在两档下答案相反（界内那一周四档同解，
+     * 证明"加严"没有顺手把正常课的实况也摘掉）。时刻全部由用例给（零设备时钟）。
+     */
+    @Test
+    fun resyncWindowsAreJudgedAgainstTheTermBoundOnBothSides() {
+        val courses = listOf(course("高等数学", listOf(1, 2)).copy(weeks = listOf(3, 17)))
+        val insideWeekThree = LocalDateTime.of(2026, 9, 21, 8, 20) // 第 3 周周一 08:00 那一节正在上
+        val insideWeekSeventeen = LocalDateTime.of(2026, 12, 28, 8, 20) // 第 17 周周一：屏上那一周是空的
+
+        data class Case(
+            val label: String,
+            val now: LocalDateTime,
+            /** 递给判据的学期上界；[TermWeekGate.UNBOUNDED_TOTAL_WEEKS] = 明说不判上界那一档 */
+            val totalWeeks: Int?,
+            /** false = 挑不出窗口 ⇒ decide 交回 ClearLeftovers，既没有实况也没有那枚下课铃 */
+            val expectWindow: Boolean,
+        )
+
+        val cases = listOf(
+            Case("越界那一周 + 递上界（今天那一档）", insideWeekSeventeen, totalWeeks = SIXTEEN, expectWindow = false),
+            Case("越界那一周 + 不判上界（病灶那一档）", insideWeekSeventeen, totalWeeks = TermWeekGate.UNBOUNDED_TOTAL_WEEKS, expectWindow = true),
+            Case("界内那一周 + 递上界", insideWeekThree, totalWeeks = SIXTEEN, expectWindow = true),
+            Case("界内那一周 + 不判上界", insideWeekThree, totalWeeks = TermWeekGate.UNBOUNDED_TOTAL_WEEKS, expectWindow = true),
+        )
+
+        for (case in cases) {
+            val window = ClassProgressScheduler.planNextClassWindow(
+                courses = courses,
+                semesterStart = semesterStart,
+                timeSlots = slots,
+                now = case.now,
+                totalWeeks = case.totalWeeks,
+            )
+            val action = LiveClassResyncer.decide(window, millisOf(case.now))
+            if (case.expectWindow) {
+                assertNotNull("${case.label}：这一档必须挑得出窗口（否则加严加到了正常课上）", window)
+                assertEquals("${case.label}：挑得出窗口就该补实况并补排下课铃", LiveClassResyncer.ResyncAction.StartLive(window), action)
+                assertEquals("${case.label}：补的那枚铃排在窗口终点上", window!!.endMillis, (action as LiveClassResyncer.ResyncAction.StartLive).window.endMillis)
+            } else {
+                assertNull(
+                    "${case.label}：周课表画不到的那一周不许有实况，更不许有那枚会撤掉真课实况与勿扰的下课铃",
+                    window,
+                )
+                assertEquals("${case.label} ⇒ 收遗留而不是补实况", LiveClassResyncer.ResyncAction.ClearLeftovers, action)
+            }
+        }
+
+        // 越界那一档挑出来的正是第 17 周（病灶响的是屏上画不到的那一节），这条把"两档确实分岔"钉死
+        val unboundedWindow = ClassProgressScheduler.planNextClassWindow(
+            courses = courses,
+            semesterStart = semesterStart,
+            timeSlots = slots,
+            now = insideWeekSeventeen,
+            totalWeeks = TermWeekGate.UNBOUNDED_TOTAL_WEEKS,
+        )
+        assertEquals("不判上界时挑的是第 17 周", 17, unboundedWindow?.week)
+    }
+
+    private companion object {
+        /** 一学期的总周数：短到第 17 周必然越界，又不至于让用例读成魔法数 */
+        const val SIXTEEN = 16
     }
 }
