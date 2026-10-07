@@ -30,8 +30,15 @@
 # componentN() / $stable 全部钉死，release dex 多背 3,800 字节（2,546,506 → 2,542,706 压缩后）。
 # 收窄后仍钉 <init>(...)：Room 生成的 bind() 依赖构造参数表的顺序，签名钉住最省事；
 # 且这 166 个成员里没有任何一个是 kotlinx.serialization 字段（@Serializable 全在
-# data/backup、data/import、widget、update、reminder 的 DTO 上，实体一个都不是）、
-# 也没有任何一处按名字反射（全仓唯一的 Class.forName 是 IslandDiagnostics 取系统属性）。
+# data/backup、data/import、widget、update、reminder 的 DTO 上，实体一个都不是）。
+# 按名字反射这一族今天**不是零**（旧写法那句"全仓唯一的 Class.forName 是 IslandDiagnostics"已过期，
+# 台账 #339 那批散文核对时现量）：尺是 `grep -rn "getMethod(\|getDeclaredMethod(\|Class.forName(" app/src/main/java`，
+# 实到 9 行、2 枚文件 —— IslandDiagnostics.kt 取 android.os.SystemProperties（2 行），
+# ReminderNotifications.kt 反射 Notification.Builder / Notification 的 setShortCriticalText /
+# getShortCriticalText / hasPromotableCharacteristics / isRequestPromotedOngoing（7 行）。
+# 九处的目标类**全是平台类**（android.os.*），没有一处指向本应用自己的实体或 DTO 的成员名，
+# 而 R8 收缩的是应用侧的类，平台侧本来就不在这份规则的射程里 ⇒ 上面那条收窄的结论不受影响。
+# 这一句是那条结论的护栏句，所以改它之前先把那把尺重跑一遍，别把"没有"抄回来。
 -keep class * extends androidx.room.RoomDatabase { <init>(); }
 -keep @androidx.room.Entity class * {
     <init>(...);
