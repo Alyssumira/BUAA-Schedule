@@ -587,7 +587,7 @@ class CourseManagementImportMessageWiringGuardTest {
         // contentType（+8 行落在 :172 那一处、+4 行落在尾部 `item { Spacer }` 那一处）
         // ⇒ 组卡那一枚协程起整体 +8、ModalTransition 起整体 +12；逐字原文一字未动，
         // 下面这十八枚行号按现盘重钉（复算：wc -l = 468，逐枚 awk 'NR==行号'）。
-        const val PAGE_LINES = 468
+        const val PAGE_LINES = 537
         val ANCHORS = listOf(
             99 to "val state by viewModel.uiState.collectAsState()",
             105 to "val snackbarHostState = remember { SnackbarHostState() }",

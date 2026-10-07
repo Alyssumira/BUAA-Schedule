@@ -431,7 +431,7 @@ internal fun groupCourses(courses: List<Course>, query: String): List<CourseGrou
     return filtered
         .groupBy { groupKeyOf(it) }
         .map { (key, fragments) ->
-            val primary = fragments.minByOrNull { it.startPeriod } ?: fragments.first()
+            val primary = primaryFragmentOf(fragments)
             CourseGroup(
                 key = key,
                 name = primary.name,
@@ -466,3 +466,72 @@ internal data class CourseGroup(
 private fun groupKeyOf(course: Course): String =
     course.sourceGroupKey
         ?: "manual:${course.name}|${course.dayOfWeek}|${course.periods.joinToString(",")}"
+
+/**
+ * 整组门面由哪一枚碎片供：[CourseGroup] 的 `name`、`teacher` 与门面名的兜底名都取自它。
+ * 纯函数，可单测（表驱动见 `ui/course/CourseGroupPrimaryFragmentTest`）。
+ *
+ * 改前那一格是 `fragments.minByOrNull { it.startPeriod } ?: fragments.first()`，两病（T207）：
+ *
+ * 1. **拿"假第 1 节"当比较键**。[Course] 的 `startPeriod` 空表兜底成 1，它自己的 KDoc 就明写
+ *    「别拿它当位置用」—— 一旦把这个 Int 当成"确实有一节在 N"来排序，**一门没有节次的碎片就凭空
+ *    占掉第 1 节、赢下整组的门面**，于是组名、教师、别名回退名全取自那枚"根本没有时间"的碎片。
+ *    现改读 [Course.firstPeriodOrNull]：没有节次的碎片一律排在所有有节次的之后 ⇒
+ *    组里只要还有一枚有节次的，没节次的那一枚就当不上门面。与
+ *    `data/import/BuaaFirstWeekPolicy.kt:114-117` 那句「没号的行不参与『谁最小』的比较」同一叙述，
+ *    也与 T26/T27 定下的「缺的那一项不占位」同源。
+ * 2. **`?: fragments.first()` 是不可达支**（`groupBy` 交出来的 value 必非空，`minByOrNull`
+ *    在非空列表上必回非 null）—— 正是 T193 登记的第 2 条那一族：从未执行过的兜底把真退化盖住。
+ *    这里不补第二枚兜底：列表真为空就让 `.first()` 当场响，与
+ *    `domain/schedule/ScheduleExporters.kt:62` 那句「上一行已判非空 ⇒ 那枚 `?:` 是不可达支」同形。
+ *
+ * ## 并列在这一组里可能不可能（按 [groupKeyOf] 的键形判出来的，不是猜的）
+ *
+ * **可能，而且是常态**，两族键各有各的并列法：
+ * - 导入组（`sourceGroupKey` 非空）：键是「学期|教学班|课序号」
+ *   （`data/import/BuaaScheduleParser.kt:66-70`），**不含星期与节次** ⇒ 同组可以横跨几天几节；
+ *   而同一条教务记录里「一个教师 × 一个周次段」拆出来的多枚片段（同文件的 `teacherWeekPairs`
+ *   那一支，星期与节次都从外层同一个 `day`/`periods` 取）**必然**在这一档并列。
+ * - 手动组（无 key，键是「manual:名称|星期|节次」）：键已经把星期与节次钉死 ⇒
+ *   组内每一枚的 [Course.firstPeriodOrNull] 与 [Course.dayOfWeek] 都相等 ⇒ **整组并列**，
+ *   "谁最先上"这一档在手动组里本来就是空转，门面只能由后续档定。
+ *
+ * 所以并列需要一枚有出处的次序，四档（见 [primaryFragmentOrder]）：
+ * **有没有节次 → 节次 → 星期 → 行 id**。前三档都是盘面上看得见的东西；末档 [Course.id] 是
+ * Room 自增主键（落库次序），DAO 取回的行两两不同 ⇒ 全序无并列，挑中哪一枚与数据库返回序、
+ * 与查询计划都无关，同一份库每次刷新挑出同一枚。整组都没有节次时头两档比不出东西，
+ * 仍由「星期 → id」定序，照样确定。
+ *
+ * ⚠️ 本函数的次序与 [CourseGroup] 里那枚**列序**（星期 → `startPeriod`）不同源：列序说的是
+ * "卡面上先印哪一行"，本函数说的是"整组门面用哪一枚的 name/teacher"。把两者并成一枚要动的是
+ * 列序那把尺 —— 那会换掉用户看惯的教师行、卡片色与共享元素的落点，超出本卡点名的调用点那一格，
+ * 故不改（已按残账登记）。
+ */
+internal fun primaryFragmentOf(fragments: List<Course>): Course =
+    fragments.sortedWith(primaryFragmentOrder).first()
+
+/**
+ * 见 [primaryFragmentOf]：四档字典序，前一档比出胜负就不再看后一档。
+ *
+ * 第一档读 [Course.firstPeriodOrNull]（**不是 `startPeriod`**）：没节次的那一枚在这一档只会被判成
+ * "排在有节次的之后"，从不替它宣称"第 1 节"，也不与有节次的争"谁最先上"；
+ * 第二档只在两枚都有节次时才比节次（都没节次时这一档恒为 0，不拿兜底值去撑次序）；
+ * 第三、四档把并列收成一个有出处的确定次序：星期 → 行 id。
+ */
+private val primaryFragmentOrder: Comparator<Course> = Comparator { left, right ->
+    val leftPeriod = left.firstPeriodOrNull
+    val rightPeriod = right.firstPeriodOrNull
+    val byHasPeriod = when {
+        leftPeriod == null && rightPeriod != null -> 1
+        leftPeriod != null && rightPeriod == null -> -1
+        else -> 0
+    }
+    val byPeriod = if (leftPeriod != null && rightPeriod != null) leftPeriod.compareTo(rightPeriod) else 0
+    val byDay = left.dayOfWeek.compareTo(right.dayOfWeek)
+    when {
+        byHasPeriod != 0 -> byHasPeriod
+        byPeriod != 0 -> byPeriod
+        byDay != 0 -> byDay
+        else -> left.id.compareTo(right.id)
+    }
+}
