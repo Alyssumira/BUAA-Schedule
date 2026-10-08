@@ -48,6 +48,11 @@ import com.buaa.schedule.domain.schedule.RestoreVolumeGate
 import com.buaa.schedule.domain.schedule.RestoreVolumeLimits
 import com.buaa.schedule.domain.schedule.restoreShareConfirmCopy
 import com.buaa.schedule.domain.schedule.restoreVolumeRejectCopy
+import com.buaa.schedule.domain.schedule.shareCodeNewerFormatCopy
+import com.buaa.schedule.domain.schedule.shareCodeNothingNamedCopy
+import com.buaa.schedule.domain.schedule.shareCodeOverCapCopy
+import com.buaa.schedule.domain.schedule.shareCodeTooManyCharsCopy
+import com.buaa.schedule.domain.schedule.shareCodeUnreadableTablesCopy
 import com.buaa.schedule.domain.schedule.WakeUpExportDecision
 import com.buaa.schedule.domain.schedule.WakeUpExportGate
 import com.buaa.schedule.domain.schedule.WeekCalculator
@@ -966,6 +971,19 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
          * 在 logcat 上有同一句 Info —— 读得到读不到从来不是 Warn 与 Info 的差别。
          */
         private const val RESTORE_VOLUME_LOG_TAG = "RestoreVolume"
+
+        /**
+         * 口令这一路**体积闸门 / 信封判据 / 被咽掉的解码异常**三判的取证 tag（T283①，#530 发现 4）。
+         *
+         * 与上面两枚分开记，理由与 `RESTORE_VOLUME_LOG_TAG` 自己的 KDoc 同一条：一枚 tag 答一判的账，
+         * `logcat -s ShareCodeGuard` 才单独答得出"这条口令是被哪把尺、哪一站拦下的"。
+         * ⚠️ 也只有新 tag 才留得下这几行：`RESTORE_VOLUME_LOG_TAG` 的引用枚数（VM 内恰好 5 处）与
+         * Info 级枚数（恰好 4 处）被 `ShareRestoreVolumeGuardTest` 第 ⑤ 层逐枚钉着，
+         * 往那一枚上多挂一行就是改别人的尺。
+         * 级别一律 **Info**（同页口径：已知设备把 logcat 截在 Info 以下，`Log.d` 等于没写）。
+         * 枚数在册：本文件 1 处声明 + 5 处 `Log.i` 引用，由 `ShareCodeEntryGateWiringGuardTest` 第 ④ 层数死。
+         */
+        private const val SHARE_CODE_LOG_TAG = "ShareCodeGuard"
     }
 
     private val _buaaTermCode = MutableStateFlow(DEFAULT_BUAA_TERM)
@@ -1646,15 +1664,53 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     /**
      * 通过分享口令导入课表。
      *
-     * 三档结论各说一句实话（T270③）：解不出来 / 条数越界被拒 / 合法。
-     * "合法"之后仍然不一定写库 —— 条数判据对**没预览过**的那一路先交回确认档。
+     * 每一档结论各说一句实话（T270③ 三档 + 台账 #530 补的三档）：解不出来 / 太大 /
+     * 来自更新版本 / 有读不懂的表 / 什么表都没带 / 条数越界被拒 / 合法。
+     * "合法"之后仍然不一定写库 —— 条数判据对**没预览过**的那一路先交回确认档，
+     * 而它吃的条数是 codec 从**原始 JSON** 上数出来的那一枚（`outcome.counts`），
+     * 不是模型的默认值（#530 发现 3：被清零的 0 会让确认弹窗一次都不过）。
      */
     fun importShareCode(code: String) {
         viewModelScope.launch {
             withImportLock {
                 when (val outcome = ScheduleShareCodec.decodeOutcome(code)) {
-                    ShareCodeOutcome.Malformed ->
+                    is ShareCodeOutcome.Malformed -> {
+                        // #530 发现 4：改前 codec 的 `runCatching{}.getOrNull()` 连 Throwable 一起吃掉且零留痕，
+                        // 而解码那一站是这一族里唯一没留痕的档（解码器自己的 bug / OOM 都在这枚兜底里消失）。
+                        // codec 自己不挂 Log（它整个文件跑在 JVM 单测里，android.util.Log 在那里是"not mocked"），
+                        // 于是它把读数随结论交出来，留痕落在这一支 —— 仍旧排在写文案之前。
+                        outcome.failure?.let {
+                            Log.i(SHARE_CODE_LOG_TAG, "口令解码失败：${it.type}：${it.message}（字符数 ${code.length}）")
+                        }
                         _importMessage.value = AppMessage("口令无法识别，请检查是否完整复制", isError = true)
+                    }
+                    // 以下四支都是"识别得出来、但不许写"的档：句子由 domain 那本册子渲染，ui 只念不拼；
+                    // 留痕一律挂**新** tag（下面那枚），不许挂 RESTORE_VOLUME_LOG_TAG ——
+                    // 后者的引用枚数（VM 内 5 处）与 Info 级枚数（4 处）被 ShareRestoreVolumeGuardTest
+                    // 第 ⑤ 层逐枚钉着，往这里多挂一枚就是把那两把尺念歪。
+                    is ShareCodeOutcome.OverSize -> {
+                        val copy = when (outcome) {
+                            is ShareCodeOutcome.OverSize.EntryTooLong -> shareCodeTooManyCharsCopy(outcome.decision)
+                            is ShareCodeOutcome.OverSize.PayloadTooLarge -> shareCodeOverCapCopy(outcome.decision)
+                        }
+                        Log.i(SHARE_CODE_LOG_TAG, "被拦的口令（体积）：$copy（字符数 ${code.length}）")
+                        _importMessage.value = AppMessage(copy, isError = true)
+                    }
+                    is ShareCodeOutcome.FromNewerApp -> {
+                        val copy = shareCodeNewerFormatCopy(outcome.decision)
+                        Log.i(SHARE_CODE_LOG_TAG, "被拒的口令（版本过高）：$copy")
+                        _importMessage.value = AppMessage(copy, isError = true)
+                    }
+                    is ShareCodeOutcome.UnreadableTables -> {
+                        val copy = shareCodeUnreadableTablesCopy(outcome.decision)
+                        Log.i(SHARE_CODE_LOG_TAG, "被拒的口令（读不懂的表）：$copy")
+                        _importMessage.value = AppMessage(copy, isError = true)
+                    }
+                    is ShareCodeOutcome.NothingRestorable -> {
+                        val copy = shareCodeNothingNamedCopy(outcome.decision)
+                        Log.i(SHARE_CODE_LOG_TAG, "被拒的口令（什么表都没带）：$copy")
+                        _importMessage.value = AppMessage(copy, isError = true)
+                    }
                     is ShareCodeOutcome.OverCapacity -> {
                         val copy = restoreVolumeRejectCopy(outcome.reject)
                         // 留痕排在写文案之前：toast 会自己消失，而"哪一条口令被哪张表的上限拦住"
@@ -1668,6 +1724,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                         raw = null,
                         entry = RestoreEntry.ShareCode,
                         previewConfirmed = false,
+                        counts = outcome.counts,
                     )
                 }
             }
@@ -1688,6 +1745,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         allowEmptyReplacement: Boolean = false,
         entry: RestoreEntry,
         previewConfirmed: Boolean,
+        counts: RestoreCounts? = null,
     ) {
         if (data.version > BACKUP_FORMAT_VERSION) {
             _importMessage.value = AppMessage(
@@ -1700,13 +1758,18 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         // 改前这里与 `ScheduleShareCodec` 那一处都只数 data.courses.size，而节次表零上限 ⇒
         // 一条带 3 万行节次的口令把整张作息表换掉（TimeSlotEntity 的主键是 autoGenerate 的 id，
         // 那些行一行都不撞键），而同趟事务末尾的 UndoManager.clear() 又拆掉了唯一的撤销把手。
+        // ⚠️ #530 发现 3：条数**优先吃调用点递进来的那一枚**（口令路 = codec 从原始 JSON 上数好的三枚），
+        // 只有没递的入口（备份文件那两路，以及确认弹窗回来那一手）才回落到模型字段。
+        // 把回落当成唯一来路，就是让 `ignoreUnknownKeys` + 全字段默认值替闸门数数 ⇒
+        // 被改名清空的表在闸门眼里是 0，"没预览过就先问一句"那一档跟着失效，一次弹窗都不过。
+        val gateCounts = counts ?: RestoreCounts(
+            courseCount = data.courses.size,
+            timeSlotCount = data.timeSlots.size,
+            reminderCount = data.reminders.size,
+        )
         when (
             val volume = RestoreVolumeGate.decide(
-                counts = RestoreCounts(
-                    courseCount = data.courses.size,
-                    timeSlotCount = data.timeSlots.size,
-                    reminderCount = data.reminders.size,
-                ),
+                counts = gateCounts,
                 limits = RestoreVolumeLimits.Default,
                 entry = entry,
                 previewed = previewConfirmed,

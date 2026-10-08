@@ -157,6 +157,14 @@ class ShareRestoreVolumeGuardTest {
      * 这一层就是卡面点名的「至少一枚拦住『闸门又只数课程』」的那枚守卫。
      * 第 ① 层认的是**改前那一形**；这一层认的是**今天这一形必须三枚条数都在**——
      * 于是"把 timeSlots 那一枚偷偷删掉"这种新形状（不在旧锚点里）也盖得住。
+     *
+     * ⚠️ **T283① 同批重钉**（台账 #530 发现 3 的修法改了形状，不重钉这一层就是拿旧尺量新盘）：
+     * 改前三枚读数是 `data.courses.size,` / `data.timeSlots.size,` / `data.reminders.size,` ——
+     * 数的是**模型的默认值**，于是"口令里那张表被改了名"这一等会被清零着过闸。
+     * 现在三枚读数在 `envelopeFactsOf` 的 `gated` 清单里各数一遍（键名 + 数组行数），
+     * 递给闸门的 `counts` 是信封判据算好的那一枚；`data.courses.size,` 这一形在 codec 里归零，
+     * 反过来钉住"闸门不许再吃模型的默认值"。同一层的 `data object Malformed` 也随档位改形，
+     * 换成 `data class Malformed`（#530 发现 4：被咽掉的 Throwable 现在跟着结论一起交出来）。
      */
     @Test
     fun `解码档真的把三张表各数一遍`() {
@@ -169,13 +177,34 @@ class ShareRestoreVolumeGuardTest {
             hits.size,
         )
         val body = braceBodyFrom(code, code.indexOf('{', hits.first() + DECODE_OUTCOME_ANCHOR.length))
+        // ②-a 三张表**各**数一枚（新形状：键名 + 行数的成对清单，枚数还是三枚，一枚都不许少）
+        for (needle in listOf(
+            "ShareCodeGatedTable.Courses to BACKUP_COURSES_KEY,",
+            "ShareCodeGatedTable.TimeSlots to BACKUP_TIME_SLOTS_KEY,",
+            "ShareCodeGatedTable.Reminders to BACKUP_REMINDERS_KEY,",
+        )) {
+            assertEquals(
+                "codec 里「$needle」恰好一处（实到 " + occurrences(code, needle) +
+                    " 处）：三张表**各**数一枚才是甲档的裁定。少递一枚 = 那张表重新零上限 —— " +
+                    "本卡病灶「3 万行节次」就是少递节次那一枚条数的形状",
+                1,
+                occurrences(code, needle),
+            )
+        }
+        // ②-b 闸门吃的那一枚 counts 必须来自信封判据，不是模型的默认值
+        assertEquals(
+            "decodeOutcome 体内「counts = counts,」恰好一处（实到 " + occurrences(body, "counts = counts,") +
+                " 处）：递给 capacityViolation 的条数是 ShareCodeEnvelopeReview 从**原始 JSON** 数好的那一枚",
+            1,
+            occurrences(body, "counts = counts,"),
+        )
         for (needle in listOf("data.courses.size,", "data.timeSlots.size,", "data.reminders.size,")) {
             assertEquals(
-                "decodeOutcome 体内「$needle」恰好一处（实到 " + occurrences(body, needle) +
-                    " 处）：三张表**各**数一枚才是甲档的裁定。少递一枚 = 那张表重新零上限 —— " +
-                    "本卡病灶「3 万行节次」就是少递 data.timeSlots.size 那一枚的形状",
-                1,
-                occurrences(body, needle),
+                "codec 里「$needle」必须归零（实到 " + occurrences(code, needle) +
+                    " 处）：这是 #530 发现 3 的反面 —— 数模型的默认值 ⇒ 被改名的表在闸门眼里是 0，" +
+                    "条数闸门与「没预览过先问一句」一起吃下那枚 0",
+                0,
+                occurrences(code, needle),
             )
         }
         assertEquals(
@@ -186,7 +215,7 @@ class ShareRestoreVolumeGuardTest {
             mainDefinitionCount(CAPACITY_CALL),
         )
         val outcome = blankCommentsKeepingLiterals(source(SHARE_CODEC))
-        for (decl in listOf("data object Malformed", "data class OverCapacity", "data class Valid")) {
+        for (decl in listOf("data class Malformed", "data class OverCapacity", "data class Valid")) {
             assertEquals(
                 "ShareCodeOutcome 里「$decl」恰好一处声明（实到 " + occurrences(outcome, decl) +
                     " 处）：三档少一档就有一格要借别人的句子说话 —— " +

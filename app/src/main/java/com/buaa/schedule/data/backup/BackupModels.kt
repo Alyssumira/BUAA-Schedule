@@ -16,6 +16,38 @@ import kotlinx.serialization.Serializable
 const val BACKUP_FORMAT_VERSION = 2
 
 /**
+ * 备份/口令 JSON **顶层**那六枚键的册子（台账 #530 发现 3）。
+ *
+ * 唯一真源是 [BackupData] 自己的序列化描述符（`elementNames`），不是在 domain 里手抄的第二份 ——
+ * 加字段/改字段名时这一枚会跟着动，`ShareCodeEnvelopeReview` 的"读不懂的键"判据才不会漂。
+ * 口令的信封判据（`data/share/ScheduleShareCodec`）要问"这条口令里有我不认得的键吗"，
+ * 问的就是这份清单。
+ */
+val BACKUP_ENVELOPE_KEYS: List<String> = BackupData.serializer().descriptor.elementNames.toList()
+
+/** [BackupData.version] 的线上键名（**在不在**这一问用得上：缺键不等于版本低，见下面那两行） */
+const val BACKUP_VERSION_KEY = "version"
+
+/**
+ * [BackupData.semester] 的线上键名。⚠️ 它**不是**列表表，条数闸门不管它，
+ * 但"这条口令带没带东西"那一问要把它算进"认得的键"，否则老口令的 `{"semester":null}` 会被误判成
+ * 读不懂的键（`explicitNulls` 默认 true ⇒ 单字段学期总是写出来的）。
+ */
+const val BACKUP_SEMESTER_KEY = "semester"
+
+/** [BackupData.semesters] 的线上键名（T204 加的表；条数闸门不数它，但"带没带东西"要数） */
+const val BACKUP_SEMESTERS_KEY = "semesters"
+
+/** [BackupData.timeSlots] 的线上键名（节次表，闸门上限 500） */
+const val BACKUP_TIME_SLOTS_KEY = "timeSlots"
+
+/** [BackupData.courses] 的线上键名（课程表，闸门上限沿用 [CourseConstraints.MAX_COURSE_COUNT]） */
+const val BACKUP_COURSES_KEY = "courses"
+
+/** [BackupData.reminders] 的线上键名（提醒表，闸门上限跟课程那一枚） */
+const val BACKUP_REMINDERS_KEY = "reminders"
+
+/**
  * 备份里带全的学期行（T204）。**可选、带默认值 ⇒ 线上兼容，`BACKUP_FORMAT_VERSION` 不涨**，
  * 理由与 [BackupCourse.credit] 那一段同口径（读 [BACKUP_FORMAT_VERSION] 的注释）：
  * - 老备份（v1/v2）没有 `semesters` 这个键 → 解析成空列表，读侧回落到单字段 [semester] 那一枚，
