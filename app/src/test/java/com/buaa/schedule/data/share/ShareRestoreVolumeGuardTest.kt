@@ -356,10 +356,21 @@ class ShareRestoreVolumeGuardTest {
             occurrences(vm, RESTORE_VOLUME_TAG_NEEDLE),
         )
         assertEquals(
-            "VM 里 `Log.i(RESTORE_VOLUME_LOG_TAG` 恰好四处（codec 越界 / 门外越界 / 事务内复核 / 待确认；实到 " +
-                occurrences(vm, "Log.i(RESTORE_VOLUME_LOG_TAG") + " 处）：被拒那一手不许静默",
+            "VM 里挂在 Info 级上的新 tag 引用恰好四处（codec 越界 / 门外越界 / 事务内复核 / 待确认；实到 " +
+                logLevelsAtTag(vm, RESTORE_VOLUME_TAG_NEEDLE).count { it == "Log.i(" } +
+                " 处，全部级别读数：" + logLevelsAtTag(vm, RESTORE_VOLUME_TAG_NEEDLE) +
+                "）：被拒那一手不许静默。级别是从 tag 往回认的，**不吃换行与缩进** —— " +
+                "调用点把 `Log.i(` 与 tag 写成两行也算数（上一版按逐字相邻数，把换行写法那一处数漏了）",
             4,
-            occurrences(vm, "Log.i(RESTORE_VOLUME_LOG_TAG"),
+            logLevelsAtTag(vm, RESTORE_VOLUME_TAG_NEEDLE).count { it == "Log.i(" },
+        )
+        assertEquals(
+            "VM 里新 tag 不许挂在非 Info 级上（实到 " +
+                logLevelsAtTag(vm, RESTORE_VOLUME_TAG_NEEDLE).filterNot { it == "Log.i(" } +
+                "）：漂到 Warn 会被 SpecialDayRefresh 第 ③ 层判成取证行级别漂移，" +
+                "漂到 Debug 以下在那台机器上根本读不到",
+            emptyList<String>(),
+            logLevelsAtTag(vm, RESTORE_VOLUME_TAG_NEEDLE).filterNot { it == "Log.i(" },
         )
         for (banned in listOf("Log.d(", "Log.v(", "Log.e(", "Log.w(")) {
             assertEquals(
@@ -378,11 +389,11 @@ class ShareRestoreVolumeGuardTest {
             occurrences(repo, RESTORE_VOLUME_TAG_NEEDLE),
         )
         assertEquals(
-            "仓储里 `Log.i(` 恰好两处（改前这一页一行日志都没有，本卡加的两处都是判据留痕；实到 " +
-                occurrences(repo, "Log.i(") + " 处）；`Log.d(` 必须 0 处（实到 " +
-                occurrences(repo, "Log.d(") + " 处）",
-            2,
-            occurrences(repo, "Log.i(") + occurrences(repo, "Log.d("),
+            "仓储里挂在 Info 级上的新 tag 引用恰好两处（全部读数：" +
+                logLevelsAtTag(repo, RESTORE_VOLUME_TAG_NEEDLE) + "）：改前这一页一行日志都没有，" +
+                "本卡加的两处都是判据留痕，级别同样不许漂 —— Info 以下在读不到",
+            listOf("Log.i(", "Log.i("),
+            logLevelsAtTag(repo, RESTORE_VOLUME_TAG_NEEDLE),
         )
         // T204 那一族的 tag 一处未动（本卡把新日志另起一枚 tag，正是为了不挤掉它）
         assertEquals(
@@ -584,6 +595,22 @@ class ShareRestoreVolumeGuardTest {
     }
 
     private fun occurrences(haystack: String, needle: String): Int = indexOfAll(haystack, needle).size
+
+    /**
+     * 从 tag 的**引用位**往回认它挂在哪一级日志上：形状是 `Log.` + 级别字母 + `(` + 任意空白 + tag。
+     *
+     * 按标识符取位，既不吃行号也不吃换行与缩进 —— 调用点把 `Log.i(` 与 tag 写成两行（长消息那种
+     * 换行写法是 KDoc 与格式化工具自己选的）照样算一处。认不出日志调用的引用位（枚举个人的
+     * `private const val` 声明）自然落空，不进账。
+     */
+    private fun logLevelsAtTag(code: String, tag: String): List<String> =
+        indexOfAll(code, tag).mapNotNull { at ->
+            val call = code.lastIndexOf("Log.", at)
+            if (call < 0) return@mapNotNull null
+            val between = code.substring(call + "Log.".length, at)
+            val level = Regex("""^([vdiwe])\(\s*$""").find(between)?.groupValues?.get(1) ?: return@mapNotNull null
+            "Log.$level("
+        }
 
     /** 从已知开括号位按花括号配平取出那一段体 */
     private fun braceBodyFrom(source: String, open: Int): String {
