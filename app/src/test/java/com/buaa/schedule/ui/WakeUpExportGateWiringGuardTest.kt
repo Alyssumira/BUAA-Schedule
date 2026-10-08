@@ -334,7 +334,7 @@ class WakeUpExportGateWiringGuardTest {
             "**钉法 = 数出现次数（抹注释）**：五枚用户字段（课程名 / 教师 / 教室 / 顶层学期名 / tableInfo 学期名）" +
                 "加一枚装着 JSON 的 `time` 串，六枚全走内核「$KERNEL_CALL」⇒ `toWakeUpJson` 体内恰好 6 枚、" +
                 "整枚文件也恰好 6 枚（体内 6 = 没有别的函数在转义，整文件 6 = 没有第二处转义落点）。" +
-                "`time` 那一枚是本卡端到端格量出来的第二手病灶：串里的 `"` 没转义 ⇒ 整份文件在那一格就非法。" +
+                "`time` 那一枚是本卡端到端格量出来的第二手病灶：串里的引号没转义 ⇒ 整份文件在那一格就非法。" +
                 "实到体内 " + occurrences(body, KERNEL_CALL) + " 枚 / 全文件 " + occurrences(code, KERNEL_CALL) + " 枚",
             6 to 6,
             occurrences(body, KERNEL_CALL) to occurrences(code, KERNEL_CALL),
