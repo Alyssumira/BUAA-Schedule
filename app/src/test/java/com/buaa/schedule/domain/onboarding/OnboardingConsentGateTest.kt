@@ -521,9 +521,9 @@ class OnboardingConsentGateTest {
             OnboardingConsentGate.residentDialogCopy(0L, "任意", handLandedOnThisScreen = false),
         )
         assertEquals(
-            "payload>0 时本屏那一手不许把档换掉（正文只跟 payload 走，活字段与手都不许翻它）：" +
-                OnboardingConsentGate.residentDialogCopy(1L, "同一串", true).message,
-            OnboardingConsentGate.residentDialogCopy(1L, "同一串", false).message,
+            "payload>0 时本屏那一手不许把档换掉（正文只跟 payload 走，活字段与手都不许翻它）",
+            OnboardingConsentGate.residentDialogCopy(1L, "同一串", handLandedOnThisScreen = true).message,
+            OnboardingConsentGate.residentDialogCopy(1L, "同一串", handLandedOnThisScreen = false).message,
         )
     }
 

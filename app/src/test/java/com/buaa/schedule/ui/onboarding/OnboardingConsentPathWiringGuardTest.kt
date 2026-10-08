@@ -265,7 +265,10 @@ class OnboardingConsentPathWiringGuardTest {
     @Test
     fun theDialogBodyIsFedByThePayloadAndReadsNoLiveField() {
         val settings = blankComments(settings())
+        // 窗口只取锚点那一行**之后**的部分：锚点自己就写着那枚活字段（它是唯一被在册允许的读者），
+        // 把它算进「窗口里的读者」会把判据念成 2 —— 与 CalendarSyncTargetPairingGuardTest 的取法对齐
         val dialog = balancedBlock(settings, "payload = if (showPrivacyDialog) privacyConsentAt else null")
+            .substringAfter('\n')
         // ---- 抹注释找锚点：窗口里 privacyConsentAt 只剩那一枚写点 ----
         assertEquals(
             "【抹注释找锚点】数据与隐私那层窗口里 `privacyConsentAt` 出现 " +
