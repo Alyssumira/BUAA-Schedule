@@ -1,6 +1,7 @@
 package com.buaa.schedule.data.repository
 
 import android.content.Context
+import android.util.Log
 import androidx.room.withTransaction
 import com.buaa.schedule.data.backup.BackupReminderPairing
 import com.buaa.schedule.data.backup.SemesterRowDecision
@@ -27,11 +28,27 @@ import com.buaa.schedule.domain.schedule.CourseConstraints
 import com.buaa.schedule.domain.schedule.ImportPlanner
 import com.buaa.schedule.domain.schedule.ImportWriteOutcome
 import com.buaa.schedule.domain.schedule.ImportWriteTally
+import com.buaa.schedule.domain.schedule.RestoreCounts
+import com.buaa.schedule.domain.schedule.RestoreEntry
+import com.buaa.schedule.domain.schedule.RestoreVolumeDecision
+import com.buaa.schedule.domain.schedule.RestoreVolumeGate
+import com.buaa.schedule.domain.schedule.RestoreVolumeLimits
+import com.buaa.schedule.domain.schedule.restoreSlotReplacementLogCopy
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.time.LocalDate
+
+/**
+ * 条数判据与节次表换表那一手的取证 tag（T270③）。
+ *
+ * 级别一律 Warn/Info：本仓已知那台机器把 logcat 砍在 Info 以下、release 又剥 Verbose
+ * （`Log.d` 等于没写）。这一族与 `BackupRestore` 那一枚分开数：那一枚被
+ * `BackupSemesterRestoreWiringGuardTest` 钉成恰好一处（T204 的补建账），混进去会把别人的
+ * 守卫挤成假红，而 `logcat -s RestoreVolume` 也就不再单独答得出"哪一趟换了作息表"。
+ */
+private const val RESTORE_VOLUME_LOG_TAG = "RestoreVolume"
 
 /** 备份/口令恢复结果 */
 sealed interface RestoreResult {
@@ -68,6 +85,17 @@ sealed interface RestoreResult {
      * 必须由调用方拿到用户明确的二次确认后再带 allowEmptyReplacement 重试。
      */
     data object EmptyBackup : RestoreResult
+
+    /**
+     * 条数越界（T270③ 甲档的**事务内复核**）：库里**一个字节都没写** ——
+     * 这一判排在任何 delete/insert 之前，事务直接退出。
+     *
+     * 门外那一遍（`ui/ScheduleViewModel.restoreFromData` 与 `ScheduleShareCodec.decodeOutcome`）
+     * 用的是同一枚内核、同一份上限，所以正常路径到不了这一等；它能被拿到的唯一形状是
+     * "有人新开了第三枚调用点、绕过 VM 直接调 restoreBackupData"。留着它是因为
+     * 这条链的破坏是**整张表**级别的，不该押在"每个调用点都记得先过一遍"上。
+     */
+    data class OverCapacity(val reject: RestoreVolumeDecision.Reject) : RestoreResult
 }
 
 /** 组删除的快照：整组被删掉的行连同各自的提醒，撤销时原样复原 */
@@ -808,6 +836,7 @@ class ScheduleRepository(
         fallbackStartDate: LocalDate,
         allowEmptyReplacement: Boolean = false,
         backupSemesterRows: List<Semester> = emptyList(),
+        entry: RestoreEntry,
     ): RestoreResult = writeMutex.withLock {
         restoreBackupDataInTx(
             backupSemester = backupSemester,
@@ -817,6 +846,7 @@ class ScheduleRepository(
             fallbackStartDate = fallbackStartDate,
             allowEmptyReplacement = allowEmptyReplacement,
             backupSemesterRows = backupSemesterRows,
+            entry = entry,
         )
     }
 
@@ -828,6 +858,7 @@ class ScheduleRepository(
         fallbackStartDate: LocalDate,
         allowEmptyReplacement: Boolean,
         backupSemesterRows: List<Semester>,
+        entry: RestoreEntry,
     ): RestoreResult = db.withTransaction {
         val normalized = courses.mapNotNull(CourseConstraints::normalize)
         val skippedInvalid = courses.size - normalized.size
@@ -843,6 +874,36 @@ class ScheduleRepository(
         // `data/backup/BackupSemesterRestorePolicy.kt` 那一判里，与历史学期同一枚（守卫按
         // 「app/src/main 里 0 处」钉这一形）。
         val safeSlots = timeSlots.filter { com.buaa.schedule.domain.schedule.isValidTimeSlot(it) }
+
+        // 条数判据在事务里**再复核一遍**（T270③ 甲档：同一枚内核、同一份上限，不是第二把尺）。
+        // ⚠️ 必须排在任何 delete/insert 之前 —— 这一判的全部意义就是"库里一个字节都没写"。
+        // 改前这里零判据，而 `isValidTimeSlot` 只判时刻真假、既不钳 number 也不数行数 ⇒
+        // 一条带 3 万行节次的口令一路通到下面的 deleteAll()，而同趟事务末尾的 UndoManager.clear()
+        // 又拆掉了唯一的撤销把手（TimeSlotDao 全文四手，零回滚路径）。
+        val counts = RestoreCounts(
+            courseCount = courses.size,
+            // 这里数的是**真要写进去**的那些行（已过 isValidTimeSlot），与调用点数的原始条数
+            // 可以不同（脏行被丢掉是另一档账，见 T262-03），上限判因此更窄而不是更宽
+            timeSlotCount = safeSlots.size,
+            reminderCount = backupReminders.size,
+        )
+        val volume = RestoreVolumeGate.decide(
+            counts = counts,
+            limits = RestoreVolumeLimits.Default,
+            entry = entry,
+            // 事务里这一遍**不问用户**（`insideRestoreTx` 排在确认档之前），previewed 不参与判据；
+            // 传 false 是为了让"这一层没有预览能力"这件事在参数上说实话
+            previewed = false,
+            insideRestoreTx = true,
+        )
+        if (volume is RestoreVolumeDecision.Reject) {
+            Log.w(
+                RESTORE_VOLUME_LOG_TAG,
+                "事务内复核拦下一次恢复（库里未写入任何行）：${volume.entry.label}的" +
+                    "${volume.table.label} ${volume.count} 条 > 上限 ${volume.limit} 条",
+            )
+            return@withTransaction RestoreResult.OverCapacity(volume)
+        }
 
         val mainCode = backupSemester?.termCode ?: normalized.firstNotNullOfOrNull { it.semesterCode }
         val manual = normalized.filter { it.isManualCourse }
@@ -905,6 +966,18 @@ class ScheduleRepository(
 
         // 备份没带节次表（或带的全是非法行）就保持现状：恢复课表不等于清空用户的节次时间
         if (safeSlots.isNotEmpty()) {
+            // ⚠️ 换表这一手没有回头路：`TimeSlotDao` 全文只有 observeAll / getAll / upsertAll /
+            // deleteAll 四手，零"回滚上一版"那一路，而下面那一枚 UndoManager.clear() 又把唯一的
+            // 撤销把手在同一趟事务里拆掉。本卡没有快照机制（丙档交回编排者），所以先把这一手
+            // 留在 logcat 上（Info 级，release 不剥）—— 事后查"作息表是谁换的"只有这一面。
+            Log.i(
+                RESTORE_VOLUME_LOG_TAG,
+                restoreSlotReplacementLogCopy(
+                    sourceLabel = entry.label,
+                    timeSlotCount = safeSlots.size,
+                    undoSnapshot = RestoreVolumeGate.undoSnapshotNeed(counts),
+                ),
+            )
             timeSlotDao.deleteAll()
             timeSlotDao.upsertAll(safeSlots.map { it.toEntity() })
         }
@@ -939,6 +1012,10 @@ class ScheduleRepository(
         }
 
         // 整表已被备份替换，内存里攒的撤销快照指向的都是替换前的行
+        // ⚠️ 同一趟事务里，这一手也把**节次表那一路唯一的把手**拆掉了：上面那次 deleteAll+upsertAll
+        // 换的是整张作息表，而撤销栈里从来没有节次这一族条目（`TimeSlotDao` 也零回滚路径）。
+        // 本卡因此把"能不能撤销"念到明处（确认弹窗那一句 + 上面那行 Info 日志），
+        // 快照本体不在本卡面内（要动 UndoManager 的条目形状与导入页的撤销入口，已交回编排者）。
         UndoManager.clear()
 
         RestoreResult.Applied(

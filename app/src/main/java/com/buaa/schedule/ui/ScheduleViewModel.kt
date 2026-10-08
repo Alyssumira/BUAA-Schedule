@@ -22,6 +22,7 @@ import android.webkit.CookieManager
 import com.buaa.schedule.data.import.IcsParser
 import com.buaa.schedule.data.import.TextScheduleParser
 import com.buaa.schedule.data.share.ScheduleShareCodec
+import com.buaa.schedule.data.share.ShareCodeOutcome
 import com.buaa.schedule.domain.calendar.CalendarReclaimPlanner
 import com.buaa.schedule.domain.calendar.CalendarReclaimPlanner.RemovalCopy
 import com.buaa.schedule.domain.editor.EditorSavePhase
@@ -40,6 +41,13 @@ import com.buaa.schedule.domain.schedule.CourseFilter
 import com.buaa.schedule.domain.schedule.IcsExportDecision
 import com.buaa.schedule.domain.schedule.IcsExportGate
 import com.buaa.schedule.domain.schedule.ImportPlanner
+import com.buaa.schedule.domain.schedule.RestoreCounts
+import com.buaa.schedule.domain.schedule.RestoreEntry
+import com.buaa.schedule.domain.schedule.RestoreVolumeDecision
+import com.buaa.schedule.domain.schedule.RestoreVolumeGate
+import com.buaa.schedule.domain.schedule.RestoreVolumeLimits
+import com.buaa.schedule.domain.schedule.restoreShareConfirmCopy
+import com.buaa.schedule.domain.schedule.restoreVolumeRejectCopy
 import com.buaa.schedule.domain.schedule.WeekCalculator
 import com.buaa.schedule.ui.home.nextDayTickDelayMillis
 import com.buaa.schedule.ui.importing.importCompletionMessage
@@ -942,6 +950,15 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
          * 这笔账要能在事后被读出来 —— 否则用户报"历史学期的日期不对"时没有任何取证面可查。
          */
         private const val RESTORE_LOG_TAG = "BackupRestore"
+
+        /**
+         * 条数判据那一族的取证 tag（T270③）。与上面那一枚分开：`BackupRestore` 那一族
+         * 已经被 `BackupSemesterRestoreWiringGuardTest` 数死一枚（T204 的补建账），
+         * 本卡这三处（被拒 / 待确认 / 事务内复核）是**另一判**的账，
+         * `logcat -s RestoreVolume` 才单独答得出"哪一条口令被哪张表的上限拦住"。
+         * 级别一律 Warn/Info（本仓已知设备把 logcat 砍在 Info 以下、release 剥 Verbose）。
+         */
+        private const val RESTORE_VOLUME_LOG_TAG = "RestoreVolume"
     }
 
     private val _buaaTermCode = MutableStateFlow(DEFAULT_BUAA_TERM)
@@ -1456,13 +1473,29 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             )
         }
 
-    fun importBackup(json: String, allowEmptyReplacement: Boolean = false) {
+    /**
+     * @param previewConfirmed 这条恢复**是不是**从"用户已经看过条数并点了头"那一支来的
+     *   （[restorePendingBackup] / [confirmEmptyRestore] 两枚调用点）。false 时条数判据会
+     *   先把这一手拦成 [pendingRestore] 那一问（T270③ 乙档），而不是直接写库。
+     */
+    fun importBackup(
+        json: String,
+        allowEmptyReplacement: Boolean = false,
+        previewConfirmed: Boolean = false,
+    ) {
         viewModelScope.launch {
             withImportLock {
                 runCatching {
                     lenientJson.decodeFromString<BackupData>(json)
                 }.onSuccess { data ->
-                    restoreFromData(data, "备份恢复", json, allowEmptyReplacement)
+                    restoreFromData(
+                        data,
+                        "备份恢复",
+                        json,
+                        allowEmptyReplacement,
+                        entry = RestoreEntry.BackupFile,
+                        previewConfirmed = previewConfirmed,
+                    )
                 }.onFailure { e ->
                     _importMessage.value = AppMessage("备份恢复失败：${e.message}", isError = true)
                 }
@@ -1472,7 +1505,8 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
 
     /**
      * 备份里一条课程都没有：继续会清空当前课表，必须由用户明确点头。
-     * 口令导入没有预览环节，直接拒绝就够了（空口令本来也没有恢复价值）。
+     * 口令那一路 T270③ 之后**有**确认弹窗了（条数那一问），但"空口令"仍然直接拒 ——
+     * 理由不变：里面本来就没有恢复价值，问一句只是多一次点击。
      */
     data class PendingEmptyRestore(val raw: String)
 
@@ -1482,11 +1516,60 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     fun confirmEmptyRestore() {
         val pending = _pendingEmptyRestore.value ?: return
         _pendingEmptyRestore.value = null
-        importBackup(pending.raw, allowEmptyReplacement = true)
+        // previewConfirmed=true：这一支用户已经明确点过"仍然恢复"，条数判据不许再问第二遍
+        importBackup(pending.raw, allowEmptyReplacement = true, previewConfirmed = true)
     }
 
     fun dismissEmptyRestore() {
         _pendingEmptyRestore.value = null
+    }
+
+    /**
+     * 待用户点头的恢复（T270③ 乙档：把口令路拉到与文件路同级的"预览＋确认"）。
+     *
+     * 卡面点名的病灶之一是两条入口**保护等级不同**：文件恢复有预览弹窗（用户看得见
+     * "带了几条节次"），口令导入零预览、粘上去就直接写库。这一枚把手就是补上的那一问 ——
+     * 判据由 `domain/schedule/RestoreVolumeGate.kt` 交回 `ConfirmFirst` 档位，
+     * 弹窗只念 [com.buaa.schedule.domain.schedule.restoreShareConfirmCopy]（文案同源）。
+     *
+     * 存的是**已解码的 BackupData** 而不是原文：原文那一路（口令 4MB 上限）留在内存里
+     * 只是白白攥一份解压前的负载，而条数已经过闸（≤ 上限），重放一次 restoreFromData 就够。
+     */
+    data class PendingRestore(
+        val data: BackupData,
+        val sourceLabel: String,
+        val raw: String?,
+        val allowEmptyReplacement: Boolean,
+        val entry: RestoreEntry,
+        val courseCount: Int,
+        val timeSlotCount: Int,
+        /** 判据当场渲染好的那一句（弹窗**只念**它，不在 UI 里重拼一档 ConfirmFirst） */
+        val confirmCopy: String,
+    )
+
+    private val _pendingRestore = MutableStateFlow<PendingRestore?>(null)
+    val pendingRestore: StateFlow<PendingRestore?> = _pendingRestore.asStateFlow()
+
+    fun dismissPendingRestore() {
+        _pendingRestore.value = null
+    }
+
+    /** 用户点了"仍然导入"：同一份内容带着 previewConfirmed=true 重放一次（只问一次，不循环） */
+    fun confirmPendingRestore() {
+        val pending = _pendingRestore.value ?: return
+        _pendingRestore.value = null
+        viewModelScope.launch {
+            withImportLock {
+                restoreFromData(
+                    pending.data,
+                    pending.sourceLabel,
+                    pending.raw,
+                    pending.allowEmptyReplacement,
+                    entry = pending.entry,
+                    previewConfirmed = true,
+                )
+            }
+        }
     }
 
     /** 备份恢复前的只读预览（不写库） */
@@ -1555,13 +1638,30 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
 
     /**
      * 通过分享口令导入课表。
+     *
+     * 三档结论各说一句实话（T270③）：解不出来 / 条数越界被拒 / 合法。
+     * "合法"之后仍然不一定写库 —— 条数判据对**没预览过**的那一路先交回确认档。
      */
     fun importShareCode(code: String) {
         viewModelScope.launch {
             withImportLock {
-                when (val data = ScheduleShareCodec.decode(code)) {
-                    null -> _importMessage.value = AppMessage("口令无法识别，请检查是否完整复制", isError = true)
-                    else -> restoreFromData(data, "口令导入", raw = null)
+                when (val outcome = ScheduleShareCodec.decodeOutcome(code)) {
+                    ShareCodeOutcome.Malformed ->
+                        _importMessage.value = AppMessage("口令无法识别，请检查是否完整复制", isError = true)
+                    is ShareCodeOutcome.OverCapacity -> {
+                        val copy = restoreVolumeRejectCopy(outcome.reject)
+                        // 留痕排在写文案之前：toast 会自己消失，而"哪一条口令被哪张表的上限拦住"
+                        // 是事后唯一能查的账（级别 Info/Warn，本仓已知设备把 logcat 砍在 Info 以下）
+                        Log.w(RESTORE_VOLUME_LOG_TAG, "被拒的口令：$copy")
+                        _importMessage.value = AppMessage(copy, isError = true)
+                    }
+                    is ShareCodeOutcome.Valid -> restoreFromData(
+                        outcome.data,
+                        "口令导入",
+                        raw = null,
+                        entry = RestoreEntry.ShareCode,
+                        previewConfirmed = false,
+                    )
                 }
             }
         }
@@ -1569,13 +1669,18 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
 
     /**
      * @param raw 原始备份内容；非 null 表示这是"导入备份文件"路径，
-     *   空备份被拒时可以把它交给用户二次确认。口令没有预览界面，传 null 直接拒绝。
+     *   空备份被拒时可以把它交给用户二次确认。
+     * @param entry 哪一路进来的（口令 / 备份文件）—— 条数判据用它决定句子里说哪一路，
+     *   两路的**保护等级相同**（T270③ 乙档：没预览过的那一律先问一句，不再一路有预览一路没有）。
+     * @param previewConfirmed 用户是否已经看过条数并点过头。
      */
     private suspend fun restoreFromData(
         data: BackupData,
         sourceLabel: String,
         raw: String?,
         allowEmptyReplacement: Boolean = false,
+        entry: RestoreEntry,
+        previewConfirmed: Boolean,
     ) {
         if (data.version > BACKUP_FORMAT_VERSION) {
             _importMessage.value = AppMessage(
@@ -1584,16 +1689,53 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             )
             return
         }
-        // 备份/口令都是用户可构造的输入：条数超限直接拒绝，
-        // 否则一次恢复就能把课表页拖到不可用（每门课都要参与冲突检测与渲染）。
-        if (data.courses.size > com.buaa.schedule.domain.schedule.CourseConstraints.MAX_COURSE_COUNT) {
-            _importMessage.value = AppMessage(
-                "${sourceLabel}失败：课程数超过上限" +
-                "（${com.buaa.schedule.domain.schedule.CourseConstraints.MAX_COURSE_COUNT} 条），" +
-                "请确认文件是否正确",
-                isError = true,
+        // 条数闸门：课程／节次／提醒**三张表各一枚上限**（T270① 甲档）。
+        // 改前这里与 `ScheduleShareCodec` 那一处都只数 data.courses.size，而节次表零上限 ⇒
+        // 一条带 3 万行节次的口令把整张作息表换掉（TimeSlotEntity 的主键是 autoGenerate 的 id，
+        // 那些行一行都不撞键），而同趟事务末尾的 UndoManager.clear() 又拆掉了唯一的撤销把手。
+        when (
+            val volume = RestoreVolumeGate.decide(
+                counts = RestoreCounts(
+                    courseCount = data.courses.size,
+                    timeSlotCount = data.timeSlots.size,
+                    reminderCount = data.reminders.size,
+                ),
+                limits = RestoreVolumeLimits.Default,
+                entry = entry,
+                previewed = previewConfirmed,
+                insideRestoreTx = false,
             )
-            return
+        ) {
+            is RestoreVolumeDecision.Reject -> {
+                val copy = restoreVolumeRejectCopy(volume)
+                Log.w(RESTORE_VOLUME_LOG_TAG, "被拒的恢复：$copy")
+                _importMessage.value = AppMessage(copy, isError = true)
+                return
+            }
+            is RestoreVolumeDecision.ConfirmFirst -> {
+                // 句子由判据渲染（档位与措辞同源），弹窗那一边只念不拼
+                val confirmCopy = restoreShareConfirmCopy(volume)
+                _pendingRestore.value = PendingRestore(
+                    data = data,
+                    sourceLabel = sourceLabel,
+                    raw = raw,
+                    allowEmptyReplacement = allowEmptyReplacement,
+                    entry = volume.entry,
+                    courseCount = volume.courseCount,
+                    timeSlotCount = volume.timeSlotCount,
+                    confirmCopy = confirmCopy,
+                )
+                Log.i(
+                    RESTORE_VOLUME_LOG_TAG,
+                    "待确认：${volume.entry.label}带 ${volume.timeSlotCount} 条节次（上限内），等用户点头",
+                )
+                _importMessage.value = AppMessage(
+                    "${sourceLabel}还没开始：口令里带 ${volume.timeSlotCount} 条节次，" +
+                        "会整张替换你的作息表，请在弹窗里确认",
+                )
+                return
+            }
+            is RestoreVolumeDecision.Write -> Unit
         }
         val result = repository.restoreBackupData(
             backupSemester = data.semester?.toDomain(),
@@ -1610,8 +1752,17 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             backupReminders = data.reminders.map { BackupReminderPairing.settingOf(it) },
             fallbackStartDate = mostRecentMonday(),
             allowEmptyReplacement = allowEmptyReplacement,
+            // 条数判据在事务里再复核一遍（同一枚内核、同一份上限），entry 递过去让它说得出是哪一路
+            entry = entry,
         )
         when (result) {
+            is RestoreResult.OverCapacity -> {
+                // 事务内那一遍拦下来的：库里一个字节都没写（判据排在任何 delete/insert 之前）。
+                // 走到这一等说明有人新开了第三枚调用点、绕过了门外那一遍 —— 日志要把这件事留在盘上。
+                val copy = restoreVolumeRejectCopy(result.reject)
+                Log.w(RESTORE_VOLUME_LOG_TAG, "事务内复核拒掉的恢复：$copy")
+                _importMessage.value = AppMessage(copy, isError = true)
+            }
             is RestoreResult.EmptyBackup -> {
                 if (raw == null) {
                     _importMessage.value = AppMessage("${sourceLabel}已取消：备份里没有课程，继续会清空当前课表")
@@ -1909,7 +2060,8 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     fun restorePendingBackup() {
         val pending = _pendingBackup.value ?: return
         _pendingBackup.value = null
-        importBackup(pending.raw)
+        // 预览弹窗已经念过条数并拿到用户的点头 ⇒ 条数判据这一路直接放行（不再问第二遍）
+        importBackup(pending.raw, previewConfirmed = true)
     }
 
     private fun contentResolverForIO() = getApplication<Application>().contentResolver

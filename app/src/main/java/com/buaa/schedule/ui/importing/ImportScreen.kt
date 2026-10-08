@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -57,6 +58,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buaa.schedule.core.designsystem.DesignTokens
+import com.buaa.schedule.core.designsystem.ModalTransition
 import com.buaa.schedule.core.designsystem.GlassSurface
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalSemanticColors
@@ -68,6 +70,7 @@ import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.joinMeta
 import com.buaa.schedule.domain.model.periodLabelOf
 import com.buaa.schedule.domain.schedule.ImportPlanner
+import com.buaa.schedule.domain.schedule.restoreShareConfirmTitle
 import com.buaa.schedule.ui.ScheduleViewModel
 import com.buaa.schedule.ui.MAX_IMPORT_BYTES
 import com.buaa.schedule.ui.readTextLimited
@@ -117,6 +120,8 @@ fun ImportScreen(
     val importMessage by viewModel.importMessage.collectAsState()
     val buaaRefreshing by viewModel.buaaRefreshing.collectAsState()
     val pendingImport by viewModel.pendingImport.collectAsState()
+    // 口令导入那一问（T270③ 乙档）：判据把"要整张换掉节次表"这一手拦在这里，等用户点头
+    val pendingRestore by viewModel.pendingRestore.collectAsState()
     // 预览里的节次文案要按节次表切段，否则「第5-6节」这种隔着午饭的课会写得和导入后不一致
     val importState by viewModel.uiState.collectAsState()
     val importHistory by viewModel.importHistory.collectAsState()
@@ -521,6 +526,36 @@ fun ImportScreen(
                 }
             }
         }
+    }
+
+    // 口令导入那一问（T270③ 乙档）：卡面点名"两条入口保护等级不同"——文件恢复有预览弹窗、
+    // 口令粘上去就直接写库，而节次表那一手又是整张替换 + 零回滚路径。
+    // 句子由判据渲染好递过来（PendingRestore.confirmCopy），本页面**只念不拼**：
+    // 弹窗里自己重算一条"要不要问"就是第二把尺。
+    ModalTransition(open = pendingRestore != null) { modal ->
+        val pending = pendingRestore
+        AlertDialog(
+            modifier = modal,
+            onDismissRequest = { viewModel.dismissPendingRestore() },
+            title = { Text(restoreShareConfirmTitle()) },
+            text = {
+                Text(
+                    text = pending?.confirmCopy.orEmpty(),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { viewModel.confirmPendingRestore() },
+                    colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) { Text("仍然导入") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissPendingRestore() }) { Text("取消") }
+            },
+        )
     }
 }
 
