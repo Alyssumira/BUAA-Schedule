@@ -405,11 +405,38 @@ class ScheduleRepository(
                         insertWithReminders(listOf(action.course), action.reminders)
                     is UndoManager.UndoAction.DeleteGroup ->
                         insertWithReminders(action.courses, action.reminders)
-                    is UndoManager.UndoAction.Create ->
-                        courseDao.getById(action.course.id)?.toDomain()?.let { deleteCourseRow(it) }
+                    is UndoManager.UndoAction.Create -> undoCreate(action)
                     is UndoManager.UndoAction.Update -> undoUpdate(action)
                 }
             }
+        }
+    }
+
+    /**
+     * 撤销一条「新增课程」条目：**只删那一枚 id 上确实还是这次新建那一门课的那一行**（#527，T287）。
+     *
+     * 改前这一手是 `courseDao.getById(action.course.id)?.toDomain()?.let { deleteCourseRow(it) }` ——
+     * 按主键删、不查身份，而同一条链上另外三支（`undoUpdate` 的 afterId 拆行 / 兄弟行 / 主行）**都**按
+     * `ImportPlanner.courseKey` 量过「那一格上还是不是这一判的目标」。三档的判据与两档取舍的账写在
+     * `UndoCreateIdentity.kt` 段首，这里只登记接线：
+     * - [UndoCreateDeletion.DeleteRow]：那一格上就是这次新建的那门课 ⇒ 删它并清掉挂在它 id 上的提醒；
+     * - [UndoCreateDeletion.NothingToDelete]：那一格上没行 ⇒ 用户新建的课早就不在库里，撤销要达到的
+     *   状态本来就已成立 ⇒ 一个字节都不动（与 [deleteCourse] 那句「没读到行就什么都不动」同一手）；
+     * - [UndoCreateDeletion.RefuseNotTheCreatedCourse]：那一格上是一行**对不上号**的东西 ⇒ 不写库、
+     *   抛出去。抛不是偷懒的报错：条目在落库之前就被 `UndoManager.pop()` 消费掉了（T183 的账），
+     *   而 [applyUndo] 交回 `Unit`，安静返回等于屏幕上什么都没变、提示条却念一句「已撤销：新增课程」，
+     *   同时那条撤销永久没了。抛出去走的是 `ScheduleViewModel.undo()` 里**已经存在**的失败通道：
+     *   按类名查表认不出本异常 ⇒ `Unexplained` 档（`restoreEntry = true`）⇒ `UndoManager.restoreTop`
+     *   把刚摘走的那一条放回栈顶，那句「还留着」只在真的放回时才念。
+     */
+    private suspend fun undoCreate(action: UndoManager.UndoAction.Create) {
+        // 读回来的那一行才算数：调用方手里那份快照可能已经不是那一格上的东西了
+        val held = courseDao.getById(action.course.id)?.toDomain()
+        when (val disposition = undoCreateDeletion(held, action.course)) {
+            is UndoCreateDeletion.DeleteRow -> deleteCourseRow(disposition.row)
+            UndoCreateDeletion.NothingToDelete -> Unit
+            is UndoCreateDeletion.RefuseNotTheCreatedCourse ->
+                throw UndoCreateRefusedException(disposition.reason)
         }
     }
 
