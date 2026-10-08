@@ -61,10 +61,24 @@ object CourseConstraints {
         periods.filter { it in 1..MAX_PERIOD }.distinct().sorted()
 
     /**
-     * 校验并归一化一条课程。无法挽救（无名称、无节次、无周次）返回 null。
+     * 校验并归一化一条课程。无法挽救（星期几越界、无名称、无节次、无周次）返回 null。
+     *
+     * 星期那一判**问内核**（[WeekdayDateOffset.dayOffsetOrReject]），不在这里写第二遍：
+     * 同一枚「星期序号合法吗」在盘面本来有三族读者 —— 写侧（本函数）、读侧三处日期推导
+     * （`ScheduleOccurrences` / 排铃两条链）、展示侧四枚数组内核（`SemesterStats` 那一族）。
+     * 改前写侧自己写的是 `if (course.dayOfWeek !in 1..7)`，与读侧那种裸
+     * `(course.dayOfWeek - 1)` 是两把尺，于是「写侧判死的值」与「读侧换算得出来的日期」
+     * 谁也不知道对方存在（#524，第⓪问裁的丁档）。上界两族同取
+     * [SemesterStats.TOTAL_DAYS]，全仓那一枚常量。
+     *
+     * ⚠️ 这一判**不能替代读侧护栏**：库里已有的脏行有三条会原样写回去的路（`ImportPlanner`
+     * 末行带 `existing.filter { it.isManualOverride }`、撤销链那句「原样写回，不再过 normalize」、
+     * Room 迁移 7→8 逐行搬 `courses`），而 normalize 只会整行判死、不会修 —— 见
+     * [WeekdayDateOffset] 段首那三行。
      */
     fun normalize(course: Course): Course? {
-        if (course.dayOfWeek !in 1..7) return null
+        val dayTier = WeekdayDateOffset.dayOffsetOrReject(course.dayOfWeek)
+        if (dayTier !is WeekdayOffset.Accepted) return null
         val periods = normalizePeriods(course.periods)
         if (periods.isEmpty()) return null
         val weeks = normalizeWeeks(course.weeks)

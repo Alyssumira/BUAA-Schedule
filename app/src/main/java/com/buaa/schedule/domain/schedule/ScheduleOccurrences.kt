@@ -80,6 +80,17 @@ object ScheduleOccurrences {
         val usedIds = mutableSetOf<String>()
         var skipped = 0
         for (course in courses) {
+            // **星期序号先过内核再推日期**（#524，T275 审计 N1，第⓪问裁的丁档）：改前这一枚 build
+            // 只判周号（下面那行 `TermWeekGate.isInTermWeek` 的参数表里根本没有星期），星期那一维
+            // 一路裸吃 `course.dayOfWeek - 1`，于是库里一枚脏星期（`SemesterStats` 逐字写着
+            // 「教务确实返回过 0 / 8」）的课**屏上七列一格画不出来，日历里却多出真实的一天**：
+            // 0 偏到上一周的周日、8 偏到下一周的周一。这一手产出的东西是 ICS 导出件与用户的
+            // 系统日历（写出去收不回来），口径与周号那一档一致：判不出 ⇒ 不写。
+            // 跳过的是**整门课**（星期是行级事实，不是周级），也**不进** [OccurrenceBuildResult.skipped]
+            // —— 那一枚的册子逐字写着「因节次时间缺失被跳过」，界面那句文案也照这一句念，
+            // 把星期混进去就是让一句实话变成一句混话（要念脏星期得单开一本册子，属另一张卡）。
+            val dayTier = WeekdayDateOffset.dayOffsetOrReject(course.dayOfWeek)
+            if (dayTier !is WeekdayOffset.Accepted) continue
             for (week in course.weeks) {
                 // **周次先过学期尺再生成日期**（T222，#307）：这一枚 build 是 ICS 与系统日历**共用**的
                 // 课次展开，改前它 `for (week in course.weeks)` 一格都不裁，于是
@@ -102,7 +113,7 @@ object ScheduleOccurrences {
                     }
                     val date = semesterStart
                         .plusWeeks((week - 1).toLong())
-                        .plusDays((course.dayOfWeek - 1).toLong())
+                        .plusDays(dayTier.offsetDays)
                     result.add(
                         Occurrence(
                             course = course,

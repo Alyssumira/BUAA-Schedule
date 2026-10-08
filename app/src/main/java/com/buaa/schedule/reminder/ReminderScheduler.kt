@@ -20,6 +20,8 @@ import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.model.toPeriodSegments
 import com.buaa.schedule.domain.model.toStartEndTimes
 import com.buaa.schedule.domain.schedule.CourseConstraints
+import com.buaa.schedule.domain.schedule.WeekdayDateOffset
+import com.buaa.schedule.domain.schedule.WeekdayOffset
 import com.buaa.schedule.domain.schedule.toEpochMillis
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -670,11 +672,19 @@ object ReminderScheduler {
         gapMinutes: (Int, Int) -> Long?,
         now: LocalDateTime,
     ): Occurrence? {
+        // **星期那一维也要过尺**（#524，T275 审计 N1，与 [ClassProgressScheduler] 的
+        // `nextOrCurrentWindow` 同一判据、同一条链）：改前这里判完周号就直接
+        // `(course.dayOfWeek - 1)` 推日期，脏星期（教务返回过 0 / 8）于是被推成**相邻那一周**的
+        // 真实日子（0 → 上一周的周日、8 → 下一周的周一），屏上根本没有这门课的那一天照样响课前提醒。
+        // 判据只在 [WeekdayDateOffset] 那一处，这里不写第二遍；两档 Rejected 一律「算不出下一次上课」
+        // = 交回 null，与同函数「没有学期起点就不排铃」同一口径（离开本应用的数据宁少不吵）。
+        val dayTier = WeekdayDateOffset.dayOffsetOrReject(course.dayOfWeek)
+        if (dayTier !is WeekdayOffset.Accepted) return null
         val segments = course.periods.toPeriodSegments(gapMinutes)
         for (week in course.weeks.sorted()) {
             if (!TermWeekGate.isInTermWeek(week, semesterStart, totalWeeks)) continue
             val date = semesterStart.plusWeeks((week - 1).toLong())
-                .plusDays((course.dayOfWeek - 1).toLong())
+                .plusDays(dayTier.offsetDays)
             for (segment in segments) {
                 val start = slots[segment.first]?.first ?: continue
                 val dateTime = date.atTime(start)

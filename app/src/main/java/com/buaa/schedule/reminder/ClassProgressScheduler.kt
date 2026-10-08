@@ -19,6 +19,8 @@ import com.buaa.schedule.domain.model.periodLabel
 import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.model.toPeriodSegments
 import com.buaa.schedule.domain.model.toStartEndTimes
+import com.buaa.schedule.domain.schedule.WeekdayDateOffset
+import com.buaa.schedule.domain.schedule.WeekdayOffset
 import com.buaa.schedule.domain.schedule.periodWindowsOf
 import com.buaa.schedule.domain.schedule.toEpochMillis
 import java.time.LocalDate
@@ -300,11 +302,20 @@ object ClassProgressScheduler {
         gapMinutes: (Int, Int) -> Long?,
         now: LocalDateTime,
     ): SegmentWindow? {
+        // **星期那一维也要过尺**（#524，T275 审计 N1）：改前这里判完周号就直接
+        // `(course.dayOfWeek - 1)` 推日期，脏星期（教务返回过 0 / 8）于是被推成**相邻那一周**的
+        // 真实日子（0 → 上一周的周日，8 → 下一周的周一），屏上根本没有这门课的那一天照响上课铃、
+        // 照挂自动勿扰；更糟的是下面 `window.begin.dayOfWeek.value` 把**偏移后的**星期发给实况卡与
+        // 组件，屏上念的星期与课程行不同。判据只在 [WeekdayDateOffset] 那一处，这里不写第二遍；
+        // 两档 Rejected 一律「算不出这一门课的下一个窗口」= 交回 null（与同函数
+        // `semesterStart` 取不到时同一口径：没有可靠的日期就不排铃，宁少不吵）。
+        val dayTier = WeekdayDateOffset.dayOffsetOrReject(course.dayOfWeek)
+        if (dayTier !is WeekdayOffset.Accepted) return null
         val gapSegments = course.periods.toPeriodSegments(gapMinutes)
         for (week in course.weeks.sorted()) {
             if (!TermWeekGate.isInTermWeek(week, semesterStart, totalWeeks)) continue
             val date = semesterStart.plusWeeks((week - 1).toLong())
-                .plusDays((course.dayOfWeek - 1).toLong())
+                .plusDays(dayTier.offsetDays)
             val window = periodWindowsOf(course, date, slots, gapSegments)
                 .firstOrNull { it.end.isAfter(now) } ?: continue
             return SegmentWindow(window.begin, window.end, window.segment, week)
