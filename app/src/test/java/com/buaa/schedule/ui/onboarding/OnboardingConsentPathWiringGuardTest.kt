@@ -19,16 +19,27 @@ import org.junit.Test
  *   [PERMANENT_PRIVACY_CONSENT_ENTRY_AVAILABLE] 的字面值与它互相对账：
  *   按钮没了而旗还写着 true ⇒ 红；按钮在而旗被翻成 false ⇒ 也红（判据吃的是旗，
  *   旗说谎就等于把 PathToPermanentEntry 那一档换成 PathSevered）。
- * - **抹注释找锚点**（② ③ 段）：先把注释抹平再找锚点，钉的是代码而不是白话 ——
+ *   T280③ 又添三枚逐字节锚点：payload 那一行本身、递进内核的 `consentStamp = consentAt,`
+ *   与 `handLandedOnThisScreen =` —— 「正文吃 payload」这件事从此写在盘面上而不只在注释里。
+ * - **抹注释找锚点**（② ③ ⑦ 段）：先把注释抹平再找锚点，钉的是代码而不是白话 ——
  *   `fun recordOnboardingGesture(` 那一体的配平块里必须同时有判据调用与两枚**带闸门**的落盘位，
  *   而且 `OnboardingHeader(` 那一体内必须出现 `recordOnboardingGesture(OnboardingGesture.HeaderSkip)`。
  *   后者就是「跳过那一手」的名字住在哪一层：把它摘掉，跳过又变回只写引导完成位的单向门。
+ *   ⑦ 段用同一把刀切出「数据与隐私那层窗口」，在窗口里找 `privacyConsentAt` ——
+ *   只许剩归零那一枚，`FirstRun.privacyConsentAt(` 一枚都不许多（那就是 T271③ 的乙档）。
  * - **数出现次数**（① 段 + ⑤ 段的枚数册子）：`recordOnboardingGesture(` 恰 5 枚、
  *   `FirstRun.completeOnboarding(context)` 恰 **1** 枚（住在闸门里）、
  *   `FirstRun.acceptPrivacy(context)` 在 `ui/onboarding/` 恰 1 枚、全 main 恰 2 枚。
- * - **读形状**（① 段 + ⑥ 段）：五枚调用点交出的 `OnboardingGesture` 必须与内核在册的五枚
+ *   T280③ 把 ⑥ 那族两把尺的现值一并记进 ⑤ 的册子：`privacyConsentAt` 4 枚生命点、
+ *   `showPrivacyDialog` 6 枚、`showPrivacyDialog = false` 3 处、`consentAt > 0L` 2 处 ——
+ *   与 `CalendarSyncTargetPairingGuardTest` 同数，两处一起拦，谁也不给「重钉上去」留位置。
+ * - **读形状**（① 段 + ⑥ ⑦ 段）：五枚调用点交出的 `OnboardingGesture` 必须与内核在册的五枚
  *   **一一对齐**（缺枚、重复、多一枚都算漂），并且落「引导已完成」的那四枚
- *   （`OnboardingGesture.writesOnboardingDone`）必须与内核的册子逐名相等。
+ *   （`OnboardingGesture.writesOnboardingDone`）必须与内核的册子逐名相等；
+ *   ⑦ 段还读三枚形状：撤回那一档的「归零 → 关窗 → 换那枚内存事实」次序（连号那两行不许被拆开）、
+ *   正文那一格只由一枚 `residentDialogCopy(` 交话（两枚 = 两把尺各判一次档），
+ *   以及窗口里不许出现 `privacyNotice` / `screenNotice(`（行上那句由本屏现读状态派生的提示
+ *   不许被搬进弹窗 —— 读了就会在收场动画那几帧里当场翻面）。
  *
  * 为什么要这么钉：基点上 `completeOnboarding` 四枚裸调用、`acceptPrivacy` 一枚裸调用，
  * 枚数差本身**不是**缺陷（引导完成与同意是两扇不同的门，`core/FirstRun.kt` 的文件头写着这条），
@@ -132,33 +143,58 @@ class OnboardingConsentPathWiringGuardTest {
      *
      * 第 ⓪ 问丁档的「乙」就住在这一格。以前那枚弹窗的 `confirmButton = {}` 只有「撤回」，
      * 没同意过的人在这页上什么也做不了 —— 所以这一体里现在必须有点名「同意隐私说明」的那一手。
+     *
+     * T280③ 在这一段添的三枚**逐字节**锚点：正文那一句的档位判断换了载体（从内联的 `if (consentAt > 0L)`
+     * 文案换成内核交回的话），于是「payload 交回来的那一位被原样递进内核」这件事本身必须一字不差地钉住 ——
+     * payload 那一行一枚、`consentStamp = consentAt,` 一枚、`handLandedOnThisScreen =` 一枚。
      */
     @Test
     fun thePermanentScreenStillOffersAConsentHand() {
         val settings = blankComments(settings())
         assertEquals(
-            "$SETTINGS 里 FirstRun.acceptPrivacy(context) 应当恰好一处（数据与隐私弹窗的确认位），实到 " +
-                occurrences(settings, "FirstRun.acceptPrivacy(context)") + " 处",
+            "【逐字节】$SETTINGS 里 FirstRun.acceptPrivacy(context) 应当恰好一处（数据与隐私弹窗的确认位），" +
+                "实到 " + occurrences(settings, "FirstRun.acceptPrivacy(context)") + " 处",
             1,
             occurrences(settings, "FirstRun.acceptPrivacy(context)"),
         )
         assertEquals(
-            "$SETTINGS 里 Text(\"同意隐私说明\") 应当恰好一处（确认位那颗按钮的字面），实到 " +
+            "【逐字节】$SETTINGS 里 Text(\"同意隐私说明\") 应当恰好一处（确认位那颗按钮的字面），实到 " +
                 occurrences(settings, "Text(\"同意隐私说明\")") + " 处 —— 少一处就是同意入口又搬回引导页了",
             1,
             occurrences(settings, "Text(\"同意隐私说明\")"),
         )
-        val dialog = balancedBlock(settings(), "payload = if (showPrivacyDialog) privacyConsentAt else null")
+        val dialog = balancedBlock(settings, "payload = if (showPrivacyDialog) privacyConsentAt else null")
         assertTrue(
-            "数据与隐私那层弹窗的确认位必须真的给出同意那一手（改前是 confirmButton = {}，只有撤回）：\n" +
+            "【逐字节】数据与隐私那层弹窗的确认位必须真的给出同意那一手（改前是 confirmButton = {}，只有撤回）：\n" +
                 dialog.take(dialog.length.coerceAtMost(400)),
             dialog.contains("confirmButton = {") && !dialog.contains("confirmButton = {},"),
+        )
+        assertEquals(
+            "【逐字节】payload 那一行是这枚活字段全仓唯一的读者，写法一个字都不许改：" +
+                "它一改（例如换成 open 驱动、或把 payload 换成布尔），" +
+                "收场动画那几帧里正文读到的就是翻过面的值",
+            1,
+            occurrences(settings, PAYLOAD_GATE),
+        )
+        assertEquals(
+            "【逐字节】弹窗正文那一句的档位必须由 payload 交回的那一位值喂进内核（`consentStamp = consentAt,` " +
+                "一枚）—— 实到 " + occurrences(dialog, "consentStamp = consentAt,") +
+                " 处。递进去的是别的载体（活字段、行上那句提示）就不叫 payload 驱动了",
+            1,
+            occurrences(dialog, "consentStamp = consentAt,"),
+        )
+        assertEquals(
+            "【逐字节】内核那一档的第三枚入参（用户在本屏按下的那一手）必须写出来，" +
+                "否则 payload 为 0 的那一侧永远念「还没按下」，把用户自己的手吞掉：实到 " +
+                occurrences(dialog, "handLandedOnThisScreen =") + " 处",
+            1,
+            occurrences(dialog, "handLandedOnThisScreen ="),
         )
         // 在册旗与那一枚按钮互相对账：判据吃的就是这枚旗，旗与按钮不一致 = 交回的档位在读谎
         val acceptHandOnThePermanentScreen =
             occurrences(settings, "FirstRun.acceptPrivacy(context)") == 1
         assertEquals(
-            "旗与按钮必须同一侧：$SETTINGS 有 FirstRun.acceptPrivacy(context) 一枚 ⇒ " +
+            "【逐字节】旗与按钮必须同一侧：$SETTINGS 有 FirstRun.acceptPrivacy(context) 一枚 ⇒ " +
                 "acceptHand=$acceptHandOnThePermanentScreen，而 $ONBOARDING 里 " +
                 "PERMANENT_PRIVACY_CONSENT_ENTRY_AVAILABLE = $flagLiteral。" +
                 "按钮被删而旗还写着 true，判据就承诺一枚盘面上没有的按钮；" +
@@ -168,7 +204,14 @@ class OnboardingConsentPathWiringGuardTest {
         )
     }
 
-    /** ⑤【数出现次数】丙档的持续提示接线：判据一枚、红点两枚（定义 + 调用）、副标题那一句一枚。 */
+    /**
+     * ⑤【数出现次数】丙档的持续提示接线 + ⑥ 那族两把尺的现值（一枚读者、三处关窗）。
+     *
+     * T280③ 在这一段添的册子就是题眼：T271③ 之所以红两格，是因为它把「弹窗正文 / 行上提示」改成读
+     * 那枚活字段，于是 `privacyConsentAt` 从 4 枚生命点涨到 8、`showPrivacyDialog` 从 6 涨到 7。
+     * 本卡**不把尺往上重钉**，改的是读法 —— 于是这几枚数同时是「读法已经改回来」的凭据：
+     * 谁再往正文或提示里塞一枚活字段读者，这一格先红（不用等 `CalendarSyncTargetPairingGuardTest`）。
+     */
     @Test
     fun theUnconsentedStateIsSaidOnThePermanentScreen() {
         val settings = blankComments(settings())
@@ -177,20 +220,114 @@ class OnboardingConsentPathWiringGuardTest {
             "privacyNotice.showsMark" to 1,
             "privacyRowSummary(privacyNotice)" to 1,
             "PrivacyConsentMissingDot()" to 2,
+            // 行上那一句持续提示的同意状态来源：一枚布尔、一处现读（不许改成回读那枚成对字段）
+            "FirstRun.privacyAccepted(context)" to 1,
+            // ---- ⑥ 那族两把尺的现值（与 CalendarSyncTargetPairingGuardTest 同数，两处一起拦）----
+            "privacyConsentAt" to 4,
+            "showPrivacyDialog" to 6,
+            "showPrivacyDialog = false" to 3,
+            "showPrivacyDialog = true" to 1,
+            "privacyConsentAt = 0L" to 1,
+            "consentAt > 0L" to 2,
+            "residentDialogCopy(" to 1,
+            "consentHandOnThisScreen = ResidentConsentHand.Accepted" to 1,
+            "consentHandOnThisScreen = ResidentConsentHand.Revoked" to 1,
         )
         for ((anchor, expected) in ledger) {
+            val actual = occurrences(settings, anchor)
             assertEquals(
-                "$SETTINGS 里 $anchor 应当 $expected 处（未同意这件事在常驻页上的持续提示档），实到 " +
-                    occurrences(settings, anchor) + " 处 —— 少一枚就是红点或那句话被摘掉了",
+                "【数出现次数】$SETTINGS 里 $anchor 应当 $expected 处（丙档的持续提示接线，以及 ⑥ 那对" +
+                    "成位字段「一枚读者、三处关窗」的尺），实到 $actual 处 —— " +
+                    "多一处就是有人又给这枚成对字段添了读者（正文或提示回读活字段，" +
+                    "部分清掉的值会被当有效念出来），少一处就是那一枚红点、那一句提示或那一处归零被摘掉了",
                 expected,
-                occurrences(settings, anchor),
+                actual,
             )
         }
         assertEquals(
-            "$ONBOARDING 里 recordOnboardingGesture( 的枚数（5 处调用 + 1 处定义）应当是 6，实到 " +
+            "【数出现次数】$ONBOARDING 里 recordOnboardingGesture( 的枚数（5 处调用 + 1 处定义）应当是 6，实到 " +
                 occurrences(blankComments(onboarding()), "recordOnboardingGesture("),
             6,
             occurrences(blankComments(onboarding()), "recordOnboardingGesture("),
+        )
+    }
+
+    /**
+     * ⑦【抹注释找锚点 + 读形状】弹窗正文只吃 payload：那一层窗口里不许出现第二枚活字段读者，
+     * 也不许出现行上那句由活字段派生的提示。
+     *
+     * 这是 T280 这一刀的正面判据。T271③ 的形状是「正文念 `privacyNotice.line`（由 `remember(活字段)`
+     * 派生）+ 确认位再写一遍那枚成对字段」—— 前者在窗口里读了一枚会翻面的值，
+     * 后者给那一对添了第二枚读者与第四枚生命点。裁的是甲：**payload 一次算好交回来，
+     * 正文那几句都由它决定**（加上「用户在本屏按下的那一手」这一枚内存事实 —— 它不是那枚成对字段，
+     * 也永远不许被当成同意时间的替身）。
+     */
+    @Test
+    fun theDialogBodyIsFedByThePayloadAndReadsNoLiveField() {
+        val settings = blankComments(settings())
+        val dialog = balancedBlock(settings, "payload = if (showPrivacyDialog) privacyConsentAt else null")
+        // ---- 抹注释找锚点：窗口里 privacyConsentAt 只剩那一枚写点 ----
+        assertEquals(
+            "【抹注释找锚点】数据与隐私那层窗口里 `privacyConsentAt` 出现 " +
+                occurrences(dialog, "privacyConsentAt") + " 处，判据是 1 处 —— 而那唯一一处必须是归零那次写。" +
+                "多出来的那一处是读者（正文回读活字段）：收场动画那几帧里 payload 还冻着旧值而正文已经翻面，" +
+                "半清掉的同意时间就此被念成有效（`CalendarSyncTargetPairingGuardTest` ⑥ 拦的就是这一形）",
+            1,
+            occurrences(dialog, "privacyConsentAt"),
+        )
+        assertEquals(
+            "【抹注释找锚点】窗口里那一处 `privacyConsentAt` 不再是归零那次写（`privacyConsentAt = 0L` 一枚）：" +
+                "它变成读取的这一刻起，这一对要按「读者在不在闸门里」重判",
+            1,
+            occurrences(dialog, "privacyConsentAt = 0L"),
+        )
+        assertFalse(
+            "【抹注释找锚点】窗口里出现了 `FirstRun.privacyConsentAt(` —— 那是绕过 payload 现读盘上那一位，" +
+                "等于给这枚成对字段添第二枚读者（T271③ 的乙档那一形）：\n" + dialog.take(300),
+            dialog.contains("FirstRun.privacyConsentAt("),
+        )
+        assertFalse(
+            "【读形状】窗口里念了行上那句 `privacyNotice` —— 那句话是常驻行（弹窗之外）的持续提示档，" +
+                "由本屏现读的状态派生；把它搬进正文就是「组合期内回读一枚会翻面的值」那一形，" +
+                "正文只许吃 payload 交回来的那一位：\n" + dialog.take(300),
+            dialog.contains("privacyNotice"),
+        )
+        assertFalse(
+            "【读形状】窗口里出现了 `screenNotice(` —— 弹窗正文的档位归 `residentDialogCopy` 说，" +
+                "行上那句提示不许在弹窗里再算一遍（两把尺读同一件事，谁先落地就没法判了）",
+            dialog.contains("screenNotice("),
+        )
+        // ---- 读形状：确认位那一手落的是「那只手」，不是那枚成对字段 ----
+        val acceptedHandAt = dialog.indexOf("consentHandOnThisScreen = ResidentConsentHand.Accepted")
+        check(acceptedHandAt >= 0) {
+            "【读形状】确认位那一手没有把「用户在本屏按下了同意」写进那枚内存事实 —— " +
+                "正文与行上的提示就都没人负责刷新，按下之后屏上还写着「还没同意」"
+        }
+        assertTrue(
+            "【读形状】`FirstRun.acceptPrivacy(context)` 之后落的那一手必须紧跟在那一格里" +
+                "（顺序即语义：先落盘、再改档），实到顺序颠倒了",
+            dialog.indexOf("FirstRun.acceptPrivacy(context)") < acceptedHandAt,
+        )
+        val revokedHandAt = dialog.indexOf("consentHandOnThisScreen = ResidentConsentHand.Revoked")
+        val zeroWriteAt = dialog.indexOf("privacyConsentAt = 0L")
+        val closeAt = dialog.indexOf("showPrivacyDialog = false")
+        val revokeAt = dialog.indexOf("FirstRun.revokePrivacy(context)")
+        check(revokedHandAt >= 0 && zeroWriteAt >= 0 && closeAt >= 0 && revokeAt >= 0) {
+            "【读形状】撤回那一档的位缺一枚：撤偏好、归零、关窗、换那枚内存事实，实到 " +
+                "$revokeAt / $zeroWriteAt / $closeAt / $revokedHandAt"
+        }
+        assertTrue(
+            "【读形状】撤回那一档的连号形状漂了：必须是「归零 → 关窗」相邻（⑥ 那对成位字段在册的连号写），" +
+                "而那一手的换档排在关窗**之后** —— 排在中间就把连号那两行拆开了，" +
+                "`CalendarSyncTargetPairingGuardTest` 的「三处关窗里恰好一处连号归零」当场红",
+            revokeAt < zeroWriteAt && zeroWriteAt < closeAt && closeAt < revokedHandAt,
+        )
+        // ---- 读形状：整段正文里递给内核的那枚状态载体只有 payload 交回的那一位 ----
+        assertEquals(
+            "【读形状】正文那一句「当前」整段只吃一枚 payload：`residentDialogCopy(` 在窗口里应当恰好一枚，" +
+                "实到 " + occurrences(dialog, "residentDialogCopy(") + " 处 —— 两处就是两把尺各判一次档位",
+            1,
+            occurrences(dialog, "residentDialogCopy("),
         )
     }
 
@@ -328,5 +465,9 @@ class OnboardingConsentPathWiringGuardTest {
     private companion object {
         const val ONBOARDING = "com/buaa/schedule/ui/onboarding/OnboardingScreen.kt"
         const val SETTINGS = "com/buaa/schedule/ui/settings/SettingsScreen.kt"
+
+        /** 那枚成对字段全仓唯一的读者 —— 逐字节钉住它，换成 open 驱动就红 */
+        const val PAYLOAD_GATE =
+            "ModalTransition(payload = if (showPrivacyDialog) privacyConsentAt else null) { consentAt, modal ->"
     }
 }
