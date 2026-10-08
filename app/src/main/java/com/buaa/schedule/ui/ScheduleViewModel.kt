@@ -956,7 +956,10 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
          * 已经被 `BackupSemesterRestoreWiringGuardTest` 数死一枚（T204 的补建账），
          * 本卡这三处（被拒 / 待确认 / 事务内复核）是**另一判**的账，
          * `logcat -s RestoreVolume` 才单独答得出"哪一条口令被哪张表的上限拦住"。
-         * 级别一律 Warn/Info（本仓已知设备把 logcat 砍在 Info 以下、release 剥 Verbose）。
+         * 级别一律 **Info**，不用 Warn：同页的 `SpecialDayRefreshWiringGuardTest` 第 ③ 层
+         * 把整枚 VM 文件里的 `Log.d` / `Log.v` / `Log.e` / `Log.w` 各数成 0 处
+         * （"取证行级别漂过就红"是那条卡的成文口径）。被拒那一手在屏上有一句 toast、
+         * 在 logcat 上有同一句 Info —— 读得到读不到从来不是 Warn 与 Info 的差别。
          */
         private const val RESTORE_VOLUME_LOG_TAG = "RestoreVolume"
     }
@@ -1652,7 +1655,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                         val copy = restoreVolumeRejectCopy(outcome.reject)
                         // 留痕排在写文案之前：toast 会自己消失，而"哪一条口令被哪张表的上限拦住"
                         // 是事后唯一能查的账（级别 Info/Warn，本仓已知设备把 logcat 砍在 Info 以下）
-                        Log.w(RESTORE_VOLUME_LOG_TAG, "被拒的口令：$copy")
+                        Log.i(RESTORE_VOLUME_LOG_TAG, "被拒的口令：$copy")
                         _importMessage.value = AppMessage(copy, isError = true)
                     }
                     is ShareCodeOutcome.Valid -> restoreFromData(
@@ -1708,7 +1711,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         ) {
             is RestoreVolumeDecision.Reject -> {
                 val copy = restoreVolumeRejectCopy(volume)
-                Log.w(RESTORE_VOLUME_LOG_TAG, "被拒的恢复：$copy")
+                Log.i(RESTORE_VOLUME_LOG_TAG, "被拒的恢复：$copy")
                 _importMessage.value = AppMessage(copy, isError = true)
                 return
             }
@@ -1760,7 +1763,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 // 事务内那一遍拦下来的：库里一个字节都没写（判据排在任何 delete/insert 之前）。
                 // 走到这一等说明有人新开了第三枚调用点、绕过了门外那一遍 —— 日志要把这件事留在盘上。
                 val copy = restoreVolumeRejectCopy(result.reject)
-                Log.w(RESTORE_VOLUME_LOG_TAG, "事务内复核拒掉的恢复：$copy")
+                Log.i(RESTORE_VOLUME_LOG_TAG, "事务内复核拒掉的恢复：$copy")
                 _importMessage.value = AppMessage(copy, isError = true)
             }
             is RestoreResult.EmptyBackup -> {

@@ -186,15 +186,20 @@ class RestoreVolumeGateTest {
             previewed = false,
             insideRestoreTx = false,
         )
-        val reject = decision as? RestoreVolumeDecision.Reject
-        assertNotNullReject(decision)
-        assertEquals(OverCapacityTable.TimeSlots, reject!!.table)
-        assertEquals(30_000, reject.count)
-        assertEquals(RestoreVolumeLimits.MAX_TIME_SLOT_COUNT, reject.limit)
-        // 库里最终几行：**一行都不写** —— 档位不是 Write 也不是 ConfirmFirst，
-        // 调用点拿不到"那就写吧"的任何许可
-        assertFalse("被拒的那一手绝不能同时是可写档", decision is RestoreVolumeDecision.Write)
-        assertFalse("被拒的那一手不许被降级成确认档", decision is RestoreVolumeDecision.ConfirmFirst)
+        // 用穷举 when 取"到底是哪一档"，而不是先 as? Reject 再补两句 is Write / is ConfirmFirst ——
+        // 后者会被上面那枚 as? 的流分析 smart cast 成"永远 false"的套套逻辑（编译期就报 warning，
+        // 而套套逻辑的格子改坏了也不红，正是本仓 T118/T121 那一族要防的形状）。
+        val tier: Any = when (decision) {
+            is RestoreVolumeDecision.Reject -> "${decision.table}/${decision.count}/${decision.limit}"
+            is RestoreVolumeDecision.Write -> "Write 档（=${decision.undoSnapshot}）：库里要写行"
+            is RestoreVolumeDecision.ConfirmFirst -> "ConfirmFirst 档：问一句就写"
+        }
+        assertEquals(
+            "3 万行节次必须死在**节次**那一枚上限（改前两道闸门都只数课程 ⇒ 它一路通到库里）。" +
+                "实到档位：$tier",
+            "TimeSlots/30000/500",
+            tier,
+        )
     }
 
     /** 朝宽自检之二：提醒表也得有自己的闸（改前两路只数课程）。 */
@@ -323,9 +328,5 @@ class RestoreVolumeGateTest {
             assertTrue("留痕文案缺「$needle」：$copy", copy.contains(needle))
         }
         assertTrue(restoreSlotReplacementLogCopy("备份恢复", 0, UndoSnapshotNeed.None).contains("不需要"))
-    }
-
-    private fun assertNotNullReject(decision: RestoreVolumeDecision) {
-        assertTrue("档位应当是 Reject（本卡的靶子那一格），实到 $decision", decision is RestoreVolumeDecision.Reject)
     }
 }

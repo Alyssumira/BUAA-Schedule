@@ -43,8 +43,9 @@ import java.time.LocalDate
 /**
  * 条数判据与节次表换表那一手的取证 tag（T270③）。
  *
- * 级别一律 Warn/Info：本仓已知那台机器把 logcat 砍在 Info 以下、release 又剥 Verbose
- * （`Log.d` 等于没写）。这一族与 `BackupRestore` 那一枚分开数：那一枚被
+ * 级别一律 **Info**：本仓已知那台机器把 logcat 砍在 Info 以下、release 又剥 Verbose
+ * （`Log.d` 等于没写），而 Warn 在 VM 那一侧另有在册守卫数成 0（口径同
+ * `ui/ScheduleViewModel` 的 tag 注释）。这一族与 `BackupRestore` 那一枚分开数：那一枚被
  * `BackupSemesterRestoreWiringGuardTest` 钉成恰好一处（T204 的补建账），混进去会把别人的
  * 守卫挤成假红，而 `logcat -s RestoreVolume` 也就不再单独答得出"哪一趟换了作息表"。
  */
@@ -897,7 +898,7 @@ class ScheduleRepository(
             insideRestoreTx = true,
         )
         if (volume is RestoreVolumeDecision.Reject) {
-            Log.w(
+            Log.i(
                 RESTORE_VOLUME_LOG_TAG,
                 "事务内复核拦下一次恢复（库里未写入任何行）：${volume.entry.label}的" +
                     "${volume.table.label} ${volume.count} 条 > 上限 ${volume.limit} 条",
