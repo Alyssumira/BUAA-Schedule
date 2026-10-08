@@ -2,12 +2,18 @@ package com.buaa.schedule.domain.onboarding
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * T271②：`OnboardingConsentGate` 的表驱动逐格账（纯 JVM，无 Robolectric、无设备、不读钟）。
+ *
+ * T280② 添了第三手两枚判据（`逐格 residentDialogCopy 的八格账（payload 决定话）` 与
+ * `residentDialogCopyTiersNeverPointOutsideTheDialog`）：钉的是**弹窗正文那几句「当前」由
+ * payload 交回的值决定、由不得那枚活字段**，两枚边界（stamp 0|1、本屏那一手 false|true）
+ * 各占两侧，合计八格 + 三格两侧对照 + 五档话的「不指路」全表扫。
  *
  * 钉的是台账 #410 那一族的两侧格子：
  *
@@ -462,6 +468,108 @@ class OnboardingConsentGateTest {
         )
     }
 
+    // ─────────────── 第三手（T280② 新增）：弹窗正文那几句「当前」由 payload 决定 ───────────────
+
+    private data class DialogCell(
+        val label: String,
+        val consentStamp: Long,
+        val handLanded: Boolean,
+        /** 期望落在哪一档：Agreed = payload 说已同意 / Handed = 本屏那一手 / NotYet = 还没同意 */
+        val expectedTier: String,
+        /** 那一格日期串该不该出现（只有 payload 说已同意那一侧才许念它） */
+        val expectLabelSpoken: Boolean,
+    )
+
+    /**
+     * 第 ⓪ 问那一半的表：**正文的话由 payload 交回的值决定，而不是由那枚活字段决定**。
+     *
+     * 两枚边界各占两侧：`consentStamp` 在 0 与 1 之间（payload 说「没有」与「有过」）、
+     * `handLanded` 在 false 与 true 之间（这一屏刚按过同意与否）。
+     * 朝宽那一侧（把活字段当输入的形状）在本表里表现为：payload<=0 时却念出已同意、
+     * 或把 payload<=0 那格的日期串漏进正文 —— 两格都当场红。
+     * 朝窄那一侧：payload>0 还念「还没同意」，或本屏那一手按过之后仍把用户留在「不指路」那一句里。
+     */
+    @Test
+    fun `逐格 residentDialogCopy 的八格账（payload 决定话）`() {
+        for ((index, cell) in dialogCells().withIndex()) {
+            val mark = "#${index + 1} ${cell.label}"
+            val label = "假日期串[$cell.consentStamp]"
+            val copy = OnboardingConsentGate.residentDialogCopy(
+                consentStamp = cell.consentStamp,
+                consentAtLabel = label,
+                handLandedOnThisScreen = cell.handLanded,
+            )
+            val tier = when {
+                copy == OnboardingConsentGate.entryInsideDialogCopy() -> "NotYet"
+                copy.message.contains(LANDED_ON_THIS_SCREEN_MARK) -> "Handed"
+                copy.message.contains("已同意（") -> "Agreed"
+                else -> "认不出来：" + copy.message
+            }
+            assertEquals("$mark\n  输入：stamp=${cell.consentStamp} handLanded=${cell.handLanded}", cell.expectedTier, tier)
+            assertTrue("$mark 标题与正文都得有话：实到 $copy", copy.title.isNotBlank() && copy.message.isNotBlank())
+            assertEquals(
+                "$mark 那一格日期串只许在 payload 说已同意那一侧出场（漏进别的档 = 把没读到的值念成读到了）",
+                cell.expectLabelSpoken,
+                copy.message.contains(label),
+            )
+            assertDialogCopyStaysInsideTheDialog(mark, copy)
+        }
+        // 两侧对照：同一枚 payload<=0 换一手就得换档，而 payload>0 那一侧一手不换档
+        assertEquals(
+            "payload=0 且本屏没按过 = 就是 entryInsideDialogCopy() 那一档（不指路的那一句）",
+            OnboardingConsentGate.entryInsideDialogCopy(),
+            OnboardingConsentGate.residentDialogCopy(0L, "任意", handLandedOnThisScreen = false),
+        )
+        assertEquals(
+            "payload>0 时本屏那一手不许把档换掉（正文只跟 payload 走，活字段与手都不许翻它）：" +
+                OnboardingConsentGate.residentDialogCopy(1L, "同一串", true).message,
+            OnboardingConsentGate.residentDialogCopy(1L, "同一串", false).message,
+        )
+    }
+
+    private fun dialogCells(): List<DialogCell> = listOf(
+        // ── payload 边界：0 与 -1 都算「盘上没有」那一侧，两侧各两格 ──
+        DialogCell("payload = 0 · 本屏没按过", 0L, false, expectedTier = "NotYet", expectLabelSpoken = false),
+        DialogCell("payload = 0 · 本屏刚按下同意", 0L, true, expectedTier = "Handed", expectLabelSpoken = false),
+        DialogCell("payload = -1（越界值也归「没有」那一侧）", -1L, false, "NotYet", expectLabelSpoken = false),
+        DialogCell("payload = -1 · 本屏刚按下同意", -1L, true, "Handed", expectLabelSpoken = false),
+        // ── payload = 1 与 Long.MAX_VALUE：「有过同意」那一侧的两端 ──
+        DialogCell("payload = 1（边界另一侧的最小值）", 1L, false, "Agreed", expectLabelSpoken = true),
+        DialogCell("payload = 1 · 本屏也按过（payload 说了算，那一手不许翻它）", 1L, true, "Agreed", expectLabelSpoken = true),
+        DialogCell("payload = Long.MAX_VALUE", Long.MAX_VALUE, false, "Agreed", expectLabelSpoken = true),
+        DialogCell("payload = Long.MAX_VALUE · 本屏按过", Long.MAX_VALUE, true, "Agreed", expectLabelSpoken = true),
+    )
+
+    /**
+     * 不变量：**弹窗正文那三档话都不指路**。
+     *
+     * 入口就在这颗弹窗里、那颗按钮就在下面，所以这三档都不许提任何别的屏（也不许出现某条
+     * [ConsentPath] 的那一屏那一手）—— 而它们当然也不许读那枚活字段：读一次就少一次 payload 的担保，
+     * 收场动画那几帧里当场翻面。这一枚把「指路」与「回读」两件事一起钉在**全表**上，
+     * 与上面那八格互补：八格管档位落点对不对，这一枚管话里没有别处。
+     */
+    @Test
+    fun residentDialogCopyTiersNeverPointOutsideTheDialog() {
+        val tiers = listOf(
+            OnboardingConsentGate.residentDialogCopy(0L, "串", handLandedOnThisScreen = false),
+            OnboardingConsentGate.residentDialogCopy(0L, "串", handLandedOnThisScreen = true),
+            OnboardingConsentGate.residentDialogCopy(7L, "串", handLandedOnThisScreen = false),
+            OnboardingConsentGate.residentDialogCopy(7L, "串", handLandedOnThisScreen = true),
+            OnboardingConsentGate.entryInsideDialogCopy(),
+        )
+        tiers.forEach { copy -> assertDialogCopyStaysInsideTheDialog(copy.message, copy) }
+        val inside = OnboardingConsentGate.entryInsideDialogCopy()
+        assertTrue(
+            "payload 为 0 那一档必须把「就在下面那一格按」说出来，否则用户还是得去别处找：" + inside.message,
+            inside.message.contains(CONSENT_BUTTON_TEXT),
+        )
+        assertNotEquals(
+            "本屏那一手落盘之后不许还念「还没按下」那一句（那是把用户的手吞掉）：",
+            OnboardingConsentGate.entryInsideDialogCopy().message,
+            OnboardingConsentGate.residentDialogCopy(0L, "串", handLandedOnThisScreen = true).message,
+        )
+    }
+
     // ─────────────── helpers ───────────────
 
     /** 有话指某处就得写清那一屏那一手；没路可指就不许出现任何一屏的名字 */
@@ -503,5 +611,32 @@ class OnboardingConsentGateTest {
             "$mark 那句话把用户指向了再也进不去的一屏：${notice.line?.message}",
             notice.line?.message?.contains(ConsentPath.onboardingEntry.screen) == true,
         )
+    }
+
+    /**
+     * 弹窗正文那一档的话**不指路**：入口就在这颗弹窗里、那颗按钮就在下面，
+     * 所以任何一条 [ConsentPath] 的那一屏都不许出现在话里（出现 = 把用户往别的屏赶，
+     * 而那一句本来该由 payload 交回的值当场说完）。
+     */
+    private fun assertDialogCopyStaysInsideTheDialog(mark: String, copy: ConsentCopy) {
+        listOf(ConsentPath.onboardingEntry, ConsentPath.settingsEntry).forEach { entry ->
+            assertFalse(
+                "$mark 弹窗正文指向了别的屏（话里不该出现「${entry.screen}」）：${copy.title} / ${copy.message}",
+                copy.message.contains(entry.screen) || copy.title.contains(entry.screen),
+            )
+            assertFalse(
+                "$mark 弹窗正文把用户赶去点「${entry.hand}」—— 那颗按钮就在这层弹窗里，" +
+                    "由 payload 交回的值决定念哪一句：${copy.message}",
+                copy.message.contains(entry.hand),
+            )
+        }
+    }
+
+    private companion object {
+        /** 本屏那一手落盘之后那句话的记号（与内核 consentHandedInsideDialogCopy 同一串） */
+        const val LANDED_ON_THIS_SCREEN_MARK = "已记下你在这一屏按下的那一手"
+
+        /** 常驻页确认位那颗按钮的字面：payload 为 0 那一档必须把它说出来 */
+        const val CONSENT_BUTTON_TEXT = "同意隐私说明"
     }
 }
