@@ -313,7 +313,9 @@ class OnboardingConsentPathWiringGuardTest {
         )
         val revokedHandAt = dialog.indexOf("consentHandOnThisScreen = ResidentConsentHand.Revoked")
         val zeroWriteAt = dialog.indexOf("privacyConsentAt = 0L")
-        val closeAt = dialog.indexOf("showPrivacyDialog = false")
+        // 关窗那一枚取归零**之后**的第一枚 —— 窗口里第一处 `showPrivacyDialog = false` 是 onDismissRequest，
+        // 它本来就不与归零连号（⑥ 那族把它算进「分头清」那一侧），拿它当连号的那一枚会把判据念反
+        val closeAt = dialog.indexOf("showPrivacyDialog = false", zeroWriteAt + 1)
         val revokeAt = dialog.indexOf("FirstRun.revokePrivacy(context)")
         check(revokedHandAt >= 0 && zeroWriteAt >= 0 && closeAt >= 0 && revokeAt >= 0) {
             "【读形状】撤回那一档的位缺一枚：撤偏好、归零、关窗、换那枚内存事实，实到 " +
