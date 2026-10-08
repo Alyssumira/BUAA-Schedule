@@ -119,9 +119,14 @@ data class RestoreVolumeLimits(
  * 2. `insideRestoreTx == true` ⇒ [Write]，永不 [ConfirmFirst]：
  *    这一等是事务里的最后一道复核，门外已经问过一遍；在这里再要一次预览就是
  *    「写库前自己弹自己」的死循环，也是把只读判据变成有副作用的那一手。
- * 3. 口令路且没预览过、而这一趟**真的要动节次表**（`timeSlotCount > 0`）⇒ [ConfirmFirst]。
- *    条件是"要动节次表"而不是"只要带东西来"：口令没带节次时 `deleteAll()` 那一手根本不会执行
+ * 3. **只要没预览过**（`previewed == false`）而这一趟**真的要动节次表**（`timeSlotCount > 0`）
+ *    ⇒ [ConfirmFirst]，且这一条**两路通吃**：口令路是今天缺手的那一路，
+ *    文件路留着同一规则是给未来的第三枚调用点兜门（今天它唯一的入口 `readBackupAndPreview`
+ *    必然带预览来，`restorePendingBackup` 把 previewed=true 递回来）。
+ *    条件不写成"只要带东西来"：节次带 0 条时 `deleteAll()` 那一手根本不会执行
  *    （`restoreBackupDataInTx` 里那句 `if (safeSlots.isNotEmpty())`），无破坏可确认。
+ *    [RestoreEntry] 在这一档只决定**句子里说哪一路**，不决定要不要问 ——
+ *    把它写成"只有 ShareCode 才问"就是把两条入口的保护等级重新折成两把尺（本卡病灶的原话）。
  * 4. 其余 ⇒ [Write]。
  *
  * ## 为什么不折成一枚 Boolean
@@ -204,7 +209,7 @@ object RestoreVolumeGate {
         capacityViolation(counts, limits, entry)?.let { return it }
         val undoSnapshot = undoSnapshotNeed(counts)
         if (insideRestoreTx) return RestoreVolumeDecision.Write(undoSnapshot)
-        if (entry == RestoreEntry.ShareCode && !previewed && counts.timeSlotCount > 0) {
+        if (!previewed && counts.timeSlotCount > 0) {
             return RestoreVolumeDecision.ConfirmFirst(
                 entry = entry,
                 courseCount = counts.courseCount,
