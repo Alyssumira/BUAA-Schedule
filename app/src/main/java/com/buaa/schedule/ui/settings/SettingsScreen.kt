@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -97,6 +98,8 @@ import com.buaa.schedule.core.designsystem.fieldImeOptions
 import com.buaa.schedule.core.designsystem.swatchPlaceholderColor
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlotProfile
+import com.buaa.schedule.domain.onboarding.ConsentScreenNotice
+import com.buaa.schedule.domain.onboarding.OnboardingConsentGate
 import com.buaa.schedule.domain.schedule.CourseConstraints
 import com.buaa.schedule.domain.schedule.SemesterStats
 import com.buaa.schedule.domain.schedule.SmartPeriods
@@ -108,6 +111,8 @@ import com.buaa.schedule.reminder.IslandDiagnostics
 import com.buaa.schedule.reminder.TomorrowPreviewReceiver
 import com.buaa.schedule.ui.NO_WRITABLE_CALENDAR_MESSAGE
 import com.buaa.schedule.ui.ScheduleViewModel
+import com.buaa.schedule.ui.onboarding.ConsentTraceTag
+import com.buaa.schedule.ui.onboarding.PERMANENT_PRIVACY_CONSENT_ENTRY_AVAILABLE
 import com.buaa.schedule.ui.onboarding.PRIVACY_STATEMENT
 import com.buaa.schedule.widget.BackgroundSync
 import com.buaa.schedule.widget.NextClassWidgetProvider
@@ -220,6 +225,16 @@ fun SettingsScreen(
     // 撤回之后行内文案必须立刻变，否则用户只会觉得"点了没反应"。
     var privacyConsentAt by remember { mutableLongStateOf(FirstRun.privacyConsentAt(context)) }
     var showPrivacyDialog by remember { mutableStateOf(false) }
+    // 丙档（T271③）：没同意这件事要在常驻页上一直念到用户处理为止。
+    // 判据吃的全是算好的值，跳过的用户再也进不到首启引导那一屏，所以这里指的必须是本页。
+    val privacyNotice = remember(privacyConsentAt) {
+        OnboardingConsentGate.screenNotice(
+            screenNeedsConsent = true,
+            privacyAccepted = privacyConsentAt > 0L,
+            onboardingCompleted = FirstRun.onboardingCompleted(context),
+            permanentEntryAvailable = PERMANENT_PRIVACY_CONSENT_ENTRY_AVAILABLE,
+        )
+    }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json"),
@@ -1843,9 +1858,9 @@ fun SettingsScreen(
             SettingsRow(
                 icon = Icons.Filled.Lock,
                 title = "数据与隐私",
-                summary = "课表、提醒与节次时间只保存在本机，不上传任何个人数据；" +
-                    "登录教务系统仅用于拉取你自己的课表。",
+                summary = privacyRowSummary(privacyNotice),
                 showChevron = true,
+                trailing = { if (privacyNotice.showsMark) PrivacyConsentMissingDot() },
                 onClick = { showPrivacyDialog = true },
             )
             }
@@ -1890,14 +1905,32 @@ fun SettingsScreen(
                             "当前：已同意（${formatLastCheck(consentAt)}）。" +
                                 "撤回后从下次启动起重新进入首启引导。"
                         } else {
-                            "当前：未同意 · 检查更新不会发起任何网络请求"
+                            privacyNotice.line?.let { "${it.title}：${it.message}" }
+                                ?: "当前：未同意 · 检查更新不会发起任何网络请求"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             },
-            confirmButton = {},
+            // 乙档（T271③，台账 #410）：同意这一手从前只住在首启引导里，
+            // 而「先跳过，稍后设置」出去的人再也进不到那一屏 —— 于是确认位只剩「撤回」可点，
+            // 没同意过的人在这页上什么也做不了。确认位现在给的就是「同意」。
+            confirmButton = {
+                if (consentAt == 0L) {
+                    TextButton(
+                        onClick = {
+                            FirstRun.acceptPrivacy(context)
+                            privacyConsentAt = FirstRun.privacyConsentAt(context)
+                            showPrivacyDialog = false
+                            Log.i(
+                                ConsentTraceTag,
+                                "用户在常驻页「数据与隐私」里按下同意：检查更新从下一次启动起可以出网",
+                            )
+                        },
+                    ) { Text("同意隐私说明") }
+                }
+            },
             dismissButton = {
                 Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceXS)) {
                     if (consentAt > 0L) {
@@ -2230,6 +2263,34 @@ private fun PendingUpdateDot() {
             .background(MaterialTheme.colorScheme.error),
     )
 }
+
+/**
+ * 「数据与隐私」那一行的副标题：本机零上传那句照旧，未同意时把持续提示档的那一句接在后面
+ * （T271③ 丙档）—— 从「先跳过，稍后设置」出去的人在引导里再也见不到这件事，
+ * 那就只能在常驻页上一直念，念到用户处理为止。
+ */
+private fun privacyRowSummary(notice: ConsentScreenNotice): String =
+    PRIVACY_ROW_BASE_SUMMARY + (notice.line?.let { "\n${it.title}：${it.message}" } ?: "")
+
+private const val PRIVACY_ROW_BASE_SUMMARY =
+    "课表、提醒与节次时间只保存在本机，不上传任何个人数据；登录教务系统仅用于拉取你自己的课表。"
+
+/**
+ * 「还没同意」的小红点：与待装更新那一枚同一档刻度、同一种纯装饰口径
+ * （同行副标题已经写了那一句话，读屏不依赖它）。
+ */
+@Composable
+private fun PrivacyConsentMissingDot() {
+    Box(
+        modifier = Modifier
+            .padding(end = DesignTokens.spaceS)
+            .size(ConsentMissingDotSize)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.error),
+    )
+}
+
+private val ConsentMissingDotSize = 8.dp
 
 private fun formatLastCheck(epochMillis: Long): String =
     if (epochMillis <= 0L) {

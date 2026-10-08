@@ -1,5 +1,6 @@
 package com.buaa.schedule.ui.onboarding
 
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -71,6 +72,9 @@ import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.ModalTransition
 import com.buaa.schedule.core.designsystem.SettingsRow
 import com.buaa.schedule.core.designsystem.SettingsSwitchRow
+import com.buaa.schedule.domain.onboarding.OnboardingConsentGate
+import com.buaa.schedule.domain.onboarding.OnboardingExitDisposition
+import com.buaa.schedule.domain.onboarding.OnboardingGesture
 import com.buaa.schedule.reminder.ClassProgressReceiver
 import com.buaa.schedule.ui.settings.ReminderGuidance
 import kotlinx.coroutines.Dispatchers
@@ -93,6 +97,19 @@ private const val STEP_PRIVACY = 1
 private const val STEP_RELIABILITY = 2
 private const val STEP_IMPORT = 3
 private const val STEP_COUNT = 4
+
+/** 判据留痕的 tag：引导五手各自落到哪一档、同意位有没有跟着落，全从这里读（HyperOS 截在 Info 级） */
+internal const val ConsentTraceTag = "BUAAOnboardingConsent"
+
+/**
+ * 「常驻页（设置 → 数据与隐私）上还留着同意那一手」这一旗（T271③ 乙档）。
+ *
+ * 它不是随手写的常量：`OnboardingConsentPathWiringGuardTest` 拿 SettingsScreen 的源码形状
+ * 与它的字面值对账 —— 那一格「同意隐私说明」被删掉而旗还写着 true，守卫当场红；
+ * 反过来旗被翻成 false 而那一格还在，也红。判据吃的就是这枚旗，
+ * 所以它一假，引导出口那一手立刻变成 [OnboardingExitDisposition.PathSevered]（改前的形状）。
+ */
+internal const val PERMANENT_PRIVACY_CONSENT_ENTRY_AVAILABLE = true
 
 /**
  * 首启引导页：欢迎 → 隐私同意 → 提醒可靠性（环境自检 + 厂商后台放行 + 实况/勿扰开关）→ 导入课表。
@@ -152,6 +169,33 @@ fun OnboardingScreen(
         }
     }
 
+    // 引导的五手全走这一枚判据（T271③，台账 #410）：落哪几位由档位自己说。
+    // 顶栏那枚「先跳过，稍后设置」从此不再白写「引导已完成」——
+    // 用户当面勾了「我已阅读并同意」就把**他的手**落盘（屏与盘同一句话），
+    // 没勾就不落（不落是判据不是疏忽，全仓没有任何一处替他置真），
+    // 而屏上从此不会再指着「去引导页同意」：那一页在这一手之后再也不组合。
+    fun recordOnboardingGesture(gesture: OnboardingGesture) {
+        val disposition = OnboardingConsentGate.gestureDisposition(
+            gesture = gesture,
+            privacyBoxTick = privacyChecked,
+            privacyAccepted = FirstRun.privacyAccepted(context),
+            onboardingCompleted = FirstRun.onboardingCompleted(context),
+            permanentEntryAvailable = PERMANENT_PRIVACY_CONSENT_ENTRY_AVAILABLE,
+        )
+        if (disposition.writesConsent) FirstRun.acceptPrivacy(context)
+        if (disposition.writesOnboardingDone) FirstRun.completeOnboarding(context)
+        // HyperOS 把 logcat 截在 Info 级 ⇒ 判据留痕一律 Log.i / Log.w，不写 Log.d
+        val trace = "${gesture.name} -> ${disposition::class.simpleName}：" +
+            (disposition.spoken?.message ?: "盘上已有同意位，这一手只落「引导已完成」")
+        when (disposition) {
+            is OnboardingExitDisposition.PathSevered,
+            is OnboardingExitDisposition.FlowOrderContradiction,
+            -> Log.w(ConsentTraceTag, "同意这一位没落而路径受阻 $trace")
+
+            else -> Log.i(ConsentTraceTag, "引导出口落盘 $trace")
+        }
+    }
+
     val notificationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { runChecks() }
@@ -200,7 +244,7 @@ fun OnboardingScreen(
         OnboardingHeader(
             currentPage = pagerState.currentPage,
             onClose = {
-                FirstRun.completeOnboarding(context)
+                recordOnboardingGesture(OnboardingGesture.HeaderSkip)
                 onFinished(null)
             },
         )
@@ -235,11 +279,11 @@ fun OnboardingScreen(
                     progressPrefs.edit { putBoolean(ClassProgressReceiver.PREF_DND, it) }
                 },
                 onImportBuaa = {
-                    FirstRun.completeOnboarding(context)
+                    recordOnboardingGesture(OnboardingGesture.ImportLanding)
                     onFinished("import")
                 },
                 onAddCourse = {
-                    FirstRun.completeOnboarding(context)
+                    recordOnboardingGesture(OnboardingGesture.ManualAddLanding)
                     // 「手动添加课程」此前只是回首页：按钮写着添加，点了什么也不会发生。
                     // editor/-1 与首页 FAB 用的是同一条路由（-1 = 新建课程）。
                     onFinished("editor/-1")
@@ -256,7 +300,7 @@ fun OnboardingScreen(
             onNext = {
                 when (pagerState.currentPage) {
                     STEP_PRIVACY -> {
-                        if (privacyChecked) FirstRun.acceptPrivacy(context)
+                        recordOnboardingGesture(OnboardingGesture.PrivacyStepNext)
                         goTo(STEP_RELIABILITY)
                     }
                     STEP_RELIABILITY -> {
@@ -266,7 +310,7 @@ fun OnboardingScreen(
                     STEP_IMPORT -> {
                         // 最后一步点「下一步」= 现在不导入。引导到此为止，
                         // 落回首页（导入页随时能从底栏再进）
-                        FirstRun.completeOnboarding(context)
+                        recordOnboardingGesture(OnboardingGesture.LastStepDone)
                         onFinished(null)
                     }
                     else -> goTo(pagerState.currentPage + 1)
@@ -310,7 +354,10 @@ private fun OnboardingHeader(currentPage: Int, onClose: () -> Unit) {
         Spacer(Modifier.weight(1f))
         // 右上角永远给一条退路：引导不是必须走完才能用应用。
         // 文案带上「稍后」并把颜色提到 onSurface（I-03）：两个字的次级色按钮看着像
-        // 装饰，用户会以为必须走完才能出去；点它和走完流程一样会落盘"引导已完成"
+        // 装饰，用户会以为必须走完才能出去。
+        // 「稍后」现在是真话（T271③）：这一手走 recordOnboardingGesture ——
+        // 屏上勾着「我已阅读并同意」就把那一格落盘（屏与盘同一句话），没勾就不落，
+        // 而同意入口不依赖这一屏：常驻页「设置 → 数据与隐私」上留着那一手（乙档）。
         TextButton(onClick = onClose) {
             Text("先跳过，稍后设置", color = MaterialTheme.colorScheme.onSurface)
         }
