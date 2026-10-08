@@ -311,14 +311,15 @@ class WakeUpJsonTextTest {
     fun `整段码位扫描 任何输入都不产裸控制字符`() {
         var cells = 0
         for (code in 0x00..0x02FF) {
+            val hex = "0x" + code.toString(16)
             val literal = WakeUpJsonText.literal(code.toChar().toString())
             cells++
             assertTrue(
-                "U+%04X 的字面量应以引号首尾括起：$literal".format(code),
+                "$hex 的字面量应以引号首尾括起：$literal",
                 literal.startsWith("\"") && literal.endsWith("\"") && literal.length >= 2,
             )
             val body = literal.substring(1, literal.length - 1)
-            assertEquals("U+%04X 的正文里有裸控制字符：$literal".format(code), 0, rawControlCount(body))
+            assertEquals("$hex 的正文里有裸控制字符：$literal", 0, rawControlCount(body))
         }
         assertEquals("扫过的码位枚数（0x00..0x02FF = 768 枚）", 768, cells)
     }
