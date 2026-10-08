@@ -113,17 +113,22 @@ class WakeUpExportDropQuadrantTest {
     @Test
     fun `四象限的出场与否`() {
         for (cell in quadrants) {
-            val json = wakeUp(listOf(course(name = cell.label, periods = cell.periods, weeks = cell.weeks)))
+            val row = course(name = cell.label, periods = cell.periods, weeks = cell.weeks)
+            val json = wakeUp(listOf(row))
             assertEquals(
                 "「${cell.label}」：periods=${cell.periods}、weeks=${cell.weeks} ⇒ 导出件里该有几段排课。" +
                     "\n实到整串：$json",
                 if (cell.expectExported) 1 else 0,
                 exportedEntries(json),
             )
+            // T279①（N6）重钉：这一格此前按 `course.name` 写死，而导出件的 `name` 现在读
+            // **displayName**（别名优先，无别名时逐字回退到 name ⇒ 本文件的夹具没有别名，
+            // 两个值今天仍相等，但尺子指的是"上屏那一枚名字"，不再是教务原名）。
+            // 带别名那一档的正格在 `WakeUpJsonTextTest`（别名进导出件 + 控制字符不出场一起打）。
             assertEquals(
-                "「${cell.label}」：那一门的名字在导出件里出场与否必须与上面的条数一致",
+                "「${cell.label}」：那一门的名字在导出件里出场与否必须与上面的条数一致（出场的是 displayName）",
                 cell.expectExported,
-                json.contains("\"name\":\"${cell.label}\""),
+                json.contains("\"name\":\"${row.displayName}\""),
             )
         }
     }

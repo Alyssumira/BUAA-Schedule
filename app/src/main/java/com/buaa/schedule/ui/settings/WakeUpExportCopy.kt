@@ -1,5 +1,7 @@
 package com.buaa.schedule.ui.settings
 
+import com.buaa.schedule.domain.schedule.WakeUpExportDecision
+
 /**
  * WakeUp 兼容 JSON 导出成功那一句的措辞（T181②，T203 补第二档，T224 把单位念对）。
  *
@@ -51,3 +53,30 @@ internal fun wakeUpExportMessage(
         else -> "WakeUp JSON 已导出（$placed 段排课；另有 $noPeriodFragments 段没有节次、$noWeekFragments 段没有周次，都无法定位，未写入）"
     }
 }
+
+/**
+ * 一段排课都写不出去那一档（T277 审计 N4 → T279①）：实话是"没写出去"，不是"已导出 0 段"。
+ *
+ * 改前这一等根本没有句子：`exportWakeUpTo` 只判 `courses.isEmpty()`（**入参**），
+ * 而两档 drop 把每一门都丢下时交回的是 `{"courses":[]}` ⇒ 默认的截断写照样开流，
+ * 用户挑的那份 `.json` 被换成一张空课表，屏幕上端出来的仍是上面那四支里的
+ * 「已导出（0 段排课；另有 N 段…未写入）」—— 一句在中文里读起来像成功回执的句子。
+ * 同门那把尺在册裁定在 `domain/schedule/IcsExportGate.kt`（甲档：零日程时**完全不碰**用户选中的
+ * 那个文件），本函数就是那条裁定落到第二条落盘链上的那一半句子。
+ *
+ * 两支各自一条**完整字面量**（与上面那四支同一写法，理由见 [wakeUpExportMessage] 的「为什么」一节）。
+ * [com.buaa.schedule.domain.schedule.WakeUpExportDecision.RefuseEmpty] 交回的是
+ * [com.buaa.schedule.domain.schedule.WakeUpTargetFileMutation.LEAVE_UNTOUCHED] ⇒ "没有被改动"
+ * 这句承诺钉的是**我们这一手不动它**（系统选择器建文档那一步不在本应用手里，本卡零设备量不到）。
+ */
+internal fun wakeUpExportRefusedMessage(decision: WakeUpExportDecision.RefuseEmpty): String =
+    if (decision.droppedFragments > 0) {
+        "这 ${decision.droppedFragments} 段都缺少节次或周次、无法定位，没有可导出的 WakeUp 内容，未写出文件，你选中的文件没有被改动"
+    } else {
+        "这个学期排不出任何一段可导出的内容，未写出文件，你选中的文件没有被改动"
+    }
+
+/** 段数报得出、导出件却是空的：那是导出器内部两格打架，不叫用户去修课表（同 ICS 那一档的分工）。 */
+internal fun wakeUpExportInconsistentMessage(decision: WakeUpExportDecision.RefuseInconsistent): String =
+    "导出失败：算出 ${decision.writtenFragments} 段可写内容却发现导出件是空的，未写出文件，你选中的文件没有被改动"
+

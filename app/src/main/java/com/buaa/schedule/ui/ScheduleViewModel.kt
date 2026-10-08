@@ -48,6 +48,8 @@ import com.buaa.schedule.domain.schedule.RestoreVolumeGate
 import com.buaa.schedule.domain.schedule.RestoreVolumeLimits
 import com.buaa.schedule.domain.schedule.restoreShareConfirmCopy
 import com.buaa.schedule.domain.schedule.restoreVolumeRejectCopy
+import com.buaa.schedule.domain.schedule.WakeUpExportDecision
+import com.buaa.schedule.domain.schedule.WakeUpExportGate
 import com.buaa.schedule.domain.schedule.WeekCalculator
 import com.buaa.schedule.ui.home.nextDayTickDelayMillis
 import com.buaa.schedule.ui.importing.importCompletionMessage
@@ -55,7 +57,9 @@ import com.buaa.schedule.ui.importing.importParseSummary
 import com.buaa.schedule.ui.settings.icsExportInconsistentMessage
 import com.buaa.schedule.ui.settings.icsExportRefusedMessage
 import com.buaa.schedule.ui.settings.icsExportWrittenMessage
+import com.buaa.schedule.ui.settings.wakeUpExportInconsistentMessage
 import com.buaa.schedule.ui.settings.wakeUpExportMessage
+import com.buaa.schedule.ui.settings.wakeUpExportRefusedMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -2153,6 +2157,23 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
      *
      * 此前这段跑在设置页 ActivityResult 回调所在的**主线程**上，并且 `runCatching`
      * 把失败静默吞掉：用户选完保存位置就以为成功了，实际可能写出一个空文件。
+     *
+     * ## T277 审计 N4 → T279①：那把闸门补到这条链上（形状逐手照 [IcsExportGate]）
+     *
+     * 改前唯一的门是 `if (courses.isEmpty())`，判的是**入参**而不是"写出去几段"：
+     * 两档 drop（没节次 = T27、没周次 = #237）把每一门都丢下时，`toWakeUpJson` 交回的是
+     * `{"name":"…","courses":[]}`，而下一手 `writeTextToUri(uriString, json)` 是默认的**截断写** ——
+     * 用户挑的那份 `.json` 当场被换成一张空课表，屏幕念的还是那句「WakeUp JSON 已导出（0 段排课…）」。
+     * 现在四枚事实（写出去的段数、丢下的段数、导出件文本、是否真选中了文件）先交给
+     * [WakeUpExportGate.decide]，再由档位决定要不要开流：[WakeUpExportDecision.WriteTruncating]
+     * 才截断写，[WakeUpExportDecision.RefuseEmpty] 与 [WakeUpExportDecision.RefuseInconsistent]
+     * 一次都不开流（用户选中的文件保持原样），[WakeUpExportDecision.NoFileSelected] 一句不说。
+     * 句子在 [wakeUpExportMessage] / [wakeUpExportRefusedMessage] / [wakeUpExportInconsistentMessage]。
+     *
+     * ⚠️ 「保持原样」钉的是我们这一手不动它；`CreateDocument` 那一步由系统选择器建文档，
+     * 不在本应用手里（本卡零设备，没量过它建出来的那一刻是什么状态）。
+     * ⚠️ 入参那一枚 `courses.isEmpty()` 的门**保留**：它说的是"课表里一枚都没有"（用户能自己补），
+     * 与"有课但一段都写不出去"（drops 全丢）是两格，句子也不同 ⇒ 并成一格就有一格没人念。
      */
     fun exportWakeUpTo(uriString: String) {
         viewModelScope.launch {
@@ -2173,11 +2194,26 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
             // 判据取 WakeUpDropTally 不在这里重拼一遍。报数只能是"写出去了几门"而不是 courses.size ——
             // 后者会在丢掉课时仍然承诺"N 门课"，而对方 App 里少了哪几门用户无从知道（这些课在网格上本来就画不出来）。
             val drops = com.buaa.schedule.domain.schedule.WakeUpDropTally.tally(courses)
-            val written = withContext(Dispatchers.IO) { writeTextToUri(uriString, json) }
-            showMessage(
-                if (written) wakeUpExportMessage(courses.size, drops.noPeriodCourses, drops.noWeekCourses) else "导出失败：无法写入所选位置",
-                isError = !written,
-            )
+            // 段数由上面那本账递进来（内核不读库、不数第二次）：写出去几段 = 总数减两档之和
+            when (val decision = WakeUpExportGate.decide(
+                writtenFragments = courses.size - drops.droppedCourses,
+                droppedFragments = drops.droppedCourses,
+                json = json,
+                fileSelected = uriString.isNotBlank(),
+            )) {
+                // 取消不是失败：没落地文件，后面两判都无从谈起，也一句话不说
+                WakeUpExportDecision.NoFileSelected -> Unit
+                is WakeUpExportDecision.RefuseEmpty -> showMessage(wakeUpExportRefusedMessage(decision), isError = true)
+                is WakeUpExportDecision.RefuseInconsistent ->
+                    showMessage(wakeUpExportInconsistentMessage(decision), isError = true)
+                is WakeUpExportDecision.WriteTruncating -> {
+                    val written = withContext(Dispatchers.IO) { writeTextToUri(uriString, decision.json) }
+                    showMessage(
+                        if (written) wakeUpExportMessage(courses.size, drops.noPeriodCourses, drops.noWeekCourses) else "导出失败：无法写入所选位置",
+                        isError = !written,
+                    )
+                }
+            }
         }
     }
 

@@ -30,7 +30,21 @@ object ScheduleExporters {
      *  把它判成第三档"没进导出件"要连着改报数那两枚文件 ⇒ 回执「需要跨卡配合」。
      *
      *  不带 credit：WakeUp 的 courses schema 里没有学分这一列，多写未知键能不能被容忍
-     *  取决于对方解析器（不受我们控制），而学分只有本应用的统计页用得上。 */
+     *  取决于对方解析器（不受我们控制），而学分只有本应用的统计页用得上。
+     *
+     *  ## 本卡（T279①）动的两格，与改前的形状（守卫按注释/代码各数一遍）
+     *
+     *  1. **字符串字段全部走 [WakeUpJsonText.literal]**（丙档：sanitize 再 escape）。改前那两行私有
+     *     `jsonStr` 只做 `replace("\\", "\\\\")` 与双引号那一手，裸换行/制表符原样出场 ⇒
+     *     RFC 8259 §7 判死整份文件，对方 App 一条课都收不到而屏幕上念"已导出"。
+     *     这一手与 `data/export/IcsExporter.kt` 的 `escape`（先归一行结束符、再逐个转义）同形。
+     *  2. **课程名走 [com.buaa.schedule.domain.model.Course.displayName]**，与 ICS / 系统日历那两条链
+     *     的 `title` 同一枚出处（改前这里读 `course.name` ⇒ 用户设的别名压根进不了对方 App，
+     *     屏上、日历里都是别名而导出件是教务原名，三链同源字段两种取法）。
+     *
+     *  ⚠️ 残账（不在本卡白名单里，逐字登记进回执「需要跨卡配合」）：`nodeArray` 里那枚
+     *     `"第N节"` 与 `s`/`e` 两枚时间串是**本机生成的 ASCII**（节次序号 + HH:mm 归一），
+     *     不走 [WakeUpJsonText.literal]；`compact` 那一手只是把冒号摘掉，不是转义落点。 */
     fun toWakeUpJson(
         courses: List<Course>,
         semester: Semester?,
@@ -86,13 +100,13 @@ object ScheduleExporters {
                 weeks.all { it % 2 == 0 } -> 2 // 双周
                 else -> 0                       // 每周
             }
-            """{"name":${jsonStr(course.name)},"teacher":${jsonStr(course.teacher ?: "")},""" +
-                """"position":${jsonStr(course.location ?: "")},"day":${course.dayOfWeek},""" +
+            """{"name":${WakeUpJsonText.literal(course.displayName)},"teacher":${WakeUpJsonText.literal(course.teacher ?: "")},""" +
+                """"position":${WakeUpJsonText.literal(course.location ?: "")},"day":${course.dayOfWeek},""" +
                 """"startNode":$startNode,"step":$step,"startWeek":$startWeek,"endWeek":$endWeek,""" +
                 """"type":$type,"color":${course.colorIndex % 20}}"""
         }.joinToString(",")
-        return """{"name":${jsonStr(semester?.termName ?: "我的课表")},"startDate":"$start",""" +
-            """"tableInfo":{"name":${jsonStr(semester?.termName ?: "我的课表")},"startDate":"$start",""" +
+        return """{"name":${WakeUpJsonText.literal(semester?.termName ?: "我的课表")},"startDate":"$start",""" +
+            """"tableInfo":{"name":${WakeUpJsonText.literal(semester?.termName ?: "我的课表")},"startDate":"$start",""" +
             """"maxWeek":$totalWeeks,"nodesPerDay":${slots.size},"time":"[$nodeArray]"},""" +
             """"courses":[$courseArray]}"""
     }
@@ -148,7 +162,4 @@ object ScheduleExporters {
             "$header\n${if (targetWeek != null) "本周" else "本学期"}没有课"
         } else "$header\n\n${body.joinToString("\n\n")}"
     }
-
-    private fun jsonStr(value: String): String =
-        "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 }
