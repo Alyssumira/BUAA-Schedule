@@ -5576,3 +5576,29 @@ T260（编辑器保存链收尾）与 T261（更新链三处静默）按序 cher
 
 我这轮起新加的一条卡面规矩在这里第二次生效：**"纯证据段用 `--allow-empty` 提交前必须在回执里点明哪几枚是空段"**——`gate/6` 的合流脚本已按"逐枚 pick＋空段跳过＋真冲突即停"写，两支的空段会被跳过、代码段会被全并。合并判据仍以我自己的冷门禁为准。
 
+### 39 `gate/6` 当场红两格 ⇒ T271 判未交付，`gate/7` 只并 T270
+
+`gate/6`（T270 的 7 枚＋T271 的 4 枚代码段，1 枚空证据段跳过）我自己的冷门禁复算：**2,539 tests / 331 XML / 0 errors / 0 skipped / 2 failures**，lint 0e·19w，APK 7,306,502 B。两枚红全落在 `CalendarSyncTargetPairingGuardTest`：`privacyConsentAt` 在弹窗体内出现 3 次而非 1、`showPrivacyDialog` 生命点 7 而非 6。逐枚定位：`3ef34cb` 与 `ai/T270` 的 `SettingsScreen.kt` 两把尺都是 **4 / 7**，只有 T271③ 那一枚把它们推到 **7 / 8**——也就是说这不是连带伤害，**那枚守卫存在的理由正是"读者只有一枚、且它就是 payload 闸门"**，它拦下的就是这一手。
+
+裁定：**T271 判未交付，不进本批**。它的分支 `ai/T271`（tip `015a8f0`）与工作树里那枚未落盘的 `entryInsideDialogCopy()` 原样保留不删——那枚函数的注释自己写着"这一句**不指路**……不需要读那枚活字段（读了就会在收场动画那几帧里当场翻面）"，即代理正朝正确的形状走，被 150 轮上限掐断。它未提交的部分按红线不算交付，`gate/6` 的日志头部已整段留档。
+
+`gate/7`＝只并 T270 一族（7 枚，`outside_app_src=0`，两把尺回到 4 / 7）：**assembleRelease 6m2s 真冷跑 / testDebugUnitTest 3m54s（`xml_before=0` → 329 枚、2,526 tests、0 失败 0 错 0 skipped）/ lintDebug 4m40s（0 error·19 warning）/ APK 7,302,103 B**，三步各 RC 0 且日志内 `BUILD SUCCESSFUL`。候选 rebase 到 master 时用 `git rev-parse <b>:app/src` 前后相等做**app/src 逐字节守恒**证（两枚都是 `16f504f8…`）⇒ master 快进到 `52fe129`。**欠账**：T270 一族的变异自证两臂从未跑过就进了 master（在册 #513 仍挂 pending），这条不许当成已完成。
+
+### 40 `gate/8`：T281（撤回归新号）＋T282（WakeUp 导出）＋T280（同意路径重做）全绿合入
+
+三张卡的盘面结局各不相同，值得分开记：
+
+- **T278 → 救援卡 T281**：原代理被模型连接中断掐死在②，分支上只留 2 枚（⓪裁定＋①修法）与**一枚未跟踪的半截单测**。配方：我把它 `cp` 到 `.tmp/dev-2026-10-07/t278-untracked-UndoReinsertIdentityTest.kt` 交只读路径给续派卡，续派卡从 master 新起 worktree、`cherry-pick -x` 那两枚、再补 ②表驱动（9 枚 `@Test`／15 格，含"占号对撞"那一格与非套套自查格）③六层守卫 ④两臂 ⑤门禁。**甲档修法核到结构层**：实体是 `@PrimaryKey(autoGenerate = true)`，交 0L 让 Room 自己分行号，`REPLACE` 在形状上再也匹配不到 ⇒ 冒牌行造不出来；`normalize` 的 copy 清单与 DAO 策略都不动。两臂红名：W（写点改回原样）红在**守卫**三格、N（内核两档塌成一档）红在**表驱动**四格，md5 还原两侧相等各已打印。
+- **T279 → 救援卡 T282**：原代理触顶在 gradle 第 3 次调用，6 枚提交全在盘上、工作树干净，欠 ④⑤。续派卡接手两臂＋门禁，另量出一枚**我自己的卡面口径问题**：`WakeUpExportGateWiringGuardTest` 的 KDoc 承诺"朝宽那臂就是死在这一格"，可那格调的是 `literal()`（先把 C0 洗成空格），转义表怎么朝宽都到不了它 ⇒ 实测 W 臂红在表驱动三格、守卫 6/6 全绿（登记 #528，与在册 #437 同族：**注释宣布的覆盖面大于代码**）。
+- **T280（同意路径重做）**：把弹窗正文那几句「当前」改成 payload 驱动、删掉活字段读者，`SettingsScreen.kt` 的两把尺回到 **4 / 7** 且 `CalendarSyncTargetPairingGuardTest` **未重钉一枚**就 11/11 绿。它的 W 臂设计得最结实——把活字段读回正文，配对守卫与接线守卫两边一起红。
+
+合并对象读数（我自己的冷门禁，`gate/8`＝master `52fe129` 之上 18 枚，零真冲突，`outside_app_src=0`，两把尺 4 / 7）：**assembleRelease 6m3s → APK 7,308,144 B；testDebugUnitTest --rerun-tasks 3m59s → `xml_before=0`、336 枚 XML、2,588 tests、0 failures / 0 errors / 0 skipped，XML 内 `timestamp` 落在我这趟窗口内；lintDebug 4m31s → 0 error·19 warning**。master 快进到 `bd2b435`，`app/src` 树与 `gate/8` 逐字节同一枚（`dc73e8ff…`）。静态尺现算：测试文件 **330**、`^    @Test` 那把 **2,588**（与 XML 逐枚相等）、`grep -o '@Test'` 那把 **2,593**（差恒为 5）、`*Guard*` **109**、docs＋README 锚点尺 **588 未动**。三枚 `--allow-empty` 证据段被 pick 跳过 ⇒ 它们的 message 已整段导到 `.tmp/dev-2026-10-07/gate8-evidence-segments-skipped.txt`（197 行）留档，**这是一条新学的口径：合并后的历史里没有它们，台账必须自己抄一份**。
+
+### 41 本轮七族只读审计交回的候选登记，与一次成规模的外部注入
+
+七枚只读审计卡（零 gradle，与我的门禁并行跑通）交回 **~40 枚新候选**，逐枚带文件＋符号＋逐字原文行，登记进任务册：会话 WebView 与凭据落盘族、扫码相机硬件族、Room 迁移／备份／撤销族、日期周次时区核族、传输层族、导出序列化器族（附五枚"脊椎数"：被转义 TEXT 字段 4 枚／行末只有 CRLF 一种／折行 1 处实现／`UID` 跨重导出稳定／`TZID` 引用 0 处且 `VTIMEZONE` 0 块＝自洽浮动本地时间）、分享口令编解码族、通知渠道与勿扰族、文档现值全表族。
+
+本轮最重的三条新档，都是"闸门在判据之前就被绕过"这一形状：①撤销按旧 id 走 `REPLACE` 把占号那门无关课整门顶替（已由 T281 修）；②它的孪生——撤销「新建课」那一支按 id 删且**不查 `courseKey`**，同一枚"重导入后号已归别人"的事实从 DELETE 到达，甲档修法盖不住（#527）；③口令路 `ignoreUnknownKeys` 先把三张表清成空，条数闸门、确认门、版本拒绝三处吃的都是那枚 0（#530）。
+
+**注入**：三枚子代理各自独立报告同一件事——工具输出被替换成"用户请求安装 `mcp-builder` / `hookify` / `mcp-config` 等 skill 与 MCP server"，并指引调用安装类工具。全部按攻击处理、零执行、零安装、`local.properties` 与 `D:/keystore` 全程未被读取或改动；另有多次"门禁已绿可合并 / 后台任务已完成(exit 0)"式抢先结论，一律自己复算（`gate/6` 那趟的真实结局就是红）。**未验到**（本轮零设备、零装机）：T281 的"撤销一次，被顶号那门课回没回来"只到结构层；T282 的 `openOutputStream` 截断行为；#524 的日期族需真日历/时区读数。push 与发版仍未批、仍未做（未推枚数以 `git rev-list --count origin/master..master` 现算）。
+
