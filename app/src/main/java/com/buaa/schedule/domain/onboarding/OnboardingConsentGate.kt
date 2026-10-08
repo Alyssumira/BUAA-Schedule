@@ -24,8 +24,7 @@ package com.buaa.schedule.domain.onboarding
  * 「我已阅读并同意」，盘上却从未有过这一位 —— 屏与盘各说各话。
  *
  * ## 修法（第 ⓪ 问裁的是丁档：乙＋丙）
- *
- * - **不许由本内核替用户置真同意位**。[OnboardingExitDisposition.writesConsent] 只在
+ *[OnboardingExitDisposition.writesConsent] 只在
  *   「用户当面勾了那一格」时为真；跳过而没勾 ⇒ 同意位不动，这是判据不是疏忽。
  * - **乙**：同意入口搬到常驻页（设置 → 数据与隐私 的确认位）。引导进不去之后，
  *   路径判据交回的就是那一屏：[ConsentPath.settingsEntry]，三下走到。
@@ -35,6 +34,31 @@ package com.buaa.schedule.domain.onboarding
  * - **丙**：未同意而这一屏又要同意时，[OnboardingConsentGate.screenNotice] 交回持续提示档
  *   （红点 + 那一句），直到用户处理；已同意的用户走 [ConsentNoticeSilent]，
  *   不许把他再拖回提示里。
+ *
+ * ## 第 ⓪ 问的第二半（T280 重裁）：弹窗正文那几句「当前」的话从哪儿取
+ *
+ * 三档候选里裁的是**甲**：常驻页那层弹窗的每一句同意状态话都只由 **payload 交回来的那一位值**
+ * （加上「用户在本屏按下的那一手」这一枚事实）决定，一次算好、组合期内不再回读。
+ * 判据来自 `CalendarSyncTargetPairingGuardTest` 自己的两句话：
+ * 「正文里读 payload 交回的那枚 `consentAt > 0L` 判据不再是 2 处（:1830 那行文案、:1844 那颗
+ * 「撤回同意」按钮的可见性）」与「给 `privacyConsentAt` 添第二枚读者，收场那几帧就当场念「未同意」」——
+ * 也就是**一枚读者、而且那枚读者必须是 payload 那一行本身**。
+ *
+ * - **乙（读那枚活字段）被否**：T271③ 就是走的乙（`privacyConsentAt = FirstRun.privacyConsentAt(context)`
+ *   与 `remember(privacyConsentAt) { screenNotice(...) }`），当场把 ⑥ 那两把尺顶成 8/7 并给弹窗体内
+ *   添了第二枚读者 —— 那正是本守卫拦下的东西，不是可以重钉上去的 collateral damage。
+ * - **丙（正文吃 payload、只在现有那一枚读者站点里读活字段）裁成生产形状**：活字段的读者全仓只留
+ *   payload 那一行；行上那句持续提示改吃**算好的布尔**（[screenNotice] 的 `privacyAccepted` 入参，
+ *   由 `FirstRun.privacyAccepted(context)` 现读，不经过那枚成对字段），重算时机由「本屏那一手」给。
+ *   弹窗正文那一侧则一律走 [residentDialogCopy]：入参是 payload 交回的值与用户那一手，
+ *   **不读活字段、也不读行上那句提示**（读了就会在收场动画那几帧里当场翻面）。
+ *
+ * 四处出口的适用面：`ui/onboarding/OnboardingScreen.kt` 那五手吃 `gestureDisposition`（落盘侧，
+ * 与正文无关）；`ui/settings/SettingsScreen.kt` 这一屏同时吃 `screenNotice`（行上）与
+ * `residentDialogCopy`（弹窗正文），第 ⓪ 问这一半裁的就是它；`ui/importing/ImportScreen.kt` 与
+ * `MainActivity.kt` 上没有同意这一手也没有「当前」那一句（它们只吃在册白名单与兜底），
+ * 所以这一半的判据不落在那两屏 —— 它们的病灶在 `UpdateCheckGate.privacyBlockedCopy` 那一句指向里，
+ * 那一格本卡不收（见回执「未交付」）。
  *
  * ## 判据顺序（顺序即语义）
  *
@@ -84,6 +108,12 @@ enum class OnboardingGesture(
 
 /** 一档要念给用户听的话：标题给屏上，正文给屏上与留痕共用（一处写、两处读） */
 data class ConsentCopy(val title: String, val message: String)
+
+/**
+ * 把一档话拼成屏上那一句（行上的持续提示与常驻页弹窗正文共用同一句形状，
+ * 免得两处各写一遍 `"$title：$message"` —— 同句多写是本仓在册的那把尺拦的）。
+ */
+fun ConsentCopy.spokenLine(): String = "$title：$message"
 
 /**
  * 一条**走得通**的同意路：在哪一屏、点哪一手、从当前页起算要几下。
@@ -381,6 +411,54 @@ object OnboardingConsentGate {
         title = "未同意隐私说明",
         message = "${entry.tapsFromFrontPage} 下就能同意：${entry.screen} · ${entry.hand}。" +
             "在同意之前，检查更新不会发起任何网络请求。",
+    )
+
+    /**
+     * 常驻页那枚弹窗正文的档位（T280①，第 ⓪ 问裁的甲）：**只**由 payload 交回来的那一位值
+     * 与「用户在本屏按下的那一手」决定。
+     *
+     * 三枚入参全是调用点算好的值：[consentStamp] 是 `ModalTransition` 的 payload 在开窗那一刻交回的
+     * 同意时间（不是那枚会翻面的活字段），[consentAtLabel] 是同一位值格式化之后的那一句
+     * （格式化住在 UI 侧 —— 本内核不读钟），[handLandedOnThisScreen] 是用户在这一屏已经按下「同意」
+     * 那一手的事实。为什么把档位判断搬回内核而不许正文去读活字段：读了就会在收场动画那几帧里当场翻面，
+     * 而「一枚读者、且那枚读者就是 payload 那一行」正是 `CalendarSyncTargetPairingGuardTest` ⑥
+     * 那一族钉死的配对不变量（多一枚读者 = 部分清掉的同意时间会被当有效念出来）。
+     */
+    fun residentDialogCopy(
+        consentStamp: Long,
+        consentAtLabel: String,
+        handLandedOnThisScreen: Boolean,
+    ): ConsentCopy = when {
+        consentStamp > 0L -> alreadyAgreedInsideDialogCopy(consentAtLabel)
+        handLandedOnThisScreen -> consentHandedInsideDialogCopy()
+        else -> entryInsideDialogCopy()
+    }
+
+    /** payload 说有过同意：那一格的日期由调用点从同一位值算好递进来，本档不读钟也不读活字段 */
+    private fun alreadyAgreedInsideDialogCopy(consentAtLabel: String): ConsentCopy = ConsentCopy(
+        title = "当前",
+        message = "已同意（$consentAtLabel）。撤回后从下次启动起重新进入首启引导。",
+    )
+
+    /**
+     * 盘上已经有同意了而 payload 交回的是 0 —— 只有「用户刚刚在本屏按下同意」这一手能走到这一档：
+     * 那枚成对字段本卡不许被第二次写（写了就多一枚读者），于是这一档说的是**那一手**而不是那位时间。
+     */
+    private fun consentHandedInsideDialogCopy(): ConsentCopy = ConsentCopy(
+        title = "当前",
+        message = "已记下你在这一屏按下的那一手：检查更新从下一次启动起才会出网，" +
+            "撤回就在下面那一格。",
+    )
+
+    /**
+     * 常驻页那枚弹窗正文的话（T271②/③ 未交回的那一手，T280 补完）：入口就在这颗弹窗里，
+     * 那颗按钮就在下面 —— 所以这一句**不指路**，也不提任何别的屏。正因如此它可以完全由
+     * payload 交回来的那一位决定，不需要读那枚活字段（读了就会在收场动画那几帧里当场翻面）。
+     */
+    fun entryInsideDialogCopy(): ConsentCopy = ConsentCopy(
+        title = "还没同意",
+        message = "检查更新不会发起任何网络请求。按下下面那格「同意隐私说明」即算同意，" +
+            "那唯一一次更新检查从下一次启动起才出网。",
     )
 
     /** 只有这两枚出口能把「用户当面勾了」这一格带走：三枚导入步的出口屏上没有那一枚勾选框 */

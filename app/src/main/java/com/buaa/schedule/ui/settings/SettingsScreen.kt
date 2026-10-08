@@ -100,6 +100,7 @@ import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlotProfile
 import com.buaa.schedule.domain.onboarding.ConsentScreenNotice
 import com.buaa.schedule.domain.onboarding.OnboardingConsentGate
+import com.buaa.schedule.domain.onboarding.spokenLine
 import com.buaa.schedule.domain.schedule.CourseConstraints
 import com.buaa.schedule.domain.schedule.SemesterStats
 import com.buaa.schedule.domain.schedule.SmartPeriods
@@ -225,12 +226,17 @@ fun SettingsScreen(
     // 撤回之后行内文案必须立刻变，否则用户只会觉得"点了没反应"。
     var privacyConsentAt by remember { mutableLongStateOf(FirstRun.privacyConsentAt(context)) }
     var showPrivacyDialog by remember { mutableStateOf(false) }
-    // 丙档（T271③）：没同意这件事要在常驻页上一直念到用户处理为止。
-    // 判据吃的全是算好的值，跳过的用户再也进不到首启引导那一屏，所以这里指的必须是本页。
-    val privacyNotice = remember(privacyConsentAt) {
+    // 丙档（T280① 重做 T271③ 那一刀）：没同意这件事要在常驻页上一直念到用户处理为止。
+    // 这一档**一枚活字段的读者都不许当**：那枚成对字段全仓只留 payload 那一行读它
+    // （`CalendarSyncTargetPairingGuardTest` ⑥ 拦的就是第二枚读者 —— 部分清掉的值会被当有效念出来）。
+    // 所以这里吃的是算好的值：盘上有没有同意位问 FirstRun.privacyAccepted（一枚布尔，不经过那位时间），
+    // 重算的时机由「用户在本屏按下的那一手」给 —— 同意与撤回各换一手，行内的红点与句子当场跟上。
+    // 跳过的用户再也进不到首启引导那一屏，所以这里指的必须是本页。
+    var consentHandOnThisScreen by remember { mutableStateOf(ResidentConsentHand.None) }
+    val privacyNotice = remember(consentHandOnThisScreen) {
         OnboardingConsentGate.screenNotice(
             screenNeedsConsent = true,
-            privacyAccepted = privacyConsentAt > 0L,
+            privacyAccepted = FirstRun.privacyAccepted(context),
             onboardingCompleted = FirstRun.onboardingCompleted(context),
             permanentEntryAvailable = PERMANENT_PRIVACY_CONSENT_ENTRY_AVAILABLE,
         )
@@ -1900,14 +1906,16 @@ fun SettingsScreen(
                             .heightIn(max = PrivacyStatementMaxHeight)
                             .verticalScroll(rememberScrollState()),
                     )
+                    // 正文那一句「当前」的档位整个搬进内核：入参只有 payload 开窗那一刻交回的值
+                    // （加上用户在本屏按下的那一手这一枚事实），组合期内一回都不读活字段 ——
+                    // 读了就会在收场动画那几帧里当场翻面（撤回与关窗是同一刻落的两枚位）。
                     Text(
-                        text = if (consentAt > 0L) {
-                            "当前：已同意（${formatLastCheck(consentAt)}）。" +
-                                "撤回后从下次启动起重新进入首启引导。"
-                        } else {
-                            privacyNotice.line?.let { "${it.title}：${it.message}" }
-                                ?: "当前：未同意 · 检查更新不会发起任何网络请求"
-                        },
+                        text = OnboardingConsentGate.residentDialogCopy(
+                            consentStamp = consentAt,
+                            consentAtLabel = if (consentAt > 0L) formatLastCheck(consentAt) else "",
+                            handLandedOnThisScreen =
+                                consentHandOnThisScreen == ResidentConsentHand.Accepted,
+                        ).spokenLine(),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1916,13 +1924,16 @@ fun SettingsScreen(
             // 乙档（T271③，台账 #410）：同意这一手从前只住在首启引导里，
             // 而「先跳过，稍后设置」出去的人再也进不到那一屏 —— 于是确认位只剩「撤回」可点，
             // 没同意过的人在这页上什么也做不了。确认位现在给的就是「同意」。
+            //
+            // 这一手**不落那枚成对字段**（T280① 收口 T271③ 多出来的第二枚读者）：位是 payload 那一行
+            // 唯一的读者，正文靠上面那一档的内核判据说话，行上的红点与句子靠下面那一手换档刷新。
+            // 按下之后窗口不自己关 —— 关窗那三枚位是 ⑥ 那族在册的形状，一处都不许多。
             confirmButton = {
-                if (consentAt == 0L) {
+                if (consentAt == 0L && consentHandOnThisScreen != ResidentConsentHand.Accepted) {
                     TextButton(
                         onClick = {
                             FirstRun.acceptPrivacy(context)
-                            privacyConsentAt = FirstRun.privacyConsentAt(context)
-                            showPrivacyDialog = false
+                            consentHandOnThisScreen = ResidentConsentHand.Accepted
                             Log.i(
                                 ConsentTraceTag,
                                 "用户在常驻页「数据与隐私」里按下同意：检查更新从下一次启动起可以出网",
@@ -1933,12 +1944,13 @@ fun SettingsScreen(
             },
             dismissButton = {
                 Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spaceXS)) {
-                    if (consentAt > 0L) {
+                    if (consentAt > 0L || consentHandOnThisScreen == ResidentConsentHand.Accepted) {
                         TextButton(
                             onClick = {
                                 FirstRun.revokePrivacy(context)
                                 privacyConsentAt = 0L
                                 showPrivacyDialog = false
+                                consentHandOnThisScreen = ResidentConsentHand.Revoked
                             },
                         ) { Text("撤回同意") }
                     }
@@ -2270,7 +2282,26 @@ private fun PendingUpdateDot() {
  * 那就只能在常驻页上一直念，念到用户处理为止。
  */
 private fun privacyRowSummary(notice: ConsentScreenNotice): String =
-    PRIVACY_ROW_BASE_SUMMARY + (notice.line?.let { "\n${it.title}：${it.message}" } ?: "")
+    PRIVACY_ROW_BASE_SUMMARY + (notice.line?.let { "\n${it.spokenLine()}" } ?: "")
+
+/**
+ * 用户在本屏（常驻页那层「数据与隐私」弹窗里）按下的那一手。
+ *
+ * 它是**内存里的一枚事实**，不是偏好：盘上有没有同意位问的是 `FirstRun.privacyAccepted`，
+ * 而这枚手只回答两件事 —— 行上那一句持续提示什么时候该重算、弹窗正文在 payload 交回 0 的那一侧
+ * 该念「已记下你的手」还是「还没同意」。它不许被当成同意时间的替身（那枚成对字段的读者全仓只留
+ * payload 那一行），也不许在收场动画那几帧里被回读成别的档位。
+ */
+private enum class ResidentConsentHand {
+    /** 这一屏还没人按过同意或撤回 */
+    None,
+
+    /** 用户刚在这一屏按下「同意隐私说明」：位已经落盘，而那枚成对字段本卡不许再写一遍 */
+    Accepted,
+
+    /** 用户刚在这一屏按下「撤回同意」：偏好里那两位一起撤了，行上的提示档要跟着回来 */
+    Revoked,
+}
 
 private const val PRIVACY_ROW_BASE_SUMMARY =
     "课表、提醒与节次时间只保存在本机，不上传任何个人数据；登录教务系统仅用于拉取你自己的课表。"
