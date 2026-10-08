@@ -183,8 +183,12 @@ class CalendarSyncTargetPairingGuardTest {
             occurrences(code, REBUILD_CTOR),
         )
         assertEquals(
-            "`targetId` 在这颗文件里的生命点不再是 10 处（1 声明 + 3 赋值 + 6 读取）。" +
-                "**多一处** = 添了读者，「漏清会不会被念出来」要按新读者重算；**少一处** = 有半条链换了载体",
+            "`targetId` 在这颗文件里的生命点不再是 11 处（1 声明 + 3 赋值 + 7 读取）。" +
+                "**多一处** = 添了读者，「漏清会不会被念出来」要按新读者重算；**少一处** = 有半条链换了载体。" +
+                "T265 那第 7 枚读者按过了：它是 `removeSyncedEvents` 里 `val targetCalendarId = _calendarSync.value.targetId`，" +
+                "只当**报数**的实参（映射里落在别的日历上的那些枚数），不参与删除范围也不在任何闸门上；" +
+                "它站在 T110 那枚成对清场之后（同一格 `everyRouteIntoTheRemoveChain…` 还在钉着那条闸门），" +
+                "所以「漏清会不会被念出来」的结论不变 —— 念哪句仍只由 `RemovalCopy` 那一族出",
             TARGET_ID_LIFE_POINTS,
             occurrences(code, "targetId"),
         )
@@ -1683,7 +1687,8 @@ class CalendarSyncTargetPairingGuardTest {
         const val TARGET_ID_ASSIGNED = "targetId = "
         const val TARGET_NAME_ASSIGNED = "targetName = "
         const val TARGET_WRITE_SITES = 3
-        const val TARGET_ID_LIFE_POINTS = 10
+        // 4b1c4a4 盘面复算是 10（1 声明 + 3 赋值 + 6 读取）；T265 添了第 7 枚读者（只用于报数），重钉成 11
+        const val TARGET_ID_LIFE_POINTS = 11
         const val TARGET_NAME_LIFE_POINTS = 5
         const val TARGET_UI_READS = 1
         const val CALENDAR_SYNC_READS = 16

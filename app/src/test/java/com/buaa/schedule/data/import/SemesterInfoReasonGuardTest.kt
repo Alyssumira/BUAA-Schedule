@@ -30,8 +30,9 @@ import org.junit.Test
  * 4. [文案搬干净] 那一句的三个字面片段在 `BuaaLoginScreen` 里 0 处、在纯函数文件里各 1 处
  *    （留在页面里 = 表驱动单测吃不到，而 `:app` 没有 Robolectric）。
  * 5. [纯度 + 一本表] 原因枚举文件与文案文件零 android import、零时钟、零 WebView、
- *    不 import `BuaaInPageFetcher`；全 `app/src/main` 里 `enum class …Reason` 恰好 2 枚
- *    （T193 那本 + 本卡这本）⇒ 卡面「别再造第二本分类表」由枚数守着。
+ *    不 import `BuaaInPageFetcher`；全 `app/src/main` 里 `enum class …Reason` 恰好 3 枚
+ *    （T193 那本 + 本卡这本 + T265 的 `MarkerBlindReason`，那一枚只说「所有权标记为什么读不回来」，
+ *    它的句子表在 `RemovalCopy` 里并由另一枚守卫逐档钉着）⇒ 卡面「别再造第二本分类表」由枚数守着。
  *    第五枚 `FirstWeekUndetermined` **不重述**内核那三枚 reason，所以它不是第二本表而是入口。
  * 6. [反套套逻辑] 探测器必须认得**改前那一形**（四档都不带原因 ⇒ 体内枚数 0）、认得
  *    「只递 raw」那一形（接线扭法）、并把「姊妹路 `BuaaWebSession` 不构造这枚类型」钉成 0 处
@@ -271,7 +272,7 @@ class SemesterInfoReasonGuardTest {
     // ─────────────── ⑤ 纯度 + 一本表 ───────────────
 
     @Test
-    fun `原因枚举与文案两份文件零 android 零时钟 全仓 Reason 枚举只两本`() {
+    fun `原因枚举与文案两份文件零 android 零时钟 全仓 Reason 枚举只三本`() {
         for (path in listOf(REASON_ENUM, COPY)) {
             val code = blankCommentsKeepingLiterals(source(path))
             for (needle in listOf("import android", "import androidx", "LocalDate.now(", "System.currentTimeMillis", "WebView")) {
@@ -300,18 +301,22 @@ class SemesterInfoReasonGuardTest {
         val reasonEnums = byFile.entries.toList().sortedBy { it.key }
             .filter { Regex("enum class \\w*Reason").find(it.value) != null }
         assertEquals(
-            "全 app/src/main 里 `enum class …Reason` 恰好 2 枚（T193 的 `UndeterminedReason` + 本卡的 " +
-                "`SemesterInfoReason`；实到 " + reasonEnums.size + " 枚，册子 " +
+            "全 app/src/main 里 `enum class …Reason` 恰好 3 枚（T193 的 `UndeterminedReason` + 本卡的 " +
+                "`SemesterInfoReason` + T265 的 `MarkerBlindReason`；实到 " + reasonEnums.size + " 枚，册子 " +
                 reasonEnums.joinToString { "${it.key}=${Regex("enum class \\w*Reason").findAll(it.value).toList().size}" } +
-                "）。卡面 §1-④ 的「别再造第二本分类表」就钉在这一格：第三本表意味着同一件事有两种名字，" +
-                "而「哪一档念哪一句」又要翻两处代码才答得出",
-            2,
+                "）。卡面 §1-④ 的「别再造第二本分类表」就钉在这一格：多一本表意味着同一件事有两种名字，" +
+                "而「哪一档念哪一句」又要翻两处代码才答得出。T265 那一枚按同一把尺复算过：它不是句子表 " +
+                "（它说不出任何一句用户文案，只说明『所有权标记为什么读不回来』这三档诊断），" +
+                "那一族的「哪一档念哪一句」在 `RemovalCopy` 里，而那张表被 CalendarReclaimSingleSourceGuardTest " +
+                "逐档钉着六张嘴 —— 第四枚 `…Reason` 仍然要按同样两步复算（它是不是句子表？它的句子表在哪枚守卫里？）" +
+                "才能进这本册子",
+            3,
             reasonEnums.size,
         )
         assertEquals(
-            "那两枚的落点必须是 `BuaaFirstWeekPolicy.kt` 与 `SemesterInfoReason.kt`（实到 " +
-                reasonEnums.joinToString { it.key } + "）：搬去界面层 = 把判据表搬到读它的地方",
-            listOf("BuaaFirstWeekPolicy.kt", "SemesterInfoReason.kt"),
+            "那三枚的落点必须是 `BuaaFirstWeekPolicy.kt`、`CalendarReclaimPlanner.kt` 与 `SemesterInfoReason.kt`" +
+                "（实到 " + reasonEnums.joinToString { it.key } + "）：搬去界面层 = 把判据表搬到读它的地方",
+            listOf("BuaaFirstWeekPolicy.kt", "CalendarReclaimPlanner.kt", "SemesterInfoReason.kt"),
             reasonEnums.map { it.key },
         )
     }
