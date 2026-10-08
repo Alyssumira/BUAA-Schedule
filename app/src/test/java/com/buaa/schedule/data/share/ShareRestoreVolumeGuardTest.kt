@@ -38,7 +38,10 @@ import org.junit.Test
  *    换行写法改不动），VM 四处处处都在 `Log.i`，而 `Log.d` / `Log.v` / `Log.e` / `Log.w`
  *    在 VM 各 0 处 —— 那条口径不是本卡自造的，是同页在册守卫
  *    `SpecialDayRefreshWiringGuardTest` 第 ③ 层已经写死的"取证行级别漂过就红"。
- * 6. [判据内核纯度与唯一定义] —— **读形状**（逐行扫 import）+ **数出现次数**。
+ * 6. [判据内核纯度与唯一定义 + 三枚比较各一枚] —— **读形状**（逐行扫 import、花括号配平取
+ *    `capacityViolation` 的体）+ **数出现次数**： 零 android/androidx、零时钟/时区/权限/机型、
+ *    三档结论各恰好一处声明、`fun decide(` 与 `fun capacityViolation(` 全树各一处，
+ *    体内三张表各留下「条数 > 上限」的比较一枚、越级结论恰好三枚。
  * 7. [编码格式没动 = 红线] —— **逐字节**：前缀、Base64/Deflater/Inflater、4MB 上限、
  *    `const val BACKUP_FORMAT_VERSION = 2`、`BackupTimeSlot` 那枚 `number` 字段各自原样。
  *
@@ -475,6 +478,29 @@ class ShareRestoreVolumeGuardTest {
                 mainDefinitionCount(SLOT_LIMIT) + " 处）：第二处就是第二把尺",
             1,
             mainDefinitionCount(SLOT_LIMIT),
+        )
+        // 三张表逐张比上限那三行（第 ② 层数的是调用点递进去的条数，这一格数的是内核自己比不比）
+        val gateBody = braceBodyFrom(code, code.indexOf('{', code.indexOf("fun capacityViolation(")))
+        for (needle in listOf(
+            "counts.courseCount > limits.maxCourses",
+            "counts.timeSlotCount > limits.maxTimeSlots",
+            "counts.reminderCount > limits.maxReminders",
+        )) {
+            assertEquals(
+                "capacityViolation 体内「$needle」恰好一处（实到 " + occurrences(gateBody, needle) +
+                    " 处）：这一格与第 ② 层是同一道缝的两头 —— 第 ② 层管「调用点有没有把条数递进来」，" +
+                    "这一格管「内核有没有真的去比这一枚上限」。删掉任一行 = 那张表重新零上限，" +
+                    "也就是本卡主病灶「闸门只管课程」换了一种写法回来",
+                1,
+                occurrences(gateBody, needle),
+            )
+        }
+        assertEquals(
+            "capacityViolation 体内越界结论恰好三枚（每张表一枚，实到 " +
+                occurrences(gateBody, "RestoreVolumeDecision.Reject(entry,") + " 处）：" +
+                "少一枚就是有一张表的分支只剩比较、没有结论",
+            3,
+            occurrences(gateBody, "RestoreVolumeDecision.Reject(entry,"),
         )
     }
 
