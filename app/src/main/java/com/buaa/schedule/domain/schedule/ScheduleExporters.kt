@@ -42,9 +42,14 @@ object ScheduleExporters {
      *     的 `title` 同一枚出处（改前这里读 `course.name` ⇒ 用户设的别名压根进不了对方 App，
      *     屏上、日历里都是别名而导出件是教务原名，三链同源字段两种取法）。
      *
-     *  ⚠️ 残账（不在本卡白名单里，逐字登记进回执「需要跨卡配合」）：`nodeArray` 里那枚
-     *     `"第N节"` 与 `s`/`e` 两枚时间串是**本机生成的 ASCII**（节次序号 + HH:mm 归一），
-     *     不走 [WakeUpJsonText.literal]；`compact` 那一手只是把冒号摘掉，不是转义落点。 */
+     *  ⚠️ 残账改口（T279①b：本卡端到端那一格量出来的，审计 N2 的范围窄了）：`tableInfo.time`
+     *     是一枚**装着 JSON 的字符串**（`"time":"[{ … }]"`），改前把 `nodeArray` 原样押进去 ⇒
+     *     那串里每一枚 `"` 都没转义，整份文件在 `"time":"[{` 之后的第一枚引号处就把字符串关掉了 ——
+     *     也就是说**即使用户文本里一枚控制字符都没有，这份 .json 也从来不是合法 JSON**
+     *     （RFC 8259 §7 的另一手：串内引号必须转义；审计只点了裸换行那一手）。
+     *     现在这一枚也走 [WakeUpJsonText.literal]：sanitize 对机器生成的 ASCII 是一次空操作，
+     *     escape 把串内的引号折成 `\"` ⇒ 交回的文件合法，而 `time` 的**内容**一字不变
+     *     （对方解析出来的仍是那串节点表）。`compact` 那一手只是把冒号摘掉，不是转义落点。 */
     fun toWakeUpJson(
         courses: List<Course>,
         semester: Semester?,
@@ -105,9 +110,12 @@ object ScheduleExporters {
                 """"startNode":$startNode,"step":$step,"startWeek":$startWeek,"endWeek":$endWeek,""" +
                 """"type":$type,"color":${course.colorIndex % 20}}"""
         }.joinToString(",")
+        // `time` 是一枚**装着 JSON 的字符串**：串里那些 `"` 一枚都不许裸出场，否则整份 .json 在
+        // 这一格就把字符串关掉（T279①b）。sanitize 对机器生成的 ASCII 是空操作，走的就是 escape 那一手。
+        val timeField = WakeUpJsonText.literal("[$nodeArray]")
         return """{"name":${WakeUpJsonText.literal(semester?.termName ?: "我的课表")},"startDate":"$start",""" +
             """"tableInfo":{"name":${WakeUpJsonText.literal(semester?.termName ?: "我的课表")},"startDate":"$start",""" +
-            """"maxWeek":$totalWeeks,"nodesPerDay":${slots.size},"time":"[$nodeArray]"},""" +
+            """"maxWeek":$totalWeeks,"nodesPerDay":${slots.size},"time":$timeField},""" +
             """"courses":[$courseArray]}"""
     }
 

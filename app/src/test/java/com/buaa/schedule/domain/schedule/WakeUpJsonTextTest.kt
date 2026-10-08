@@ -38,6 +38,13 @@ import org.junit.Test
  * 所以"这份文件根本不是合法 JSON"那一格在它眼里全绿）。本文件的端到端格走 [Json.parseToJsonElement]
  * 加自写的"整份文档 0 枚裸 C0"那把尺，两头各量一遍；另有一格钉 N6（别名进导出件、原名只在没别名时出场）。
  *
+ * ⚠️ 那一格当场量出了**第二手病灶**（审计 N2 只点了裸换行那一手，范围窄了）：`tableInfo.time`
+ * 是一枚**装着 JSON 的字符串**，改前把节点表原样押进那对引号里 ⇒ 串内每一枚引号都没转义，
+ * 整份文件在 `"time":"[{` 之后的第一枚引号处就把字符串关掉了 —— 用户文本里一枚控制字符都没有，
+ * 这份 .json 也从来不是合法的。修法与裁定同一条尺：那一枚也走 [WakeUpJsonText.literal]
+ * （sanitize 对机器生成的 ASCII 是空操作，escape 把串内引号折成 `\"`），格子见
+ * [time 那一枚装着JSON的字符串现在合法而内容一字不变]。
+ *
  * ⚠️ 零 adb：对方 App 拿到合法 JSON 以后怎么排课不在本卡的读数面里（卡面明说本卡零设备）。
  */
 class WakeUpJsonTextTest {
@@ -358,6 +365,51 @@ class WakeUpJsonTextTest {
             "学期名两处同一手：tableInfo",
             "2026 秋 学期",
             tree["tableInfo"]!!.jsonObject["name"]!!.jsonPrimitive.content,
+        )
+    }
+
+    /**
+     * 端到端那一格当场量出来的第二手病灶：`tableInfo.time` 是一枚**装着 JSON 的字符串**，
+     * 改前把 `nodeArray` 原样押进那对引号里 ⇒ 串内的引号一枚都没转义，整份文件解析到那一格就判死。
+     * 本格两头都打：改过的那形解析得过、而 `time` 的**内容**一字不变；改前那一形并排复算出它真的非法。
+     */
+    @Test
+    fun `time 那一枚装着JSON的字符串现在合法而内容一字不变`() {
+        val json = ScheduleExporters.toWakeUpJson(listOf(course(name = "高等数学")), semester, emptyList())
+        val tree = Json.parseToJsonElement(json).jsonObject
+        val tableInfo = tree["tableInfo"]!!.jsonObject
+        val perDay = tableInfo["nodesPerDay"]!!.jsonPrimitive.content.toInt()
+        val timeText = tableInfo["time"]!!.jsonPrimitive.content
+        val nodes = timeText.let { Json.parseToJsonElement(it).jsonArray }
+        assertTrue("节次表一枚都没有 = 这一格成了空转（导出器哪天不写 nodes 了要回来重钉）：$timeText", nodes.isNotEmpty())
+        assertEquals(
+            "time 里那串节点的枚数必须与同一份文件里 nodesPerDay 报的同一枚数（sanitize/escape 只动引号，不动内容）",
+            perDay,
+            nodes.size,
+        )
+        val first = nodes[0].jsonObject
+        assertEquals(
+            "第一枚节点的四个字段解析回来还是那四个值（对方 App 拿到的内容一字不变）：$first",
+            listOf("e", "name", "node", "s"),
+            first.keys.toList().sorted(),
+        )
+        assertEquals("第1节", first["name"]!!.jsonPrimitive.content)
+        assertEquals("080000", first["s"]!!.jsonPrimitive.content)
+        // 并排复算（反证）：把同一串内容按改前那一形押进引号里，解析器必须当场判死
+        val legacyHand = """{"time":"$timeText"}"""
+        val kernelHand = """{"time":${WakeUpJsonText.literal(timeText)}}"""
+        assertTrue(
+            "改前那一形（串内引号原样出场）必须解析失败 —— 这一格红了就说明错尺没复算成功：$legacyHand",
+            runCatching { Json.parseToJsonElement(legacyHand) }.isFailure,
+        )
+        assertTrue(
+            "内核那一形必须解析得过：$kernelHand",
+            runCatching { Json.parseToJsonElement(kernelHand) }.isSuccess,
+        )
+        assertEquals(
+            "两形交回的 time 内容必须同一枚（本卡只修合法性，不改这份件的语义）",
+            timeText,
+            Json.parseToJsonElement(kernelHand).jsonObject["time"]!!.jsonPrimitive.content,
         )
     }
 

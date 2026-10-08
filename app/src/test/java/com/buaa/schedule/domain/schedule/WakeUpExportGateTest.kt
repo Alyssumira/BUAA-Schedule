@@ -163,7 +163,7 @@ class WakeUpExportGateTest {
                 "格子「${cell.name}」：写出去=${cell.written}、丢下=${cell.dropped}、" +
                     "文本=「${cell.json.take(24)}」、已选中文件=${cell.fileSelected} ⇒ " +
                     "期望 ${cell.expected}，实到 ${tier(actual)} —— ${cell.why}\n" +
-                    "这一格红了，说明判据朝$side的方向跑掉了",
+                    "这一格红了，说明判据朝${side}的方向跑掉了",
                 cell.expected,
                 tier(actual),
             )

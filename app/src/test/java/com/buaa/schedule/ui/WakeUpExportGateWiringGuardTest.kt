@@ -28,8 +28,10 @@ import org.junit.Test
  *
  * 判据是**数出现次数（抹注释）+ 逐字节**：`ScheduleExporters.kt` 里改前那两行的形状
  * （`jsonStr` 与 `replace("\\", "\\\\")`）在代码里各 **0** 处、在注释里各恰好 **1** 处（取证）；
- * 内核 `WakeUpJsonText.literal(` 在 `toWakeUpJson` 体内恰好 **5** 枚（教师、教室、课程名、
- * 顶层学期名、tableInfo 学期名 —— 五枚用户字段一枚都不能不走它）；全文件剩下的那一枚 `replace(`
+ * 内核 `WakeUpJsonText.literal(` 在 `toWakeUpJson` 体内恰好 **6** 枚（教师、教室、课程名、
+ * 顶层学期名、tableInfo 学期名五枚用户字段，另加一枚**装着 JSON 的 `time` 串** —— 它里面的 `"`
+ * 改前一枚都没转义，整份文件在那一格就非法，本卡端到端那一格把它量了出来），
+ * 全文件剩下的那一枚 `replace(`
  * 必须**逐字节**是 `compact` 那一行（它摘的是时间里的冒号，不是转义落点：机器生成的 ASCII HH:mm）。
  * N6 那一格同用两种钉法：`course.name` 代码 0 处 / 注释 1 处，`course.displayName` 在体内恰好 1 枚。
  *
@@ -330,10 +332,11 @@ class WakeUpExportGateWiringGuardTest {
 
         assertEquals(
             "**钉法 = 数出现次数（抹注释）**：五枚用户字段（课程名 / 教师 / 教室 / 顶层学期名 / tableInfo 学期名）" +
-                "全走内核「$KERNEL_CALL」⇒ `toWakeUpJson` 体内恰好 5 枚、整枚文件也恰好 5 枚" +
-                "（体内 5 = 没有别的函数在转义，整文件 5 = 没有第二处转义落点）。" +
+                "加一枚装着 JSON 的 `time` 串，六枚全走内核「$KERNEL_CALL」⇒ `toWakeUpJson` 体内恰好 6 枚、" +
+                "整枚文件也恰好 6 枚（体内 6 = 没有别的函数在转义，整文件 6 = 没有第二处转义落点）。" +
+                "`time` 那一枚是本卡端到端格量出来的第二手病灶：串里的 `"` 没转义 ⇒ 整份文件在那一格就非法。" +
                 "实到体内 " + occurrences(body, KERNEL_CALL) + " 枚 / 全文件 " + occurrences(code, KERNEL_CALL) + " 枚",
-            5 to 5,
+            6 to 6,
             occurrences(body, KERNEL_CALL) to occurrences(code, KERNEL_CALL),
         )
         assertEquals(
