@@ -25,8 +25,12 @@ package com.buaa.schedule.domain.schedule
  *
  * ## 为什么不折成一枚 Boolean
  *
- * 三档要说三种不同的话（见下面那三句文案）：「太长」要报字符数与上限并劝人别贴这么大的东西；
- * 「太大」要报解压字节数与上限、并且**不许**劝人重新复制；流自己停在中途那是另一档（形状坏了）。
+ * 三档要说三种不同的话：「太长」要报字符数与上限并劝人别贴这么大的东西（下面第一句）；
+ * 「太大」要报解压字节数与上限、并且**不许**劝人重新复制（下面第二句）；
+ * [ShareCodePayloadGate.StreamStoppedEarly] 那一档说的才是「多半没复制完整」—— 那一句在本仓
+ * 已有在册原文（调用点 `Malformed` 那支的「请检查是否完整复制」），所以它**不需要第二份句子**，
+ * 却**需要自己那一格**：少了它，"被体积上限拦下"与"被剪贴板截断"就只能在同一句话里赌一个，
+ * 而那两个下一步正好相反（一个劝人删掉内容重导、一个劝人重新复制整串）。
  * 折成 Boolean 之后"太大"与"读不懂"在同一枚 false 里合体，调用点只能猜 —— 那正是发现 2 的病灶。
  *
  * ## 那枚 1,000,000 字符上限怎么来的（推算，不是实测）
@@ -81,7 +85,7 @@ object ShareCodeSizeGate {
      * 为什么记在 domain 而不在 `ui/ImportLimits.kt`：
      * `MAX_IMPORT_BYTES` 的载体是 `InputStream.readTextLimited(maxBytes)`，它**只能**长在"读流"那一格，
      * 而口令那一路到手时已经是一枚 `String`（剪贴板文本），没有流可读；
-     * 且 `app/src/main/java/com/buaa/schedule/data/**` 全仓零处 import `com.buaa.schedule.ui`
+     * 且 `app/src/main/java/com/buaa/schedule/data` 那一整棵目录全仓零处 import `com.buaa.schedule.ui`
      * （实测 `grep -rn "^import com.buaa.schedule.ui" app/src/main/java/com/buaa/schedule/data` 零命中），
      * 把判据写进 ui 再让 codec 回头拿常量就是让 data 层倒依存 ui 层。
      * 同族先例：口令那一路的**条数**上限也记在 domain（`RestoreVolumeLimits.MAX_TIME_SLOT_COUNT = 500`），
@@ -126,17 +130,6 @@ object ShareCodeSizeGate {
     }
 }
 
-/**
- * 解码那一站咽下去的那枚 Throwable 的**读数**（#530 发现 4）。
- *
- * 只有类型名 + message 两枚文本：codec 不许把异常对象本身递到 ui（那等于把写库的手术刀递给文案层），
- * ui 也不许拿它当用户文案念（同页在册口径：解析器的英文原文不是用户文案）。
- * 它唯一的用处是**留痕** —— 让调用点能在写文案之前把"哪一站、什么类型、说了什么"记进 logcat。
- *
- * 本文件因此不收它作判据入参：判据不吃异常，读数只路过判据所在的这一枚文件。
- */
-data class ShareCodeFailure(val type: String, val message: String?)
-
 // ─────────────────── 文案（档位与句子同源，抄进 ui 就是第二把尺）───────────────────
 
 /** [ShareCodeEntryGate.TooManyChars] 那一句：说得出字符数与上限，并保证一次都没分配那枚 ByteArray。 */
@@ -150,6 +143,12 @@ fun shareCodeTooManyCharsCopy(decision: ShareCodeEntryGate.TooManyChars): String
  *
  * ⚠️ 这一句里**不许**出现「请检查是否完整复制」—— 那条口令可以是完整的，只是内容超上限；
  * 劝人重新复制一条本来就完整的码就是假话（改前正是这一格折进了 `Malformed`）。
+ *
+ * ⚠️ [ShareCodePayloadGate.StreamStoppedEarly] 那一档**故意没有第三句**：它要说的那句
+ * 「口令无法识别，请检查是否完整复制」在调用点（`ui/ScheduleViewModel.importShareCode` 的
+ * `Malformed` 那支）已有在册原文，本文件再写一遍就是同一句话的两个版本（同页在册的同句多写那一族）。
+ * 这一档在 codec 里折进 `Malformed` 时带着自己的读数（`failure.type = "incomplete-deflate-stream"`），
+ * logcat 因此仍分得出"被上限拦下"与"被剪贴板截断"。
  */
 fun shareCodeOverCapCopy(decision: ShareCodePayloadGate.OverCap): String =
     "口令导入已拒绝：这条口令解压后要占 ${decision.decompressedBytes} 字节以上，超过上限 " +

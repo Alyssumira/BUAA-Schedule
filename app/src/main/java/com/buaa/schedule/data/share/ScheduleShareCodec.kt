@@ -17,7 +17,6 @@ import com.buaa.schedule.domain.schedule.ShareCodeEnvelopeDecision
 import com.buaa.schedule.domain.schedule.ShareCodeEnvelopeFacts
 import com.buaa.schedule.domain.schedule.ShareCodeEnvelopeReview
 import com.buaa.schedule.domain.schedule.ShareCodeEntryGate
-import com.buaa.schedule.domain.schedule.ShareCodeFailure
 import com.buaa.schedule.domain.schedule.ShareCodeGatedTable
 import com.buaa.schedule.domain.schedule.ShareCodeGatedTableRow
 import com.buaa.schedule.domain.schedule.ShareCodePayloadGate
@@ -102,6 +101,12 @@ sealed interface ShareCodeOutcome {
  * 只带类型名与 message 两枚文本：codec 不许把异常对象本身递到 ui（那等于把写库的手术刀递给文案层），
  * 也不许在 ui 的句子里念异常原文（同页在册的口径：解析器的英文原文不是用户文案，见台账 #369 一族）。
  * 读数只干一件事 —— 让调用点能在写文案**之前**把它留痕进 logcat。
+ *
+ * `type` 那一枚在绝大多数情况下就是 Throwable 的类名（`java.util.zip.DataFormatException` 那种），
+ * 另有两格**没有异常对象可记**、由本文件自己命名（`decodeOutcome` 里逐处点着名）：
+ * `incomplete-deflate-stream` = 压缩流在体积上限之前就自己停了（多半没复制完整），
+ * `envelope-not-an-object` = 顶层解出来不是对象（压根不是那一份信封）。
+ * 这两格占的是「无法识别」那句话里**唯一真实**的那一半，与"太大""读不懂"那两档互不代替。
  */
 data class ShareCodeFailure(val type: String, val message: String?)
 
