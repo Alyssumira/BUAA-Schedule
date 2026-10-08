@@ -478,14 +478,29 @@ class ScheduleRepository(
         insertWithReminders(action.removed, action.reminders)
     }
 
-    /** 以新 id 重新入库若干课程（原行已删除，期间 id 可能已被导入占用），并把快照里的提醒挂回新行 */
+    /** 以新 id 重新入库若干课程（原行已删除，期间 id 可能已被导入占用），并把快照里的提醒挂回新行
+     *
+     * "新 id"这一格由 [undoWritePrimaryKey] 供给（#520 F-06）：这一枚是撤销链四支
+     * （`Delete` / `DeleteGroup` / `RestoreAsNewRow` / `removed` 片段）共用的唯一重插口子，
+     * 主键一律抹平交给 Room 另号 —— 带旧 id 走 REPLACE 会顶掉此刻持有那个号的另一门课。 */
     private suspend fun insertWithReminders(
         courses: List<Course>,
         reminders: List<ReminderSetting>,
     ) {
         courses.forEach { course ->
-            val newId = CourseConstraints.normalize(course)?.let { courseDao.insert(it.toEntity()) }
-                ?: return@forEach
+            // #520 F-06：这一手的身份是「以**新 id** 入库」，而 normalize 原样带回 `course.id`
+            // （它的 copy 清单只有 name/periods/weeks/colorIndex/customColorArgb/credit 六项，
+            // 且本卡裁定不许去那儿抹主键 —— 那会连带改掉 saveCourse / updateCourse /
+            // updateCoursePartialWeeks / RestoreInPlace 四枚不在撤销链上的写路径），
+            // `courseDao.insert` 又是 `OnConflictStrategy.REPLACE` ⇒ 带着旧 id 去插等于
+            // `INSERT OR REPLACE … VALUES (<before.id>)`：**此刻正持有那一枚 id 的无关课程被整行删掉**、
+            // 快照顶号进来，而 reminders 的主键就是 courseId ⇒ 那门课的提醒行跟着归给冒进来的那一门。
+            // 取法只有 `undoWritePrimaryKey` 那一处，别在这里再写一遍裸 0L。
+            val newId = CourseConstraints.normalize(course)?.let { normalized ->
+                val primaryKey = undoWritePrimaryKey(normalized.id, landsOnSnapshotRow = false)
+                courseDao.insert(normalized.copy(id = primaryKey).toEntity())
+            } ?: return@forEach
+            // 筛的是快照那一枚**旧** id（reminders 按 courseId 存的就是它），挂的是 DAO 交回的**新** id
             reminders.filter { it.courseId == course.id }.forEach {
                 reminderDao.upsert(it.copy(courseId = newId).toEntity())
             }
