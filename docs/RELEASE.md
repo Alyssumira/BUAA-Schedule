@@ -14,22 +14,36 @@ powershell -ExecutionPolicy Bypass -File release.ps1         # 首发：按 grad
 传号时第一步会拒绝"同号或更小的号"（`stampVersion`），所以首次发布**不要**传号 ——
 `VERSION_NAME` 已经写着 `0.1.0`，没有上一个版本可比。
 
-它按顺序做完就停：
+它按顺序做完**四步**（"做完就停"的那一处"停"是第 4 步，不是第 3 步）：
 
 1. `:app:stampVersion` —— 把 `0.2.0` 写进 `gradle.properties` 的 `VERSION_NAME`，并把
    `VERSION_CODE` 加一；
 2. `:app:testDebugUnitTest :app:lintDebug` —— 门禁，红了就不往下走；
-3. `:app:releasePackage`（依赖 `assembleRelease`）—— R8 打包，收进
-   `dist/buaa-schedule-<版本>.apk`，打印证书指纹和 Gitee 发布步骤。
+3. `:app:releasePackage`（依赖 `assembleRelease`）—— R8 打包，按**量到的签名者**把产物收进
+   `dist/buaa-schedule-<版本>.apk`（只有发布密钥签出来的那一份才配这个名字），打印证书指纹、
+   写自证条，并只对可发布的产物打印 Gitee 发布步骤；
+4. `:app:testDebugUnitTest --rerun-tasks -PbuaaRequireReleaseArtifacts -PreleaseRunId=<本轮暗号>`，
+   用 `--tests` 点名两枚**产物层守卫**重跑一遍 —— 它们只在读得到第 3 步那枚产物时才有内容，
+   而带上 `-PbuaaRequireReleaseArtifacts` 之后"跳过"就当场算红（台账 #340 补的就是这一步；
+   没有它，"取证 log 还在不在 dex、兜底那颗 `.so` 是不是 DEFLATED、签名者是谁"这三格在发版
+   路径上一格都不会被读到）。
 
-`releasePackage` 自己有三道闸，因为"文件名看起来对"不构成证据：
+`releasePackage` 自己有四道闸，因为"文件名看起来对"不构成证据：
 
 - 收产物前先删掉 `dist/` 里其它版本的 `buaa-schedule-*.apk`（同时躺着两个版本时，上传
   附件拿错文件几乎是必然，而且错了也不会红）；
 - 复制完用 `aapt2 dump badging` **读回包内**的 `versionName` / `versionCode`，与本轮
   `gradle.properties` 要求的值逐字核对，不一致就直接失败；
 - `-DebugSign` 的中间产物写在 `build/release-work/`，不写 `build/outputs/apk/release/`
-  —— 后者归 AGP 独占，它对里面文件的处理不由我们决定。
+  —— 后者归 AGP 独占，它对里面文件的处理不由我们决定；
+- **产物的名字与发布步骤都跟着"量到的签名者"走**（台账 #535）：能读出 v1（JAR）签名块时以证书
+  DN 为准（`CN=Android Debug` 就是本机调试密钥那一张），只有 v2/v3 时退回"这份字节由谁产出"。
+  调试自签那一份永远叫 `buaa-schedule-<版本>-debugsigned.apk`，可发布名 `buaa-schedule-<版本>.apk`
+  在这条路上不可能被产出；同一次运行的输出里也没有那五条编号步骤，只有一段「不可发布」说明。
+  复制之前与复制之后各量一次，两次不一致也算红。
+  自证条同时记 `signedBy` / `signerDn` / `signerSha256` 三格，交给第 4 步的产物层守卫按同一枚
+  ZIP+PKCS#7 读法**独立复算**并与它对表 —— 侧车谎报、字节与名字不同册、把调试包放在可发布名上，
+  三档各自红，不需要任何人读屏幕。
 
 签名命令走 `ProcessBuilder` 并检查退出码。这里踩过一次坑：`providers.exec {}` 返回的是
 **惰性** ValueSource，不去取结果就根本不执行，于是 apksigner 从未跑过、目标文件不存在，
@@ -37,13 +51,19 @@ powershell -ExecutionPolicy Bypass -File release.ps1         # 首发：按 grad
 而弃用提示压不掉）。
 
 `release.ps1` 在最后还有一道**意图核对**：回读 `gradle.properties`，确认它等于这次要发的
-号、并且 `dist/buaa-schedule-<号>.apk` 确实在，否则红着退出并提醒"别去打 tag"。
+号、并且产物确实在 `dist/` 里（可发布名，或调试自签那枚带 `-debugsigned` 尾巴的名字），
+否则红着退出并提醒"别去打 tag"。手里这份能不能发，脚本看的是**它拿到的是哪一枚名字**——
+名字由构建侧量到的签名决定，脚本不再自己按 `-DebugSign` 那枚旗猜。
 `releasePackage` 只能保证"包内版本 == gradle.properties"，它不知道你想要哪个号 ——
 改号那步静默失效时（本项目踩过：分支条件写成 `if ($Bump)`，而脚本里没有这个参数），
 两头都是绿的，只有这一道核对能把"发出去的号其实没改"拦下来。
 
 只想在真机上验一遍 R8 产物（没有发布密钥时）加 `-DebugSign`，它用本机调试密钥自签。
 **这种包不得发布**：换回正式密钥时用户必须先卸载，而卸载会把课表数据库一起带走。
+自测跑出来的那一份在 `dist/` 里叫 `buaa-schedule-<版本>-debugsigned.apk`（尾巴由**量到的签名者**
+给，不由 `-DebugSign` 这枚旗给），那次运行的 `dist/` 里不会出现正式名，`releasePackage` 也不会
+为它打印任何一条发布步骤。想让自测运行连号都不推进，就别传版本号（无号那一支按
+`gradle.properties` 现值原样打包）。
 
 ## 版本号只有一个来源
 
@@ -126,7 +146,10 @@ CI 用 `BUAA_KEYSTORE_BASE64` 等环境变量传同一组值（secrets 存不了
 - 标题写版本号，正文即更新说明（弹窗按 markdown 逐行渲染，`#`/`- ` 认）。
 - 附件名用 `buaa-schedule-<版本>.apk`（下载目录里按这个名字保留，"重试安装"不必重下）。
 - **可以再挂一个调试包**（真机自测要用），但文件名里必须含 `debug`，例如
-  `buaa-schedule-<版本>-debug.apk`。客户端选附件的顺序是：精确匹配上面的规范名 →
+  `buaa-schedule-<版本>-debug.apk`；`release.ps1 -DebugSign` 自己交出的那一份叫
+  `buaa-schedule-<版本>-debugsigned.apk`，名字里同样含 `debug`，所以万一被误传也还在这条
+  排除规则之内（这枚尾巴是构建侧按量到的签名者加的，见上面「一条命令」那一节的第四道闸）。
+  客户端选附件的顺序是：精确匹配上面的规范名 →
   退而选第一个名字里不含 `debug` 的 APK → 只剩调试包时**不给下载链接**（弹窗改跳发布页）。
   这么定的原因不是洁癖：调试签名覆盖不了正式签名，把调试包发给装了正式包的用户，
   结果要么是"未安装成功"，要么是把用户逼去卸载重装，而卸载会连带清掉课表数据库。

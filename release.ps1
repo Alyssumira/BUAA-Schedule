@@ -4,6 +4,8 @@
     用法：powershell -ExecutionPolicy Bypass -File release.ps1 0.2.0
           不传版本号 = 按 gradle.properties 里已有的号原样打包（首次发布走这条）
     自测装机（不发布）：加 -DebugSign
+    ——那种运行的产物在 dist 里带 `-debugsigned` 尾巴（台账 #535：名字跟着**量到的签名**走，
+      不跟着这枚旗走），正式名不可能由它产出，:app:releasePackage 也不为它打印发布步骤。
 
     为什么要有这个脚本：版本号原先靠"记得传 -PversionName"来保证。漏一次就会发出一个
     自称旧版本的包 —— Gitee 的 tag 已经指到新版本，于是所有用户被提示"有更新"、装完
@@ -117,11 +119,18 @@ if ($stampNow -ne $Version) {
     Write-Host "别去打 tag —— 先看上面 1/$total 那一步的输出。" -ForegroundColor Red
     exit 1
 }
-$artifact = Join-Path $root "dist\buaa-schedule-$Version.apk"
+# 产物的名字由构建侧**量到的签名者**决定（台账 #535）：正式名 `buaa-schedule-<号>.apk` 只属于
+# 发布密钥签出来的那一枚，调试自签那一份永远带 `-debugsigned` 尾巴。这里照同一本册子找两枚名字，
+# 不去猜 -DebugSign 那枚旗——旗只决定"要不要自签"，不决定"手里这份能不能发"。
+$canonicalArtifact = Join-Path $root "dist\buaa-schedule-$Version.apk"
+$selfTestArtifact = Join-Path $root "dist\buaa-schedule-$Version-debugsigned.apk"
+$artifact = if (Test-Path $canonicalArtifact) { $canonicalArtifact } else { $selfTestArtifact }
 if (-not (Test-Path $artifact)) {
     Write-Host "产物不在 $artifact —— 手里没有包就别去发布。" -ForegroundColor Red
     exit 1
 }
+# 手里这份能不能发，只看它拿到的是哪一枚名字（构建侧已经保证名字与量到的签名者同册）。
+$publishable = ($artifact -eq $canonicalArtifact)
 Write-Host "意图核对通过：$Version / $(Split-Path -Leaf $artifact)（$([math]::Round((Get-Item $artifact).Length / 1MB, 2)) MB）" -ForegroundColor DarkGray
 
 # 产物层守卫排在产物**之后**（台账 #340）。原先这两枚（`ReleaseForensicLogSurvivalTest`、
@@ -144,9 +153,12 @@ Invoke-Build @(
 ) "$total/$total 产物层守卫（读本轮 release 产物，跳过即红）"
 
 Write-Host ''
-if ($DebugSign) {
-    Write-Host "调试密钥自签的包已生成：只可装机自测，**不要**发到 Gitee（换回正式密钥时用户必须先卸载，课表会一起没）。" -ForegroundColor Yellow
+if (-not $publishable) {
+    Write-Host "调试密钥自签的包已生成：$(Split-Path -Leaf $artifact) —— 名字里的 debugsigned 是量出来的签名者给的，" -ForegroundColor Yellow
+    Write-Host "只可装机自测，**不要**发到 Gitee（换回正式密钥时用户必须先卸载，课表会一起没）。" -ForegroundColor Yellow
+    Write-Host ":app:releasePackage 没有为它打印任何一条发布步骤；上面 $total/$total 那一步的产物层守卫核的就是这份自证条（signedBy 已入库）。" -ForegroundColor DarkGray
+    if ($bump) { Write-Host "这一次为推进号改的 gradle.properties 两行：不发布就别提交它。" -ForegroundColor DarkGray }
 } else {
     Write-Host "dist\buaa-schedule-$Version.apk 已就绪，按上面打印的步骤发到 Gitee。" -ForegroundColor Green
+    if ($bump) { Write-Host "别忘了：gradle.properties 的两行版本号改动要与 tag v$Version 一起提交。" -ForegroundColor Green }
 }
-Write-Host "别忘了：gradle.properties 的两行版本号改动要与 tag v$Version 一起提交。" -ForegroundColor Green

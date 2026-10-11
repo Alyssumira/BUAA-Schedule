@@ -537,6 +537,37 @@ val releaseDistDir = File(rootProject.projectDir, "dist")
 val releaseDebugSign = project.findProperty("debugSign") != null
 val releaseStampVersion = (project.findProperty("releaseVersion") as String?)?.trim().orEmpty()
 
+// 台账 #535：产物的**名字**、自证条里的**签名者**、以及交给操作者的**发布步骤**，三处共用下面这把尺。
+//
+// 为什么要收成一把：原先这三处各说各话 —— `-PdebugSign` 自签出来的那份被 `copyTo` 成与正式包
+// **同一个名字**放进 dist，而 `printPublishSteps` 无条件逐字打印「上传附件：<那个名字>」，
+// 自证条里又没有任何一格记签名者，于是整条产物层守卫链（#340 补的那一步）能在一份
+// 装机会连带清掉用户课表数据库的包上打满绿灯。人抄那一行就把它发出去了。
+//
+// 现在这三处都只认一个判据：**量出来的签名者**。`-PdebugSign` 那枚旗只决定"要不要去自签"，
+// 不再决定"产物叫什么、能不能发"。
+val signerRelease = "release"
+val signerDebug = "debug"
+val signerUnsigned = "unsigned"
+
+/** 字节侧那份字节的来路：AGP 用发布密钥签出来的，还是本脚本拿调试密钥自签出来的 */
+val originSignedByAgp = "agp-release"
+val originDebugKey = "debug-key"
+
+/**
+ * Android 工具链那枚公开调试证书的 DN 头（`CN=Android Debug,O=Android,C=US`）。
+ * 它是公开常量，不是任何密钥材料；写进自证条的 `signerDn` 也只是 APK 里本来就摊着的那段 DN。
+ */
+val debugSignerDnHead = "CN=Android Debug"
+
+/**
+ * 非 release 签名的产物尾巴。`-debugsigned` 里含 `debug` 不是巧合：客户端选附件时
+ * 第二顺位明确排除名字里含 `debug` 的那一枚（`UpdateInfo` 里的 `pickApkAsset`），
+ * 所以名字同时是"人不发错"与"用户不选错"两层的证据。
+ */
+val debugArtifactNameSuffix = "-debugsigned"
+val unsignedArtifactNameSuffix = "-unsigned"
+
 /**
  * #340：这一轮发版的**运行号**（由 `release.ps1` 用 `-PreleaseRunId=` 传进来）。
  *
@@ -626,7 +657,8 @@ tasks.register("stampVersion") {
 
 tasks.register("releasePackage") {
     group = "release"
-    description = "把 release 产物收进 dist/buaa-schedule-<版本>.apk，并打印 Gitee 发布步骤"
+    description = "把 release 产物按**量到的签名者**收进 dist（release 才拿 buuaa-schedule-<版本>.apk，" +
+        "debug 拿 -debugsigned 尾巴），写自证条并只对可发布的产物打印 Gitee 发布步骤"
     dependsOn("assembleRelease")
     outputs.upToDateWhen { false }
     doLast {
@@ -634,9 +666,9 @@ tasks.register("releasePackage") {
         val signed = File(outputDir, "app-release.apk")
         val unsigned = File(outputDir, "app-release-unsigned.apk")
         // 文件名就是签名结论：AGP 只在配齐签名配置时才产出 app-release.apk
-        val source = when {
-            signed.isFile -> signed
-            unsigned.isFile && releaseDebugSign -> signWithDebugKey(unsigned)
+        val (source, origin) = when {
+            signed.isFile -> signed to originSignedByAgp
+            unsigned.isFile && releaseDebugSign -> signWithDebugKey(unsigned) to originDebugKey
             unsigned.isFile -> throw GradleException(
                 "产物是 unsigned APK，装不上也发不出去。二选一：" +
                     "\n  · 正式发布：在 local.properties 配 buaa.keystore.path/.password/.alias/.keyPassword" +
@@ -646,8 +678,11 @@ tasks.register("releasePackage") {
             )
             else -> throw GradleException("assembleRelease 没有产出 APK，检查 $outputDir")
         }
+        // 台账 #535：名字由**这份字节是谁签的**决定，不由 -PdebugSign 那枚旗决定。
+        // 复制之前量一次（决定叫什么），复制之后再量一次（决定自证条与发布步骤）。
+        val signer = classifyArtifactSigner(signerDistinguishedNames(source), origin)
         val distDir = releaseDistDir.apply { mkdirs() }
-        val artifact = File(distDir, "buaa-schedule-$releaseVersionName.apk")
+        val artifact = File(distDir, artifactNameFor(signer))
         // 先把别的版本清掉：dist 里同时躺着 0.1.0 和 0.2.0 时，上传附件那一步
         // 拿错文件的概率几乎是必然，而且错了也不会红。
         distDir.listFiles()
@@ -660,12 +695,105 @@ tasks.register("releasePackage") {
                 releaseLog.lifecycle("   已删掉上一轮产物 ${stale.name}（本轮版本是 $releaseVersionName）")
             }
         source.copyTo(artifact, overwrite = true)
-        releaseLog.lifecycle("📦 ${artifact.path}（${artifact.length() / 1024} KB）")
+        releaseLog.lifecycle("📦 ${artifact.path}（${artifact.length() / 1024} KB，签名者=$signer）")
         val readFromApk = assertArtifactVersion(artifact)
-        reportSigners(artifact)
-        writeReleaseProvenance(artifact, readFromApk)
-        printPublishSteps(artifact)
+        val measuredSigner = reportSigners(artifact, origin)
+        if (measuredSigner != signer) {
+            throw GradleException(
+                "复制前后量到的签名者不一致（$signer → $measuredSigner）：${artifact.path} 里那份字节不是本轮 " +
+                    "${source.name} 交出来的 —— 别按任何一份说明书行事，先清空 dist 与 build/release-work 再重跑。",
+            )
+        }
+        assertNameMatchesSigner(artifact, measuredSigner)
+        writeReleaseProvenance(artifact, readFromApk, measuredSigner)
+        printPublishSteps(artifact, measuredSigner)
     }
+}
+
+/**
+ * 产物的落点名（台账 #535 的甲：名字层先把"绝不能发"写进文件名）。
+ *
+ * 可发布名 `buaa-schedule-<版本>.apk` **只**从 release 那一支出得来，而且它是纯函数：
+ * 想让一次调试自签的运行拿到正名，唯一的路是先骗过 [classifyArtifactSigner] 的字节判据 ——
+ * 那正是 [assertNameMatchesSigner]（构建侧）与产物层守卫（发版路径侧）各自拦的事情。
+ */
+fun artifactNameFor(signer: String): String = when (signer) {
+    signerRelease -> "buaa-schedule-$releaseVersionName.apk"
+    signerDebug -> "buaa-schedule-$releaseVersionName$debugArtifactNameSuffix"
+    else -> "buaa-schedule-$releaseVersionName$unsignedArtifactNameSuffix"
+}
+
+/**
+ * 名字与量到的签名者必须同册 —— gradle 侧断言，不需要任何人读屏幕（#535 要的"可强制"就是这一格）。
+ *
+ * 两个方向都拦：
+ * - 顶着可发布名却不是 release 签名 ⇒ 操作者照着步骤把一份装机会清掉课表库的包装机（#535 本体）；
+ * - 真是 release 签名却没拿到可发布名 ⇒ 名字这层把正式包藏起来了，`release.ps1` 会在
+ *   "手里没有包就别去发布"那一格红着退出，比让它去上传一份名字带 debugsigned 的正式包好。
+ */
+fun assertNameMatchesSigner(artifact: File, signer: String) {
+    val wearsPublishableName = artifact.name == artifactNameFor(signerRelease)
+    if (wearsPublishableName && signer != signerRelease) {
+        throw GradleException(
+            "不可发布的产物顶着可发布的名字：${artifact.name} 量到的签名者是 $signer（不是 $signerRelease）。" +
+                "这份包装机后第一次换回正式签名会「未安装成功」，而卸载会把课表数据库一起带走 —— " +
+                "任务在此停住：既不写自证条，也不打印任何发布步骤。",
+        )
+    }
+    if (!wearsPublishableName && signer == signerRelease) {
+        throw GradleException(
+            "release 签名的产物（量自 ${artifact.name}）没拿到可发布名 ${artifactNameFor(signerRelease)}：" +
+                "名字这一层把正式包藏起来了，照屏幕行事会漏发；先把 dist 与 build/release-work 清空再重跑。",
+        )
+    }
+}
+
+/**
+ * 名字判据的取数处：读 APK 里 v1（JAR）签名块的证书 DN。
+ *
+ * 与 [reportSigners] 同一次读、同一枚针，别处不再复刻（#535 要的是"链自证"而不是"人自证"）。
+ * 只有 v2/v3 签名时这里交回空列表 —— 那一档由 [classifyArtifactSigner] 的来路分支兜，
+ * 而签名配置里 `enableV1Signing = true` 就是让这一格"读得出"的那枚旋钮（代价：几 KB 的
+ * META-INF 与 v1 那套已知弱点）。
+ */
+fun signerDistinguishedNames(apk: File): List<String> = signerCertificates(apk).map { it.first }
+
+/** APK 里每枚 v1 签名块证书的「DN 到 SHA-256 指纹」；只有 v2/v3 时为空（与原先那行 console 判语同一前提） */
+fun signerCertificates(apk: File): List<Pair<String, String>> {
+    val distinguishedNames = ArrayList<String>()
+    val fingerprints = ArrayList<String>()
+    ZipFile(apk).use { zip ->
+        val blocks = zip.entries().asSequence()
+            .filter { it.name.startsWith("META-INF/") && it.name.substringAfterLast('.', "") in SIGNER_BLOCKS }
+            .toList()
+        val factory = CertificateFactory.getInstance("X.509")
+        for (block in blocks) {
+            zip.getInputStream(block).use { input ->
+                for (certificate in factory.generateCertificates(input)) {
+                    val x509 = certificate as X509Certificate
+                    distinguishedNames += x509.subjectX500Principal.name
+                    fingerprints += MessageDigest.getInstance("SHA-256").digest(x509.encoded)
+                        .joinToString("") { byte -> "%02X".format(byte) }
+                }
+            }
+        }
+    }
+    return distinguishedNames.zip(fingerprints)
+}
+
+/**
+ * 三档结论（台账 #535 的判据本身）。
+ *
+ * 字节优先：DN 里带 `CN=Android Debug` 就判 debug，**哪怕**它是 AGP 按 `local.properties`
+ * 那四要素签出来的 —— 那恰好是"把调试密钥配成发布密钥"这一档唯一的读数。
+ * 读不到签名块（只有 v2/v3）时才退回"这份字节由谁产出"，那条来路同样是事实而不是旗子。
+ */
+fun classifyArtifactSigner(distinguishedNames: List<String>, origin: String): String = when {
+    distinguishedNames.any { name -> name.contains(debugSignerDnHead, ignoreCase = true) } -> signerDebug
+    distinguishedNames.isNotEmpty() -> signerRelease
+    origin == originSignedByAgp -> signerRelease
+    origin == originDebugKey -> signerDebug
+    else -> signerUnsigned
 }
 
 /**
@@ -786,9 +914,16 @@ fun sha256Of(file: File): String =
  *   证据就在这枚文件里，它同样得绑到本轮。
  * `versionName` / `versionCode` 写的是 [assertArtifactVersion] **从包里读出来**的那对，
  * `aapt2=` 如实记录它到底读没读过。
+ *
+ * 台账 #535 补的三格是**签名者**：`signedBy=`（release / debug / unsigned 三档，量自字节）、
+ * `signerDn=` 与 `signerSha256=`（第一枚 v1 签名块证书的 DN 与 SHA-256 指纹，读不到就是空串）。
+ * 为什么签名者必须进侧车而不是只打一行 console：#340 那条链的全部判据都从侧车出发
+ * （`apk=` 指哪枚、字节该是多少、是不是本轮），签名者不在侧车里 = 产物层守卫**无从问起**，
+ * 于是它能在一份不可发布的包上打满绿灯。DN 与指纹都是 APK 里本来就摊着的信息，不是密钥材料。
  */
-fun writeReleaseProvenance(artifact: File, readFromApk: Pair<String, Int>?) {
+fun writeReleaseProvenance(artifact: File, readFromApk: Pair<String, Int>?, signer: String) {
     val configuration = File(releaseBuildDir, "outputs/mapping/release/configuration.txt")
+    val certificate = signerCertificates(artifact).firstOrNull()
     val props = Properties().apply {
         setProperty("builtBy", ":app:releasePackage")
         setProperty("apk", artifact.relativeTo(rootProject.projectDir).path.replace('\\', '/'))
@@ -800,6 +935,9 @@ fun writeReleaseProvenance(artifact: File, readFromApk: Pair<String, Int>?) {
         setProperty("configuration", configuration.relativeTo(rootProject.projectDir).path.replace('\\', '/'))
         setProperty("configurationSha256", if (configuration.isFile) sha256Of(configuration) else "")
         setProperty("configurationExists", configuration.isFile.toString())
+        setProperty("signedBy", signer)
+        setProperty("signerDn", certificate?.first.orEmpty())
+        setProperty("signerSha256", certificate?.second.orEmpty())
     }
     releaseProvenanceFile.parentFile.mkdirs()
     // 先删再写：Properties.store 保留文件里没有的旧键会串轮（上一轮写过、这一轮没有的留在原地）
@@ -809,38 +947,40 @@ fun writeReleaseProvenance(artifact: File, readFromApk: Pair<String, Int>?) {
 }
 
 /**
- * 打出包里的签名证书指纹：发出去的包与本机已装的是不是同一把密钥，只有这一行能一次看清。
+ * 打出包里的签名证书指纹，并把**结论交回**给调用方（#535：以前它只打一行就打完，算完即丢）。
  *
  * 不叫 `apksigner verify` —— 这里只想知道"有哪几张证书"，直接读 APK 里的 PKCS#7 签名块就行，
  * 少起一个进程也不受本机有没有 build-tools 影响。JDK 的 X.509 CertificateFactory 认 PKCS#7。
- * 只有 v2/v3 签名（没有 v1 的 META-INF 块）时这里看不到证书，属正常。
+ * 只有 v2/v3 签名（没有 v1 的 META-INF 块）时这里看不到证书，属正常 —— 那一档交回的是
+ * [classifyArtifactSigner] 按来路给的结论，不是 console 那一行。
  */
-fun reportSigners(apk: File) {
-    ZipFile(apk).use { zip ->
-        val blocks = zip.entries().asSequence()
-            .filter { it.name.startsWith("META-INF/") && it.name.substringAfterLast('.', "") in SIGNER_BLOCKS }
-            .toList()
-        if (blocks.isEmpty()) {
-            releaseLog.lifecycle("   包里无 v1（JAR）签名块：只有 v2/v3 时这里读不到证书，属正常")
-            return
-        }
-        val factory = CertificateFactory.getInstance("X.509")
-        for (block in blocks) {
-            zip.getInputStream(block).use { input ->
-                for (certificate in factory.generateCertificates(input)) {
-                    val x509 = certificate as X509Certificate
-                    val sha256 = MessageDigest.getInstance("SHA-256").digest(x509.encoded)
-                        .joinToString("") { byte -> "%02X".format(byte) }
-                    releaseLog.lifecycle("   签名证书 DN=${x509.subjectX500Principal.name} SHA-256=$sha256")
-                }
-            }
-        }
+fun reportSigners(apk: File, origin: String): String {
+    val certificates = signerCertificates(apk)
+    if (certificates.isEmpty()) {
+        releaseLog.lifecycle("   包里无 v1（JAR）签名块：只有 v2/v3 时这里读不到证书，属正常")
     }
+    for ((distinguishedName, sha256) in certificates) {
+        releaseLog.lifecycle("   签名证书 DN=$distinguishedName SHA-256=$sha256")
+    }
+    val signer = classifyArtifactSigner(certificates.map { certificate -> certificate.first }, origin)
+    releaseLog.lifecycle("   量到的签名者=$signer（名字、自证条与下面的发布步骤都跟着这一枚走）")
+    return signer
 }
 
 val SIGNER_BLOCKS = setOf("RSA", "DSA", "EC")
 
-fun printPublishSteps(artifact: File) {
+/**
+ * 打印 Gitee 发布步骤 —— 但只对 **release 签名**的产物打印（#535 的甲的后半）。
+ *
+ * 原先它无条件打印「3. 上传附件：<文件名>」，而那个文件名与调试自签包是同一个，
+ * 于是照屏幕行事的人会把一份装机会清掉课表数据库的包装机发出去。现在签名者是入参，
+ * 非 release 直接走 [printNotPublishableNotice] 那一段：那五条编号步骤一条都不印。
+ */
+fun printPublishSteps(artifact: File, signer: String) {
+    if (signer != signerRelease) {
+        printNotPublishableNotice(artifact, signer)
+        return
+    }
     val tag = "v$releaseVersionName"
     releaseLog.lifecycle(
         """
@@ -858,6 +998,8 @@ fun printPublishSteps(artifact: File) {
         |     接口：POST $giteeApiReleasesUrl/{release_id}/attach_files（multipart 字段名 file，
         |     成功回 201，附件 id 在响应里）
         |     要额外挂调试包自测的话，名字里必须含 debug（客户端选附件的顺序见 UpdateInfo.pickApkAsset）
+        |     ——`-DebugSign` 交出的那份本来就叫 buaa-schedule-$releaseVersionName$debugArtifactNameSuffix，
+        |     尾巴是量出来的签名者给的，不是旗子给的；那份包不该出现在正式发布的附件列表里
         |     附件必须「公开可下载」——私有仓库或需登录时，接口给的是 HTML 登录页，
         |     应用会把它挡在安装器之外（校验见 UpdateInfo.apkIntegrityProblem）
         |  4. 自查发布结果（不需要装，命令行就能验）：
@@ -868,6 +1010,31 @@ fun printPublishSteps(artifact: File) {
         |
         |提醒：VERSION_NAME=$releaseVersionName / VERSION_CODE=$releaseVersionCode 已写进 gradle.properties，
         |      把这一行的改动与 tag 一起提交；漏提交会让下一次发布从旧号起步。
+        """.trimMargin(),
+    )
+}
+
+/**
+ * 非 release 签名的那一份产物：这里**不打印任何可执行的发布指令**（#535）。
+ *
+ * 与上面那五条编号步骤互斥到字面：这一段里既不出现「上传附件：」那个形状、也不出现打 tag 的命令，
+ * 因为照这一页抄命令的人此刻手里是一枚"名字已经说明自己不能发"的包。
+ * 它要说的是三件事：它是谁签的、为什么名字带尾巴、怎么换回正式那条路。
+ */
+fun printNotPublishableNotice(artifact: File, signer: String) {
+    releaseLog.lifecycle(
+        """
+        |
+        |—— 这份产物不可发布：量到的签名者 = $signer，不是 $signerRelease ——
+        |  · 文件名：${artifact.name}（尾巴由签名者决定，与 ${artifactNameFor(signerRelease)} 是两枚名字）
+        |  · 不打 tag、不建发布、不把它当附件传上去：上面那套「把 v$releaseVersionName 发出去」的步骤
+        |    一条都不适用于它，本任务也没有打印那五条
+        |  · 它只服务装机自测。装过这份包的设备第一次装正式签名的包会「未安装成功」，
+        |    必须先卸载，而卸载会把课表数据库一起带走 —— 先走 App 内的导出备份 / 分享口令
+        |  · 要发正式包：在 local.properties 配齐 buaa.keystore 那四要素，去掉 -PdebugSign 重跑；
+        |    只有那份字节是发布密钥签出来的，产物才会拿到可发布名
+        |自证条（app/build/release-provenance/release-artifact.properties）里的 signedBy=$signer
+        |      会跟着这枚产物一起交给发版路径最后那一步的产物层守卫复算对表。
         """.trimMargin(),
     )
 }
