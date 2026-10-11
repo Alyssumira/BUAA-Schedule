@@ -5613,3 +5613,16 @@ T260（编辑器保存链收尾）与 T261（更新链三处静默）按序 cher
 2. **两臂的落点差异本轮各交回一次证据**：T287 的 W（撤销无条件删）红在**守卫**三格、表驱动 4/0 全绿（因为它没动内核）；T288 的 W（下界放进 0）红在**表驱动**七格、守卫全绿（形状守卫看不见数值）。这正是本仓把"哪一层红"当证据读的原因——朝宽那一臂如果两边都绿，说明钉子没长在该长的地方。
 
 本轮修掉并进 master 的真缺陷：#520（撤销按旧 id 走 `REPLACE` 顶掉无关课，T281）、#524（星期序号三处日期推导无护栏 ⇒ 坏行不画在屏上却写进用户日历当成上一周的周日并在那天响铃；`dayOfWeek=0` 与 `8` 实测不同侧，另量出 `(day - 1).toLong()` 在 `Int.MIN_VALUE` 上溢出会把方向也念反，T288）、#527（撤销「新建课」那一支按 id 删不查 `courseKey`——T287 逐路复算后判定**今天的写手造不出可达路径**，交付的是把该不变量钉死的防线，且明说它不是对已复现故障的修法）、#410/#510（引导同意路径重做为 payload 驱动、配对守卫一枚未重钉，T280）、#526（WakeUp 的 JSON 文本层与落盘闸门，T282）。
+
+### 43 已推 `016993c..d3cc73f`（218 枚，钩子零拒）；`gate/10` 把 T286 接回主线；我自己的探针字符串又骗了我一次
+
+推送按四步走完后一次过：`behind=0`、218 枚的作者与提交者邮箱逐枚同为注册邮箱 `chidanta_suki@qq.com`（**远端 tip 现读为 `d3cc73f`，`unpushed=0`**）。**发版仍未授权，也没人替我授权**——按 `docs/RELEASE.md` 那条"不传号"的路子走会再产一个 0.1.1/3，对已在 0.1.1 上的人永久不可见（#342×#366＝#502），而拦同号那把尺恰在那条路上不跑。
+
+`gate/10`＝把 `ai/T286` rebase 到推送后的 `d3cc73f` 再跑我自己的三步冷门禁：rebase 落盘复验（`merge-base` 就是 `d3cc73f`、`branch_now=ai/T286`、无遗留 rebase 目录、`on_top=8`、`porcelain=0`、`outside_app_src=0`）→ **assembleRelease 5m44s / APK 7,314,506 B → testDebugUnitTest --rerun-tasks 5m34s（`xml_before=0`、344 枚 XML、2,645 tests、0 failures / 0 errors / 0 skipped，XML 内 `timestamp` 17:53:03Z 落在我 17:42 起跑的窗口内）→ lintDebug 5m24s（0 error·19 warning）**，三步各 RC 0 且日志内 `BUILD SUCCESSFUL` ⇒ 快进合并，`master:app/src` 与被验对象逐字节同一枚。静态尺现算：`^    @Test` **2,645**（与 XML 相等）、`*Guard*` **112**、docs＋README 锚点尺 **588 未动**。
+
+**我这轮犯的两把度量错，都记下来防再犯：**
+
+1. `gate/10` 脚本的 OBJ-CHECK 把 needle 打在 `cd .worktrees/T286` **之前**，于是量的是主仓（`d3cc73f`，还没有 T286）那棵树，报出 `needle_codec=0`——与 `gate/4` 那次"针落错文件"同族、新形状是**落错工作目录**。在正确的树里逐字重量：codec 的 `:179` 就是 `ShareCodeSizeGate.reviewEntry(code.length, ShareCodeSizeGate.MAX_SHARE_CODE_CHARS)`（排在 `trim()` 与 `Base64.getUrlDecoder()` 之前）、`:215` 是 `reviewPayload(decompressedBytes, MAX_DECOMPRESSED_BYTES, streamFinished)`、`:238` 是 `ShareCodeEnvelopeReview.review(envelopeFactsOf(root))`，VM 侧 `:1694`/`:1710` 真念这些档 ⇒ 接线为真，#530 落地。
+2. 派 T294 前我用 `grep -rn 'fontScale\|textScale\|…'` 量到 **0 命中**并把它写进卡面当"这一族完全没人读系统字体缩放"——**那是假象**：同一趟命令里我的 `awk` 也因 `\!` 被转义吃掉而报错，`\|` 同样被削掉。代理在正确的树上复算为 **10 枚 main 文件读 fontScale**。真话是"只有 RemoteViews 组件与 DayView 的实测内核读它，没有任何 Compose 页的 dp 预算读它"。**规矩：带 `\|`／`\!` 的 grep/awk 表达式不许当判据；要判据就写进脚本文件再跑，或者用不带反斜杠的多个 `-e` 分支。**
+
+同日四族只读审计交回并登记（详见任务册）：#535 发版闸门（重：`-PdebugSign` 那枚包被复制成**可发布正名**、provenance 十枚键里没有签名者，于是 #340 那条产物链在不可上架的包上打满绿灯；另复算证明 **#340 本体盘上已修**并被 `forensicAt > packageAt` 那格逐字钉住）、#536 Flow／协程族（重：**一条后台链把同一批表读 4/4/3 次**，同一性在开机广播、冷启动重建、每次编辑保存三处入口证到，零枚测试钉读次数；另 F1 把协程取消折成"检查更新失败"弹窗——同文件 `:378` 已知道正确写法）、#537 字体缩放／大屏族（重两枚：`WeekView` 的行预算吃的正是 T61b① 已否掉的标称尺，而全仓 `clipToBounds` 在 main 里只在 `DayView` 有一处 ⇒ 溢出型而非裁剪型；节次轴两行时间从不参与行高判定）。
