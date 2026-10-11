@@ -620,7 +620,8 @@ class ClassProgressCleanupDecisionTest {
             "rescheduleRemindersAndBells 不再补排课堂铃：课前提醒全关的用户第一节课之后再没有实况与勿扰：\n$wrapper",
             // ai/T14：这一处补排必须带上它自己那个报告口，否则续排抛在 cancel 之前的失败
             // 出不了 ClassProgressScheduler 那个 runCatching，闸门会把这一轮记成成功
-            wrapper.contains("ClassProgressScheduler.rescheduleNextWindow(context, onStepFailed)"),
+            // T297（#536 F2）追加第三枚实参（那一份读载体），报告口的位置没动
+            wrapper.contains("ClassProgressScheduler.rescheduleNextWindow(context, onStepFailed, snapshot)"),
         )
 
         val worker = withoutComments(readMainSource(FALLBACK_WORKER_FILE))

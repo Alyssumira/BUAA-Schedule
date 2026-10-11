@@ -389,7 +389,8 @@ class CalendarModeClassBellCleanupTest {
         assertTrue("续排不再排在 !reminderArmed 的守卫里：\n$wrapper", wrapper.contains("if (!reminderArmed) {"))
         assertTrue(
             "续排那一步不再带报告口（ai/T14 的账会原地复活）：\n$wrapper",
-            wrapper.contains("ClassProgressScheduler.rescheduleNextWindow(context, onStepFailed)"),
+            // T297（#536 F2）追加第三枚实参（那一份读载体），报告口的位置没动
+            wrapper.contains("ClassProgressScheduler.rescheduleNextWindow(context, onStepFailed, snapshot)"),
         )
         assertEquals(
             "包装里出现第二个 cancelAll（= 在这里替判据做主）：\n$wrapper",
@@ -411,7 +412,8 @@ class CalendarModeClassBellCleanupTest {
 
         assertTrue(
             "改数据后的收尾不再无条件补排课堂铃（日历模式那半边的「只撤不排」回来了）：\n$body",
-            body.contains("BackgroundSync.rescheduleRemindersAndBells(app)"),
+            // T297（#536 F2）：收尾先把四张表读成一份载体，再把载体交给下面这几步
+            body.contains("BackgroundSync.rescheduleRemindersAndBells(app, snapshot = chainSnapshot)"),
         )
         assertEquals("收尾里续排被走了不止一遍：\n$body", 1, occurrences(body, "rescheduleRemindersAndBells("))
         assertFalse("收尾还在自己撤闹钟（判据只该有一份实现）：\n$body", body.contains("cancelAll("))

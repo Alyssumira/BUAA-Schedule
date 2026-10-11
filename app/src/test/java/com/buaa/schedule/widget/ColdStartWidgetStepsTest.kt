@@ -171,8 +171,9 @@ class ColdStartWidgetStepsTest {
         )
         assertTrue(
             "刷组件这一步没共享结论（裸调 refreshWidgets(context) 会自己再问一遍 Launcher）：\n$flat",
+            // T297（#536 F2）追加第二枚实参：链入口那一份读载体（组件四步吃的仍是同一次探测）
             !flat.contains("refreshWidgets(context)") &&
-                flat.contains("refreshWidgetData = { syncAndRedrawAllWidgets(context) }"),
+                flat.contains("refreshWidgetData = { syncAndRedrawAllWidgets(context, snapshot) }"),
         )
         assertTrue(
             "零点闹钟这一步没共享结论：\n$flat",

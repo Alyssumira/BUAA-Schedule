@@ -114,9 +114,14 @@ class TomorrowPreviewAlignmentTest {
         assertTrue(
             "事件入口必须是 suspend：调用方（BootReceiver / WidgetRefreshReceiver）" +
                 "在部分唤醒锁的同步 block 里等它跑完，自己起协程等于把这段活放出锁外",
-            functionSignatureExists(source, "suspend fun scheduleTomorrowPreview(context: Context)"),
+            // T297（#536 F2）加了第二枚实参（链入口那一份读载体，默认 null = 单独调用时自己读），
+            // "必须是 suspend"这半条判据与实参表无关，针头跟着签名走
+            functionSignatureExists(
+                source,
+                "suspend fun scheduleTomorrowPreview(context: Context, snapshot: ChainReadSnapshot? = null)",
+            ),
         )
-        val body = functionBody(source, "fun scheduleTomorrowPreview(context: Context)")
+        val body = functionBody(source, "fun scheduleTomorrowPreview(context: Context, snapshot: ChainReadSnapshot? = null)")
 
         assertTrue("事件入口要先问过课表", body.contains("nextScheduledPreviewDay("))
         assertTrue("关掉开关仍然必须撤销闹钟", body.contains("TomorrowPreviewScheduler.cancel(context)"))

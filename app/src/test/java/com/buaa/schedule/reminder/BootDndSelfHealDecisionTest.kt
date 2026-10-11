@@ -188,7 +188,8 @@ class BootDndSelfHealDecisionTest {
 
         // 安全网是紧随其后的那条重建链：顺序翻面，"期限未到"的那类记录就没人收口了
         val dndStep = source.indexOf("step(\"dndSelfCheck\") {")
-        val reschedule = source.indexOf("rescheduleRemindersAndBells(context)")
+        // T297（#536 F2）：这一步开始吃入口那一份读载体（第三枚实参形态是命名实参 snapshot =）
+        val reschedule = source.indexOf("rescheduleRemindersAndBells(context, snapshot = chainSnapshot)")
         assertTrue(
             "勿扰步骤不再排在 rescheduleRemindersAndBells 之前：安全网链条（BootReceiver 注释里那四条路径）失效",
             dndStep in 0 until reschedule,

@@ -106,8 +106,9 @@ class ColdStartRebuildWiringTest {
             widgetCalls,
         )
         // 两半都吃到闸门那个 report 口：闸门数得出"这一轮有没有干净跑完"，才谈得上写不写指纹
-        assertTrue(wiring.contains("BackgroundSync.rescheduleRemindersAndBells(context, report)"))
-        assertTrue(wiring.contains("BackgroundSync.runColdStartWidgetSteps(context, report)"))
+        // T297（#536 F2）追加第三枚实参（入口那一份读载体），报告口的位置没动
+        assertTrue(wiring.contains("BackgroundSync.rescheduleRemindersAndBells(context, report, snapshot)"))
+        assertTrue(wiring.contains("BackgroundSync.runColdStartWidgetSteps(context, report, snapshot)"))
         // 第一半的返回值就是钥匙 2 下一次要探的那一头（"本轮排上了课前提醒闹钟"）
         assertTrue(
             "闸门没把 rescheduleRemindersAndBells 的结论翻成闹钟头：钥匙 2 会探错一头：\n$wiring",
@@ -126,8 +127,10 @@ class ColdStartRebuildWiringTest {
         val guard = body.indexOf("if (!decision.rebuild) return Outcome.Skipped")
         assertTrue("闸门里找不到那条提前 return（判据放行也照样往下跑）：\n$body", guard >= 0)
 
-        val chainCalls = occurrences(body, "rebuildRemindersAndBells(report)")
-        val widgetCalls = occurrences(body, "runWidgetSteps(report)")
+        // T297（#536 F2）：两半的实参表各多一枚入口那一份读载体，针头跟着换；
+        // 载体的读取被排在 guard 之后这一格由 `ChainReadSnapshotWiringGuardTest` 钉
+        val chainCalls = occurrences(body, "rebuildRemindersAndBells(report, snapshot)")
+        val widgetCalls = occurrences(body, "runWidgetSteps(report, snapshot)")
         assertEquals(
             "重建整链的第一半被调了 $chainCalls 遍，只能一遍（多一遍就是 §2.2 的并发重复）：\n$body",
             1,
@@ -138,8 +141,8 @@ class ColdStartRebuildWiringTest {
             1,
             widgetCalls,
         )
-        assertTrue(body.indexOf("rebuildRemindersAndBells(report)") > guard)
-        assertTrue(body.indexOf("runWidgetSteps(report)") > guard)
+        assertTrue(body.indexOf("rebuildRemindersAndBells(report, snapshot)") > guard)
+        assertTrue(body.indexOf("runWidgetSteps(report, snapshot)") > guard)
         assertTrue(body.indexOf("writeFingerprint(") > guard)
     }
 

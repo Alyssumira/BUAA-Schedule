@@ -37,7 +37,9 @@ class ClassProgressRescheduleWiringTest {
 
         assertTrue(
             "兜底续排没有带上闸门那个报告口（ai/T13 登记的那条残余会原地复活：这一轮仍被记成成功）：\n$wrapper",
-            wrapper.contains("ClassProgressScheduler.rescheduleNextWindow(context, onStepFailed)"),
+            // T297（#536 F2）之后第三枚实参是那一份读载体；报告口的位置没动，
+            // 所以这一格钉的仍然是"接了自己的报告口"，只是实参表多了一枚
+            wrapper.contains("ClassProgressScheduler.rescheduleNextWindow(context, onStepFailed, snapshot)"),
         )
         assertEquals(
             "rescheduleRemindersAndBells 里续排被走了不止一遍（多一遍等于把刚排上的上课铃撤了重排）：\n$wrapper",
@@ -166,7 +168,15 @@ class ClassProgressRescheduleWiringTest {
         )
         assertTrue("早退那两条开始自己报失败（那是「没有内容」不是「排失败」）：\n$load", !load.contains("onStepFailed"))
         assertTrue("早退那两条开始打取证日志：\n$load", !load.contains("logFailure"))
-        assertTrue("查库的两道判据本体没了：\n$load", load.contains("getCurrentSemester()") && load.contains("startLocalDate"))
+        // T297（#536 F2）：这一读从"自己查三张表"换成了"取链入口那一份，没有才自己查"
+        // （`snapshot ?: context.scheduleRepository().loadChainReadSnapshot()`）。
+        // 钉的东西没变——**两道判据的本体还在**（学期行取不到、开学日取不到），只是数据源换了；
+        // 上面那两条 `?: return@load null` 的计数一格都没动，正是这条要求它别动。
+        assertTrue(
+            "查库那一步不再读四张表那一份（或不再从载体上取学期行）：\n$load",
+            load.contains("snapshot ?: context.scheduleRepository().loadChainReadSnapshot()") &&
+                load.contains("read.semester") && load.contains("startLocalDate"),
+        )
 
         val seam = normalize(balancedBlock(source, "internal suspend fun rescheduleNextWindow("))
         val switches = seam.indexOf("if (!classProgress && !dndEnabled) return")
