@@ -1,5 +1,6 @@
 package com.buaa.schedule.widget
 
+import com.buaa.schedule.domain.schedule.ChainReadSnapshot
 import com.buaa.schedule.widget.ColdStartRebuild.AlarmHead
 import com.buaa.schedule.widget.ColdStartRebuild.Decision
 import com.buaa.schedule.widget.ColdStartRebuild.Fingerprint
@@ -45,13 +46,20 @@ class ColdStartRebuildTest {
         val decisions = mutableListOf<Decision>()
         var chainRuns = 0
         var probeRuns = 0
+
+        /** 四张表那一份读载体被授予了几次 —— #536 F2 要钉的就是这个数 */
+        var snapshotLoads = 0
+
+        /** 重建整链的两半各自收到的那一份（null = 载体没读到，下游两半自己回库） */
+        val handed = mutableListOf<ChainReadSnapshot?>()
     }
 
     /**
      * 跑一次闸门。
      *
      * @param failing 让哪一处抛（`chain` = 重建整链、`widgets` = 组件四步、
-     *   `probe` = 钥匙 2 的探测、`read` = 读指纹、`write` = 写指纹）
+     *   `probe` = 钥匙 2 的探测、`read` = 读指纹、`write` = 写指纹、
+     *   `snapshot` = 入口那一份四张表读取）
      * @param reportsFailure 重建整链**不抛**、只通过留痕口报上来的一步失败
      *   —— 那是各步自己 `runCatching` 吞掉异常的那些路径
      */
@@ -86,15 +94,22 @@ class ColdStartRebuildTest {
                 if (failing == "probe") throw IllegalStateException("getBroadcast 抛了")
                 armed
             },
-            rebuildRemindersAndBells = { report ->
+            loadReadSnapshot = {
+                trace.snapshotLoads += 1
+                if (failing == "snapshot") throw IllegalStateException("四张表读不动")
+                chainSnapshot
+            },
+            rebuildRemindersAndBells = { report, snapshot ->
                 trace.ran += "chain"
                 trace.chainRuns += 1
+                trace.handed += snapshot
                 if (failing == "chain") throw IllegalStateException("整链炸了")
                 reportsFailure?.let { report(it, IllegalStateException("$it 这一步抛了")) }
                 if (failing == "head") null else chainResult
             },
-            runWidgetSteps = {
+            runWidgetSteps = { _, snapshot ->
                 trace.ran += "widgets"
+                trace.handed += snapshot
                 if (failing == "widgets") throw IllegalStateException("组件四步炸了")
             },
             reportStepFailure = { label, _ -> trace.reportedFailures += label },
@@ -105,6 +120,17 @@ class ColdStartRebuildTest {
     /** 三把钥匙里"时间"与"版本"两格都绿时的那份指纹 */
     private fun fresh(head: AlarmHead? = AlarmHead.PreClassReminder, ageMillis: Long = 5 * hour) =
         Fingerprint(versionCode = versionCode, succeededAt = now - ageMillis, head = head)
+
+    /**
+     * 入口那一份四张表读载体（#536 F2）。内容在这里不重要，重要的是**哪一枚实例**与
+     * **它被授予了几次** —— 那两件事才是这条链上能数的东西。
+     */
+    private val chainSnapshot = ChainReadSnapshot(
+        semester = null,
+        courses = emptyList(),
+        timeSlots = emptyList(),
+        remindersByCourseId = emptyMap(),
+    )
 
     // ---- 钥匙 1：versionCode -------------------------------------------------
 
@@ -342,6 +368,88 @@ class ColdStartRebuildTest {
         runGate(trace, stored = fresh(head = AlarmHead.ClassBells), armed = false)
 
         assertEquals("read,probe,chain,widgets,write", trace.ran.joinToString(","))
+    }
+
+    // ---- 一枚链只读一遍（#536 F2 / 台账 #218）--------------------------------
+    //
+    // 上面那条"顺序"钉的是 `ran` 这本账，而四张表那一份读**故意没进这本账**：
+    // 它是入口造载体，不是链上的一步，把它塞进 `ran` 就等于改了那条已经钉了七轮的口径。
+    // 这一节的格子吃的是 `snapshotLoads` 与 `handed` —— 链上有几处真的回库，
+    // 在这条缝上是可数的：`loadReadSnapshot` 被授几次、下游两半各收到哪一枚。
+
+    /** 正例：闸门放行 ⇒ 四张表整链只读一遍，读到的那一枚原样交给链的上下两半 */
+    @Test
+    fun `闸门放行时四张表只读一遍并原样递给两半`() {
+        val trace = Trace()
+
+        runGate(trace, stored = null)
+
+        assertEquals(1, trace.chainRuns)
+        assertEquals("一枚链把四张表读了不止一遍（学期行/课程/节次/提醒册子）", 1, trace.snapshotLoads)
+        assertEquals("上下两半各该收到一份载体", 2, trace.handed.size)
+        assertTrue(
+            "两半收到的不是同一枚 —— 那就是各读了一遍，只是看不出来",
+            trace.handed[0] != null && trace.handed[0] === trace.handed[1],
+        )
+    }
+
+    /** 负例：三把钥匙都放行时，入口一趟都不许查（否则这张卡省下来的又被自己花回去） */
+    @Test
+    fun `闸门跳过时一份载体都不造`() {
+        val trace = Trace()
+
+        val outcome = runGate(trace, stored = fresh(), armed = true)
+
+        assertEquals(Outcome.Skipped, outcome)
+        assertEquals("这一轮什么都没重建，却先付了一遍四张表的钱", 0, trace.snapshotLoads)
+        assertTrue(trace.handed.isEmpty())
+    }
+
+    /**
+     * 表驱动：造载体的次数跟着"整链跑了几遍"走，两枚格子方向都对。
+     * 期望是手写的，不是从 `chainRuns` 里推出来的 —— 推出来就成了套套逻辑。
+     */
+    @Test
+    fun `载体造几遍跟着三把钥匙的结论走`() {
+        val cases = listOf(
+            // 指纹 / 闹钟在不在排 / 期望：整链遍数 = 载体遍数
+            Triple(null, true, 1),                      // 没有成功记录 ⇒ 跑
+            Triple(null, false, 1),                     // 同上，闹钟也不在
+            Triple(fresh(), true, 0),                   // 三把钥匙全放行 ⇒ 跳过
+            Triple(fresh(), false, 1),                  // 只有闹钟那一把说不行
+            Triple(fresh(ageMillis = 25 * hour), true, 1), // 到 24h 硬上限 ⇒ 跑
+            Triple(Fingerprint(versionCode - 1, now - 1 * hour, AlarmHead.PreClassReminder), true, 1),
+        )
+        for ((stamp, armed, expected) in cases) {
+            val trace = Trace()
+
+            runGate(trace, stored = stamp, armed = armed)
+
+            assertEquals(
+                "指纹=${stamp?.succeededAt} version=${stamp?.versionCode} 闹钟在排=$armed",
+                expected,
+                trace.snapshotLoads,
+            )
+            assertEquals("载体遍数与整链遍数脱钩了", expected, trace.chainRuns)
+        }
+    }
+
+    /** 载体读不动：两半都收到 null（各自回库，一个字节都不会少读），且不写指纹 */
+    @Test
+    fun `载体读不动时两半拿到 null 且不写指纹`() {
+        val trace = Trace()
+
+        val outcome = runGate(trace, stored = null, failing = "snapshot")
+
+        assertEquals(Outcome.RebuiltWithFailures, outcome)
+        assertEquals("读一份失败却重试了第二遍", 1, trace.snapshotLoads)
+        assertEquals("两半都得自己回库", listOf<ChainReadSnapshot?>(null, null), trace.handed)
+        assertTrue(
+            "入口这一份读失败没进闸门那本账 ⇒ 下一次冷启动会被误判成无事可做：${trace.reportedFailures}",
+            trace.reportedFailures.contains("loadChainReadSnapshot"),
+        )
+        assertTrue("载体没读到却写了成功指纹", trace.written.isEmpty())
+        assertEquals(1, trace.chainRuns)
     }
 
     // ---- 钥匙 2 的人群口径 ---------------------------------------------------
