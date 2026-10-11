@@ -5626,3 +5626,97 @@ T260（编辑器保存链收尾）与 T261（更新链三处静默）按序 cher
 2. 派 T294 前我用 `grep -rn 'fontScale\|textScale\|…'` 量到 **0 命中**并把它写进卡面当"这一族完全没人读系统字体缩放"——**那是假象**：同一趟命令里我的 `awk` 也因 `\!` 被转义吃掉而报错，`\|` 同样被削掉。代理在正确的树上复算为 **10 枚 main 文件读 fontScale**。真话是"只有 RemoteViews 组件与 DayView 的实测内核读它，没有任何 Compose 页的 dp 预算读它"。**规矩：带 `\|`／`\!` 的 grep/awk 表达式不许当判据；要判据就写进脚本文件再跑，或者用不带反斜杠的多个 `-e` 分支。**
 
 同日四族只读审计交回并登记（详见任务册）：#535 发版闸门（重：`-PdebugSign` 那枚包被复制成**可发布正名**、provenance 十枚键里没有签名者，于是 #340 那条产物链在不可上架的包上打满绿灯；另复算证明 **#340 本体盘上已修**并被 `forensicAt > packageAt` 那格逐字钉住）、#536 Flow／协程族（重：**一条后台链把同一批表读 4/4/3 次**，同一性在开机广播、冷启动重建、每次编辑保存三处入口证到，零枚测试钉读次数；另 F1 把协程取消折成"检查更新失败"弹窗——同文件 `:378` 已知道正确写法）、#537 字体缩放／大屏族（重两枚：`WeekView` 的行预算吃的正是 T61b① 已否掉的标称尺，而全仓 `clipToBounds` 在 main 里只在 `DayView` 有一处 ⇒ 溢出型而非裁剪型；节次轴两行时间从不参与行高判定）。
+
+### 44 T297⓪：#536/F2 的第⓪问裁定 —— 一枚链内快照载体（甲），并驳回审计那枚 4×
+
+卡：`ai/T297`，基点 `b4fc983`。审计 = `.tmp/dev-2026-10-07/t293-audit.md` F2（在册 #536、台账 #218）。
+本段只做三件事：逐条把审计的引用行在盘上核一遍、按盘面重算读次数（**审计那枚 `getDisplayCourses` 4× 是低的**）、裁第⓪问。
+
+**路径订正**：卡面写的 `service/BootReceiver.kt` 与 `domain/startup/ColdStartRebuild.kt` 都不存在
+（`ls domain/` 只有 calendar/editor/model/onboarding/schedule/update/widget，全仓无 `service/` 包）。
+盘上真相是审计自己写的那两枚：`reminder/BootReceiver.kt`、`widget/ColdStartRebuild.kt`。
+
+**四处读组（逐枚 `awk` 读回的原文，非审计摘要）**：
+
+1. `widget/BackgroundSync.kt:135-139` —— `val repository = context.scheduleRepository()` /
+   `val semester = repository.getCurrentSemester()` / `val courses = repository.getDisplayCourses(semester)` /
+   `val timeSlots = repository.getTimeSlots()` / `val reminders = repository.getReminders().associateBy { it.courseId }`。
+2. `reminder/ClassProgressScheduler.kt:431-440`（`rescheduleNextWindow` 的注入 loader）—— `:432` 学期行、
+   `:435` `courses = repository.getDisplayCourses(semester),`、`:440` `timeSlots = repository.getTimeSlots(),`。
+   它可达的条件在 `widget/BackgroundSync.kt:267-273`：`:267 val reminderArmed = rescheduleReminders(...)` ⇒
+   `:268 if (!reminderArmed) {` ⇒ `:273 ClassProgressScheduler.rescheduleNextWindow(context, onStepFailed)`。
+3. `widget/WidgetDataSynchronizer.kt:128-129`（`getAllSemesters()` + `getCurrentSemester()`）+ `:146-147`
+   （`getTimeSlots = { repository.getTimeSlots() },` / `getDisplayCourses = { repository.getDisplayCourses(it) },`）。
+   乘数在 `:264-285` 的排产本体：`:271 val timeSlots = getTimeSlots()`（整轮一次，T7 已收）+
+   `:272 keys.map { ... getDisplayCourses(semester) }`，而 `keys` = `"current"` ∪ 每枚 `termCode`（`:131-134`）
+   ⇒ **课程表被读 K = 学期数 + 1 遍**（同文件 `:118` 自己写的口径："每轮 1 趟节次表 + K 趟课程"）。
+4. `widget/BackgroundSync.kt:444-447`（`scheduleTomorrowPreview`）—— `:445` 学期行、
+   `:447` `courses = repository.getDisplayCourses(semester),`。
+
+**链同一性（三处入口，逐枚核过，入口之间零写入）**：
+`reminder/BootReceiver.kt:77-80` 四步全在同一次 `WakeLocks.withPartialWakeLock(...)` 的 `:38` block 里
+（`:77 rescheduleRemindersAndBells` / `:78 refreshWidgets` / `:79 scheduleWidgetMidnight` / `:80 scheduleTomorrowPreview`）；
+`widget/ColdStartRebuild.kt:181` + `:185` 是同一个 `run(context)` 递进闸门的两半，
+而 `runColdStartWidgetSteps`（`widget/BackgroundSync.kt:483-495`）把 `refreshWidgetData = { syncAndRedrawAllWidgets(context) }`
+与 `scheduleTomorrowPreview = { scheduleTomorrowPreview(context) }` 接的是同一枚 Context；
+`ui/ScheduleViewModel.kt:1195-1199` 的 `afterDataChangedInternal()` —— **审计给的 `:1177-1181` 已漂 +18**，
+它是每一次改课表 / 改提醒 / 改节次的收尾，`viewModelScope` 一条协程。
+
+**仓储层无缓存**：`data/repository/ScheduleRepository.kt:207`
+`suspend fun getCurrentSemester(): Semester? = semesterDao.getCurrent()?.toDomain()`（`:215` 节次、
+`:226-233` 展示口径课程 = `courseDao.getDisplay(semester.termCode)`，`semester == null` 那一档走 `getAll()`），
+每一次调用都是一趟查询。
+
+**按盘面重算的"改前"读次数（一枚链，K = 学期数 + 1）**：
+
+| 表 | 改前一枚链 | 审计的说法 |
+| --- | --- | --- |
+| `getCurrentSemester` | **4**（#1 :136 / #2 :432 / #3 :129 / #4 :445） | 4 —— 对 |
+| `getTimeSlots` | **3**（#1 :138 / #2 :440 / #3 :146） | 3 —— 对 |
+| `getDisplayCourses` | **3 + K**（#1 :137 / #2 :435 / #4 :447 ＋ #3 :147 的 K 趟） | "4×（多学期时再乘）" —— **低记**：`K = 学期数 + 1 ≥ 1`，单学期就是 5× |
+| `getReminders` / `getAllSemesters` | 各 **1**（#1 :139 / #3 :128） | 未入账 |
+
+⇒ 两枚学期行的用户：`4 + 3 + 6 + 1 + 1 =` **15 趟 Room 往返**，不是审计那句"11 趟"。
+那句"11"只有把 #3 的 K 趟折成 1 趟、再漏掉 `getReminders`/`getAllSemesters` 才凑得出。
+
+**第⓪问裁定：甲 —— 一枚链内快照载体，在入口造好、当参数传给提醒/组件/续排/预告四步。**
+依据是本仓自己写下的那条先例，不是我的偏好：`widget/BackgroundSync.kt:315-317`
+「共享方式是把结论**当参数传下去**而不是缓存起来 —— 没有缓存就没有陈旧问题」，
+`:469-473` 又把"顺手引入缓存"点名成「漏一次 invalidate 就让新组件永远不刷新」那类事故的形状；
+T10（`runColdStartWidgetSteps` 的注入 seam）与 T43（`WidgetDataSynchronizer` 的脏 key 写侧）走的都是
+"结论进参数、生命周期等于这一次调用"那一线。载体只装**跨步重复**的那三张表（学期行 / 展示口径课程 / 节次）
+加提醒册子；`getAllSemesters()` 与那 K 趟按学期的课程查询不进载体 —— 它们在链上各只被读一遍
+（K 趟是 #3 自己的口径，审计已明说不是这张卡），提前替全链预取反而要无组件用户多付一趟
+`WidgetSnapshotPlanTest` 钉着的那本账。
+- **乙（仓储层短命缓存）否**：它给"陈旧"开了一整个新面（`#297`/`#449` 两枚在册卡就是这个面的形状），
+  而且 `rescheduleReminders` 那一步自己就说了「同一轮里两次磁盘，两次结论可以不一致」（`:117`）——
+  缓存要赢的是这句话，不是性能。
+- **丙（把链并成一趟）否**：三处入口的步骤集合本来就不同（开机多 `scheduleWidgetMidnight`、
+  冷启动那半边走探测去重的四步编排、UI 收尾没有零点闹钟），而每一步的 `step()` 标签与
+  `onStepFailed` 留痕各有在册守卫（`ClassProgressRescheduleFailureReportTest`、
+  `ColdStartRebuildWiringTest`、`CalendarModeClassBellCleanupTest`）；并成一趟等于把三本账合成一本，
+  收益和甲一样，风险全是新的。
+- **丁（先量化、只收同一次唤醒里的重复）采纳的是它的判据，不是它的落点**：上面的表就是量化，
+  我确实只折"同一枚协程里读了第二遍"的那些；跨请求的重复（每 12 小时兜底 Worker、每一次广播各读各的）
+  在这张卡里一个字不动。
+
+**我接受的风险，以及必须由哪一层作废**：快照可能在链跑到一半时被用户改动作废。
+判据是盘面这条：**链内没有任何一步写这四张表** —— `rescheduleReminders` 只排闹钟、
+`rescheduleNextWindow` 只排铃、`WidgetDataSynchronizer.sync` 写的是 `widget_snapshots`、
+`scheduleTomorrowPreview` 写的是 AlarmManager；改课表那条路（`ui/ScheduleViewModel.kt`）是先落库、
+再调 `afterDataChangedInternal()`，所以入口取到的就是"改完之后"的那一份。
+作废因此归**入口层**：三处入口各自现造一枚新快照，任何一步都不许把它存下来跨调用复用
+（载体不是缓存，它的生命周期 = 这一次协程）。按本仓派生字段那条成文规矩
+（`docs/derived-field-audit.md:355`「值 = f(同表另一枚参数) 只有两条正当落点……没有第三条」），
+载体**不带任何派生参数**：`totalWeeks` / `startLocalDate` 一律由消费者直接从装着的学期行上读
+（`ClassProgressScheduler` 那枚 `totalWeeks = semester.totalWeeks,` 逐字留在原处，
+`TermWeekGateSingleSourceGuardTest` 的"钉法 = 逐字节 = 1 处"因此一格不动），
+载体唯一的判据 `covers()` 是类体内的函数，不进参数表、也就不进 `equals`/`componentN`。
+
+**在册守卫的账面影响（同一枚 commit 里重钉，不躲）**：`TomorrowPreviewAlignmentTest`（签名与 body 两枚锚点）、
+`ClassProgressRescheduleWiringTest`（包装体那枚逐字 + 早退那格"查库的两道判据本体"）、
+`ClassProgressCleanupDecisionTest` 与 `CalendarModeClassBellCleanupTest`（同一条续排逐字 + UI 收尾那枚
+`rescheduleRemindersAndBells(app)`）、`BootDndSelfHealDecisionTest`（开机步骤次序那枚 indexOf）、
+`ColdStartRebuildWiringTest`（闸门接线两枚逐字）、`ColdStartRebuildTest`（seam 形参形状）。
+`bellRescheduleCallSitesAreTheKnownSixRepoWide` 的"带报告口的调用点恰好一枚"判的是实参里有没有逗号，
+新增的第三个实参落在 BackgroundSync 那一处 ⇒ 集合与计数都不动。
