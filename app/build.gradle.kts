@@ -555,10 +555,14 @@ val originSignedByAgp = "agp-release"
 val originDebugKey = "debug-key"
 
 /**
- * Android 工具链那枚公开调试证书的 DN 头（`CN=Android Debug,O=Android,C=US`）。
- * 它是公开常量，不是任何密钥材料；写进自证条的 `signerDn` 也只是 APK 里本来就摊着的那段 DN。
+ * Android 工具链那枚公开调试证书的 DN **片段**：`CN=Android Debug`。
+ *
+ * 本机实测（build-tools 36.0.0 的 apksigner 拿 `~/.android/debug.keystore` 签一枚 zip，再用 JDK 的
+ * `subjectX500Principal.name` 读回来）交回的是 `C=US,O=Android,CN=Android Debug` —— RDN 的顺序由
+ * 证书自己决定，所以这里按**包含**判、不按前缀判。它是公开常量，不是任何密钥材料；
+ * 写进自证条的 `signerDn` 也只是 APK 里本来就摊着的那段 DN。
  */
-val debugSignerDnHead = "CN=Android Debug"
+val debugSignerDnMarker = "CN=Android Debug"
 
 /**
  * 非 release 签名的产物尾巴。`-debugsigned` 里含 `debug` 不是巧合：客户端选附件时
@@ -789,7 +793,7 @@ fun signerCertificates(apk: File): List<Pair<String, String>> {
  * 读不到签名块（只有 v2/v3）时才退回"这份字节由谁产出"，那条来路同样是事实而不是旗子。
  */
 fun classifyArtifactSigner(distinguishedNames: List<String>, origin: String): String = when {
-    distinguishedNames.any { name -> name.contains(debugSignerDnHead, ignoreCase = true) } -> signerDebug
+    distinguishedNames.any { name -> name.contains(debugSignerDnMarker, ignoreCase = true) } -> signerDebug
     distinguishedNames.isNotEmpty() -> signerRelease
     origin == originSignedByAgp -> signerRelease
     origin == originDebugKey -> signerDebug

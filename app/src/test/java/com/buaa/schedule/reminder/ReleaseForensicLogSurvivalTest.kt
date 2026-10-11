@@ -2,12 +2,15 @@ package com.buaa.schedule.reminder
 
 import java.io.File
 import java.security.MessageDigest
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
 import java.util.Properties
 import java.util.zip.ZipFile
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.fail
 import org.junit.Assert.assertTrue
 
@@ -40,7 +43,10 @@ import org.junit.Assert.assertTrue
  * 3. [minifiedDexStillCarriesEveryForensicLine] / [effectiveR8ConfigCarriesNoLogStrippingRule] ——
  *    读 `:app:assembleRelease` 的产物（APK 里的 classes\*.dex、R8 dump 出的 configuration.txt），
  *    **日常门禁里没有产物就跳过**（`testDebugUnitTest` 不依赖 `assembleRelease`，产物在不在
- *    取决于谁最后跑过什么）。跳过不等于没事：要连着跑
+ *    取决于谁最后跑过什么）。台账 #535 在这一层再加一枚
+ *    [artifactLayerCrossChecksTheRecordedSignerAgainstTheApkBytes]：读同一枚 APK 的 v1（JAR）签名块，
+ *    与自证条里新增的 `signedBy` / `signerDn` / `signerSha256` 三格对表。**它的字节那一格任何路径都跑**
+ *    （调试密钥签出来的产物在这枚守卫面前就是红），"跳过"只发生在拿不到产物那一档。跳过不等于没事：要连着跑
  *    `:app:assembleRelease :app:testDebugUnitTest` 才吃到第 3 层。
  * 4. [releaseScriptRunsTheArtifactLayerGuardsAfterTheArtifact] /
  *    [artifactLayerHasExactlyOneSkipExitAndBothSidesAreWired] —— 恒跑，钉的是**发版路径本身**
@@ -461,7 +467,133 @@ class ReleaseForensicLogSurvivalTest {
         )
     }
 
+    /**
+     * 产物层读的那一枚包必须**自带签名者证据**，而且侧车对签名者的声明要能与**同一枚包的字节**对表
+     * （台账 #535 —— #340 那条链原先能在一份不可发布的包上打满绿灯，就是因为签名者不在判据里）。
+     *
+     * 三格各拦一种"看着对"：
+     * 1. **字节**：产物层读到的这枚包如果是 Android 调试密钥签的（证书 DN 就是
+     *    [DEBUG_SIGNER_DN_MARKER] 那张公开调试证书），任何路径都当场红 —— 这一格不看开关、
+     *    不看侧车，日常门禁也吃到；
+     * 2. **声明与字节对表**：有自证条时 `signerDn` / `signerSha256` 必须与这里**独立复算**出来的
+     *    第一枚 v1 签名块证书逐字相等，`signedBy` 必须与字节量出来的档位一致（读不到签名块那一档
+     *    构建侧按来路放行，此时这三格得同时为空、且不许宣称 debug）。侧车谎报在这里红，
+     *    而不是等到有人去读屏幕；
+     * 3. **名字与档位同册**：自证条 `apk=` 指着的那枚文件如果顶着可发布名
+     *    `buaa-schedule-<gradle.properties 里的 VERSION_NAME>.apk`，声明的签名者就必须是 release；
+     *    反过来声明不是 release 时那个名字就不该是可发布名。这一格钉的正是 #535 本体 ——
+     *    调试自签的包躺在正式名上、`printPublishSteps` 逐字教人把它当附件传上去。
+     *
+     * 与构建脚本的关系：`signerCertificates` 在 app 的构建脚本里，不在单 classpath 上，所以这里是
+     * **第二枚读者**而不是复用 —— 这一格要的就是"声明方与核对方各读一遍各自的字节"，
+     * 两枚读者只同源于 JDK 的 ZipFile + X.509 API。调试密钥那张证书 DN 是公开常量（工具链自带的），
+     * 本文件与构建脚本各写一份的事实由 `ReleaseArtifactSignerSingleRulerGuardTest` 跨文件钉住。
+     */
+    @Test
+    fun artifactLayerCrossChecksTheRecordedSignerAgainstTheApkBytes() {
+        val floor = "签名者不进自证条（#535 那一格）时，产物层能在一份装机就要用户先卸载、" +
+            "而卸载会清掉课表数据库的包上打满绿灯。"
+        val root = projectDir()
+        val provenance = readProvenance(root)
+        val apk = releaseApkForArtifactLayer("签名者这一格（signedBy / signerDn / signerSha256）", floor)
+        val certificates = signerCertificatesOf(apk)
+        val distinguishedNames = certificates.map { it.first }
+
+        // 1. 字节：这一枚绝不能是调试密钥签的
+        val debugCertificates = distinguishedNames.filter { it.contains(DEBUG_SIGNER_DN_MARKER, ignoreCase = true) }
+        assertTrue(
+            "产物层读到的这枚包（${apk.name}）是**调试密钥**签的：DN=$debugCertificates —— " +
+                "台账 #535：这种包顶着可发布的名字进 dist，`releasePackage` 与产物层守卫照样全绿，" +
+                "而装它的那台设备第一次换回正式签名就会「未安装成功」，卸载连带清掉课表数据库。",
+            debugCertificates.isEmpty(),
+        )
+
+        // 2/3 没有自证条 = 这一趟没跑过 :app:releasePackage（日常门禁正是这一档，没有声明可核）。
+        // 这里不许自己加跳过出口：第 1 格在任何路径下都已经跑完，发版路径读不到侧车由
+        // releaseApkForArtifactLayer 那一枚唯一出口处理。
+        if (provenance == null) return
+
+        val claimed = provenance.getProperty(KEY_SIGNED_BY)?.trim().orEmpty()
+        val claimedDn = provenance.getProperty(KEY_SIGNER_DN)?.trim().orEmpty()
+        val claimedFingerprint = provenance.getProperty(KEY_SIGNER_SHA)?.trim().orEmpty()
+        assertTrue(
+            "自证条没有 $KEY_SIGNED_BY 这一格（$PROVENANCE_FILE）：#535 说的那样" +
+                "「十条键里没有一条是签名者」又回来了，产物层对签名这件事重新变成读空气",
+            claimed.isNotEmpty(),
+        )
+        assertTrue(
+            "自证条里的 $KEY_SIGNED_BY=\"$claimed\" 不是三档之一（release / debug / unsigned）：" +
+                "档位换了写法，读侧与写侧就不是同一本册子了",
+            claimed in setOf(SIGNER_RELEASE, SIGNER_DEBUG, SIGNER_UNSIGNED),
+        )
+
+        if (certificates.isNotEmpty()) {
+            assertEquals("自证条里的 signerDn 与字节里第一枚签名证书不等：", claimedDn, distinguishedNames.first())
+            assertEquals(
+                "自证条里的 signerSha256 与这里独立复算的证书指纹不等 —— 侧车指着的字节与它自己的声明" +
+                    "不是同一份东西：",
+                claimedFingerprint,
+                certificates.first().second,
+            )
+            val bytesSay = if (debugCertificates.isNotEmpty()) SIGNER_DEBUG else SIGNER_RELEASE
+            assertEquals(
+                "自证条宣称 $KEY_SIGNED_BY=$claimed，而字节量出来是 $bytesSay（DN=$distinguishedNames）：" +
+                    "谎报签名者",
+                bytesSay,
+                claimed,
+            )
+        } else {
+            // 读不到 v1 签名块：只有 v2/v3（发布签名配置 enableV1Signing 被关掉那一档）或根本没签。
+            // 这一档构建侧按来路放行，但侧车不能再宣称任何一张证书，也不许自称 debug。
+            assertTrue(
+                "字节里读不到 v1（JAR）签名块，可自证条却写着 signerDn=\"$claimedDn\" / " +
+                    "signerSha256=$claimedFingerprint —— 它宣称的那张证书不在这枚包里",
+                claimedDn.isEmpty() && claimedFingerprint.isEmpty(),
+            )
+            assertNotEquals(
+                "字节里读不到签名块却宣称 debug：debug 这一档的判据是**量到**那张调试证书" +
+                    "（DN 片段见 DEBUG_SIGNER_DN_MARKER），按旗子写结论就是 #535 原先那个形状",
+                SIGNER_DEBUG,
+                claimed,
+            )
+        }
+
+        val relative = provenance.getProperty(KEY_APK)?.trim().orEmpty()
+        val wearPublishableName = File(relative).name == PUBLISHABLE_NAME_PREFIX +
+            gradleProperty(root, "VERSION_NAME") + ".apk"
+        assertEquals(
+            "名字与签名者不同册（#535 本体）：$PROVENANCE_FILE 里 $KEY_APK=\"$relative\"，" +
+                "可发布名的产物其签名者声明必须是 $SIGNER_RELEASE，非 $SIGNER_RELEASE 的产物不许拿那个名字" +
+                "（客户端按规范名**第一顺位**选中它，而调试签名覆盖不了正式签名）",
+            SIGNER_RELEASE == claimed,
+            wearPublishableName,
+        )
+    }
+
     // ---- 产物层唯一的"拿产物"出口 -------------------------------------------------------------------
+
+    /**
+     * 读 APK 里 v1（JAR）签名块的证书「DN 到 SHA-256 指纹」：纯 JVM 的 ZipFile + X.509 读法，
+     * 与构建脚本那枚 `signerCertificates` 各读一遍（理由见 [artifactLayerCrossChecksTheRecordedSignerAgainstTheApkBytes]）。
+     */
+    private fun signerCertificatesOf(apk: File): List<Pair<String, String>> {
+        val read = ArrayList<Pair<String, String>>()
+        ZipFile(apk).use { zip ->
+            val factory = CertificateFactory.getInstance("X.509")
+            for (entry in zip.entries().toList()) {
+                if (!entry.isFile || !entry.name.startsWith("META-INF/")) continue
+                if (entry.name.substringAfterLast('.', "") !in SIGNER_BLOCK_EXTENSIONS) continue
+                zip.getInputStream(entry).use { input ->
+                    for (certificate in factory.generateCertificates(input)) {
+                        val x509 = certificate as X509Certificate
+                        read += x509.subjectX500Principal.name to MessageDigest.getInstance("SHA-256")
+                            .digest(x509.encoded).joinToString("") { byte -> "%02X".format(byte) }
+                    }
+                }
+            }
+        }
+        return read
+    }
 
     /** 发版路径（`-PbuaaRequireReleaseArtifacts` 命中）时缺产物 / 产物不是本轮的都当场红 */
     private val releaseArtifactsRequired: Boolean
@@ -681,6 +813,28 @@ class ReleaseForensicLogSurvivalTest {
     private val KEY_VERSION_NAME = "versionName"
     private val KEY_VERSION_CODE = "versionCode"
     private val BUILT_BY = ":app:releasePackage"
+
+    // ---- 台账 #535：签名者三档、公开调试证书的 DN 片段、可发布名 ---------------------------------------
+
+    private val KEY_SIGNED_BY = "signedBy"
+    private val KEY_SIGNER_DN = "signerDn"
+    private val KEY_SIGNER_SHA = "signerSha256"
+    private val SIGNER_RELEASE = "release"
+    private val SIGNER_DEBUG = "debug"
+    private val SIGNER_UNSIGNED = "unsigned"
+
+    /**
+     * 工具链自带那张调试证书的 DN 片段（公开常量，不是任何密钥材料）。
+     * 与 app/build.gradle.kts 里 debugSignerDnMarker 是同一枚字面 —— 写侧与读侧共用一个事实，
+     * 哪一侧改了另一侧就得跟着改，这件事由 `ReleaseArtifactSignerSingleRulerGuardTest` 跨文件钉住。
+     */
+    private val DEBUG_SIGNER_DN_MARKER = "CN=Android Debug"
+
+    /** v1（JAR）签名块的扩展名，与构建脚本里那组 SIGNER_BLOCKS 同一份 */
+    private val SIGNER_BLOCK_EXTENSIONS = setOf("RSA", "DSA", "EC")
+
+    /** 可发布名前缀：客户端按规范名**第一顺位**选中附件，所以这个名字本身就是判据 */
+    private val PUBLISHABLE_NAME_PREFIX = "buaa-schedule-"
 
     // ---- 词法与文件小工具 --------------------------------------------------------------------------
 
