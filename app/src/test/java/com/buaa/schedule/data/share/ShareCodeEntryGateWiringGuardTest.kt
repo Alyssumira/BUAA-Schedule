@@ -71,6 +71,7 @@ class ShareCodeEntryGateWiringGuardTest {
         )
         val entryAt = body.indexOf(ENTRY_CALL)
         val trimAt = body.indexOf(TRIM_ANCHOR)
+        val base64At = base64Hits.first()
         assertTrue(
             "先后判据：$ENTRY_CALL 必须排在「$TRIM_ANCHOR」之前（切片内位置 entry=$entryAt, trim=$trimAt）。" +
                 "trim() 在无空白时返回同一个 String 是实现细节，押它就是借 JDK 当尺",

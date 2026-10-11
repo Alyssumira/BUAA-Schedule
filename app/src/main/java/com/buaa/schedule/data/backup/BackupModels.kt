@@ -5,7 +5,9 @@ import com.buaa.schedule.domain.model.ReminderSetting
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.schedule.CourseConstraints
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.elementNames
 
 /**
  * 备份文件的格式版本：写侧的默认值与读侧的「高于此版本即拒绝恢复」共用这一处（P2-3）。
@@ -23,6 +25,7 @@ const val BACKUP_FORMAT_VERSION = 2
  * 口令的信封判据（`data/share/ScheduleShareCodec`）要问"这条口令里有我不认得的键吗"，
  * 问的就是这份清单。
  */
+@OptIn(ExperimentalSerializationApi::class)
 val BACKUP_ENVELOPE_KEYS: List<String> = BackupData.serializer().descriptor.elementNames.toList()
 
 /** [BackupData.version] 的线上键名（**在不在**这一问用得上：缺键不等于版本低，见下面那两行） */

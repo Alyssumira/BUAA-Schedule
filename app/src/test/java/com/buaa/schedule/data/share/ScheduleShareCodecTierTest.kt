@@ -277,25 +277,72 @@ class ScheduleShareCodecTierTest {
         assertNull("截断那一等一条都不许落库", ScheduleShareCodec.decode(truncated))
     }
 
+    /** 造一条**解压后超 4MB** 的完整载荷（不是坏流），只为把 PayloadTooLarge 那一档真跑出来 */
+    private fun oversizedSlotsJson(): String = buildString {
+        append("{\"version\":2,\"")
+        append(BACKUP_TIME_SLOTS_KEY)
+        append("\":[")
+        var i = 0
+        while (length < 5_000_000) {
+            append("""{"number":${i++ % 40 + 1},"startTime":"08:00","endTime":"08:45"},""")
+        }
+        append("""{"number":1,"startTime":"08:00","endTime":"08:45"}]}""")
+    }
+
     @Test
     fun 档位册子还是七档不是Boolean() {
+        // 本工程没有 kotlin-reflect ⇒ `KClass.sealedSubclasses` 直接抛 KotlinReflectionNotSupportedError
+        //（在册教训逐字记在 IcsExportGateTest 第 ④ 层："实测过、记在这儿免得下一个人再撞"）。
+        // 这一格因此吃的是**每档各造一枚真实输入、再看跑出来的那枚档名**——比读分支表更硬：
+        // 分支表只说"类型在册"，这一格说的是"调用点真拿得到这一档"。
+        // 「ShareCodeOutcome 的声明恰好九枚、一枚都不许少」那把静态尺在
+        // ShareCodeEntryGateWiringGuardTest 第 ⑥ 层（源码里数声明枚数）。
+        val max = ShareCodeSizeGate.MAX_SHARE_CODE_CHARS
+        val entryTooLong = ScheduleShareCodec.decodeOutcome("BUAASCH1:" + "A".repeat(max + 1))
+        val payloadTooLarge = ScheduleShareCodec.decodeOutcome(deflateToCode(oversizedSlotsJson()))
+        val produced = listOf(
+            ScheduleShareCodec.decodeOutcome(""),
+            entryTooLong,
+            payloadTooLarge,
+            ScheduleShareCodec.decodeOutcome(deflateToCode("{\"version\":3,${coursesJson(1)}}")),
+            ScheduleShareCodec.decodeOutcome(
+                deflateToCode("{\"version\":2,${coursesJson(20)},${slotRowsJson("slotTimes", 600)}}"),
+            ),
+            ScheduleShareCodec.decodeOutcome(
+                deflateToCode(
+                    "{\"version\":2,\"semester\":null,\"semesters\":[],\"timeSlots\":[]," +
+                        "\"courses\":[],\"reminders\":[]}",
+                ),
+            ),
+            ScheduleShareCodec.decodeOutcome(
+                deflateToCode("{\"version\":2,${slotRowsJson(BACKUP_TIME_SLOTS_KEY, 600)}}"),
+            ),
+            ScheduleShareCodec.decodeOutcome(
+                deflateToCode(
+                    "{\"version\":2,${coursesJson(1)},${slotRowsJson(BACKUP_TIME_SLOTS_KEY, 1)}}",
+                ),
+            ),
+        ).map { it.javaClass.simpleName }.toSet()
         assertEquals(
-            "ShareCodeOutcome 顶层七档各一枚声明（T270 三档 + #530 四档）；折成 Boolean 就是本卡病灶回来",
-            listOf(
+            "八枚叶档各跑出过一枚 ⇒ 顶层七档俱在（OverSize 那一档的两枚叶子各算一枚）：实到 $produced。" +
+                "少一枚就是有一档重新借别人的句子说话（折成 Boolean 就是本卡病灶回来）",
+            setOf(
+                "EntryTooLong",
                 "FromNewerApp",
                 "Malformed",
                 "NothingRestorable",
                 "OverCapacity",
-                "OverSize",
+                "PayloadTooLarge",
                 "UnreadableTables",
                 "Valid",
             ),
-            ShareCodeOutcome::class.sealedSubclasses.map { it.simpleName }.sorted(),
+            produced,
         )
         assertEquals(
-            "OverSize 下面两档（字符数 / 解压字节数）各一枚：两把尺两种下一步，不许合体",
-            listOf("EntryTooLong", "PayloadTooLarge"),
-            ShareCodeOutcome.OverSize::class.sealedSubclasses.map { it.simpleName }.sorted(),
+            "OverSize 下面两档（字符数 / 解压字节数）各一枚：两把尺两种下一步，不许合体（实到 " +
+                listOf(entryTooLong, payloadTooLarge).map { it.javaClass.simpleName }.toSet() + "）",
+            setOf("EntryTooLong", "PayloadTooLarge"),
+            listOf(entryTooLong, payloadTooLarge).map { it.javaClass.simpleName }.toSet(),
         )
         val twoThousandOne = deflateToCode("{\"version\":2,${coursesJson(2001)}}")
         assertTrue(

@@ -255,10 +255,19 @@ class ShareCodeEnvelopeReviewTest {
 
     @Test
     fun 档位没有一档被折成Boolean() {
+        // 本工程没有 kotlin-reflect ⇒ `KClass.sealedSubclasses` 直接抛 KotlinReflectionNotSupportedError
+        //（在册教训见 IcsExportGateTest 第 ④ 层），所以这一格吃的是内核**跑出来的四枚档**而不是分支表；
+        //「声明恰好四枚」那把静态尺在 ShareCodeEntryGateWiringGuardTest（读的是源码形状）。
+        val seen = listOf(
+            ShareCodeEnvelopeReview.review(facts(gated(courses = 1))),
+            ShareCodeEnvelopeReview.review(facts(versionPresent = true, versionCode = CURRENT + 1)),
+            ShareCodeEnvelopeReview.review(facts(gated(), unreadableArrays = listOf("slotTimes" to 600))),
+            ShareCodeEnvelopeReview.review(facts(gated(courses = 0, timeSlots = 0, reminders = 0))),
+        ).map { it.javaClass.simpleName }.sorted()
         assertEquals(
-            "四档各说一句实话（读全了 / 版本太高 / 表名读不懂 / 什么都没带）；折成 Boolean 调用点只能猜",
-            listOf("NewerFormat", "NothingNamed", "UnreadableTables", "Understood"),
-            ShareCodeEnvelopeDecision::class.sealedSubclasses.map { it.simpleName }.sorted(),
+            "四档各跑出过一枚（读全了 / 版本太高 / 表名读不懂 / 什么都没带）；折成 Boolean 调用点只能猜：实到 $seen",
+            listOf("NewerFormat", "NothingNamed", "Understood", "UnreadableTables"),
+            seen,
         )
     }
 

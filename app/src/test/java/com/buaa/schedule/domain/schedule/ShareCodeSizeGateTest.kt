@@ -103,16 +103,29 @@ class ShareCodeSizeGateTest {
 
     @Test
     fun 三档没有一档被折成Boolean() {
+        // 本工程没有 kotlin-reflect ⇒ `KClass.sealedSubclasses` 直接抛 KotlinReflectionNotSupportedError
+        //（在册教训见 IcsExportGateTest 第 ④ 层那句"实测过、记在这儿免得下一个人再撞"）。
+        // 这一格因此吃的是**内核跑出来的档**而不是分支表；"声明恰好几枚"那把静态尺在
+        // ShareCodeEntryGateWiringGuardTest 第 ⑤/⑥ 层（读的是源码里的声明枚数）。
+        val entrySeen = listOf(
+            ShareCodeSizeGate.reviewEntry(0, 10),
+            ShareCodeSizeGate.reviewEntry(11, 10),
+        ).map { it.javaClass.simpleName }.sorted()
         assertEquals(
-            "入口判据的两档（放行 / 字符数越界）都在册子里；折成 Boolean 就等于把太大与解不出来合体",
+            "入口判据的两档（放行 / 字符数越界）各跑出过一枚；折成 Boolean 就等于把太大与解不出来合体：实到 $entrySeen",
             listOf("Proceed", "TooManyChars"),
-            ShareCodeEntryGate::class.sealedSubclasses.map { it.simpleName }.sorted(),
+            entrySeen,
         )
+        val payloadSeen = listOf(
+            ShareCodeSizeGate.reviewPayload(99, 100, streamFinished = true),
+            ShareCodeSizeGate.reviewPayload(100, 100, streamFinished = false),
+            ShareCodeSizeGate.reviewPayload(99, 100, streamFinished = false),
+        ).map { it.javaClass.simpleName }.sorted()
         assertEquals(
-            "解压判据的三档（放行 / 超上限 / 流自己断了）都在册子里：改前这里只有能不能解出 BackupData " +
-                "一枚 Boolean，于是超上限与坏压缩在屏上是同一句假话",
+            "解压判据的三档（放行 / 超上限 / 流自己断了）各跑出过一枚：改前这里只有能不能解出 BackupData " +
+                "一枚 Boolean，于是超上限与坏压缩在屏上是同一句假话：实到 $payloadSeen",
             listOf("OverCap", "Proceed", "StreamStoppedEarly"),
-            ShareCodePayloadGate::class.sealedSubclasses.map { it.simpleName }.sorted(),
+            payloadSeen,
         )
     }
 
