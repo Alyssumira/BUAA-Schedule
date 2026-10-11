@@ -8,6 +8,7 @@ import com.buaa.schedule.data.repository.scheduleRepository
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.schedule.ChainReadSnapshot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
@@ -115,10 +116,13 @@ object WidgetDataSynchronizer {
      * 以及"每个 key 都要有一行排产"这条不变式，一个字都没动，也不许跟着写集合一起收窄
      * （判据钉在 `WidgetSnapshotDirtyTest` 与 `WidgetSnapshotPlanTest`）。
      *
-     * 查询侧的口径不变：每轮 1 趟节次表 + K 趟课程（[planSnapshotRows]），
+     * 查询侧的口径：每轮 1 趟节次表 + K 趟课程（[planSnapshotRows]）。
+     * **T297（#536 F2）之后再加一句限定**：带 `snapshot` 进来时这一轮的节次表与"当前学期"那一问
+     * 不再回库（1 趟节次表 + 1 趟学期行由链的入口付掉，学期码等于入口那一枚的那些 key 也不再各查一遍），
+     * 剩下的仍然是 K 趟按学期码的课程查询 —— 那一笔是 T7 收过的排产口径，不是这张卡要动的。
      * 写侧从 K 次 upsert 降到"变了几行写几行"，删侧仍是那 1 条 `deleteKeysNotIn`。
      */
-    suspend fun sync(context: Context) = withContext(Dispatchers.IO) {
+    suspend fun sync(context: Context, snapshot: ChainReadSnapshot? = null) = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext
         // 与兜底函数逐字等价（scheduleRepository 内部同样取 applicationContext 再 as? BUAAApplication），
         // 这里只是把已经摊开写过一遍的那份兜底换成统一入口，省掉每轮 sync 一枚 DAO 包装与第二把写锁。
@@ -126,7 +130,10 @@ object WidgetDataSynchronizer {
         val db = AppDatabase.getInstance(appContext)
         val dao = db.widgetSnapshotDao()
         val semesters = repository.getAllSemesters()
-        val current = repository.getCurrentSemester()
+        // 当前学期那一行与节次表：这一轮的调用方（后台链的入口）已经读过一遍了，带载体进来就别再查
+        // （#536 F2）。学期册与"按 key 排产的那 K 趟课程"照旧自己读 —— 那是本文件顶部写下的口径，
+        // 也是 T7 已经收过的那笔账，不在这张卡里。
+        val current = snapshot?.semester ?: repository.getCurrentSemester()
 
         val keys = LinkedHashSet<String>().apply {
             add("current")
@@ -143,8 +150,13 @@ object WidgetDataSynchronizer {
                     keys = keys,
                     semesters = semesters,
                     current = current,
-                    getTimeSlots = { repository.getTimeSlots() },
-                    getDisplayCourses = { repository.getDisplayCourses(it) },
+                    getTimeSlots = { snapshot?.timeSlots ?: repository.getTimeSlots() },
+                    getDisplayCourses = { row ->
+                        // covers() 认的是"同一道查询"：学期码相同（或两边都没学期）就是同一问，
+                        // 那一份课程册子已经在载体里，不必再回库里捞一遍
+                        if (snapshot != null && snapshot.covers(row)) snapshot.courses
+                        else repository.getDisplayCourses(row)
+                    },
                 ),
                 previous = lastWritten.toMap(),
                 sameLocalDayAsNow = ::sameLocalDayAsNow,

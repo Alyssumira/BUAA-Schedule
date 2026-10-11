@@ -19,6 +19,7 @@ import com.buaa.schedule.domain.model.periodLabel
 import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.model.toPeriodSegments
 import com.buaa.schedule.domain.model.toStartEndTimes
+import com.buaa.schedule.domain.schedule.ChainReadSnapshot
 import com.buaa.schedule.domain.schedule.WeekdayDateOffset
 import com.buaa.schedule.domain.schedule.WeekdayOffset
 import com.buaa.schedule.domain.schedule.periodWindowsOf
@@ -418,6 +419,7 @@ object ClassProgressScheduler {
     suspend fun rescheduleNextWindow(
         context: Context,
         onStepFailed: (label: String, error: Throwable) -> Unit = NO_RESCHEDULE_STEP_FAILURE,
+        snapshot: ChainReadSnapshot? = null,
     ) = rescheduleNextWindow(
         readClassSwitches = {
             val prefs =
@@ -428,16 +430,20 @@ object ClassProgressScheduler {
             )
         },
         loadWindowInput = load@{
-            val repository = context.scheduleRepository()
-            val semester = repository.getCurrentSemester() ?: return@load null
+            // 这一读在改前是"自己去查三张表"，而它上面那一步（rescheduleReminders）刚查完同样的
+            // 三张表（#536 F2）。现在入口把结论装进载体传下来，这里只从载体上取；没有载体
+            // （WidgetFallbackWorker / CourseFluidService / ClassProgressReceiver 那五处单独调用）
+            // 才自己去读一趟，读的仍是同一批表、同一个口径。
+            val read = snapshot ?: context.scheduleRepository().loadChainReadSnapshot()
+            val semester = read.semester ?: return@load null
             val semesterStart = semester.startLocalDate ?: return@load null
             NextWindowInput(
-                courses = repository.getDisplayCourses(semester),
+                courses = read.courses,
                 semesterStart = semesterStart,
                 // 学期行就在手上，总周数就没有"取不到"那一档：这里传的是那一行的真值，
                 // 而不是 UNBOUNDED 那一枚（拿不到学期行的路在上一句已经 return@load null 了）
                 totalWeeks = semester.totalWeeks,
-                timeSlots = repository.getTimeSlots(),
+                timeSlots = read.timeSlots,
             )
         },
         reschedule = { input ->

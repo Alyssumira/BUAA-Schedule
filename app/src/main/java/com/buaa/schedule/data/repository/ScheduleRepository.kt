@@ -24,6 +24,7 @@ import com.buaa.schedule.domain.model.ImportHistory
 import com.buaa.schedule.domain.model.ReminderSetting
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.model.TimeSlot
+import com.buaa.schedule.domain.schedule.ChainReadSnapshot
 import com.buaa.schedule.domain.schedule.CourseConstraints
 import com.buaa.schedule.domain.schedule.ImportPlanner
 import com.buaa.schedule.domain.schedule.ImportWriteOutcome
@@ -205,6 +206,28 @@ class ScheduleRepository(
     }
 
     suspend fun getCurrentSemester(): Semester? = semesterDao.getCurrent()?.toDomain()
+
+    /**
+     * 一枚后台链的读快照：四张表各读一遍，产出的载体交给链上四步共用（#536 F2 / 台账 #218）。
+     *
+     * 读的顺序是定的，不是随手排的：`courses` 的口径由 `semester` 那一行决定
+     * （[getDisplayCourses] 在 null 那一档换的是另一道查询），所以学期行必须在前。
+     *
+     * 这一手长在仓储层而不是链的编排层，是因为它是这条链上唯一该碰数据库的地方 ——
+     * 编排层（`BackgroundSync` / `ClassProgressScheduler` / `WidgetDataSynchronizer`）拿到的是
+     * 已经算好的值，它们自己不再各自回头查同一批表。载体本身不含任何查询能力，
+     * 也不被存在任何地方（生命周期 = 一次链，见
+     * [com.buaa.schedule.domain.schedule.ChainReadSnapshot] 的类注释）。
+     */
+    suspend fun loadChainReadSnapshot(): ChainReadSnapshot {
+        val semester = getCurrentSemester()
+        return ChainReadSnapshot(
+            semester = semester,
+            courses = getDisplayCourses(semester),
+            timeSlots = getTimeSlots(),
+            remindersByCourseId = getReminders().associateBy { it.courseId },
+        )
+    }
 
     suspend fun getSemesterByTermCode(termCode: String): Semester? =
         semesterDao.getByTermCode(termCode)?.toDomain()

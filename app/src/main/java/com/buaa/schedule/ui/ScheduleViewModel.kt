@@ -1189,14 +1189,40 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
      */
     private suspend fun afterDataChangedInternal() {
         val app = getApplication<Application>()
+        // 一枚链只读一遍（#536 F2）：下面三步原先各自回库查同一批表（学期行四遍、节次表三遍、
+        // 展示口径的课程 3+K 遍），而这三步之间没有任何写那几张表的动作 —— 上面那笔落库才是
+        // 唯一一次写，它已经在这之前完成了，所以入口读到的一定是"改完之后"的那一份。
+        val chainSnapshot = com.buaa.schedule.widget.readChainSnapshotOrNull(app)
         // 必须兑现 rescheduleReminders 的 Boolean 契约（false=课堂铃没人排、当场补排），
         // 此前这里丢弃返回值：改一节课后上/下课铃被 cancelAll 清掉且不再续排，
         // 实况岛最长 12 小时不出现（只有兜底 Worker 兑现了契约）
-        com.buaa.schedule.widget.BackgroundSync.rescheduleRemindersAndBells(app)
-        com.buaa.schedule.widget.BackgroundSync.refreshWidgets(app)
+        com.buaa.schedule.widget.BackgroundSync.rescheduleRemindersAndBells(app, snapshot = chainSnapshot)
+        com.buaa.schedule.widget.BackgroundSync.refreshWidgets(app, snapshot = chainSnapshot)
         // 明日预告的续排此前只挂在开机广播与设置开关上：假期结束回到有课周，
         // 预告链条不会自己回来。数据每次变化都重新判定一次（内部按开关决定排/撤）
-        com.buaa.schedule.widget.BackgroundSync.scheduleTomorrowPreview(app)
+        com.buaa.schedule.widget.BackgroundSync.scheduleTomorrowPreview(app, chainSnapshot)
+    }
+
+    /**
+     * 设置页那枚「每天 22:00 推送明日课程概览」开关拨动之后重新对齐闹钟（#536 F3）。
+     *
+     * 接收者必须是这一枚 [viewModelScope]，**不许**回过去用设置页那枚 `rememberCoroutineScope()`：
+     * `scheduleTomorrowPreview` 在排闹钟那一手之前要跨过查库（学期行 + 展示口径的课程），而页
+     * scope 绑在一次组合上 —— 拨完开关立刻按返回键（本仓的顶层导航切 tab 是真的 dispose 目的地）
+     * 就把这一整颗协程取消在查库里，prefs 那边却已经同步落盘了 `enabled = true`。结果是开关下次
+     * 进来仍然亮着、22:00 那颗闹钟一颗也没排上，而副标题那句"明天没有课或假期中不会推送"恰好
+     * 替这个静默 no-op 说了话。关掉那一档本来就安全（`scheduleTomorrowPreview` 在任何挂起点之前
+     * 短路撤闹钟），这一手只把"开"那一支挪出组合寿命。
+     *
+     * 先例：T124a 那一族（`ui/home/HomeScreen.kt` / `ui/course/CourseManagementScreen.kt` 的
+     * "接收者是 `viewModel.viewModelScope`，不是本页 `rememberCoroutineScope()` 的那枚 scope"），
+     * 反向棘轮在 `ui/WriteChainReceiverWiringGuardTest` 档 ⑥（T297 把它的定义从"写库那一手"拓宽成
+     * "写库或有外部副作用的那一手"，这一枚落点就是这么进来的）。
+     */
+    fun onTomorrowPreviewToggled() {
+        viewModelScope.launch {
+            com.buaa.schedule.widget.BackgroundSync.scheduleTomorrowPreview(getApplication())
+        }
     }
 
     /** 用户切换提醒模式后调用：立即按新模式重排/取消应用内闹钟 */

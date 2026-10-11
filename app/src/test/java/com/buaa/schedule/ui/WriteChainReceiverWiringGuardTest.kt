@@ -57,6 +57,14 @@ import org.junit.Test
  *    按 文件 × 那一手逐字 登记，判据是**只许减不许增**（不是"三枚之外还剩几枚"的计数 ——
  *    B/K3 把剩下的继续搬走时这一格照样只说真话；新长出一枚、或把搬走的那一枚搬回来才红）。
  *    册子被掏空也红（那一格就不判任何东西了）；
+ *    ⚠️ **T297（#536 F3）把这一档的判据对象拓宽了**：原来只数"写库那一手"，现在数的是
+ *    "写库**或有外部副作用**的那一手" —— `WRITE_NEEDLES` 里多了那手挂 AlarmManager 的
+ *    `BackgroundSync.scheduleTomorrowPreview(`。拓宽不是为了整齐：设置页那枚明日预告开关的病与
+ *    T124a 那一族**一模一样**（页 scope 被组合取消 ⇒ 那一手永远不执行），只因为它的副作用是闹钟
+ *    而不是数据库行，就正好长在原本那本册子的定义之外，于是全仓唯一为这种病造的守卫一格也拦不到它
+ *    （#536 F3 点名的就是这个逃生口）。名册登记的**盘上侧**今天仍是空集（那一手已经进了
+ *    `ScheduleViewModel.onTomorrowPreviewToggled` 的 `viewModelScope`），在册的是**针**：
+ *    谁把它搬回页 scope 名下，这一格当场红。
  * 7. 先例未被顶掉：`applyConflictShift` 仍走 `viewModel.viewModelScope` + `job.join()`。
  * 8. **双向闭合**：档 ①〜③ 只钉「名册 `MOVED` 里在册的每一枚都合格」，本格钉另一侧「盘上该被点名的
  *    每一枚都进了名册」—— 从盘上按 `VM_SCOPE_LANDING_FILES` 那两枚文件独立扫出所有
@@ -147,6 +155,13 @@ class WriteChainReceiverWiringGuardTest {
             "viewModel.undoDeleteCourse(",
             "saveCourseDraft(",
             "onDelete(target)",
+            // T297（#536 F3）把这一族的定义从"写库那一手"拓宽成"写库**或有外部副作用**的那一手"：
+            // 明日预告那枚开关挂的是 AlarmManager，不是数据库，所以它原先逃得过这本册子 ——
+            // 而同一种病（页 scope 一被组合取消，那一手就永远不执行）在它身上一模一样地成立，
+            // 甚至更难看：prefs 是同步落盘的，开关下次进来还亮着，闹钟却一颗也没排上。
+            // 这本册子今天是空的（那一手已经进了 ScheduleViewModel.onTomorrowPreviewToggled 的
+            // viewModelScope），留着的用途只有一个：谁把它搬回页 scope 名下，这一格当场红。
+            "BackgroundSync.scheduleTomorrowPreview(",
         )
 
         /**
@@ -469,7 +484,7 @@ class WriteChainReceiverWiringGuardTest {
         }
     }
 
-    // ─────────────── ⑥ 反向棘轮：页 scope 名下不许再长出写库链 ───────────────
+    // ─────────────── ⑥ 反向棘轮：页 scope 名下不许再长出写库/带外部副作用的那一手 ───────────────
 
     @Test
     fun `页 scope 名下的写库链册子只许减不许增`() {
@@ -499,7 +514,8 @@ class WriteChainReceiverWiringGuardTest {
                 "\n  参照物登记的册子：" + PAGE_SCOPE_WRITE_LEDGER.toSortedMap().entries.joinToString { (f, n) ->
                     f + "={" + n.toSortedMap().entries.joinToString { "${it.key}×${it.value}" } + "}"
                 } +
-                "\n本卡判据是「写库那一手不许挂在 composition scope 上」：新长出一枚 = 又开一笔" +
+                "\n本卡判据是「写库那一手、或有外部副作用的那一手（T297 起把挂 AlarmManager 的那手" +
+                "也算进来）不许挂在 composition scope 上」：新长出一枚 = 又开一笔" +
                 "『库里改了、撤销条目没压、课前铃/桌面组件/明日预告不重排、UI 静默』的账。" +
                 "反向也挑明：把已登记的搬走**不红**（只许减不许增），要继续收就照 B/K3 那一档——" +
                 "body 里带 composition-only 的那些枚只能半搬。" +

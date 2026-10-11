@@ -10,6 +10,7 @@ import android.util.Log
 import androidx.work.WorkManager
 import com.buaa.schedule.data.repository.scheduleRepository
 import com.buaa.schedule.domain.model.ReminderMode
+import com.buaa.schedule.domain.schedule.ChainReadSnapshot
 import com.buaa.schedule.reminder.ClassProgressReceiver
 import com.buaa.schedule.reminder.ClassProgressScheduler
 import com.buaa.schedule.reminder.ReminderScheduler
@@ -34,6 +35,31 @@ private const val LOG_TAG = "BackgroundSync"
  * 签名里出现 `{ _, _ -> }` 它会切到默认值上去。
  */
 internal val NO_STEP_FAILURE: (label: String, error: Throwable) -> Unit = { _, _ -> }
+
+/**
+ * 后台链入口那一次读：**成功交回载体，失败交回 null**（null = 下游各步改回自己查库）。
+ *
+ * 为什么失败要折成 null 而不是往上抛：这一读的用途只是"省掉同一批表的第二遍查询"，
+ * 它自己抛了（Room 的 SQLiteFullException、cursor window 都是现实存在的）绝不能把整条重建链
+ * 带停 —— 交回 null 之后，`rescheduleReminders` / `refreshWidgets` / `scheduleTomorrowPreview`
+ * 各自照旧查自己的那份，用户侧一个字节都不会少读（宁可多读一趟，不许少读）。
+ *
+ * 一个例外**必须**往上抛：协程取消。它是控制流而不是失败，吞在这里就等于把"调用方已经不想
+ * 跑这条链了"折成"继续往下跑"（同 [com.buaa.schedule.reminder.BootReceiver] 自己那句
+ * `catch (e: CancellationException) { throw e }`、`UpdateCheck` 那处注释写的同一个口径）。
+ *
+ * [com.buaa.schedule.widget.ColdStartRebuild] 不用这一手：那条链的失败要进 `failures` 清单，
+ * 否则闸门会写下"上次成功"的指纹、把这一轮白跳 24 小时（ai/T14 那笔账），所以它直接注入
+ * `loadChainReadSnapshot()` 并自己报失败。
+ */
+internal suspend fun readChainSnapshotOrNull(context: Context): ChainReadSnapshot? = try {
+    context.scheduleRepository().loadChainReadSnapshot()
+} catch (e: kotlinx.coroutines.CancellationException) {
+    throw e
+} catch (e: Exception) {
+    Log.w(LOG_TAG, "读后台链快照失败，链上各步改回自己查库", e)
+    null
+}
 
 /**
  * 冷启动组件那四步的留痕口：与它们改动前各自那句 `Log.w` 一字不差
@@ -105,6 +131,7 @@ object BackgroundSync {
     suspend fun rescheduleReminders(
         context: Context,
         onStepFailed: (label: String, error: Throwable) -> Unit = NO_STEP_FAILURE,
+        snapshot: ChainReadSnapshot? = null,
     ): Boolean {
         if (!usesInAppReminders(context)) {
             // 日历模式：应用内课前提醒那条通道一个闹钟都不排，已经把排好的那些清干净。
@@ -132,14 +159,18 @@ object BackgroundSync {
             return false
         }
         return runCatching {
-            val repository = context.scheduleRepository()
-            val semester = repository.getCurrentSemester()
-            val courses = repository.getDisplayCourses(semester)
-            val timeSlots = repository.getTimeSlots()
-            val reminders = repository.getReminders().associateBy { it.courseId }
+            // 一枚链只读一遍：入口把四张表的结论装进载体递进来，这里不再各自回头查。
+            // 没有载体（单独调用这一步的调用点）照旧自己读，一次也不比别人少。
+            val read = snapshot ?: context.scheduleRepository().loadChainReadSnapshot()
             // rescheduleAll 的返回值就是本轮那一次全量搜索的结论：
             // 再搜一遍既白跑上千次窗口构造，又要多读一次时钟（同源约束见 ReminderScheduler）
-            ReminderScheduler.rescheduleAll(context, courses, semester, timeSlots, reminders) != null
+            ReminderScheduler.rescheduleAll(
+                context,
+                read.courses,
+                read.semester,
+                read.timeSlots,
+                read.remindersByCourseId,
+            ) != null
         }.onFailure {
             Log.w(TAG, "重排提醒失败", it)
             onStepFailed("rescheduleReminders", it)
@@ -263,14 +294,16 @@ object BackgroundSync {
     suspend fun rescheduleRemindersAndBells(
         context: Context,
         onStepFailed: (label: String, error: Throwable) -> Unit = NO_STEP_FAILURE,
+        snapshot: ChainReadSnapshot? = null,
     ): Boolean {
-        val reminderArmed = rescheduleReminders(context, onStepFailed)
+        val reminderArmed = rescheduleReminders(context, onStepFailed, snapshot)
         if (!reminderArmed) {
             // 与 WidgetFallbackWorker 同一口径：只在提醒那条链没接手课堂铃时才补排，
             // 无条件再排一遍等于把刚排上的上课铃撤了重排。
             // 报告口必须传下去（ai/T14）：这里不传，续排那道抛在 cancel 之前的失败就出不了
             // 它自己那个 runCatching，闸门会把这一轮记成成功并写下指纹。
-            ClassProgressScheduler.rescheduleNextWindow(context, onStepFailed)
+            // 载体也必须传下去（#536 F2）：续排那一步读的正是上面那三张表。
+            ClassProgressScheduler.rescheduleNextWindow(context, onStepFailed, snapshot)
         }
         return reminderArmed
     }
@@ -316,13 +349,17 @@ object BackgroundSync {
      * 没有缓存就没有陈旧问题（组件刚被拖上/拆掉的 `onEnabled` / `onDisabled` 那两条路
      * 拿到的仍然是自己当场探测的结果，见 [runColdStartWidgetSteps] 的注释）。
      */
-    suspend fun refreshWidgets(context: Context, hasAnyWidget: Boolean = hasAnyWidgetSafely(context)) {
+    suspend fun refreshWidgets(
+        context: Context,
+        hasAnyWidget: Boolean = hasAnyWidgetSafely(context),
+        snapshot: ChainReadSnapshot? = null,
+    ) {
         runCatching {
             WidgetDataCache.invalidate()
             // 一个组件都没放时，下面的全量快照 sync（逐个学期查库 + JSON + upsert）与
             // 6 次 getAppWidgetIds 都没有读者 —— 开机/改时间/12 小时兜底每次都白跑一遍。
             if (!hasAnyWidget) return
-            syncAndRedrawAllWidgets(context)
+            syncAndRedrawAllWidgets(context, snapshot)
         }.onFailure { Log.w(TAG, "刷新 Widget 失败", it) }
     }
 
@@ -361,8 +398,8 @@ object BackgroundSync {
      * 今日列表的「进行中」高亮正是随铃翻面的，任何"数据没变就不用重绘"的判据落在它身上
      * 都是功能回归。
      */
-    internal suspend fun syncAndRedrawAllWidgets(context: Context) {
-        WidgetDataSynchronizer.sync(context)
+    internal suspend fun syncAndRedrawAllWidgets(context: Context, snapshot: ChainReadSnapshot? = null) {
+        WidgetDataSynchronizer.sync(context, snapshot)
         TodayWidgetProvider.updateAll(context)
         TomorrowWidgetProvider.updateAll(context)
         WeekWidgetProvider.updateAll(context)
@@ -376,10 +413,15 @@ object BackgroundSync {
      *
      * [hasAnyWidget] 同 [refreshWidgets]：默认自己探测；[WidgetFallbackWorker.doWork] 开头已经
      * 问过一遍，把结论带进来就省掉这条链里的第二次探测。
+     *
+     * 这里也是**一枚链**（兜底 Worker 每 12 小时那一趟就是这两步连着跑），所以它自己就是入口：
+     * 载体在这里造一次，两步共用（#536 F2）。造失败就当没有载体 —— 那两步照旧各自读，
+     * 一个字节都不会少读（宁可多读，不许少读）。
      */
     suspend fun onDataChanged(context: Context, hasAnyWidget: Boolean = hasAnyWidgetSafely(context)): Boolean {
-        val bellsHandled = rescheduleReminders(context)
-        refreshWidgets(context, hasAnyWidget)
+        val snapshot = readChainSnapshotOrNull(context)
+        val bellsHandled = rescheduleReminders(context, snapshot = snapshot)
+        refreshWidgets(context, hasAnyWidget, snapshot)
         return bellsHandled
     }
 
@@ -429,10 +471,17 @@ object BackgroundSync {
      * [com.buaa.schedule.reminder.WakeLocks.withPartialWakeLock] 是 inline 的同步 block、
      * `finally` 当场 release —— 一 `launch` 出去 block 就返回、锁随之松开，
      * 剩下那两次查库和排闹钟就没有唤醒保证（故障面 `WakeLocks` 的类注释里写透了）。
-     * 关掉开关那条短路不查库，仍在锁内当场撤销；唯一非挂起的调用点（设置页那枚开关）
-     * 自己用 `rememberCoroutineScope()` 接。
+     * 关掉开关那条短路不查库，仍在锁内当场撤销。
+     *
+     * 设置页那枚开关（唯一非挂起的调用点）**不许**再用本页 `rememberCoroutineScope()` 接
+     * （#536 F3，本卡收掉）：那一枚 scope 绑在组合上，按返回键就整颗取消，而排闹钟那一手前面
+     * 还隔着查库 —— 于是 prefs 已经落盘、开关下次进来照样亮着、闹钟一颗也没排上。
+     * 现在它挂在 `ScheduleViewModel.onTomorrowPreviewToggled` 的 `viewModelScope` 上。
+     *
+     * [snapshot] 是同一条链上游读好的那一份（#536 F2）；带着一颗链的载体进来就不再回头查
+     * 学期行与课程表，只有单独调用这一步时才自己读。
      */
-    suspend fun scheduleTomorrowPreview(context: Context) {
+    suspend fun scheduleTomorrowPreview(context: Context, snapshot: ChainReadSnapshot? = null) {
         val enabled = context
             .getSharedPreferences("schedule_settings", Context.MODE_PRIVATE)
             .getBoolean(TomorrowPreviewReceiver.PREF_ENABLED, true)
@@ -441,11 +490,10 @@ object BackgroundSync {
             return
         }
         runCatching {
-            val repository = context.scheduleRepository()
-            val semester = repository.getCurrentSemester()
+            val read = snapshot ?: context.scheduleRepository().loadChainReadSnapshot()
             val fireDay = TomorrowPreviewReceiver.nextScheduledPreviewDay(
-                courses = repository.getDisplayCourses(semester),
-                semester = semester,
+                courses = read.courses,
+                semester = read.semester,
                 today = LocalDate.now(),
             )
             if (fireDay == null) {
@@ -483,13 +531,14 @@ object BackgroundSync {
     suspend fun runColdStartWidgetSteps(
         context: Context,
         reportStepFailure: (label: String, error: Throwable) -> Unit = LOG_COLD_START_STEP_FAILURE,
+        snapshot: ChainReadSnapshot? = null,
     ): Boolean = runColdStartWidgetSteps(
         probeHasWidgets = { hasAnyWidgetSafely(context) },
         invalidateWidgetCache = { WidgetDataCache.invalidate() },
-        refreshWidgetData = { syncAndRedrawAllWidgets(context) },
+        refreshWidgetData = { syncAndRedrawAllWidgets(context, snapshot) },
         scheduleMidnightAlarm = { scheduleWidgetMidnight(context, hasAnyWidget = true) },
         cancelMidnightAlarm = { cancelWidgetMidnight(context) },
-        scheduleTomorrowPreview = { scheduleTomorrowPreview(context) },
+        scheduleTomorrowPreview = { scheduleTomorrowPreview(context, snapshot) },
         ensureFallbackWorker = { hasWidgets -> WidgetFallbackWorker.ensure(context, hasAnyWidget = hasWidgets) },
         reportStepFailure = reportStepFailure,
     )

@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.core.content.edit
 import com.buaa.schedule.BuildConfig
+import com.buaa.schedule.data.repository.scheduleRepository
+import com.buaa.schedule.domain.schedule.ChainReadSnapshot
 import com.buaa.schedule.reminder.ClassProgressReceiver
 import com.buaa.schedule.reminder.ClassProgressScheduler
 import com.buaa.schedule.reminder.ReminderScheduler
@@ -176,13 +178,15 @@ internal object ColdStartRebuild {
             readFingerprint = { readFingerprint(prefs) },
             writeFingerprint = { writeFingerprint(prefs, it) },
             alarmsStillArmed = { head -> alarmsStillArmed(context, head) },
-            rebuildRemindersAndBells = { report ->
+            // 三把钥匙放行之后才有人来取这一份（闸门跳过时一趟都不查，见 run 的那一步）
+            loadReadSnapshot = { context.scheduleRepository().loadChainReadSnapshot() },
+            rebuildRemindersAndBells = { report, snapshot ->
                 // 返回值就是"本轮排上了课前提醒闹钟"（口径见 rescheduleRemindersAndBells）
-                val reminderArmed = BackgroundSync.rescheduleRemindersAndBells(context, report)
+                val reminderArmed = BackgroundSync.rescheduleRemindersAndBells(context, report, snapshot)
                 if (reminderArmed) AlarmHead.PreClassReminder else AlarmHead.ClassBells
             },
-            runWidgetSteps = { report ->
-                BackgroundSync.runColdStartWidgetSteps(context, report)
+            runWidgetSteps = { report, snapshot ->
+                BackgroundSync.runColdStartWidgetSteps(context, report, snapshot)
             },
         )
     }
@@ -197,9 +201,14 @@ internal object ColdStartRebuild {
      *
      * @param alarmsStillArmed 钥匙 2 的探针，参数是"上一次成功重排排上了哪一头"。
      *   只在钥匙 3 与钥匙 1 都放行时才被调用（省掉两次 binder 探测）。
+     * @param loadReadSnapshot 整链那一份读载体（#536 F2）：**只有闸门放行、真的要重建时才被授予**，
+     *   三把钥匙都亮"无事可做"时一趟查询都不许花（这就是它做成注入 lambda 而不是值的原因）。
+     *   它抛了记成失败 ⇒ 不写指纹 ⇒ 下一次冷启动无条件重跑；取到 null 不可能（那一步自己保证有值），
+     *   取失败则交下去的是 null —— 下游两半各自回库读，一个字节都不会少读。
      * @param rebuildRemindersAndBells 重建整链的第一半（重排提醒 + 课堂铃兜底）；
-     *   返回这一轮排上的那一头闹钟，null 表示这一步抛了。
-     * @param runWidgetSteps 重建整链的第二半（组件四步）。
+     *   返回这一轮排上的那一头闹钟，null 表示这一步抛了。第二个实参是上面那一份载体。
+     * @param runWidgetSteps 重建整链的第二半（组件四步）。第二个实参同一份载体 —— 这两半原先
+     *   各自回库查同一批表（学期行四遍、节次表三遍），现在共用入口那一次读。
      * @param reportStepFailure 闸门自己那三步（读指纹 / 探测 / 写指纹）的留痕口，
      *   默认就是 `Log.w`；收成参数是为了让 JVM 单测不被 android.jar 的桩带偏
      *   （同 `runColdStartWidgetSteps` 的那个参数，理由一字不差）。
@@ -214,8 +223,15 @@ internal object ColdStartRebuild {
         readFingerprint: () -> Fingerprint?,
         writeFingerprint: (Fingerprint) -> Unit,
         alarmsStillArmed: (AlarmHead?) -> Boolean,
-        rebuildRemindersAndBells: suspend (report: (String, Throwable) -> Unit) -> AlarmHead?,
-        runWidgetSteps: suspend (report: (String, Throwable) -> Unit) -> Unit,
+        loadReadSnapshot: suspend () -> ChainReadSnapshot,
+        rebuildRemindersAndBells: suspend (
+            report: (String, Throwable) -> Unit,
+            snapshot: ChainReadSnapshot?,
+        ) -> AlarmHead?,
+        runWidgetSteps: suspend (
+            report: (String, Throwable) -> Unit,
+            snapshot: ChainReadSnapshot?,
+        ) -> Unit,
         rerunAfterMillis: Long = RERUN_AFTER_MILLIS,
         reportStepFailure: (String, Throwable) -> Unit = LOG_REBUILD_STEP_FAILURE,
         logDecision: (Decision) -> Unit = LOG_REBUILD_DECISION,
@@ -243,10 +259,19 @@ internal object ColdStartRebuild {
         logDecision(decision)
         if (!decision.rebuild) return Outcome.Skipped
 
-        val head = runCatching { rebuildRemindersAndBells(report) }
+        // 一枚链只读一遍（#536 F2）：整链四步原先各自回库查同一批表（学期行 4 遍、节次表 3 遍、
+        // 展示口径的课程 3+K 遍）。载体在这里读一次，交给下面的两半共用。
+        // 位置是刻意的：它排在 `if (!decision.rebuild) return` **之后** —— 三把钥匙放行跳过重建时
+        // 一趟都不许查（否则这张卡省下来的东西又被入口自己花回去了）。
+        // 取不到载体不报"没有可排的窗口"，报的是"读这一份失败"：闸门因此不写指纹，
+        // 下一次冷启动无条件重跑 —— 方向只能是多跑，与 ai/T14 那条账同一个取舍。
+        val snapshot = runCatching { loadReadSnapshot() }
+            .onFailure { report("loadChainReadSnapshot", it) }
+            .getOrNull()
+        val head = runCatching { rebuildRemindersAndBells(report, snapshot) }
             .onFailure { report("rebuildRemindersAndBells", it) }
             .getOrNull()
-        runCatching { runWidgetSteps(report) }
+        runCatching { runWidgetSteps(report, snapshot) }
             .onFailure { report("coldStartWidgetSteps", it) }
 
         // ⚠️ 只有整链干净地跑完才写"上次成功"：任一步抛了就不写，下一次冷启动照跑。

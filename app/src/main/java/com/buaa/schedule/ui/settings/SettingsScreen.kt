@@ -115,7 +115,6 @@ import com.buaa.schedule.ui.ScheduleViewModel
 import com.buaa.schedule.ui.onboarding.ConsentTraceTag
 import com.buaa.schedule.ui.onboarding.PERMANENT_PRIVACY_CONSENT_ENTRY_AVAILABLE
 import com.buaa.schedule.ui.onboarding.PRIVACY_STATEMENT
-import com.buaa.schedule.widget.BackgroundSync
 import com.buaa.schedule.widget.NextClassWidgetProvider
 import com.buaa.schedule.widget.TodayWidgetProvider
 import com.buaa.schedule.widget.TomorrowWidgetProvider
@@ -1332,9 +1331,12 @@ fun SettingsScreen(
                     onCheckedChange = {
                         previewEnabled = it
                         prefs.edit { putBoolean(TomorrowPreviewReceiver.PREF_ENABLED, it) }
-                        // 入口改成 suspend 了（为什么必须挂起，举证在 BackgroundSync 的 KDoc）；
-                        // 这枚开关跑在主线程，用本页既有的 settingsScope 接一次，不在这就地查库
-                        settingsScope.launch { BackgroundSync.scheduleTomorrowPreview(context) }
+                        // 排闹钟那一手前面隔着两趟查库（#536 F3）：接收者必须是 VM 那枚
+                        // viewModelScope，不是本页 settingsScope —— 拨完就按返回键会把这一颗
+                        // 协程取消在查库里，开关落成了"开"而闹钟一颗也没排上。
+                        // 为什么必须挂起、以及"关掉那一档当场撤销不查库"那条短路，举证在
+                        // BackgroundSync.scheduleTomorrowPreview 的 KDoc。
+                        viewModel.onTomorrowPreviewToggled()
                     },
                 )
             }

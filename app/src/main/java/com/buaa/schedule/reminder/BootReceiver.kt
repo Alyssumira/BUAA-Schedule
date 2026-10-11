@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.buaa.schedule.widget.BackgroundSync
+import com.buaa.schedule.widget.readChainSnapshotOrNull
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -72,12 +73,22 @@ class BootReceiver : BroadcastReceiver() {
                     //   ReminderNotifications.kt:197-202 那两个变量都是进程内状态）。
                     // 真在上课则续排链重排出已过期的上课铃、立刻投递重新 enter，勿扰一秒都不掉。
                     step("dndSelfCheck") { ClassProgressDnd.selfCheck(context) }
+                    // 一枚链只读一遍（#536 F2）：下面这几步原先各自回库查同一批表（学期行四遍、
+                    // 节次表三遍、展示口径的课程 3+K 遍），而这四步之间没有任何写那几张表的动作。
+                    // 取不到载体就当没有 —— 各步照旧自己读，宁可多读一趟也不许少读。
+                    val chainSnapshot = readChainSnapshotOrNull(context)
                     // rescheduleReminders 的 Boolean 返回值代表「提醒链是否已接手课堂铃」，
                     // 开机时闹钟全清、返回值此前被直接丢弃 —— 用打包版补齐课堂铃重排
-                    step("rescheduleReminders") { BackgroundSync.rescheduleRemindersAndBells(context) }
-                    step("refreshWidgets") { BackgroundSync.refreshWidgets(context) }
+                    step("rescheduleReminders") {
+                        BackgroundSync.rescheduleRemindersAndBells(context, snapshot = chainSnapshot)
+                    }
+                    step("refreshWidgets") {
+                        BackgroundSync.refreshWidgets(context, snapshot = chainSnapshot)
+                    }
                     step("scheduleWidgetMidnight") { BackgroundSync.scheduleWidgetMidnight(context) }
-                    step("scheduleTomorrowPreview") { BackgroundSync.scheduleTomorrowPreview(context) }
+                    step("scheduleTomorrowPreview") {
+                        BackgroundSync.scheduleTomorrowPreview(context, chainSnapshot)
+                    }
                     step("ensureChannels") { ReminderNotifications.ensureChannels(context) }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
