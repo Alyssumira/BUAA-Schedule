@@ -581,7 +581,7 @@ class ReleaseForensicLogSurvivalTest {
         ZipFile(apk).use { zip ->
             val factory = CertificateFactory.getInstance("X.509")
             for (entry in zip.entries().toList()) {
-                if (!entry.isFile || !entry.name.startsWith("META-INF/")) continue
+                if (entry.isDirectory || !entry.name.startsWith("META-INF/")) continue
                 if (entry.name.substringAfterLast('.', "") !in SIGNER_BLOCK_EXTENSIONS) continue
                 zip.getInputStream(entry).use { input ->
                     for (certificate in factory.generateCertificates(input)) {
