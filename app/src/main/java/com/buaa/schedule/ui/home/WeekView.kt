@@ -72,6 +72,7 @@ import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -85,7 +86,6 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -498,11 +498,40 @@ private fun WeekGrid(
         GlassGovernance.effectiveTier(Personalization.glassTier) >= DesignTokens.GLASS_TIER_STANDARD &&
             com.kyant.backdrop.isRenderEffectSupported()
     }
+    // —— 实测行高（T296①，F1/F2/F3 的供数层）——
+    // 出口就是 DayView 那本在册的尺：TextMeasurer 量一行 CJK 样例的首行行框、进位到整 px 再折回 dp
+    // （`rememberTimelineTextMeasurer` / `timelineLineHeightDp`，T61b① 立的那份口径）。
+    // 一台设备一枚样式一次测量、由网格层量好往下递，不在每张卡里各量一遍（理由同上面 glassReady
+    // 那条：逐卡各算 = 拖动时每帧几十次）。
+    // 改前这里没有尺：课程卡吃 `lineHeight.takeIf { it.isSp }?.toDp() ?: 16.dp`、节次轴吃同一枚标称乘
+    // fontScale —— 正是 DayTimelineBlockLines.kt:17-20 判死过的那把（标称 16 / 实画 17.14dp）。
+    // 卡里 titleStyle 与 metaStyle 两枚**本来就是同一个 labelMedium**，所以两枚"不同的兜底数"
+    //（?: 16.dp 与 ?: 14.dp）在盘上从来没有真的分开过。
+    val density = LocalDensity.current
+    val gridFontScale = density.fontScale
+    val labelLineMeasurer = rememberTimelineTextMeasurer()
+    val labelLineHeightDp = timelineLineHeightDp(
+        MaterialTheme.typography.labelMedium,
+        labelLineMeasurer,
+        gridFontScale,
+    )
+    // 网格视口实高：下面那层视口 Box 用 onSizeChanged 量（改前这一档压根没量，吃的是 screenHeightDp − 96）
+    var gridViewportPx by remember { mutableStateOf(IntSize.Zero) }
     // 用户可调行高：默认 64dp，缩放 0.75–1.5；24h 模式的时高同步缩放
     val rowHeight = if (Personalization.weekFitViewport) {
-        val screenHeightDp = LocalConfiguration.current.screenHeightDp
-        val headerSpace = 96
-        ((screenHeightDp - headerSpace).coerceAtLeast(200) / slots.size.coerceAtLeast(1)).dp
+        // T296① F3：视口换成网格**量到的实高**，weekRowScale 在这一档照吃，
+        // 行高另有"实测一行 + 卡内边距"的地板托底 —— 字号那一项就是从地板进来的。
+        // 代价：托底生效时网格不再正好铺满一屏，改为滚动（网格本来就在 verticalScroll 里）。
+        weekFitViewportRowHeightDp(
+            viewportHeightDp = with(density) { gridViewportPx.height.toDp() }.value.toDouble(),
+            slotCount = slots.size,
+            rowScale = Personalization.weekRowScale.toDouble(),
+            minimumRowHeightDp = weekRowHeightFloorDp(
+                lineHeightDp = labelLineHeightDp,
+                contentVerticalPaddingDp = CourseCellContentPadding.value.toDouble(),
+            ),
+            fallbackRowHeightDp = (baseRowHeight * Personalization.weekRowScale).value.toDouble(),
+        ).dp
     } else {
         baseRowHeight * Personalization.weekRowScale
     }
@@ -574,7 +603,6 @@ private fun WeekGrid(
     var pendingDelete by remember { mutableStateOf<Course?>(null) }
     var detailFor by remember { mutableStateOf<Course?>(null) }
     var daysAreaWidthPx by remember { mutableIntStateOf(0) }
-    val density = LocalDensity.current
     val dayWidthPx = if (compactScroll) {
         with(density) { compactDayWidth.toPx() }.toInt()
     } else {
@@ -601,7 +629,6 @@ private fun WeekGrid(
     }
     // 网格自身的纵向滚动：菜单要贴在按压点上，得知道内容被卷走了多少
     val gridScrollState = rememberScrollState()
-    var gridViewportPx by remember { mutableStateOf(IntSize.Zero) }
     val sceneBackdrop = LocalSceneBackdrop.current
 
     // —— 拖拽时的边缘自动滚动（①I-01）——
@@ -735,6 +762,7 @@ private fun WeekGrid(
                             slots = slots,
                             layouts = periodLayouts,
                             rowHeight = rowHeight,
+                            labelLineHeightDp = labelLineHeightDp,
                             gapAfterNumber = gapAfterNumber,
                             gapHeight = { animatedGapHeight.value },
                         )
@@ -885,6 +913,7 @@ private fun WeekGrid(
                                                 entranceSlot = entranceRanks[course.id to segment.first] ?: 0,
                                                 entranceSlotCount = entranceCardCount,
                                                 cardHeight = hDp,
+                                                labelLineHeightDp = labelLineHeightDp,
                                                 inConflict = course.id in conflictCourseIds,
                                                 notEveryWeek = notEveryWeekFlag(course.weeks.size, notEveryWeekBase),
                                                 isCurrentProvider = {
@@ -1008,6 +1037,7 @@ private fun WeekGrid(
                                             entranceSlot = entranceRanks[course.id to segment.first] ?: 0,
                                             entranceSlotCount = entranceCardCount,
                                             cardHeight = cardHeight,
+                                            labelLineHeightDp = labelLineHeightDp,
                                             inConflict = course.id in conflictCourseIds,
                                             notEveryWeek = notEveryWeekFlag(course.weeks.size, notEveryWeekBase),
                                             isCurrentProvider = {
@@ -1881,6 +1911,11 @@ private fun TimeLabels(
     slots: List<TimeSlot>,
     layouts: List<PeriodLayout>,
     rowHeight: Dp,
+    /**
+     * labelMedium 的**实测**行高（dp），由网格层量一次递进来（T296① F2）。
+     * 改前这一列自己现算 `lineHeight.takeIf { it.isSp }?.toDp() ?: 16.dp`——本仓 T61b① 判死过的标称尺。
+     */
+    labelLineHeightDp: Double,
     /** 空档插在哪一节之后（null = 当前无空档） */
     gapAfterNumber: Int? = null,
     /** 空档高度的取值回调：只在标签列里读，动画不会波及整块网格 */
@@ -1893,16 +1928,23 @@ private fun TimeLabels(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(height),
+                    .height(height)
+                    // 定高容器 ＋ 内容居中 = 超出的量对称甩到行外，压在相邻两行的时间数字上。
+                    // 预算已经按实测记账（下面那枚 axisPlan），这一枚 clip 只是"没人采样过的字体"
+                    // 那一档残余的安全网（DayTimelineBlockLines.kt:24-25 的次序：先量后裁）。
+                    .clipToBounds(),
                 contentAlignment = Alignment.Center,
             ) {
-                val labelLineHeight = with(LocalDensity.current) {
-                    MaterialTheme.typography.labelMedium.lineHeight.takeIf { it.isSp }?.toDp() ?: 16.dp
-                }
+                // 三行（节次号 / 起 / 止）**一起**交给行预算内核（T296① F2）。
+                // 改前那枚 `height >= labelLineHeight * 3` 只决定节次号画不画，而带 `\n` 的两行时间
+                // 无条件在场：maxLines = 2 管的是行数上限、Ellipsis 收的是横向超宽，两者都不管纵向，
+                // 所以行高不够时那两行照画、上下都出界。
+                val axisPlan = planWeekTimeAxis(
+                    heightDp = height.value.toDouble(),
+                    lineHeightDp = labelLineHeightDp,
+                )
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    // 行高够时补上节次号：参考稿左侧是「1 / 08:00 / 08:45」三行。
-                    // 行高不够（视口适配 / 节次很多）时只显示起止时间，避免又出现文字溢出。
-                    if (height >= labelLineHeight * 3) {
+                    if (axisPlan.showPeriodNumber) {
                         Text(
                             text = "${slot.number}",
                             style = MaterialTheme.typography.labelMedium,
@@ -1911,14 +1953,30 @@ private fun TimeLabels(
                             maxLines = 1,
                         )
                     }
-                    Text(
-                        text = "${slot.startTime}\n${slot.endTime}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    when {
+                        axisPlan.showTwoLineTime -> Text(
+                            text = "${slot.startTime}\n${slot.endTime}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        // 容量只够一行：只画起时。并成「08:00–08:45」那一手在 48dp 的定宽列里
+                        // 横向本来就放不下（列宽是 dp、与字号无关），会把纵向溢出换成
+                        // 一句看起来读错了的时间——内核里记着同一笔账的理由。
+                        axisPlan.showStartOnly -> Text(
+                            text = slot.startTime,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        // 一行都不够（横屏 × 视口均分那一档）：整档不画，
+                        // 而不是把两行数字甩在彼此身上——这一行的格线本身已经是"这里有一节"的信息。
+                        else -> Unit
+                    }
                 }
             }
             // 空档靠一个 Spacer 撑开，而不是改 layout.height / layout.top：
@@ -1968,6 +2026,11 @@ private fun CourseCell(
     entranceSlotCount: Int,
     /** 卡片实际高度（与 modifier 上的 .height() 一致），用于按可用空间分配文本行数 */
     cardHeight: Dp,
+    /**
+     * labelMedium 的**实测**行高（dp）：网格层量一次往下递（T296① F1）。
+     * 卡里的课名行与副信息行用的就是同一枚样式，所以这里只需要这一枚数。
+     */
+    labelLineHeightDp: Double,
     inConflict: Boolean,
     isCurrentProvider: () -> Boolean,
     /** 玻璃档位与渲染能力：由网格层算一次传下来，不在每张卡里各查一遍 */
@@ -2301,40 +2364,44 @@ private fun CourseCell(
             ),
     ) {
         Column(
-            modifier = Modifier.padding(CourseCellContentPadding),
+            // 定高卡 ＋ 居中内容 = 预算之外的残余对称甩到卡外，压在上下相邻卡上（改前 WeekView 一枚
+            // clip 都没有，全仓唯一的 clipToBounds 落在 DayView.kt）。这一枚是"没人采样过的字体"
+            // 那一档的安全网，不是记账的替代品；次序照 DayTimelineBlockLines.kt:24-25——
+            // 裁要落在 .padding(...) **之后**（早于 padding 等于没裁）。
+            modifier = Modifier
+                .padding(CourseCellContentPadding)
+                .clipToBounds(),
             verticalArrangement = Arrangement.Center,
         ) {
-            // —— 文本行数预算 ——
-            // 卡片高度由节次几何决定（默认 62dp，视口适配 / 24h 模式下更矮），
-            // 而内容此前固定按「最多 3 行标题 + 节次 + 地点」排版：总高远超可用空间，
-            // Column 居中后上下溢出，被外层的 clip 裁掉 —— 表现就是课程描述/地点
-            // 显示不全、或文字像互相压住。这里按**实际卡高**逐行分配预算，
-            // 并用系统字体缩放后的真实行高计算，字体放大时也不会溢出。
-            val density = LocalDensity.current
+            // —— 文本行数预算（T296① F1）——
+            // 卡片高度由节次几何决定（默认 62dp，视口适配 / 24h 模式下更矮），逐行分配的答案出自
+            // planWeekCourseCard：吃的是**实测行高**（labelLineHeightDp，由网格层量好递进来）与
+            // 卡的内边距，扣完就不再承诺下一行。
+            // 改前这里吃的是 `titleStyle.lineHeight.takeIf { it.isSp }?.toDp() ?: 16.dp`——
+            // 正是 DayTimelineBlockLines.kt:17-20 判死过的那把尺（Compose 的 lineHeight 是**下限**
+            // 不是行盒：装机标称 16dp / 实画 17.14dp，每行朝宽松一侧多承诺 ~7%），
+            // 而同段注释自称"用系统字体缩放后的真实行高计算"——那是 doc-vs-disk，本次换的是尺，
+            // 顺带把这句话改成与盘面一致的。
+            // 另一笔：卡里 titleStyle 与 metaStyle 本就是同一枚 labelMedium，所以那两枚"不同"的兜底
+            //（?: 16.dp 与 ?: 14.dp）在盘上从来没真的分开过。
             val titleStyle = MaterialTheme.typography.labelMedium
             val metaStyle = MaterialTheme.typography.labelMedium
-            val titleLineHeight = with(density) {
-                titleStyle.lineHeight.takeIf { it.isSp }?.toDp() ?: 16.dp
-            }
-            val metaLineHeight = with(density) {
-                metaStyle.lineHeight.takeIf { it.isSp }?.toDp() ?: 14.dp
-            }
-            // 必须与上面那个 Column 的 padding 同源：写死 5.dp 的话，
-            // 调内缩只调了一处，行高预算就会和真实可用高度分叉（文字再次被裁）。
-            val available = (cardHeight - CourseCellContentPadding * 2).coerceAtLeast(0.dp)
             val metaText = courseCardMeta(course)
-            // —— 副信息行先占位，课名才用剩下的空间 ——
-            // 旧口径反过来：三行预算先给课名，默认行高下单节课卡只有 52dp 可用，
-            // 三行课名正好占满，于是**教室/教师那一行在任何卡上都出不来**——
-            // 而"这节课去哪上"恰恰是这张卡最该当场回答的即时信息。
-            // 该砍的是课名的第三行（下面还有省略号兜着），不是副信息。
-            val showMeta = metaText != null && available - titleLineHeight >= metaLineHeight
-            val afterMeta = if (showMeta) available - metaLineHeight else available
-            // 节次行排在副信息之后：卡片本身已经按节次跨了那么几行高，它是三者里最冗余的一行
-            val showSegmentLabel = segment.last > segment.first &&
-                afterMeta - titleLineHeight >= metaLineHeight
-            val titleBudget = afterMeta - if (showSegmentLabel) metaLineHeight else 0.dp
-            val titleLines = (titleBudget / titleLineHeight).toInt().coerceIn(1, 3)
+            // 优先级照改前那段账：副信息行先占位、课名用剩下的空间（"这节课去哪上"是这张卡最该
+            // 当场回答的即时信息，该砍的是课名第三行——那一行下面还有省略号兜着）。
+            // 内边距与上面那个 Column 同源：写死 5.dp 的话调内缩只调了一处，预算就又和真实可用高度分叉。
+            val cardPlan = planWeekCourseCard(
+                cardHeightDp = cardHeight.value.toDouble(),
+                contentVerticalPaddingDp = CourseCellContentPadding.value.toDouble(),
+                titleLineHeightDp = labelLineHeightDp,
+                metaLineHeightDp = labelLineHeightDp,
+                hasMetaLine = metaText != null,
+                // 节次行排在副信息之后：卡片本身已经按节次跨了那么几行高，它是三者里最冗余的一行
+                hasPeriodLine = segment.last > segment.first,
+            )
+            val showMeta = cardPlan.showMetaLine
+            val showSegmentLabel = cardPlan.showPeriodLine
+            val titleLines = cardPlan.titleLines
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (inConflict) {

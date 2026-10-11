@@ -67,8 +67,10 @@ class DayTimelineBlockLinesWiringGuardTest {
         assertTrue("行高要按 fontScale 换算（dp 门槛不长、行高长，这就是 38/58 两头错的根）", body.contains("fontScale"))
         val dayView = blankComments(source(DAY_VIEW))
         assertTrue(
-            "换算这件事要有名字，别散成四处各乘一遍",
-            dayView.contains("private fun timelineLineHeightDp(") &&
+            "换算这件事要有名字，别散成四处各乘一遍。T296① 把这枚尺的可见性从 private 抬到 internal：" +
+                "周网格用的就是**这同一把尺**（本仓成文口径见 StatsEntryWiringGuardTest「只许造一枚 " +
+                "TextMeasurer，两处各造就会各信各的字体测量值」），名字与算式一个字都没动",
+            dayView.contains("internal fun timelineLineHeightDp(") &&
                 dayView.contains("timelineLineHeightDp(MaterialTheme.typography.labelLarge") &&
                 dayView.contains("timelineLineHeightDp(MaterialTheme.typography.labelMedium"),
         )

@@ -992,6 +992,10 @@ fun SettingsScreen(
                     )
                     SettingsSwitchRow(
                         title = "视口均分行高",
+                        // T296① F3：这一档此前**整枚不吃**下面那支「行高」滑杆（滑杆照样能拨、照样 save，
+                        // 屏上照样念「行高 130%」）。现在行高 = 网格量到的实高 ÷ 节次数 × 那支滑杆，
+                        // 并按"实测一行"托底 —— 代价就写在下面这句里，屏上不再是两句各说各的。
+                        summary = "行高＝网格可视高度均分给每一节，再乘下面的「行高」比例；不足一行文字时按一行托底，此时整表改为滚动",
                         checked = Personalization.weekFitViewport,
                         onCheckedChange = {
                             Personalization.weekFitViewport = it

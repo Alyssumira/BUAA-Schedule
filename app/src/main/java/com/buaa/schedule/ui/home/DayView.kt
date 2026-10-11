@@ -1523,9 +1523,13 @@ private fun hhmm(time: LocalTime): String =
  * 本仓钉住的那份 ui-text 里没有 `rememberTextMeasurer`（只有 [TextMeasurer] 本体与它的
  * `measure`），所以自己造一枚、按 (resolver, density, direction) 记忆——density 里就带着
  * fontScale，系统字号一变这一枚就换，跨字号的旧测量值不会留下来。
+ *
+ * T296①：可见性从 private 抬到 internal —— 周网格要用的就是**这同一把尺**，
+ * 再开一份就是"两处各造就会各信各的字体测量值"（`StatsEntryWiringGuardTest` 对本仓这条
+ * 形状的成文判语）。抬visibility不改任何一枚在册锚点的原文。
  */
 @Composable
-private fun rememberTimelineTextMeasurer(): TextMeasurer {
+internal fun rememberTimelineTextMeasurer(): TextMeasurer {
     val resolver = LocalFontFamilyResolver.current
     val measurerDensity = LocalDensity.current
     val direction = LocalLayoutDirection.current
@@ -1548,9 +1552,11 @@ private val TimelineLineSample = "课"
  *
  * 记忆键 = 样式 + fontScale + density，也就是**一台设备一枚样式一次测量**，
  * 不随色块数走：一次测量 = 一次文本排版，一天十几节课乘上去就是白付的首帧账。
+ *
+ * T296①：日视图与周网格共用这一把尺（internal 而非再开一份 private 副本）。
  */
 @Composable
-private fun timelineLineHeightDp(
+internal fun timelineLineHeightDp(
     style: TextStyle,
     textMeasurer: TextMeasurer,
     fontScale: Float,
