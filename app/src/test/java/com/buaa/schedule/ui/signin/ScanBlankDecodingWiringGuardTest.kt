@@ -193,16 +193,31 @@ class ScanBlankDecodingWiringGuardTest {
         for (relative in listOf(REJECT_FILE, VIEW_MODEL_FILE, GATE_FILE, RECOVERY_FILE)) {
             val path = "$MAIN_PREFIX/$relative"
             // T245② 被授权改过 ScanSubmissionGate.kt 的**措辞**（占位的语义 + awaitingUserAction
-            // 有两个写者那两句），所以这一枚的基点前移到 T245②；其余三枚仍按 6a27324 逐字节核对。
+            // 有两个写者那两句），所以这一枚的基点前移到 T245②；其余三枚那时仍按 6a27324 逐字节核对
+            // （状态机那一枚随后由 T257③ 前移、ScanReject.kt 那一枚由 T309① 前移 —— 见下面两段）。
             // 反向钉一枚没删、没放宽：闸门文件从今往后照样"不许顺手改"。
             //
             // T257③ 被授权改过 SignInViewModel.kt 的**漏斗**（那第四处 `if (flight.value) return`
             // 换成 ScanFlightAdmission 分档 + 一句卡面 + 一行 Log.w），所以这一枚的基点同样前移，
             // 前移的实物由下面那枚靶子当场复算（新旧两份状态机逐字节不同才允许不同源）。
             // 状态机从今往后照样"不许顺手改"：改它就得连带重钉这一枚与本文件的反向钉。
+            //
+            // T309① 前移第三枚：REJECT_FILE（ScanReject.kt）的基点从 6a27324 前移到 T302① 那枚提交。
+            // 被授权改的是**四刀委托**：`urlSchemeOf(text)` / `urlPathOf(text)` / `urlAuthority(text)` /
+            // `splitAuthority(it)` 这四处原本同包的裸调用改成跨层写全限定名 `com.buaa.schedule.domain.url.*`，
+            // 另加三行说明注释 —— 写全限定名而不是引 import，是为了不当掉 `ScanTargetParserTest`
+            //「解析层零 import 零 android 零取钟」那道纯度钉（那颗文件今天 `^import ` 行数仍 0，T309① 复算过）。
+            // 四刀的实现本体逐字节搬进 `domain/url/UrlShape.kt`：T309① 把 6a27324 那份（当时住在
+            // IClassQrParser.kt 尾部）与新那份的函数体逐字符对过，四枚全部相同 ⇒ 这一手是行为保持的搬家。
+            // 授权人＝编排者（10-12 裁「并尺合法」：全仓只许一把 authority 刀，#455 那一族「唯一真源旁边
+            // 又各写一遍」在本仓反复出事）；先例就是上面那两次前移（T245②／T257③），处置也照同一套：
+            // 基点前移＋反向钉不删不放宽＋把"被授权的差集到底有多大"钉成可复算的格子（见下面那枚靶子）。
+            // 七档判据、措辞与取证行这一手一个字都没动，所以这颗文件从今往后照样"不许顺手改"：
+            // 谁再动它的判据或措辞，逐字节那一头当场红。
             val rev = when (relative) {
                 GATE_FILE -> T245_GATE_BASELINE
                 VIEW_MODEL_FILE -> T257_VIEW_MODEL_BASELINE
+                REJECT_FILE -> T302_REJECT_BASELINE
                 else -> T87_BASELINE
             }
             val baseline = gitShow(rev, path)
@@ -239,6 +254,64 @@ class ScanBlankDecodingWiringGuardTest {
         assertTrue(
             "新基线的状态机不再问 ScanFlightAdmission（前移的后面不是本卡改的那一手）：",
             newViewModel.contains("scanFlightAdmission("),
+        )
+        // ---- 靶子（T309①，照上面 T257③ 那条先例的写法）：ScanReject.kt 这次前移的差集**恰好**是那四刀＋那段注释 ----
+        // ⚠️ 不许只写成"新旧两份逐字节不同就通过"：那只能证明前移不是白给的，证不了差集里只有被授权的那一手。
+        // 下面四枚格子的期望值全部手写（326 行 / 330 行 / 四刀 / 三行注释），最后一枚才是真防线：
+        // 把新基线里那四刀委托与那段注释**逐字还原**回去，结果必须与旧基线的每一个字节相同。
+        val rejectPath = "$MAIN_PREFIX/$REJECT_FILE"
+        val oldReject = gitShow(T87_BASELINE, rejectPath)
+        val newReject = gitShow(T302_REJECT_BASELINE, rejectPath)
+        check(oldReject != null && newReject != null) {
+            "ScanReject.kt 的两份基线取不到（$rejectPath），靶子无从复算"
+        }
+        val rejectBefore = normalizeNewlines(oldReject)
+        val rejectAfter = normalizeNewlines(newReject)
+        assertTrue(
+            "ScanReject.kt 在 6a27324 与 06214c1 上逐字节相同 ⇒ 基点前移是白给的，这一枚反向钉已经空转",
+            rejectBefore != rejectAfter,
+        )
+        // 格子 1（行数）：旧基线 326 行、新基线 330 行 —— 恰好多 4 行（三行注释＋那一刀被写成两行）
+        assertEquals("ScanReject.kt 在 6a27324 上的行数（手写期望值）：", 326, newlines(rejectBefore))
+        assertEquals("ScanReject.kt 在 06214c1 上的行数＝旧基线＋4：", 330, newlines(rejectAfter))
+        // 格子 2（被改动的表达式）：跨层前缀恰好四枚、四刀各恰好一处、旧基线里一枚都没有（那时还是同包裸调用）
+        assertEquals(
+            "06214c1 里「$T302_DELEGATION_PREFIX」只许出现四刀（第五枚就是又起了一把尺）：",
+            4,
+            occurrences(rejectAfter, T302_DELEGATION_PREFIX),
+        )
+        assertEquals(
+            "6a27324 里不该有跨层委托（那四刀当时是同包的裸调用）：",
+            0,
+            occurrences(rejectBefore, T302_DELEGATION_PREFIX),
+        )
+        for (call in listOf("urlSchemeOf(", "urlPathOf(", "urlAuthority(", "splitAuthority(")) {
+            assertEquals("旧基线里 $call 只许一处：", 1, occurrences(rejectBefore, call))
+            assertEquals("新基线里 $call 只许一处（两处＝签到这一族自己又写了一遍）：", 1, occurrences(rejectAfter, call))
+        }
+        // 格子 3（那段注释）：必须**逐字**还是那三行，而且旧基线里没有它（有就说明基线取错了、量不出事）
+        val rejectCommentBlock = T302_REJECT_COMMENT_LINES.joinToString("\n")
+        assertEquals("T302① 补的那段说明注释是 3 行：", 3, T302_REJECT_COMMENT_LINES.size)
+        assertEquals("那段注释在新基线里只许一处：", 1, occurrences(rejectAfter, rejectCommentBlock))
+        assertTrue(
+            "新基线里没有那段逐字的授权注释（被前移的那一手不是被授权的形状，措辞被改过）：\n$rejectCommentBlock",
+            rejectAfter.contains(rejectCommentBlock),
+        )
+        assertTrue("旧基线里已经带着那段注释（基线取错了，这么比量不出任何东西）：", !rejectBefore.contains(T302_REJECT_COMMENT_HEAD))
+        // 格子 4（真防线）：还原四刀＋那段注释之后必须逐字节落回旧基线。差集里多一个字符（换判据、改措辞、
+        //              动取证行、把代码挪个位置）都红在这里，而不是红在"顺手换个 sha"。
+        val rejectUnfolded = rejectAfter.replace("$rejectCommentBlock\n", "")
+        assertEquals("抹掉那三行注释之后是 327 行（330-3）：", 327, newlines(rejectUnfolded))
+        assertEquals("那一刀在新基线里必须是 T302① 的两行形状（找不到就没法把它并回去）：", 1, occurrences(rejectUnfolded, T302_REJECT_PARTS_NEW))
+        val rejectRejoined = rejectUnfolded.replace(T302_REJECT_PARTS_NEW, T302_REJECT_PARTS_OLD)
+        assertEquals("把换行的那一刀并回一行之后是 326 行（与旧基线同行数）：", 326, newlines(rejectRejoined))
+        val rejectRebuilt = rejectRejoined.replace(T302_DELEGATION_PREFIX, "")
+        assertEquals("四刀该还原干净（跨层前缀归零）：", 0, occurrences(rejectRebuilt, T302_DELEGATION_PREFIX))
+        assertEquals(
+            "ScanReject.kt 相对 6a27324 的差集不只有「那四刀委托＋那段注释」：逐字还原回去之后还剩别的改动 ⇒ " +
+                "七档判据、措辞或取证行被顺手改过，这一枚基点前移不成立、得回退 T302① 那一手",
+            rejectBefore,
+            rejectRebuilt,
         )
         val statusPath = "$MAIN_PREFIX/$STATUS_FILE"
         val statusBaseline = gitShow(T87_BASELINE, statusPath)
@@ -391,6 +464,13 @@ class ScanBlankDecodingWiringGuardTest {
         }
     }
 
+    /**
+     * 换行符枚数（＝ `wc -l` 那把尺，两枚独立数据源都对得上 326 / 330）。
+     * 用 `count("\n")` 而不是 `lines().size`：后者"结尾那个换行算不算一行"是 stdlib 的口径，
+     * 而 ⑤b 的靶子期望值是**手写字面数**，钉的必须是与我复算时同一把尺。
+     */
+    private fun newlines(text: String): Int = occurrences(text, "\n")
+
     /** `git show <rev>:<path>`；取不到（没 git / 没这个对象）返回 null，由调用方判失败而不是静默通过 */
     private fun gitShow(rev: String, path: String): String? = try {
         val process = ProcessBuilder("git", "show", "$rev:$path")
@@ -475,6 +555,36 @@ class ScanBlankDecodingWiringGuardTest {
          * 所以 [VIEW_MODEL_FILE] 的逐字节基点前移到这一枚 —— 靶子在本条守卫里当场复算。
          */
         const val T257_VIEW_MODEL_BASELINE = "00b0b51"
+
+        /**
+         * T302①（由编排者 10-12 裁「并尺合法」授权）把 [REJECT_FILE] 里那四刀同包裸调用改成跨层委托
+         * `com.buaa.schedule.domain.url.*` 并补了三行说明注释，所以这一枚的逐字节基点前移到那一枚。
+         *
+         * 前移不是白给的，也不是放松：差集的形状由 ⑤b 那枚靶子当场复算（期望值手写），
+         * 还原回去必须逐字节落回 [T87_BASELINE] —— 从今往后动 ScanReject.kt 的判据或措辞就红在这里。
+         */
+        const val T302_REJECT_BASELINE = "06214c1"
+
+        /** 那四刀共用的跨层前缀：靶子按枚数钉它（新基线恰好 4 枚、旧基线 0 枚、还原后归零） */
+        const val T302_DELEGATION_PREFIX = "com.buaa.schedule.domain.url."
+
+        /** 那句「T302①：这三刀……」的起头（旧基线里必须没有，否则基线取错了） */
+        const val T302_REJECT_COMMENT_HEAD = "// T302①：这三刀"
+
+        /** T302① 补的那段说明注释，**逐字三行**（改了措辞就不叫"被授权的那一段"，还原也还原不回去） */
+        val T302_REJECT_COMMENT_LINES = listOf(
+            "            // T302①：这三刀（scheme / path / authority+port）搬进了 domain/url/UrlShape.kt ——",
+            "            // 全仓只许一枚 authority 刀，签到那一路与教务会话那一路共用同一把尺子。",
+            "            // 跨层写全限定名：本文件的零 import 行由 ScanTargetParserTest 的纯度守卫钉着。",
+        )
+
+        /** 被改写成两行的那一刀（新基线形状）与它原本的一行（旧基线形状）：靶子用这一对把行数对回去 */
+        const val T302_REJECT_PARTS_NEW =
+            "            val parts = if (urlShaped) com.buaa.schedule.domain.url.urlAuthority(text)\n" +
+                "                ?.let { com.buaa.schedule.domain.url.splitAuthority(it) } else null"
+
+        const val T302_REJECT_PARTS_OLD =
+            "            val parts = if (urlShaped) urlAuthority(text)?.let { splitAuthority(it) } else null"
 
         /** 真码形状（值本身是假的，滚动码的真值永远不该出现在这里） */
         val realCode =
