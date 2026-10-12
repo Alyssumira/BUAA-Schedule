@@ -155,21 +155,27 @@ internal sealed interface SemesterRenameSaveStep {
      * `SemesterEntity` 的 `@PrimaryKey(autoGenerate = true)` 另号 ⇒「最近写入的 = 当前学期」
      * 在这一枚站点是真的（与 `switchSemester` 那一路的 `copy(id = 0L)` 同形）。
      *
-     * ⚠️ 改前那一形（T304 之前逐字，登记在册、不许接回去）：写侧交的是这枚步骤带进来的那枚号本尊，
-     * 而它是设置页从库里读出来又原样递回来的 ⇒ REPLACE 命中同一个 rowid、不新增行，
-     * 上一段那句「由 Room 自增」根本没发生；细节见本文件段首「在册 C1」那一节。
+     * ⚠️ 改前那一形（逐字登记在册、不许接回去）：`semesterDao.insert(step.semester.toEntity())` ——
+     * 写侧交的是这枚步骤带进来的那枚号本尊，而它是设置页从库里读出来又原样递回来的 ⇒
+     * 同一趟 `DeleteRowsForTermCode` 刚按 termCode 删过那一枚行，带旧号走 REPLACE 命中同一个 rowid、
+     * **不新增行**，上一段那句「由 Room 自增」根本没发生；那一枚号此刻若被别的 termCode 的行持有
+     * （跨事务的陈旧快照）就被整行顶掉。细节见本文件段首「在册 C1（T304）」那一节。
      */
     data class WriteSemesterRow(val semester: Semester) : SemesterRenameSaveStep {
 
         /**
          * 真正交回写侧的那一行 —— 派生字段落在**类体属性**上（本仓只有两条落点：类体属性 /
          * 每枚构造站点各配守卫），于是构造这一枚步骤的人没有「自己记得抹号」这件事可做，
-         * 写侧也只有 [rowToWrite] 一枚可吃。取值口径是 [semesterWritePrimaryKeyLanding] 的分档本体。
+         * 写侧也只有 [rowToWrite] 一枚可吃。取值口径就是 [semesterWritePrimaryKeyLanding] 的分档本体，
+         * 号不在这儿另算一遍。
          *
-         * `semester.id` 本来就是 0L（本来就是新行那一格）时这一手**幂等**：多抹一次还是 0L，
-         * 不许多插一行、也不进任何违规档。
+         * `semester.id` 本来就是 0L（本来就是新行那一格）时走 [SemesterWritePrimaryKeyLanding.LandsAsFreshRow]
+         * 那一支：原样带走，**幂等** —— 不许多插一行，也不许把这一格判成违规。
          */
-        val rowToWrite: Semester = semester.copy(id = FRESH_ROW_PRIMARY_KEY)
+        val rowToWrite: Semester = when (semesterWritePrimaryKeyLanding(semester.id)) {
+            SemesterWritePrimaryKeyLanding.LandsAsFreshRow -> semester
+            is SemesterWritePrimaryKeyLanding.LandsOnSnapshotRow -> semester.copy(id = FRESH_ROW_PRIMARY_KEY)
+        }
     }
 }
 
