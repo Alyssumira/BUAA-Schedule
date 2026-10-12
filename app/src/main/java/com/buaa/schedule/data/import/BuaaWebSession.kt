@@ -50,8 +50,12 @@ object BuaaWebSession {
     /**
      * 教务站点 origin：会话判定、页面内接口（[BuaaInPageFetcher]）、登录回跳地址
      * 共用这一份，避免各处字面量漂移（R5 F-39）。
+     *
+     * T302①：字面量本体搬到了 `domain/url/EduWebOrigin.kt`（唯一真源），这里只留一枚别名 ——
+     * 「是不是教务 origin」那句话由 [com.buaa.schedule.domain.url.eduDocumentVerdict] 说，
+     * 本文件不再拿它做前缀比较（在册 #515：`:354`/`:605` 带斜杠、`:120` 不带斜杠，两把尺各自说谎）。
      */
-    const val BYXT_ORIGIN = "https://byxt.buaa.edu.cn"
+    const val BYXT_ORIGIN = com.buaa.schedule.domain.url.EduWebOrigin.ORIGIN
 
     private const val SESSION_ENTRY_URL = "$BYXT_ORIGIN/jwapp/sys/homeapp/index.do"
 

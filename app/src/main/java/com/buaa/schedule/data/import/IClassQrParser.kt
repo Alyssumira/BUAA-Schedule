@@ -46,7 +46,8 @@ object IClassQrParser {
      * 门槛四道，缺一律不认：
      * 1. 绝对 http(s) URL；
      * 2. host 逐字等于 [IClassSignUrl.HOST]（拿 authority 切出来的 host 比对，不是 `contains`：
-     *    `iclass.buaa.edu.cn:8081.evil.com` 那种后缀伪装在 [splitAuthority] 那一刀就掉了）；
+     *    `iclass.buaa.edu.cn:8081.evil.com` 那种后缀伪装在
+     *    [com.buaa.schedule.domain.url.splitAuthority] 那一刀就掉了）；
      * 3. 路径落在 [SCAN_SIGN_ROUTE] 上（见那里写的理由）；
      * 4. query 里有非空 `courseSchedId`。
      *
@@ -62,10 +63,12 @@ object IClassQrParser {
         ) {
             return null
         }
-        val authority = urlAuthority(text) ?: return null
+        val authority = com.buaa.schedule.domain.url.urlAuthority(text) ?: return null
         // 端口不参与"是不是这张码"的判定（没有 :8081 的形态也认），但决定提交前要不要升级，
         // 那一步在 IClassSignUrl.upgradeToTls —— 它才对 host+端口这一**对**较真。
-        val host = splitAuthority(authority)?.first ?: return null
+        // T302①：这一刀搬到了 domain/url/UrlShape.kt（全仓一枚），跨层调用写全限定名 ——
+        // 本文件的零 import 行是 ScanTargetParserTest 那枚纯度守卫钉着的，不许为了少打几个字请回 import。
+        val host = com.buaa.schedule.domain.url.splitAuthority(authority)?.first ?: return null
         if (!host.equals(IClassSignUrl.HOST, ignoreCase = true)) return null
         if (!isScanSignRoute(text)) return null
         val schedId = queryValue(text, COURSE_SCHED_ID) ?: return null
@@ -80,11 +83,13 @@ object IClassQrParser {
      * 为什么不整串 `contains`：参数值里也可能出现这个字符串（`?back=…stu_scan_sign.action`），
      * 那时候这张码根本不是签到入口，而是别的东西包了一层。
      *
-     * T83：切 path 那一步搬到 [urlPathOf]（同一刀，[ScanRejectClassifier] 说 WrongRoute 那一档
+     * T83：切 path 那一步搬到 [com.buaa.schedule.domain.url.urlPathOf]（同一刀，
+     * [ScanRejectClassifier] 说 WrongRoute 那一档
      * 时要念它），本函数的判据一个字没动 —— 否则"收不收"与"为什么没收"就长成了两把尺子。
+     * T302① 那一刀与上面两枚一起住进 `domain/url/UrlShape.kt`：全仓只许一枚 authority/path 刀。
      */
     private fun isScanSignRoute(url: String): Boolean =
-        urlPathOf(url)?.endsWith(SCAN_SIGN_ROUTE) == true
+        com.buaa.schedule.domain.url.urlPathOf(url)?.endsWith(SCAN_SIGN_ROUTE) == true
 
     /**
      * query 取值（键名大小写不敏感）：只看 `#` 之前那一截 —— 这张码没有 hash 路由。
@@ -122,74 +127,4 @@ object IClassQrParser {
         }
         return pairs
     }
-}
-
-/**
- * 取一条绝对 URL 的 authority（`://` 之后、第一个 `/ ? #` 之前那段），取不到返回 null。
- *
- * 为什么不用 `java.net.URI`：这一族的码是从**投影照片**上解出来的，实测那串的常见形状里
- * 会有 URI 拒收的字符（未编码的空格、`{}`、`|`），而"URI 解不开"不等于"不是这张码"。
- * 手写切一段反而逐字可控：host 与端口都留在返回值里，谁要用谁自己按最后一个 `:` 分。
- */
-internal fun urlAuthority(url: String): String? {
-    val separator = url.indexOf("://")
-    if (separator <= 0) return null
-    val start = separator + 3
-    if (start >= url.length) return null
-    var end = url.length
-    for (index in start until url.length) {
-        val c = url[index]
-        if (c == '/' || c == '?' || c == '#') {
-            end = index
-            break
-        }
-    }
-    return if (end > start) url.substring(start, end) else null
-}
-
-/**
- * 一条绝对 URL 的 scheme（`://` 之前那段，逐字取、小写归一）；不是这个形状时返回 null。
- *
- * 判据不吃它（"是不是这张码"与 http/https 无关，见 [IClassQrParser] 的门槛四），
- * 它只服务 T83 那一行取证：`http:` 与 `https:` 是两种现场（前者才需要 [IClassSignUrl.upgradeToTls]）。
- */
-internal fun urlSchemeOf(url: String): String? {
-    val separator = url.indexOf("://")
-    if (separator <= 0) return null
-    return url.substring(0, separator).lowercase()
-}
-
-/**
- * 一条绝对 URL 的 path（authority 之后、第一个 `?` 之前，且只看到 `#` 为止）；没有 path 段时 null。
- *
- * 刀法与 [urlAuthority] 同一份：先 `substringBefore('#')` 再找 `?`，所以
- * `http://h/p?x=1#/y?q=2` 的 path 是 `/p`、`http://h/p#/y?q=2` 的也是 `/p`。
- * 这一刀原来是 [IClassQrParser.isScanSignRoute] 内联写的，T83 搬出来共用 ——
- * 判档的那一把尺子与收码的那把必须是同一把，两把就会有一把说谎。
- */
-internal fun urlPathOf(url: String): String? {
-    val head = url.substringBefore('#')
-    val separator = head.indexOf("://")
-    if (separator <= 0) return null
-    val pathStart = head.indexOf('/', separator + 3)
-    if (pathStart < 0) return null
-    val queryStart = head.indexOf('?', pathStart).let { if (it < 0) head.length else it }
-    return head.substring(pathStart, queryStart)
-}
-
-/**
- * authority 拆成 (host, port)：无端口时 port 是空串。
- *
- * 切的是**最后一个**冒号（host 里出现冒号只可能是端口分隔符），并且要求端口是纯数字，
- * 否则整段判为畸形返回 null。两条都是为后缀伪装准备的：
- * `iclass.buaa.edu.cn:8081.evil.com` 按 `startsWith` 会过关，按这一刀就落到
- * port=`8081.evil.com`（非数字）⇒ null ⇒ 不是这一族的码。
- * `user:pass@host` 同理（port 段带着 `@`，非数字）。
- */
-internal fun splitAuthority(authority: String): Pair<String, String>? {
-    val at = authority.lastIndexOf(':')
-    if (at < 0) return authority to ""
-    val port = authority.substring(at + 1)
-    if (port.isEmpty() || !port.all { it.isDigit() }) return null
-    return authority.substring(0, at) to port
 }

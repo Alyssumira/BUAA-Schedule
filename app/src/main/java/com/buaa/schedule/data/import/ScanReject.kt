@@ -130,8 +130,8 @@ object ScanRejectClassifier {
         val length: Int = text.length
         val urlShaped: Boolean =
             text.startsWith("http://", ignoreCase = true) || text.startsWith("https://", ignoreCase = true)
-        val scheme: String? = if (urlShaped) urlSchemeOf(text) else null
-        val path: String? = if (urlShaped) urlPathOf(text) else null
+        val scheme: String? = if (urlShaped) com.buaa.schedule.domain.url.urlSchemeOf(text) else null
+        val path: String? = if (urlShaped) com.buaa.schedule.domain.url.urlPathOf(text) else null
 
         /**
          * 参数名只看 `#` 之前那一截 query —— 与 [IClassQrParser.queryParamNames] 同一刀，
@@ -144,7 +144,11 @@ object ScanRejectClassifier {
         val port: String?
 
         init {
-            val parts = if (urlShaped) urlAuthority(text)?.let { splitAuthority(it) } else null
+            // T302①：这三刀（scheme / path / authority+port）搬进了 domain/url/UrlShape.kt ——
+            // 全仓只许一枚 authority 刀，签到那一路与教务会话那一路共用同一把尺子。
+            // 跨层写全限定名：本文件的零 import 行由 ScanTargetParserTest 的纯度守卫钉着。
+            val parts = if (urlShaped) com.buaa.schedule.domain.url.urlAuthority(text)
+                ?.let { com.buaa.schedule.domain.url.splitAuthority(it) } else null
             // 空 host（`http://:8081/x` 那一类畸形写法）连同它后面那枚端口一起按"读不出服务器"处理：
             // 措辞那一头是拿 host==null 说"认不出是哪台的码"的，留一枚孤零零的端口只会拼出半句话
             val readableHost = parts?.first?.lowercase()?.takeIf { it.isNotEmpty() }

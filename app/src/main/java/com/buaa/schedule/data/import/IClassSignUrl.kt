@@ -48,8 +48,10 @@ object IClassSignUrl {
         val separator = raw.indexOf("://")
         if (separator <= 0) return raw
         if (!raw.substring(0, separator).equals("http", ignoreCase = true)) return raw
-        val authority = urlAuthority(raw) ?: return raw
-        val parts = splitAuthority(authority) ?: return raw
+        // T302①：这两刀搬到 domain/url/UrlShape.kt（全仓一枚 authority 刀）。跨层写全限定名，
+        // 不是为了好看 —— 本文件的零 import 行由 ScanTargetParserTest 的纯度守卫钉着。
+        val authority = com.buaa.schedule.domain.url.urlAuthority(raw) ?: return raw
+        val parts = com.buaa.schedule.domain.url.splitAuthority(authority) ?: return raw
         if (!parts.first.equals(HOST, ignoreCase = true) || parts.second != CLEARTEXT_PORT) return raw
         val rest = raw.substring(raw.indexOf(authority, separator + 3) + authority.length)
         return "https://$HOST:$TLS_PORT$rest"
