@@ -5636,33 +5636,35 @@ T260（编辑器保存链收尾）与 T261（更新链三处静默）按序 cher
 （`ls domain/` 只有 calendar/editor/model/onboarding/schedule/update/widget，全仓无 `service/` 包）。
 盘上真相是审计自己写的那两枚：`reminder/BootReceiver.kt`、`widget/ColdStartRebuild.kt`。
 
+**本节所有行号都是"改前"状态，以 `b4fc983` 为准；写成 `X.kt` 的 `:NNN` 这种不断开的形式，是为了不让它被全仓锚点尺当成一枚活锚去重钉。**
+
 **四处读组（逐枚 `awk` 读回的原文，非审计摘要）**：
 
-1. `widget/BackgroundSync.kt:135-139` —— `val repository = context.scheduleRepository()` /
+1. `widget/BackgroundSync.kt` 的 `:135-139` —— `val repository = context.scheduleRepository()` /
    `val semester = repository.getCurrentSemester()` / `val courses = repository.getDisplayCourses(semester)` /
    `val timeSlots = repository.getTimeSlots()` / `val reminders = repository.getReminders().associateBy { it.courseId }`。
-2. `reminder/ClassProgressScheduler.kt:431-440`（`rescheduleNextWindow` 的注入 loader）—— `:432` 学期行、
+2. `reminder/ClassProgressScheduler.kt` 的 `:431-440`（`rescheduleNextWindow` 的注入 loader）—— `:432` 学期行、
    `:435` `courses = repository.getDisplayCourses(semester),`、`:440` `timeSlots = repository.getTimeSlots(),`。
-   它可达的条件在 `widget/BackgroundSync.kt:267-273`：`:267 val reminderArmed = rescheduleReminders(...)` ⇒
+   它可达的条件在 `widget/BackgroundSync.kt` 的 `:267-273`：`:267 val reminderArmed = rescheduleReminders(...)` ⇒
    `:268 if (!reminderArmed) {` ⇒ `:273 ClassProgressScheduler.rescheduleNextWindow(context, onStepFailed)`。
-3. `widget/WidgetDataSynchronizer.kt:128-129`（`getAllSemesters()` + `getCurrentSemester()`）+ `:146-147`
+3. `widget/WidgetDataSynchronizer.kt` 的 `:128-129`（`getAllSemesters()` + `getCurrentSemester()`）+ `:146-147`
    （`getTimeSlots = { repository.getTimeSlots() },` / `getDisplayCourses = { repository.getDisplayCourses(it) },`）。
    乘数在 `:264-285` 的排产本体：`:271 val timeSlots = getTimeSlots()`（整轮一次，T7 已收）+
    `:272 keys.map { ... getDisplayCourses(semester) }`，而 `keys` = `"current"` ∪ 每枚 `termCode`（`:131-134`）
    ⇒ **课程表被读 K = 学期数 + 1 遍**（同文件 `:118` 自己写的口径："每轮 1 趟节次表 + K 趟课程"）。
-4. `widget/BackgroundSync.kt:444-447`（`scheduleTomorrowPreview`）—— `:445` 学期行、
+4. `widget/BackgroundSync.kt` 的 `:444-447`（`scheduleTomorrowPreview`）—— `:445` 学期行、
    `:447` `courses = repository.getDisplayCourses(semester),`。
 
 **链同一性（三处入口，逐枚核过，入口之间零写入）**：
-`reminder/BootReceiver.kt:77-80` 四步全在同一次 `WakeLocks.withPartialWakeLock(...)` 的 `:38` block 里
+`reminder/BootReceiver.kt` 的 `:77-80` 四步全在同一次 `WakeLocks.withPartialWakeLock(...)` 的 `:38` block 里
 （`:77 rescheduleRemindersAndBells` / `:78 refreshWidgets` / `:79 scheduleWidgetMidnight` / `:80 scheduleTomorrowPreview`）；
-`widget/ColdStartRebuild.kt:181` + `:185` 是同一个 `run(context)` 递进闸门的两半，
-而 `runColdStartWidgetSteps`（`widget/BackgroundSync.kt:483-495`）把 `refreshWidgetData = { syncAndRedrawAllWidgets(context) }`
+`widget/ColdStartRebuild.kt` 的 `:181` + `:185` 是同一个 `run(context)` 递进闸门的两半，
+而 `runColdStartWidgetSteps`（`widget/BackgroundSync.kt` 的 `:483-495`）把 `refreshWidgetData = { syncAndRedrawAllWidgets(context) }`
 与 `scheduleTomorrowPreview = { scheduleTomorrowPreview(context) }` 接的是同一枚 Context；
-`ui/ScheduleViewModel.kt:1195-1199` 的 `afterDataChangedInternal()` —— **审计给的 `:1177-1181` 已漂 +18**，
+`ui/ScheduleViewModel.kt` 的 `:1195-1199` 的 `afterDataChangedInternal()` —— **审计给的 `:1177-1181` 已漂 +18**，
 它是每一次改课表 / 改提醒 / 改节次的收尾，`viewModelScope` 一条协程。
 
-**仓储层无缓存**：`data/repository/ScheduleRepository.kt:207`
+**仓储层无缓存**：`data/repository/ScheduleRepository.kt` 的 `:207`
 `suspend fun getCurrentSemester(): Semester? = semesterDao.getCurrent()?.toDomain()`（`:215` 节次、
 `:226-233` 展示口径课程 = `courseDao.getDisplay(semester.termCode)`，`semester == null` 那一档走 `getAll()`），
 每一次调用都是一趟查询。
@@ -5680,7 +5682,7 @@ T260（编辑器保存链收尾）与 T261（更新链三处静默）按序 cher
 那句"11"只有把 #3 的 K 趟折成 1 趟、再漏掉 `getReminders`/`getAllSemesters` 才凑得出。
 
 **第⓪问裁定：甲 —— 一枚链内快照载体，在入口造好、当参数传给提醒/组件/续排/预告四步。**
-依据是本仓自己写下的那条先例，不是我的偏好：`widget/BackgroundSync.kt:315-317`
+依据是本仓自己写下的那条先例，不是我的偏好：`widget/BackgroundSync.kt` 的 `:315-317`
 「共享方式是把结论**当参数传下去**而不是缓存起来 —— 没有缓存就没有陈旧问题」，
 `:469-473` 又把"顺手引入缓存"点名成「漏一次 invalidate 就让新组件永远不刷新」那类事故的形状；
 T10（`runColdStartWidgetSteps` 的注入 seam）与 T43（`WidgetDataSynchronizer` 的脏 key 写侧）走的都是
@@ -5720,3 +5722,24 @@ T10（`runColdStartWidgetSteps` 的注入 seam）与 T43（`WidgetDataSynchroniz
 `ColdStartRebuildWiringTest`（闸门接线两枚逐字）、`ColdStartRebuildTest`（seam 形参形状）。
 `bellRescheduleCallSitesAreTheKnownSixRepoWide` 的"带报告口的调用点恰好一枚"判的是实参里有没有逗号，
 新增的第三个实参落在 BackgroundSync 那一处 ⇒ 集合与计数都不动。
+
+### 45 `gate/13` 一趟合入三张卡（T295＋T296＋T297）；我这轮的尺子骗了我两次，两种新形状
+
+合并对象：BASE `b4fc983` ＋ `ai/T295`（4 枚）＋ `ai/T296`（4 枚）＋ `ai/T297`（6 枚）＝ `on_top=14` ⇒ 快进到 `f2e5fb6`，`master:app/src` 与被验对象逐字节同一枚（两棵树都是 `64fcbc40278c3b1b41bb77e8bb0c2cd058475a21`）。被跳过的 7 枚全是 `--allow-empty` 的纯证据段（T295 的 ⓪④W④N⑤、T296 的 ⓪④⑤），cherry-pick 不吃空提交，消息全文已导出到 `.tmp/dev-2026-10-07/gate13-skipped-evidence.txt` 留档——同族教训在册：`--allow-empty` 的证据段会被 cherry-pick 吃掉，合完当场要 `git show -s` 导出。
+
+门禁（我自己的冷跑：`--no-daemon -Pkotlin.compiler.execution.strategy=in-process -Dorg.gradle.workers.max=1 --continue`，JAVA_HOME `D:/AndroidSDK/jdk-21`）：assembleRelease 6m10s ⇒ **APK 7,316,541 B** → testDebugUnitTest --rerun-tasks 4m14s（`xml_before=0` → 349 枚 XML、**2,686 tests · 0 failures · 0 errors · 0 skipped**，XML 内 `timestamp` 落在 02:48:42Z–02:49:09Z，在我 02:45:04Z 起跑的那格窗口里）→ lintDebug 4m33s（**0 error · 18 warning**，比上一档 −1；直方图前五 `NewerVersionAvailable` 5、`GradleDependency` 3、`FrequentlyChangingValue` 2、`ConfigurationScreenWidthHeight` 2、`WebViewApiAvailability` 1）。三步各 RC 0 且日志内 `BUILD SUCCESSFUL`。
+
+静态尺现算：`^    @Test` **2,686** ＝ XML 枚数（成对尺没破）；`*Guard*.kt` **112 → 115**（新增 `ReleaseArtifactSignerSingleRulerGuardTest`、`WeekViewLineBudgetWiringGuardTest`、`ChainReadSnapshotWiringGuardTest`）；docs＋README 锚点尺 **588**；`SettingsScreen.kt` 那把配对尺 `privacyConsentAt`=4 / `showPrivacyDialog`=7 与 master 原值逐枚相同 ⇒ T280 的 payload 驱动修法没被这三张里任何一张顶回。同批四档包体读数：T295 自报 7,314,506、T296 自报 7,315,880、T297 自报 7,316,618、合并态 7,316,541 ⇒ 极差 2,112 B，**单次全量只是一个读数，不立地板**（本仓已证"±几百字节不许归因给代码"）。
+
+三张卡各落地了什么：**T295** 把可发布产物的名字改成跟着实测签名者走、provenance 里 `signedBy` 成一枚一等键、发版步骤被闸门住（在册 #535 那半条"不可上架的包打满绿灯"）；**T296** 把 `WeekView` 的行预算从被 T61b① 否掉的标称尺换成实测内核 `WeekViewLineBudget`（零 import，守卫把 import 清单钉成空），块上 `clipToBounds()` 兜没量过的字体，设置页补一格口径说明，并把 `DayTimelineBlockLinesWiringGuardTest` 的锚点从 `private fun timelineLineHeightDp(` 改钉 `internal fun`（#537 的 F1/F2/F3）；**T297** 按 #536/F2 的甲档把 `ChainReadSnapshot` 在入口造好、当参数传给提醒／组件／续排／预告四步，同一枚后台链的 Room 往返 **15 → 6**。
+
+崩盘与救援的形状没变：T295、T297 都在 150 回合上限触顶，回收都走"新 worktree 续派＋`cherry-pick -x`＋编排者把未落盘文件 `cp` 到 `.tmp` 只读交出"，两回都跑通。**回收卡第 0 步是先编译**这条规矩又值回票价：T297 的"已提交"段落里揪出 6 枚编译雷（`/*` 嵌在 KDoc 里、`$fn(...)` 模板、后缀碰撞的探针要改成减法、`List<Map.Entry>` 对 `List<Pair>`、切不出表达式体函数的 `functionBlock` ⇒ 新加 `lambdaBlock(..., "loadWindowInput = load@{")`、以及一枚匹配 0 处的死 needle `repository().getCurrentSemester()` 把反向登记表念成空），T286 上一轮 5 枚，T295 本轮 0 枚。**"提交过"从来不等于"编译过"**（在册 #534）。
+
+我这轮犯的两把度量错，形状都是新的，各记一条：
+
+1. **尺子从提示符搬进脚本文件，转义层就换了。** 脚本里那行 `grep -rhoE '[A-Za-z0-9_]+\\.kt:[0-9]+'`，ERE 把它读成"字面反斜杠＋任意字符"，于是在同一棵树、同一条命令，手敲 588 而脚本报 **0**。这是 needle 落错层的第四种形状（① 落错文件、② 落错工作目录、③ 被 shell 削掉 `\|`／`\!`、④ **换执行载体＝换转义层**）。规矩：判据搬进脚本后第一次跑必须先与手敲对表；**读到 0 而期望非 0 时先判"我的尺坏了"，不许判"对象是空的"**。
+2. 收单前置检查里我自己现造的"守卫点名了哪些文件"那把尺（`grep -oE '[A-Za-z0-9_/.-]+\.kt'`）报出两枚 MISSING，逐行 `grep -n` 回读原文都是假阳性——`$FORENSIC_CLASS_SIMPLE.kt` 是一枚字符串模板、`app/build.gradle.kt` 是被我的正则截断的 `.kts`。真结论是**三枚新守卫点名的每一枚文件都存在**（这检查本是防"注释宣布某守卫钉住了 X，而 X 从未存在"那类最贵的假绿）。⇒ "数出来先抽 3–5 格回读原文"这条再记一次。
+
+锚点尺一度到 **599**：多出的 11 处全来自 `8918248`（T297⓪ 的改前证据表，按提交逐枚归因）。处置是把行号从文件名后面断开——原来"文件名＋冒号＋行号"连写的那一种，改成 `` `X.kt` 的 `:135-139` `` 这种中间断开的形式，并在段首补一句"本节所有行号都是改前状态，以 `b4fc983` 为准"。这不是把尺子调松——尺子要能一眼区分"有人加了活锚"与"有锚烂了"，而改前证据本来就不该被当成活锚去重钉。复算：`git diff -U0` 删 11 行、加 13 行，11 枚行首逐枚回读没被吃。
+
+盘面与欠账：`master=f2e5fb6`，未推枚数 **23**（`git rev-list --count origin/master..master` 现算；远端 tip 仍 `d3cc73f`、`behind=0`）。**push 与发版都还没批**——上一句"推然后继续"覆盖的是 `d3cc73f` 那一档，不算对这 23 枚的授权。本轮零设备、零装机验证（#98 那批扫码页四态、T281 的"被顶号那门课回没回来"、#524 的日期族都还只到结构层）。三枚只读审计卡（T299 持久层／T300 原生桥与 R8／T301 组件渲染链）与这趟门禁并行跑着，交回后按同一口径去重登记。
