@@ -224,15 +224,15 @@ object SemesterStats {
     }
 
     /**
-     * 参与计算的周数：学期总周数优先，没有学期行时用数据里出现过的最大周次。
-     * 两者都钳到 [CourseConstraints.MAX_TOTAL_WEEKS]，且恒 ≥ 1（下面要拿它当除数）。
+     * 参与计算的周数：问具名读数 [SemesterWeekCount.readable]，它答 null（没有学期行、或那一枚是脏的 ≤ 0）
+     * 时才退到数据里出现过的最大周次；两路都钳到 [CourseConstraints.MAX_TOTAL_WEEKS]，且恒 ≥ 1（要当除数）。
      *
      * T51 起对同目录的图表内核开放（[CourseWeekSpans.board] /
      * [WeekFreeGrid.gridOf] / [WeeklyLoadTrend.trendOf]）：横轴长度一旦有第二套算法，
      * 三张图和统计页那句"共 N 周"就会各说各话。
      */
     fun weekAxisLength(courses: List<Course>, semester: Semester?): Int {
-        val weeks = semester?.totalWeeks?.takeIf { it > 0 }
+        val weeks = SemesterWeekCount.readable(semester?.totalWeeks)
             ?: courses.asSequence().flatMap { it.weeks.asSequence() }.maxOrNull()
             ?: 1
         return weeks.coerceIn(1, CourseConstraints.MAX_TOTAL_WEEKS)

@@ -1,7 +1,7 @@
 package com.buaa.schedule.ui.home
 
 import com.buaa.schedule.domain.model.Course
-import com.buaa.schedule.domain.schedule.CourseConstraints
+import com.buaa.schedule.domain.schedule.SemesterWeekCount
 
 /**
  * 「没有学期」时首页那一排周次控件的判据内核（T197）。
@@ -88,13 +88,16 @@ internal fun shouldOfferTimeModeToggle(selectedTab: Int, weekTab: Int): Boolean 
  *
  * - 没有学期 ⇒ **空清单**（改前这里是就地物化的 `(1..totalWeeks).toList()`，而那一枚 totalWeeks
  *   就是文件头点名的假 20 ⇒ 真列出 20 行、真能点）；
- * - 有学期 ⇒ 与改前逐字同：`(1..totalWeeks.coerceIn(1, MAX_TOTAL_WEEKS)).toList()`，
- *   下界 1、上界 30 一枚不许动（"兼容历史脏数据：总周数限幅，避免跳周列表物化超大列表"那笔账照旧）；
- * - `hasSemester` 为真而周数取不到：按空清单处理，宁可少给一排也不凭空造一排周号。
+ * - 有学期 ⇒ 区间由那枚具名读数 [SemesterWeekCount.readable] 给出（上界 30 那笔"兼容历史脏数据：
+ *   总周数限幅，避免跳周列表物化超大列表"的账现在只长在读数里一处，本文件不再自己夹）；
+ * - `hasSemester` 为真而周数取不到、**或学期行那一枚是脏的 ≤ 0**（T331 收 #452）：按空清单处理。
+ *   改前 0 被 `coerceIn` 折成 1 ⇒ 清单真能点出「第 1 周」，而同一学期在判据尺 `TermWeekGate`
+ *   那里一周都不在学期内 —— 清单里点得开的门与判据尺说没有的那一周必须是同一批。
  */
 internal fun weekChoicesFor(hasSemester: Boolean, totalWeeks: Int?): List<Int> {
-    if (!hasSemester || totalWeeks == null) return emptyList()
-    return (1..totalWeeks.coerceIn(1, CourseConstraints.MAX_TOTAL_WEEKS)).toList()
+    val weeks = if (hasSemester) SemesterWeekCount.readable(totalWeeks) else null
+    if (weeks == null) return emptyList()
+    return (1..weeks).toList()
 }
 
 /**
@@ -108,7 +111,8 @@ internal fun shouldDrawSemesterProgress(hasSemester: Boolean): Boolean = hasSeme
 /**
  * 两枚「这学期多少周」的结论，一份函数：`(Pager 页数, 不是每周都有的分母)`。
  *
- * - 有学期：两枚都是学期总周数（夹取语义与改前逐字同，下界 1 上界 [CourseConstraints.MAX_TOTAL_WEEKS]）；
+ * - 有学期：两枚都是具名读数 [SemesterWeekCount.readable] 的答案（它答 null = 没有学期行、
+ *   或那一枚是脏的 ≤ 0 ⇒ 分母 null ⇒ 旗不亮，T331 前这一格被折成 1 周当分母使）；
  * - 没学期：分母改吃**这批课里真实出现过的最大周号**（教务/导入的周次数据本身是真的），
  *   一枚周号都没有 ⇒ 分母 null ⇒ 旗不亮（[notEveryWeekFlag]）；
  * - 没学期的页数跟着同一枚分母走（改前是假 20，于是横滑 Pager 能翻到第 20 页根本没有的周）；
@@ -122,10 +126,10 @@ internal fun weekCountsOf(
     courses: List<Course>,
 ): Pair<Int, Int?> {
     val base = if (hasSemester) {
-        semesterTotalWeeks
+        SemesterWeekCount.readable(semesterTotalWeeks)
     } else {
-        courses.maxOfOrNull { course -> course.weeks.maxOrNull() ?: 0 }?.takeIf { it > 0 }
-    }?.coerceIn(1, CourseConstraints.MAX_TOTAL_WEEKS)
+        SemesterWeekCount.readable(courses.maxOfOrNull { course -> course.weeks.maxOrNull() ?: 0 })
+    }
     return (base ?: 1) to base
 }
 

@@ -698,8 +698,8 @@ fun HomeScreen(
                 displayWeek = browseWeek ?: state.currentWeek,
                 currentWeek = state.currentWeek,
                 hasSemester = state.semester != null,
-                totalWeeks = state.semester?.totalWeeks
-                    ?.coerceIn(1, com.buaa.schedule.domain.schedule.CourseConstraints.MAX_TOTAL_WEEKS),
+                totalWeeks = com.buaa.schedule.domain.schedule.SemesterWeekCount
+                    .readable(state.semester?.totalWeeks),
                 // remember：这条映射每次翻周都会重建十几个 Set，而顶栏本身就在重组
                 courseWeeks = remember(visibleCourses) {
                     visibleCourses.map { it.weeks.toSet() }
@@ -1039,7 +1039,7 @@ private fun ScheduleToolbarRow(
     weekHeadline: String,
     displayWeek: Int?,
     currentWeek: Int?,
-    /** 学期的总周数（已按 1..MAX_TOTAL_WEEKS 夹取）；**null = 没有学期这枚事实**，零硬写兜底 */
+    /** 具名读数 `SemesterWeekCount.readable` 的答案；**null = 没有「这学期多少周」这枚事实**（没学期行 / 那一行是脏的），零硬写兜底 */
     totalWeeks: Int?,
     courseWeeks: List<Set<Int>>,
     onBrowseWeekChange: (Int?) -> Unit,
