@@ -333,13 +333,22 @@ class ChainReadSnapshotWiringGuardTest {
 
     // ---- 这一格自己的判据：四张表不许再被裸读（供 ④ 复用，方向只有一个）--------------
 
-    /** 链上某一步的体内：四张表的裸读一次都不许出现（回退式那一行里的 loadChainReadSnapshot 不算） */
+    /**
+     * 链上某一步的体内：四张表的裸读一次都不许出现（回退式那一行里的 loadChainReadSnapshot 不算）。
+     *
+     * ⚠️ T297③补（地雷 6，判死格）：这一族的针原本写成 `repository().getCurrentSemester()` 那种形状，
+     * 而盘上根本不存在这个形状 —— 链上的写法要么是 `context.scheduleRepository().getCurrentSemester()`
+     * （那里 "Repository" 是大写 R，小写 needle 逐字节匹配不到），要么是 `repository.getCurrentSemester()`
+     * （没有那对圆括号）。四枚 needle 在改前与改后的体内都数出 0，等于**这一格从来不判任何东西**：
+     * 朝宽那一臂（某一步回头裸读学期行）红不到它。换成方法名本体这四枚，改后仍为 0（逐枚实测），
+     * 而任何回库裸读——不论接收者怎么写——都会撞上。判据方向没变：只许 0。
+     */
     private fun assertNoRawTableRead(where: String, normalizedBody: String) {
         for (needle in listOf(
-            "repository().getCurrentSemester()",
-            "repository().getTimeSlots()",
-            "repository().getDisplayCourses(",
-            "repository().getReminders(",
+            "getCurrentSemester()",
+            "getTimeSlots()",
+            "getDisplayCourses(",
+            "getReminders(",
         )) {
             assertEquals("$where 里还有 $needle 这一趟裸读（载体装着的东西又被查了一遍）", 0, occurrences(normalizedBody, needle))
         }
