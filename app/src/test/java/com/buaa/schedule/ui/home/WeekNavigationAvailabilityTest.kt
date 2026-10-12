@@ -20,8 +20,8 @@ import org.junit.Test
  *
  * 表打的档位（卡面口径：有学期/无学期 × 周次信息有/无 × 页签命中/不命中），无学期那一档**钉两条结论**：
  * ① 清单为空（②进度线不画）与③旗不亮（分母取不到时读屏不许念那半句）。
- * 另三遍不冗余的尺：④有学期那一档与改前**逐格同值**（含夹取下界 1、上界 [CourseConstraints.MAX_TOTAL_WEEKS]，
- * 本卡不许动正常档）；⑤内核从不造出入参之外的周数（这是"零硬写 20"的实数版，比"grep 没匹配到"强）；
+ * 另三遍不冗余的尺：④有学期的**正常档**与改前逐格同值（上界夹取 [CourseConstraints.MAX_TOTAL_WEEKS] 照旧，本卡不许动
+ * 正常档；学期行那一枚是 0 / 负数的那两格 T331 起改答空清单，账见 `SemesterWeekCount` 的差异册子）；⑤内核从不造出入参之外的周数；
  * ⑥两枚结论同源（Pager 页数与分母出自同一枚 [weekCountsOf]，同一屏上"这学期多少周"只许一个答案）。
  *
  * 纯 JVM：页签序号、有没有学期、学期总周数、这批课的周次信息四样事实全由参数注入 ——
@@ -159,7 +159,7 @@ class WeekNavigationAvailabilityTest {
     )
 
     @Test
-    fun `清单档位逐格对号 夹取上下界与改前逐字同`() {
+    fun `清单档位逐格对号 正常档与改前逐字同 脏学期行改答空清单`() {
         val table = listOf(
             ChoiceRow("有学期 16 周 ⇒ 1..16（与改前逐格同）", true, 16, (1..16).toList()),
             ChoiceRow(
@@ -169,8 +169,8 @@ class WeekNavigationAvailabilityTest {
             ),
             ChoiceRow("没学期且没有周数 ⇒ 空清单（两枚入参一起说实话）", false, null, emptyList()),
             ChoiceRow("hasSemester 为真而周数取不到 ⇒ 空清单：宁可少给一排，也不凭空排一排", true, null, emptyList()),
-            ChoiceRow("脏数据 0 周 ⇒ 夹到下界 1（改前 coerceIn(1, MAX) 同值，下界不许漂）", true, 0, listOf(1)),
-            ChoiceRow("脏数据负数 ⇒ 同样夹到下界 1", true, -5, listOf(1)),
+            ChoiceRow("学期行 0 周（脏）⇒ **空清单**：T331 前夹到下界 1、清单真能点出「第 1 周」，而判据尺对同一学期一周都不放行（#452 那扇门）", true, 0, emptyList()),
+            ChoiceRow("学期行 -5（脏）⇒ 同样空清单：0 与负数必须同一档答案，不许一个折成 1、另一个原样漏下去", true, -5, emptyList()),
             ChoiceRow(
                 "脏数据 999 ⇒ 夹到上界 ${CourseConstraints.MAX_TOTAL_WEEKS}（" +
                     "「避免跳周列表物化超大列表」那笔账照旧）",
@@ -235,15 +235,15 @@ class WeekNavigationAvailabilityTest {
     )
 
     @Test
-    fun `两枚结论逐格对号 有学期与改前同值 无学期改吃真实最大周号`() {
+    fun `两枚结论逐格对号 有学期正常档与改前同值 无学期改吃真实最大周号`() {
         val table = listOf(
             CountsRow(
                 "有学期 16 周、课只上到第 8 周 ⇒ 两枚都是 16（分母吃学期总周数，与改前逐字同）",
                 true, 16, listOf((1..8).toList()), 16, 16,
             ),
             CountsRow(
-                "有学期而脏数据 0 周 ⇒ 夹到下界 1（改前 coerceIn(1, MAX) 同值）",
-                true, 0, listOf(listOf(1, 2)), 1, 1,
+                "有学期而学期行是 0（脏）⇒ 页数仍 1、**分母改答 null**（T331 前分母是 1，那枚旗拿造出来的一周当分母）",
+                true, 0, listOf(listOf(1, 2)), 1, null,
             ),
             CountsRow(
                 "有学期而脏数据 999 周 ⇒ 夹到上界 $MAX_WEEKS_TEXT",
