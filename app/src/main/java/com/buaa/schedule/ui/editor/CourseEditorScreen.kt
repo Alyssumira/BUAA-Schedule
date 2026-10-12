@@ -192,38 +192,28 @@ fun CourseEditorScreen(
         parsePeriods(startSection, endSection, extraPeriods)
     }
     val weeks = remember(weeksText) { WeekParser.parse(weeksText) }
+
+    // 字段级校验：本体在 editorFieldVerdict（纯 JVM 内核）。改前这里是六枚就地算好的 Boolean，
+    // 闸门却不吃它们 —— 于是这一段注释承诺的"红框和存不存得进去永远同步"从未成立过。
+    // 现在 isError、supportingText、顶部汇总横幅、保存闸门四处消费的是同一本红名单。
+    // 六条判据逐条与改前同口径（本卡改的是"红不进闸门"，不是任何一格"什么算红"）：
+    // 额外节次/学分/提前分钟三格都带 isNotBlank() 前件 —— 留空那一档不判红。
+    val fields = editorFieldVerdict(
+        startSection = startSection,
+        endSection = endSection,
+        extraPeriods = extraPeriods,
+        weeks = weeks,
+        creditText = creditText,
+        advanceMinutes = advanceMinutes,
+    )
+
     // 没有节次就没有"这门课几点上"，保存必须禁用（本体在 editorCanSave，单测钉住）
     // T260：`saving` 只管这一棵组合，转屏就归零；写库在飞那一刻转屏时放开这颗按钮的就是
     // `saveInFlight` 那一枚（读的是跨配置存活的 VM 结论旗）。两枚取并，不放宽任何一格判据。
-    val canSave = editorCanSave(weeks = weeks, periods = periods, saving = saving || saveInFlight)
-
-    // 字段级校验：判定与 parsePeriods 一一对应，这样"红框"和"存不存得进去"永远同步，
-    // 不会出现标了红却能保存、或者没标红却被拦住。
-    val startPeriodNumber = startSection.trim().toIntOrNull()
-    val endPeriodNumber = endSection.trim().toIntOrNull()
-    val sectionOrderReversed = startPeriodNumber != null && endPeriodNumber != null &&
-        endPeriodNumber < startPeriodNumber
-    val startSectionInvalid = startPeriodNumber == null ||
-        startPeriodNumber !in 1..CourseConstraints.MAX_PERIOD
-    val endSectionInvalid = endPeriodNumber == null ||
-        endPeriodNumber !in 1..CourseConstraints.MAX_PERIOD ||
-        sectionOrderReversed
-    // 额外节次是可选的：留空不算错，填了就必须能解析成 1..MAX_PERIOD 的节次
-    val extraPeriodsInvalid = extraPeriods.isNotBlank() &&
-        WeekParser.parse(extraPeriods).let { list ->
-            list.isEmpty() || list.any { it !in 1..CourseConstraints.MAX_PERIOD }
-        }
-    val weeksInvalid = weeks.isEmpty()
-    // 学分可选：留空 = 不知道（统计页会单列"未计入"），填了就必须是 0..MAX_CREDIT 的数值。
-    // 坏值判错而不是静默丢掉，否则用户填了 "3,5"（逗号）却以为存进去了。
-    val creditNumber = creditText.trim().toDoubleOrNull()
-    val creditInvalid = creditText.isNotBlank() &&
-        CourseConstraints.normalizeCredit(creditNumber) == null
-    // 提前分钟留空是合法的（保存时回退默认值），填了就必须是 0..MAX 的整数。
-    // 这一格是全站唯一一个"错了不标红"的字段：填 999 会静默变成 60（审查：表单一致性）
-    val advanceInvalid = advanceMinutes.isNotBlank() &&
-        (advanceMinutes.trim().toIntOrNull() == null ||
-            advanceMinutes.trim().toIntOrNull() !in 0..CourseConstraints.MAX_ADVANCE_MINUTES)
+    // T321：红名单一起递进去 —— 改前闸门只吃 weeks/periods，于是"标了红却能保存、
+    // 存进去的是归一化之后的另一个值"（台账 #499 = #379 升档）。
+    val canSave = editorCanSave(weeks = weeks, periods = periods, saving = saving || saveInFlight,
+        redFields = fields.redFields)
 
     // 键盘流转：与设置页共用同一套字段声明（审查⑦V-表单）。
     // 表单是一条竖向 Column，所以「下一个」直接用 FocusDirection.Down，
@@ -242,7 +232,7 @@ fun CourseEditorScreen(
             teacher = teacher.trim().ifEmpty { null },
             location = location.trim().ifEmpty { null },
             campus = campus.trim().ifEmpty { null },
-            credit = CourseConstraints.normalizeCredit(creditNumber),
+            credit = CourseConstraints.normalizeCredit(fields.creditNumber),
             dayOfWeek = day,
             periods = periods,
             weeks = weeks,
@@ -359,7 +349,10 @@ fun CourseEditorScreen(
             // 详细原因已经落到出错的字段旁边（isError + supportingText），
             // 顶部只留一条汇总——它负责"为什么保存按钮是灰的"，不负责指出是哪一格。
             // 呈现与首页冲突横幅同档（ALERT + error 语义色），不再是一行裸文本。
-            if (periods.isEmpty() || weeks.isEmpty()) {
+            // T321：条件改吃内核那本红名单。原来会亮的两档仍然亮（periods 空 ⇒ 开始/结束节次
+            // 至少一格红，weeks 空 ⇔ 周次那一格红），加上三枚"红着却能保存"的新档 ——
+            // 甲档的代价（看不出为什么按不下去）就是在这里出声的。
+            if (fields.anyRed) {
                 GlassSurface(
                     variant = GlassVariant.ALERT,
                     semanticTint = MaterialTheme.colorScheme.error,
@@ -436,9 +429,9 @@ fun CourseEditorScreen(
                         imeAction = ImeAction.Next,
                     ),
                     keyboardActions = nextFieldActions,
-                    isError = creditInvalid,
+                    isError = fields.isRed(EditorRedField.Credit),
                     supportingText = fieldError(
-                        creditInvalid,
+                        fields.isRed(EditorRedField.Credit),
                         "学分要是 0–${CourseConstraints.MAX_CREDIT.toInt()} 之间的数字",
                     ),
                 )
@@ -455,9 +448,9 @@ fun CourseEditorScreen(
                         singleLine = true,
                         keyboardOptions = numberFieldOptions,
                         keyboardActions = nextFieldActions,
-                        isError = startSectionInvalid,
+                        isError = fields.isRed(EditorRedField.StartSection),
                         supportingText = fieldError(
-                            startSectionInvalid,
+                            fields.isRed(EditorRedField.StartSection),
                             sectionSupportingText(
                                 text = startSection,
                                 orderReversed = false,
@@ -473,12 +466,12 @@ fun CourseEditorScreen(
                         singleLine = true,
                         keyboardOptions = numberFieldOptions,
                         keyboardActions = nextFieldActions,
-                        isError = endSectionInvalid,
+                        isError = fields.isRed(EditorRedField.EndSection),
                         supportingText = fieldError(
-                            endSectionInvalid,
+                            fields.isRed(EditorRedField.EndSection),
                             sectionSupportingText(
                                 text = endSection,
-                                orderReversed = sectionOrderReversed,
+                                orderReversed = fields.orderReversed,
                                 courseHadNoPeriods = courseHadNoPeriods,
                             ),
                         ),
@@ -494,9 +487,9 @@ fun CourseEditorScreen(
                     singleLine = true,
                     keyboardOptions = nextFieldOptions,
                     keyboardActions = nextFieldActions,
-                    isError = extraPeriodsInvalid,
+                    isError = fields.isRed(EditorRedField.ExtraPeriods),
                     supportingText = fieldError(
-                        extraPeriodsInvalid,
+                        fields.isRed(EditorRedField.ExtraPeriods),
                         "无法解析，且每一项都要在 1–${CourseConstraints.MAX_PERIOD} 内",
                     ),
                 )
@@ -518,8 +511,11 @@ fun CourseEditorScreen(
                     // 这时给"下一个"等于按了没反应，应该是收起键盘。
                     keyboardOptions = if (initialCourse == null) doneFieldOptions else nextFieldOptions,
                     keyboardActions = if (initialCourse == null) doneActions else nextFieldActions,
-                    isError = weeksInvalid,
-                    supportingText = fieldError(weeksInvalid, "周次解析为空，可用 1-16 / 1-16单 / 1,3,5"),
+                    isError = fields.isRed(EditorRedField.Weeks),
+                    supportingText = fieldError(
+                        fields.isRed(EditorRedField.Weeks),
+                        "周次解析为空，可用 1-16 / 1-16单 / 1,3,5",
+                    ),
                 )
             }
 
@@ -569,9 +565,9 @@ fun CourseEditorScreen(
                         singleLine = true,
                         keyboardOptions = fieldImeOptions(numeric = true, last = true),
                         keyboardActions = doneActions,
-                        isError = advanceInvalid,
+                        isError = fields.isRed(EditorRedField.Advance),
                         supportingText = fieldError(
-                            advanceInvalid,
+                            fields.isRed(EditorRedField.Advance),
                             "提前量取 0–${CourseConstraints.MAX_ADVANCE_MINUTES} 分钟，" +
                                 "留空按默认 ${ReminderSetting.DEFAULT_ADVANCE_MINUTES} 分钟",
                         ),
@@ -849,13 +845,6 @@ internal fun editorPeriodDraft(initialCourse: Course?): EditorPeriodDraft {
         courseHadNoPeriods = first == null,
     )
 }
-
-/**
- * 保存闸门。`periods.isNotEmpty()` 这一项不许放宽：节次解析为空时点保存
- * 会写出一门没有节次的课（或被解析器吞掉），而这两条都该由界面先拦住。
- */
-internal fun editorCanSave(weeks: List<Int>, periods: List<Int>, saving: Boolean): Boolean =
-    weeks.isNotEmpty() && periods.isNotEmpty() && !saving
 
 /**
  * 「开始/结束节次」两格的 supportingText 措辞（[fieldError] 只在判红时才用它）。
