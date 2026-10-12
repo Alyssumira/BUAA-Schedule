@@ -22,6 +22,7 @@ import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.model.toStartEndTimes
 import com.buaa.schedule.domain.schedule.SemesterWeekDates
 import com.buaa.schedule.domain.schedule.WeekCalculator
+import com.buaa.schedule.domain.widget.WidgetWeekBrowseRequestCode
 import com.buaa.schedule.reminder.ClassProgressScheduler
 import com.buaa.schedule.reminder.clockOf
 import kotlinx.coroutines.CancellationException
@@ -45,11 +46,14 @@ enum class ListWidgetMode { TODAY, TOMORROW, WEEK }
  */
 object WidgetCommon {
 
-    /** 头部点击的 requestCode 偏移：避免与列表模板共用同一个 appWidgetId 而互相覆盖 */
+    /**
+     * 头部点击的 requestCode 偏移：避免与列表模板共用同一个 appWidgetId 而互相覆盖。
+     *
+     * 这一族的**数值与取法本卡都不动**（T329）：改了会把已装机的那两族 PendingIntent 作废一次。
+     * 只保证「同一枚 id 下，列表那一族与头部这一族不同码」；跨族的分块账（`appWidgetId ≥ 100_000`
+     * 时三族会互相撞进同一枚数）不在这枚偏移的覆盖面里，登记在册的遗留问题。
+     */
     private const val HEADER_REQUEST_CODE_OFFSET = 100_000
-
-    /** 翻周热区的 requestCode 基准：再按实例 + 方向错开，与上面两类互不覆盖 */
-    private const val WEEK_BROWSE_REQUEST_CODE_BASE = 200_000
 
     private const val BOOTSTRAP_INTERVAL_MS = 60_000L
 
@@ -334,7 +338,10 @@ object WidgetCommon {
         // 行点击模板：Factory 里每行用 fillInIntent 带上课程 id。
         // - 集合组件的模板必须 FLAG_MUTABLE，否则系统无法把行 extras 合进来（点行无反应）；
         // - requestCode 必须与下方头部点击区分：PendingIntent 判等基于 Intent.filterEquals
-        //   （不含 extras），同一个 appWidgetId 会让两者互相覆盖。
+        //   （不含 extras），同一个 appWidgetId 会让两者互相覆盖。三族各自的取法是：这一族（以及
+        //   网格那一族的同形模板）用裸 appWidgetId，头部那一族加 HEADER_REQUEST_CODE_OFFSET，
+        //   翻周那一族走 WidgetWeekBrowseRequestCode 的 (实例, 方向) 单射读数。三族只在取值区间
+        //   上分开，没有任何一处代码保证它们互不覆盖 —— 跨族分块那本账不在这里收，见该文件 KDoc。
         val listTapIntent = Intent(context, MainActivity::class.java).apply {
             putExtra(CourseListFactory.EXTRA_COURSE_ID, -1L)
         }
@@ -822,6 +829,24 @@ object WidgetCommon {
      *
      * 用显式组件意图发给该 Provider 自己：manifest 里不需要为此加 intent-filter
      * （显式意图不受 filter 匹配限制），组件侧也就无须改动应用级配置。
+     *
+     * ## requestCode 的取法（T329）
+     *
+     * 这一族的两枚热区各自要一枚**唯一**的 requestCode：`PendingIntent` 判等基于
+     * `Intent.filterEquals`，不含 extras，同一个数就是同一枚 PendingIntent；而下发侧带
+     * `FLAG_UPDATE_CURRENT`，extras（哪一枚实例、往哪个方向翻）由最后写入的那一手说了算。
+     * 改前这里是一行内联算术，逐字留此做取证（代码里一枚都不许多出来）：
+     *
+     * ```
+     * WEEK_BROWSE_REQUEST_CODE_BASE + appWidgetId + (if (delta > 0) 1 else 0)
+     * ```
+     *
+     * 它让实例 k 的「下一周」与实例 k+1 的「上一周」算出同一个数
+     * （`200_000 + k + 1 == 200_000 + (k+1) + 0`，算术必然，与运行期无关）。现在这里只递参数，
+     * 取法收在 [WidgetWeekBrowseRequestCode.requestCode] 那一枚纯 JVM 具名读数里
+     * （(实例, 方向) 单射：一枚实例占两格，方向走符号档）。
+     * 撞号是盘上的算术事实；「覆写成哪一手、点 k 的下一周把偏移写进另一枚组件的账」
+     * 是 framework 行为推断，本卡零 adb、零设备读数。
      */
     private fun applyWeekBrowse(
         context: Context,
@@ -853,8 +878,9 @@ object WidgetCommon {
                 viewId,
                 PendingIntent.getBroadcast(
                     context,
-                    // requestCode 必须与标题/列表的点击区分开：PendingIntent 判等不看 extras
-                    WEEK_BROWSE_REQUEST_CODE_BASE + appWidgetId + (if (delta > 0) 1 else 0),
+                    // 取码走那枚 (实例, 方向) 单射读数：这里不许再自己做「基准 + 裸 id (+ 方向)」的
+                    // 内联算术 —— 那一形让 next(k) 与 prev(k+1) 同码，两枚热区并成一枚 PendingIntent。
+                    WidgetWeekBrowseRequestCode.requestCode(appWidgetId, delta),
                     intent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                 ),
