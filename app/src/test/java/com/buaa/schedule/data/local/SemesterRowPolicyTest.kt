@@ -1,5 +1,6 @@
 package com.buaa.schedule.data.local
 
+import com.buaa.schedule.data.repository.FRESH_ROW_PRIMARY_KEY
 import com.buaa.schedule.domain.model.Semester
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -17,6 +18,20 @@ import org.junit.Test
  * Room 真库这一档**没做**（`:app` 的 JVM 测试面没有 Robolectric、没有能在 JVM 上跑的 Room 缝，
  * 红线零设备）：这里每一格都用 [Semester] 真实构造行、直接跑内核；
  * SQL 那一头的形状由 `SemesterRowShapeGuardTest` 逐字钉住，两把尺必须同口径。
+ *
+ * ## T304② 加的第四段（#514 之外的在册 C1：`WriteSemesterRow` 交哪一枚主键）
+ *
+ * ①–③ 那三段改前对这一判**零尺**，两件事叠在一起才让它漏过去：
+ * - ③ 段那五枚靶子喂给 `WriteSemesterRow` 的 target 逐枚都是 `row(id = 0L, …)`（本文件原 :213 / :250 /
+ *   :276 / :293 / :325 五枚，一枚不带旧号），而盘上真正的喂入是**非零号**
+ *   （`SettingsScreen` 递的是 `id = semester?.id ?: 0L`，`semester` 是库里读出的那一枚行）；
+ * - 假库 `FakeSemesterTable.commit()` 那枚分支改前写死 `rows += step.semester.copy(id = nextId++)` ——
+ *   假库替生产者抹了号（生产者吃的是 `step.semester` 本尊），于是喂非零号也照样落成新行。
+ *
+ * ⇒ 本段把假库改成照 `@Insert(onConflict = REPLACE)` + `@PrimaryKey(autoGenerate = true)` 的真语义分两档
+ * （交哨兵 ⇒ 另号；交旧号 ⇒ 命中同 id 的 rowid、整行顶掉、**行数不涨**），落点那一手吃的是
+ * 写侧真正交出去的那一枚行（默认 `it.rowToWrite`，与 `applySemesterRowSteps` 同一枚），
+ * 再用四格盘面 + 一枚"同一份计划跑两趟"的对照靶子把这一族打开。
  */
 class SemesterRowPolicyTest {
 
@@ -380,10 +395,238 @@ class SemesterRowPolicyTest {
         )
     }
 
+    // ─────────────── ④ T304 在册 C1：WriteSemesterRow 到底交哪一枚主键给 DAO ───────────────
+
+    @Test
+    fun `落那一枚新行的四格盘面 交出去的主键恒是哨兵而那一枚行落成当前学期`() {
+        // 一格 = 一枚真实盘面：target 从哪儿带着号来、库里已经躺着什么行。
+        // 期望值全部**手算**（自增号 = 盘面现有最大 id + 1；当前学期 = id 最大那一枚），不是拿被判的代码再算一遍。
+        data class Cell(
+            val label: String,
+            val currentRow: Semester?,
+            val target: Semester,
+            val libraryRows: List<Semester>,
+            val expectSteps: Int,
+            val expectSavedRowId: Long,
+            val expectRowCount: Int,
+        )
+
+        val cells = listOf(
+            Cell(
+                label = "抹号写回（新建那一路：target.id 本来就是 0L）",
+                currentRow = null,
+                target = row(id = 0L, startDate = "2026-09-07", totalWeeks = 24),
+                libraryRows = emptyList(),
+                expectSteps = 2,
+                expectSavedRowId = 1L,
+                expectRowCount = 1,
+            ),
+            Cell(
+                label = "带旧号写回（设置页把库里读出的那枚号原样递回来，库里另有更大 id 的兄弟学期）",
+                currentRow = row(id = 9L, startDate = "2026-08-31", totalWeeks = 20),
+                target = row(id = 9L, startDate = "2026-09-07", totalWeeks = 24),
+                libraryRows = listOf(
+                    row(id = 9L, startDate = "2026-08-31", totalWeeks = 20),
+                    row(id = 11L, termCode = OTHER, startDate = "2026-02-23", totalWeeks = 19),
+                ),
+                expectSteps = 2,
+                expectSavedRowId = 12L,
+                expectRowCount = 2,
+            ),
+            Cell(
+                label = "同一事务里两步都跑（改代码那一档：四枚步骤 + 带旧号）",
+                currentRow = row(id = 9L, termCode = OTHER, startDate = "2025-09-01", totalWeeks = 20),
+                target = row(id = 9L, termCode = TERM, startDate = "2026-09-07", totalWeeks = 24),
+                libraryRows = listOf(
+                    row(id = 9L, termCode = OTHER, startDate = "2025-09-01", totalWeeks = 20),
+                    row(id = 13L, termCode = TERM, startDate = "2026-08-31", totalWeeks = 20),
+                ),
+                expectSteps = 4,
+                expectSavedRowId = 14L,
+                expectRowCount = 1,
+            ),
+            Cell(
+                label = "target.id == 0L 而库里已有同 termCode 的陈旧行（本来就是新行 ⇒ 不许多插一行）",
+                currentRow = row(id = 4L, startDate = "2026-08-31", totalWeeks = 20),
+                target = row(id = 0L, startDate = "2026-09-07", totalWeeks = 24),
+                libraryRows = listOf(row(id = 4L, startDate = "2026-08-31", totalWeeks = 20)),
+                expectSteps = 2,
+                expectSavedRowId = 5L,
+                expectRowCount = 1,
+            ),
+        )
+
+        val offenders = mutableListOf<String>()
+        cells.forEach { cell ->
+            val plan = planSemesterRenameSave(cell.currentRow, cell.target, hasCoursesUnderNewCode = false)
+            if (plan !is SemesterRenameSavePlan.Apply) {
+                offenders += "${cell.label}：计划没成（实到 $plan）"
+                return@forEach
+            }
+            if (plan.steps.size != cell.expectSteps) {
+                offenders += "${cell.label}：步骤枚数 ${plan.steps.size} != ${cell.expectSteps}（${plan.steps}）"
+            }
+            val write = plan.steps.last() as? SemesterRenameSaveStep.WriteSemesterRow
+            if (write == null) {
+                offenders += "${cell.label}：最后一枚步骤不是 WriteSemesterRow（实到 ${plan.steps.last()}）"
+                return@forEach
+            }
+            // ① 分档那一维：交给 DAO 的主键必须是哨兵 ⇒ LandsAsFreshRow。
+            //    「本来就是新行」那格（第四格）也进同一档 —— 把它判成违规档就是朝窄。
+            val tier = semesterWritePrimaryKeyLanding(write.rowToWrite.id)
+            if (tier != SemesterWritePrimaryKeyLanding.LandsAsFreshRow) {
+                offenders += "${cell.label}：分档 $tier != LandsAsFreshRow（交出的主键 ${write.rowToWrite.id}）"
+            }
+            // ② 落库后果那一维：整组跑完之后，刚保存那一枚必须是 id 最大（= 当前学期），行数不多不少
+            val table = semesterTableOf(*cell.libraryRows.toTypedArray())
+            runSemesterStepsInFakeTx(plan, table, throwAt = null)
+            val newest = table.rows.maxByOrNull { it.id }
+            if (newest?.id != cell.expectSavedRowId) {
+                offenders += "${cell.label}：id 最大那一枚实到 ${newest?.id}，期望 ${cell.expectSavedRowId}" +
+                    "（整表 ${table.rows}）"
+            }
+            if (newest?.termCode != cell.target.termCode) {
+                offenders += "${cell.label}：当前学期实到 ${newest?.termCode}，期望刚保存的那一枚 " +
+                    "${cell.target.termCode}"
+            }
+            if (newest?.startDate != cell.target.startDate || newest?.totalWeeks != cell.target.totalWeeks) {
+                offenders += "${cell.label}：落下的内容不是用户交进去的那一枚（实到 $newest）"
+            }
+            if (table.rows.size != cell.expectRowCount) {
+                offenders += "${cell.label}：行数实到 ${table.rows.size}，期望 ${cell.expectRowCount}" +
+                    "（整表 ${table.rows}）"
+            }
+            if (table.rows.count { it.termCode == cell.target.termCode } != 1) {
+                offenders += "${cell.label}：写路级 termCode 收口破了，同 termCode 落下 " +
+                    "${table.rows.count { it.termCode == cell.target.termCode }} 枚行"
+            }
+        }
+        assertEquals(
+            "四格盘面（带旧号写回 / 抹号写回 / 同一事务里两步都跑 / 本来就是新行）一种都不许偏 —— " +
+                "实到偏差：" + offenders.joinToString("; ") + "。" +
+                "红了就说明「落那一枚新行」又交回旧号了：REPLACE 命中同一个 rowid ⇒ 不新增行 ⇒ " +
+                "「最近写入的 = 当前学期」落空（#514 之外那一枚在册 C1 换种写法回来）",
+            emptyList<String>(),
+            offenders,
+        )
+    }
+
+    @Test
+    fun `分档尺认得带旧号回写那一形 同一份计划两趟落下的是两枚不同盘面`() {
+        // ① 分档本体：哨兵 ⇒ 新行；非 0 ⇒ 原地顶号。0L 与 1L 是相邻两侧，缺一格这一档就是猜的。
+        val tiers = listOf(FRESH_ROW_PRIMARY_KEY, 1L, 9L).map { semesterWritePrimaryKeyLanding(it) }
+        assertEquals(
+            "三枚主键的分档（期望：哨兵 → LandsAsFreshRow；1L / 9L → LandsOnSnapshotRow(同号)；实到 $tiers）",
+            listOf(
+                SemesterWritePrimaryKeyLanding.LandsAsFreshRow,
+                SemesterWritePrimaryKeyLanding.LandsOnSnapshotRow(1L),
+                SemesterWritePrimaryKeyLanding.LandsOnSnapshotRow(9L),
+            ),
+            tiers,
+        )
+
+        // ② 载体那一手：带旧号进来的必须交出哨兵，且**只抹号**、内容四项一字不动
+        val fromDb = SemesterRenameSaveStep.WriteSemesterRow(
+            row(id = 9L, startDate = "2026-09-07", totalWeeks = 24),
+        )
+        val alreadyFresh = SemesterRenameSaveStep.WriteSemesterRow(
+            row(id = 0L, startDate = "2026-09-07", totalWeeks = 24),
+        )
+        assertEquals(
+            "WriteSemesterRow(带旧号 9L) 交出去的那一枚（实到 ${fromDb.rowToWrite}）：抹号之后必须还是" +
+                "用户交进去的内容，且主键为哨兵",
+            row(id = 0L, startDate = "2026-09-07", totalWeeks = 24),
+            fromDb.rowToWrite,
+        )
+        assertEquals(
+            "WriteSemesterRow(本来就是新行 0L) 那一手是**幂等**的（实到 ${alreadyFresh.rowToWrite}）：" +
+                "多抹一次还是 0L，不许顺手换号、也不许多插一行",
+            row(id = 0L, startDate = "2026-09-07", totalWeeks = 24),
+            alreadyFresh.rowToWrite,
+        )
+
+        // ③ 探测器不空转：同一份计划、同一枚假库，只有"交出去的那一枚行"不同 ⇒ 两枚不同盘面。
+        //    这一格钉的是本文件③段改前量不到任何东西的根因：假库替生产者抹号，于是生产者交什么都绿。
+        val current = row(id = 9L, startDate = "2026-08-31", totalWeeks = 20)
+        val unrelated = row(id = 11L, termCode = OTHER, startDate = "2026-02-23", totalWeeks = 19)
+        val plan = planSemesterRenameSave(
+            current,
+            current.copy(startDate = "2026-09-07", totalWeeks = 24),
+            hasCoursesUnderNewCode = false,
+        ) as SemesterRenameSavePlan.Apply
+
+        val fresh = semesterTableOf(current, unrelated)
+        runSemesterStepsInFakeTx(plan, fresh, throwAt = null)
+        val legacy = semesterTableOf(current, unrelated, handedRow = { it.semester })
+        runSemesterStepsInFakeTx(plan, legacy, throwAt = null)
+
+        assertEquals(
+            "今天那一趟：刚保存的那一枚落成新号 12、成了当前学期（实到 ${fresh.rows}）",
+            listOf(11L, 12L),
+            fresh.rows.map { it.id }.sorted(),
+        )
+        assertEquals(
+            "今天那一趟的当前学期（id 最大那一枚）就是刚保存的那一枚（与 `getCurrent()` 的 ORDER BY id DESC 同尺）",
+            TERM,
+            fresh.rows.maxByOrNull { it.id }?.termCode,
+        )
+        assertEquals(
+            "改前那一趟：带旧号 9L 回写 ⇒ 原地顶号、**不新增行**（整表 id 仍是 9 与 11；实到 ${legacy.rows}）",
+            listOf(9L, 11L),
+            legacy.rows.map { it.id }.sorted(),
+        )
+        assertEquals(
+            "改前那一趟写完内容确实变了（24 周）却**没顶成当前学期** ⇒ 「最近写入的 = 当前学期」不成立，" +
+                "屏上念的还是另一学期的课表；实到当前 " + legacy.rows.maxByOrNull { it.id }?.termCode,
+            OTHER,
+            legacy.rows.maxByOrNull { it.id }?.termCode,
+        )
+
+        // ④ 同族病本体那一格（陈旧快照递回一枚**别人正占着**的号）：带旧号写回会吃掉那一枚无关行
+        val staleSnapshot = row(id = 11L, startDate = "2026-09-07", totalWeeks = 24)
+        val foreignHolder = listOf(row(id = 11L, termCode = OTHER, startDate = "2026-02-23", totalWeeks = 19))
+        val sibling = row(id = 9L, startDate = "2026-08-31", totalWeeks = 20)
+        val stalePlan = planSemesterRenameSave(sibling, staleSnapshot, hasCoursesUnderNewCode = false)
+            as SemesterRenameSavePlan.Apply
+        val staleFresh = semesterTableOf(sibling, *foreignHolder.toTypedArray())
+        runSemesterStepsInFakeTx(stalePlan, staleFresh, throwAt = null)
+        val staleLegacy = semesterTableOf(sibling, *foreignHolder.toTypedArray(), handedRow = { it.semester })
+        runSemesterStepsInFakeTx(stalePlan, staleLegacy, throwAt = null)
+        assertEquals(
+            "今天那一趟：兄弟学期那一枚行原样留着（实到 ${staleFresh.rows}）",
+            listOf(11L, 12L),
+            staleFresh.rows.map { it.id }.sorted(),
+        )
+        assertEquals(
+            "改前那一趟：REPLACE 命中 11L ⇒ 那枚**别的 termCode** 的行被整行顶掉，" +
+                "它的开学日与总周数就这么蒸发了（实到 ${staleLegacy.rows}）—— " +
+                "这族在 #520/T281（课程侧）与 #527/T287（建课侧）各收过一次，学期行是漏网的那枚",
+            listOf(11L),
+            staleLegacy.rows.map { it.id }.sorted(),
+        )
+        assertEquals(
+            "改前那一趟里兄弟行（OTHER）一个字节都不剩",
+            emptyList<String>(),
+            staleLegacy.rows.map { it.termCode }.filter { it == OTHER },
+        )
+    }
+
     // ─────────────── 假库：只用来把「整组才落下」这件事跑成数据 ───────────────
 
-    /** 一枚假的库表 + 台账：步骤先排队，[commit] 才整组落下（对应一枚真事务的边界） */
-    private class FakeSemesterTable(rows: List<Semester>) {
+    /**
+     * 一枚假的库表 + 台账：步骤先排队，[commit] 才整组落下（对应一枚真事务的边界）。
+     *
+     * T304②：`WriteSemesterRow` 那一手落的是**写侧真正交出去的那一枚行**（[handedRow]，默认
+     * `it.rowToWrite` —— 与 `ScheduleRepository.applySemesterRowSteps` 吃的那一枚同一枚），并按
+     * `SemesterDao.insert` 的 `OnConflictStrategy.REPLACE` + `SemesterEntity` 的
+     * `@PrimaryKey(autoGenerate = true)` 分两档（见 [insertHanded]）。
+     * 改前这里写死 `rows += step.semester.copy(id = nextId++)` = **假库替生产者抹号**，
+     * 于是"带旧号写回"这一族在本文件里一格也量不出来。
+     */
+    private class FakeSemesterTable(
+        rows: List<Semester>,
+        private val handedRow: (SemesterRenameSaveStep.WriteSemesterRow) -> Semester = { it.rowToWrite },
+    ) {
         val rows: MutableList<Semester> = rows.toMutableList()
         val courseCodes: MutableList<String> = mutableListOf(OTHER, TERM)
         private val pending = mutableListOf<SemesterRenameSaveStep>()
@@ -410,15 +653,34 @@ class SemesterRowPolicyTest {
                     is SemesterRenameSaveStep.DeleteRowsForTermCode ->
                         rows.removeAll(rows.filter { it.termCode == step.termCode }.toSet())
 
-                    is SemesterRenameSaveStep.WriteSemesterRow ->
-                        rows += step.semester.copy(id = nextId++)
+                    is SemesterRenameSaveStep.WriteSemesterRow -> insertHanded(handedRow(step))
                 }
                 appliedSteps++
             }
         }
+
+        /**
+         * `INSERT OR REPLACE` 的两档真语义（这里按 Room 文档的口径自己判，**不吃**被验的那枚分档判据，
+         * 免得假库与判据互相圆场）：
+         * - 交出的主键 == 哨兵 `FRESH_ROW_PRIMARY_KEY` ⇒ 不走显式主键，另号（库里 id 从 1 起，
+         *   任何一行都拿不到 0L）；
+         * - 交出的主键非 0 ⇒ 走显式主键，命中同 id 那一枚 rowid 就整行顶掉且**行数不涨**，
+         *   那一枚号此刻若被别的 termCode 的行持有 ⇒ 那枚无关行消失。
+         */
+        private fun insertHanded(handed: Semester) {
+            if (handed.id == FRESH_ROW_PRIMARY_KEY) {
+                rows += handed.copy(id = nextId++)
+            } else {
+                rows.removeAll { it.id == handed.id }
+                rows += handed
+            }
+        }
     }
 
-    private fun semesterTableOf(vararg rows: Semester) = FakeSemesterTable(rows.toList())
+    private fun semesterTableOf(
+        vararg rows: Semester,
+        handedRow: (SemesterRenameSaveStep.WriteSemesterRow) -> Semester = { it.rowToWrite },
+    ) = FakeSemesterTable(rows.toList(), handedRow)
 
     /**
      * 按生产的形状把计划跑一遍：**整组步骤进同一枚事务，commit 只发生一次**。
