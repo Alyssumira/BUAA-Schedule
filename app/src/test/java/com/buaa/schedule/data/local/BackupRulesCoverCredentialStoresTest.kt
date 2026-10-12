@@ -7,8 +7,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 「凡是走 [KeystoreBlobStore] 的 SharedPreferences，都必须出现在两份备份规则的排除名单里」
- * 这把尺子（T85b-B）。
+ * 备份排除名单的两把尺（T85b-B 的推导 ＋ T330 的逐字册子）。
+ *
+ * 一句话口径：**凡是鉴权材料，都必须出现在两份备份规则每一块的排除名单里** ——
+ * 一份靠"从源码数出来"（只管走 [KeystoreBlobStore] 的存储），另一份靠"逐字对一张写死的册子"
+ * （管其余三枚：`buaa_session.xml`、`app_webview`、`spoc_token_store.xml`）。
  *
  * 为什么值得单独钉：排除名单是**手写的资源文件**，凭证存储是**另一头写的 Kotlin**。
  * 两边唯一的连线就是一枚字面量（prefs 名 + `.xml`），所以加一枚凭证存储的人
@@ -20,18 +23,34 @@ import org.junit.Test
  * 那一笔当时只留下一句「本卡记下但没有改」的注释（T85b-A 已经把它兑现）。
  * 本文件要防的是**下一枚**：不靠人记得，靠一次 `testDebugUnitTest`。
  *
- * 判据是从源码里**数出来**的，不是抄一份名单回来对抄 —— 抄来的名单会跟着源码一起漏改。
- * 数法：扫 `app/src/main/java` 下所有 `.kt`，取每个 `KeystoreBlobStore(` 实例化的
- * `prefsName` 字面量（具名实参、或按位置的第一枚字面量都认）。
+ * T330 收的是另一头账（推导那一判据自己的漏）：它只数得出 2 枚 `KeystoreBlobStore` 实例，
+ * 而名单 5 枚 ⇒ `app_webview`、`buaa_session.xml`、`spoc_token_store.xml` 三枚**零判据**，
+ * 手工删掉那三行里任何一行，`testDebugUnitTest` 全绿、`assembleRelease` 成功。
+ *
+ * 判据的两条路（**第 0 问的读数决定了为什么是两条**）：
+ * - 推导那一路仍然**从源码里数出来**，不抄名单 —— 抄来的名单会跟着源码一起漏改。
+ *   数法：扫 `app/src/main/java` 下所有 `.kt`，取每个 `KeystoreBlobStore(` 实例化的
+ *   `prefsName` 字面量（具名实参、或按位置的第一枚字面量都认）。
+ * - 册子那一路是**写死的 5 枚**（[CREDENTIAL_ROSTER]）。它不是没想到要推导，是盘上推导不出来：
+ *   唯一同族的第二枚标记是 `PREFS_NAME` / `prefsName` 的字面量，可它在 main 里数出 6 枚值，其中
+ *   `schedule_settings`（用户课表与偏好）、`widget_appearance`、`widget_binding` **不是凭证**，
+ *   拿它当推导源就等于把这三枚也排进名单（那是换一种错）；`app_webview` 在 `app/src/main` 的任何
+ *   `.kt` 里零字面量，那枚目录名由 framework 决定，本仓没有任何一行代码或测试能把它算出来。
+ *   所以册子逐枚配**盘上锚点**，锚点归哪一档由 [everyRosterEntryCarriesAnAnchorFindableOnDisk] 钉，
+ *   册子与推导集的同源由 [rosterDerivableEntriesAreExactlyTheDerivedKeystoreStores] 钉，
+ *   「非凭证不许进名单」由 [everyScannedPrefsNameIsEitherExcludedOrDeclaredNonCredential] 钉。
+ *   代价（在册）：新增一枚凭证存储要同时改两份 xml 的三块 + 这张册子；只改代码不改册子的话，
+ *   推导那一判据与那两格同源尺都会点名它，不会是静默的。
  *
  * 三条口径说明：
  * - **读不到就是要失败，不许 skip**。刀法照 `IClassSignInWiringGuardTest`：
  *   跳过的守卫比没有守卫更糟，历史上"文件读不到就 assume 掉"掩过真问题。
  * - 只看**工作目录里的源码与资源**，不碰构建产物、不碰网络、不装机，纯 JVM。
- * - `spoc_token_store.xml` 那一行**不在本判据的射程内**，而且不许把它算进来：
- *   `SpocTokenStore.kt` 已随 T85 删除，盘上再没有对应的 prefs 名可数。那行排除是给
- *   **老设备残留**留的，删掉等于把别人设备上的凭证密文送上云 —— 它由两份文件里的注释
- *   把口径钉着，不由这把尺子管（这把尺子只管"现在还在写的存储"）。
+ * - `spoc_token_store.xml` 那一行**不许算进推导集**（`SpocTokenStore.kt` 已随 T85 删除，
+ *   盘上再没有对应的 prefs 名可数，推导那一路看不见它），但它那一行**现在由这把尺子管着** ——
+ *   管它的是逐字册子那一格，不是推导那一格（T330 之前的口径是「它只由注释钉着」，那句话已经不成立）。
+ *   那行排除是给**老设备残留**留的，删掉等于把别人设备上的凭证密文送上云，所以报错消息里点名
+ *   「老设备残留行，不许跟着删」。
  *
  * ⚠️ 改完 `res/xml` 单独重跑本文件**不需要**再带 `--rerun`（T92① 把这根拐杖收了）：
  * 这把尺子量的是磁盘上的字，而 JVM 测试任务默认只认编译产物 —— 资源文件不在里面，Gradle 会
@@ -43,6 +62,9 @@ import org.junit.Test
  * 所以：往 `res/` 下**新加**一类要被守卫读的文件时，只要它还在 `app/src/main/res` 里就自动进输入面；
  * 但要是守卫改去读 `app/src/main/res` 之外的路径（例如某个新模块的资源），就得把那条路径也补进
  * 那份清单 —— 漏了的表现为"这把尺子又回到只在全量跑时管用"，正是本卡收掉的那笔账。
+ * T330 没有动那份清单：它新增读取的只有 `app/src/main/java`（已登记的第 ① 格）与
+ * 原本就在读的 `app/src/main/res` 下那两份规则文件（第 ② 格覆盖整棵 `src/main/res`），
+ * 一格都不必补 —— 清单由 `WorkingTreeInputSurfaceGuardTest` 三向对账，本卡的改动不触发它。
  */
 class BackupRulesCoverCredentialStoresTest {
 
@@ -328,7 +350,9 @@ class BackupRulesCoverCredentialStoresTest {
         )
     }
 
-    // ---- 数存储名的那一段：扫源码，不抄名单 ----
+    // ---- 数存储名的那一段：扫源码（这一路只数得出 KeystoreBlobStore 的实例；写死的那张册子在
+    //      文件末尾的 CREDENTIAL_ROSTER，两条路各管什么、为什么不能并成一条，见类 KDoc 与
+    //      rosterDerivableEntriesAreExactlyTheDerivedKeystoreStores） ----
 
     /**
      * `app/src/main/java` 下每一枚 `KeystoreBlobStore(...)` 实例化用到的 prefs 名。
