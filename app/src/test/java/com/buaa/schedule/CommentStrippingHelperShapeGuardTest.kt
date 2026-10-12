@@ -65,13 +65,22 @@ import org.junit.Test
  * 重钉代价（仍然在册）：新增一枚合法助手 ⇒ 三枚值各 +1、④ 的差值那格不动；新增一句点名散文 ⇒
  * 只有 ④ 会红，红的是「在册散文清单长了」，不是尺子被顶走了。
  *
+ * ## 再一次重钉（T332④）：新增一枚合法助手，四枚写死值各 +1
+ * `domain/schedule/SemesterWeekCountWiringGuardTest`（T332④，钉「这学期多少周」只有那一枚具名读数）
+ * 自带了一枚同族助手 —— 写法逐字抄 `domain/schedule/TermWeekGateSingleRulerWiringGuardTest` 那一枚，
+ * 没有造新形状，所以动的只有枚数这一把。本卡复算后的两栏（逐枚文件对账仍零枚不平，助手是真助手）：
+ * - 声明：133 → **134**（守卫侧与裸原文两栏同数这一条定理不动）
+ * - 物化：守卫侧（抹注释后）133 → **134**；裸原文 134 → **135**；两栏差仍恰 1 枚，来源仍是 ⓪ 步在册的那枚散文文件
+ * - 两棵树族内总枚数（② 那格的覆盖面尺）：134 → **135** = test 134 + main 1（EXPECTED_MAIN_DECLS 一字未动）
+ * 代价照旧在册：再新增一枚合法助手 ⇒ 这几枚各 +1、④ 的差值那格不动。
+ *
  * ## 重测这两把尺（两栏都要念，别只念一栏）
  * 写在这里的命令一律把括号写成方括号类，所以它们一个字都不匹配本文件自己的针 —— 这条理由从 T323 起
  * 才真正要紧：④ 那格数的是抹注释**之前**的原文，「反正注释会被抹掉」不再替这些命令免检。
  * 拼针的那几枚常量（TO_ARRAY 那一族）用「拆开来写」同一招自免，散文把自己数进册子的路只有这一条。
- * - 声明：`grep -rhoE 'val out = [A-Za-z_][A-Za-z0-9_]*[.]toCharArray[(][)]' app/src/test | wc -l` → 合并态 133
+ * - 声明：`grep -rhoE 'val out = [A-Za-z_][A-Za-z0-9_]*[.]toCharArray[(][)]' app/src/test | wc -l` → T332 起 134
  *   这一把两栏同数：族内声明写不进注释（针要的是整行尾巴上那记数组化调用），散文顶不动它。
- * - 物化：`grep -rhoE 'String[(]out[)]' app/src/test | wc -l` → 裸原文 134 ／ 守卫侧（抹注释后）133
+ * - 物化：`grep -rhoE 'String[(]out[)]' app/src/test | wc -l` → 裸原文 135 ／ 守卫侧（抹注释后）134
  *   写死值钉的是守卫侧那一栏；两栏差的那 1 枚由 ④ 单独钉成在册量，不是「已知误差」。
  * 对不上就照上面两节的拆解重钉，别把判据改成 >=。
  *
@@ -121,7 +130,7 @@ class CommentStrippingHelperShapeGuardTest {
 
     /**
      * ② 形状尺：每一枚族内声明做到它所在函数的收尾，那段里必须物化、不得出现被禁写法。
-     * 本格同时断言切到的枚数等于两棵树的族内总枚数（合并态 134），一枚都没切到时不会当成绿。
+     * 本格同时断言切到的枚数等于两棵树的族内总枚数（T332 起 135），一枚都没切到时不会当成绿。
      */
     @Test
     fun everyCharArrayHelperMaterializesItsArrayInsteadOfCallingToStringOnIt() {
@@ -235,7 +244,7 @@ class CommentStrippingHelperShapeGuardTest {
      *      注释里第二次提到的那一枚被抹掉了；把它的真返回改成「out 的 toString」，病形抹注释栏立刻从 0 变 1，
      *      本格与 ① ② 一起红，注释洗不掉代码。
      *   丙 两栏合流＝假绿（绝对值反向）：test 那棵树的裸原文栏必须仍比抹注释栏高，等号一成立就说明
-     *      要么那句散文被删了（删证据不是修尺），要么扫描器改成了读原文 —— 后者会让 ① 交回 134 对 133。
+     *      要么那句散文被删了（删证据不是修尺），要么扫描器改成了读原文 —— 后者会让 ① 交回 135 对 134。
      * 另加两把全树定理尺：族内声明那把两栏恒等（注释造不出一枚族内声明，针要的是整行尾巴上那记数组化调用），
      * 以及抹注释只会删不会造（裸原文栏恒 >= 抹注释栏；反过来说明 blankComments 在动代码）。
      * 代价（如实写，与甲档同一条）：新增一枚合法助手 ⇒ 裸原文栏与在册点名清单都要回来重钉，别改成 >=。
@@ -346,7 +355,7 @@ class CommentStrippingHelperShapeGuardTest {
     /**
      * 抹注释保行号、字符串不动：与 `WorkingTreeInputSurfaceGuardTest` 同一写法。
      * 最后那一句是本守卫自己钉着的那一档物化写法 —— 换成「out 的 toString」就是本卡点名的病，
-     * 而 ① 那格会当场念出「实到 0 枚／写死 133 枚」（W 臂量过的正是这一档）。
+     * 而 ① 那格会当场念出「实到 0 枚／写死 134 枚」（W 臂量过的正是这一档）。
      */
     private fun blankComments(src: String): String {
         val out = src.toCharArray()
@@ -548,15 +557,16 @@ private const val MAIN_ROOT = "app/src/main"
 /**
  * ⓪ 步现量写死的绝对值（T323 重钉其中三枚，EXPECTED_MAIN_DECLS 不动）——
  * 口径 = 本守卫内部「抹注释之后」的那份文本，不是裸 grep。
- * 拆解：基点 13759a5 的 131 枚 ＋ T320 本守卫自己那枚助手 1 枚 ＋ T321 带进来的同族第二枚助手 1 枚 = 133。
- * 裸 grep 在物化这把上念的是 134，多的那 1 枚是散文；它没被丢掉，由 ④ 那格按在册量单独钉住。
+ * 拆解：基点 13759a5 的 131 枚 ＋ T320 本守卫自己那枚助手 1 枚 ＋ T321 带进来的同族第二枚助手 1 枚
+ * ＋ T332 那枚新守卫（domain/schedule/SemesterWeekCountWiringGuardTest）助手 1 枚 = 134（T323 钉的是 133）。
+ * 裸 grep 在物化这把上念的是 135，多的那 1 枚是散文；它没被丢掉，由 ④ 那格按在册量单独钉住。
  * 为什么钉守卫侧那一栏而不是裸的那一栏：写死值必须是仪器自己观测得到的数，否则是一把永远读不到
  * 自己的死尺；而绝对值要听的那件事（扫描器失明 ⇒ 实到 0）在这一栏照样当场响。见类 KDoc 的重钉记录。
  */
-private const val EXPECTED_TEST_DECLS = 133
-private const val EXPECTED_TEST_MATERIALIZATIONS = 133
+private const val EXPECTED_TEST_DECLS = 134
+private const val EXPECTED_TEST_MATERIALIZATIONS = 134
 private const val EXPECTED_MAIN_DECLS = 1
-private const val EXPECTED_ALL_HELPER_DECLS = 134
+private const val EXPECTED_ALL_HELPER_DECLS = 135
 
 /**
  * ④ 的在册散文点名：全仓唯一一枚「KDoc 里同时逐字引用了正形与病形」的文件（ai/T321 留下的证据，
@@ -571,8 +581,8 @@ private const val PROSE_FILE_STRIPPED_MATERIALIZATIONS = 1
 private const val PROSE_FILE_RAW_FORBIDDEN = 1
 private const val PROSE_FILE_STRIPPED_FORBIDDEN = 0
 
-/** ④ 的在册量：`app/src/test` 裸原文栏比抹注释栏高 1 枚（134 对 133）；两栏合流＝证据没了 */
-private const val EXPECTED_TEST_RAW_MATERIALIZATIONS = 134
+/** ④ 的在册量：`app/src/test` 裸原文栏比抹注释栏高 1 枚（135 对 134）；两栏合流＝证据没了 */
+private const val EXPECTED_TEST_RAW_MATERIALIZATIONS = 135
 
 /** 被禁写法在 `app/src/test` + `app/src/main` 的现量下限（34 + 5）：读空了才红，长了不红 */
 private const val EXPECTED_TO_STRING_SITE_FLOOR = 39

@@ -82,10 +82,19 @@ class WeekNavigationAvailabilityWiringGuardTest {
             )
         }
         assertEquals(
-            "内核里「$CLAMP」出现 ${occurrences(code, CLAMP)} 处，期望恰好 2 处（清单那一枚 + 两枚结论那一枚）：" +
-                "夹取的下界 1 与上界 30 与改前逐字同，少一枚就是有人把「兼容历史脏数据」那笔账改了口径",
-            2,
+            "内核里「$CLAMP」出现 ${occurrences(code, CLAMP)} 处，期望 0 处（T331② 重钉：改前这里恰 2 处 —— " +
+                "清单那一枚与两枚结论那一枚各自夹取）：学期周数的上下界现在只许长在具名读数 " +
+                "$READING_CALL 里那一枚，内核再自己夹一遍就是第二把尺（#452 那扇门的门轴就是这个形状）。" +
+                "红了就是把就地夹取写回了内核",
+            0,
             occurrences(code, CLAMP),
+        )
+        assertEquals(
+            "内核里「$READING_CALL」出现 ${occurrences(code, READING_CALL)} 处，期望恰好 3 处（清单那一枚 + " +
+                "两枚结论那两枚）：与上面那一格互为正反 —— 夹取搬走的同一批落点必须改问读数，" +
+                "少一枚就是有一条链既不自己夹、也不问读数（那它吃的又是哪门子数？）",
+            3,
+            occurrences(code, READING_CALL),
         )
     }
 
@@ -167,15 +176,23 @@ class WeekNavigationAvailabilityWiringGuardTest {
         )
         assertEquals(
             "递给工具条的「$TOTAL_WEEKS_ARG」出现 ${occurrences(toolbar, TOTAL_WEEKS_ARG)} 处，期望恰好 1 处：" +
-                "本卡把它换成「没学期就是 null」（夹取表达式 coerceIn(1, MAX) 逐字留着），" +
-                "两枚判据与翻周按钮都按这一枚说话；多一枚就是有人又递了一遍周数",
+                "T331② 重钉 —— 改前这里是 `totalWeeks = state.semester?.totalWeeks?.coerceIn(1, …MAX_TOTAL_WEEKS)`" +
+                "（脏学期行被折成 1 递给屏，#452 那一格「这学期 1 周」就是这么念出来的），现在只许递具名读数。" +
+                "0 处 = 顶栏又不问读数了；2 处 = 同一份实参表里又派生了一遍周数",
             1,
             occurrences(toolbar, TOTAL_WEEKS_ARG),
         )
         assertTrue(
-            "「$TOTAL_WEEKS_ARG」那一枚不再走 null：递进工具条的周数换了写法（现在实到 " +
-                "${occurrences(toolbar, TOTAL_WEEKS_NULL_ARG)} 处），清单与进度线吃的就是它",
-            toolbar.contains(TOTAL_WEEKS_NULL_ARG),
+            "递进工具条的那一枚必须是读数的答案（「$TOTAL_WEEKS_READING_CALL」实到 " +
+                "${occurrences(toolbar, TOTAL_WEEKS_READING_CALL)} 处，期望恰 1 处）：" +
+                "清单与进度线吃的就是它 ⇒ 顶栏读数与它同源于那一枚读数",
+            occurrences(toolbar, TOTAL_WEEKS_READING_CALL) == 1,
+        )
+        assertEquals(
+            "「$TOTAL_WEEKS_NULL_ARG」那一形（就地夹在读参数上的旧写法）在工具条实参表里必须 0 处，实到 " +
+                "${occurrences(toolbar, TOTAL_WEEKS_NULL_ARG)} 处：它就是 #452 的屏上那一半，病灶不许回潮",
+            0,
+            occurrences(toolbar, TOTAL_WEEKS_NULL_ARG),
         )
         // 簇的进出条件仍只认 showWeekNav（#113/#118 那两笔权重账的前提：常驻加权槽 + 簇自身一枚 weight）
         val (args, content) = weekNavCluster(home)
@@ -561,8 +578,12 @@ class WeekNavigationAvailabilityWiringGuardTest {
         const val LEGACY_CHOICE_LINE = "val weekChoices = remember(totalWeeks) { (1..totalWeeks).toList() }"
         const val LEGACY_FLAG_LINE = "notEveryWeek = course.weeks.size < totalWeeks"
 
-        /** 夹取那一句（下界 1、上界 30 与改前逐字同） */
+        /**
+         * 改前那两枚就地夹取的针（T331② 之后必须归零）：夹取只许长在具名读数里那一枚，
+         * 内核与顶栏都改问 [SemesterWeekCount.readable]。
+         */
         const val CLAMP = "coerceIn(1, CourseConstraints.MAX_TOTAL_WEEKS)"
+        const val READING_CALL = "SemesterWeekCount.readable("
 
         /** 第三等账那一枚不许顺手改：全 main 抹注释后「?: 20」只剩它 */
         val THIRD_ACCOUNT_LEDGER = mapOf(SETTINGS_NAME to 1)
@@ -571,7 +592,10 @@ class WeekNavigationAvailabilityWiringGuardTest {
         const val NAV_WIRING =
             "showWeekNav = shouldOfferWeekNavigation(selectedTab, state.semester != null, weekTab = 0)"
         const val HAS_SEMESTER_ARG = "hasSemester = state.semester != null"
-        const val TOTAL_WEEKS_ARG = "totalWeeks = state.semester?.totalWeeks"
+        const val TOTAL_WEEKS_ARG = "totalWeeks = com.buaa.schedule.domain.schedule.SemesterWeekCount"
+        const val TOTAL_WEEKS_READING_CALL = ".readable(state.semester?.totalWeeks)"
+
+        /** 改前那一形（就地夹在读参数上，对屏念出「这学期 1 周」的那一枚）：现在必须 0 处 */
         const val TOTAL_WEEKS_NULL_ARG = "?.coerceIn(1, com.buaa.schedule.domain.schedule.CourseConstraints.MAX_TOTAL_WEEKS)"
         const val CHOICE_WIRING = "val weekChoices = remember(totalWeeks) { weekChoicesFor(hasSemester, totalWeeks) }"
         const val PROGRESS_WIRING = "if (shouldDrawSemesterProgress(hasSemester)) SemesterProgressLine("
