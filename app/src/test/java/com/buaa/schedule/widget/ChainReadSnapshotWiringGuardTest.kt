@@ -71,7 +71,7 @@ class ChainReadSnapshotWiringGuardTest {
             "val timeSlots: List<TimeSlot>,",
             "val remindersByCourseId: Map<Long, ReminderSetting>,",
         )) {
-            assertTrue("参数表少了这一枚：$needle\n$headerOf(code)", code.contains(needle))
+            assertTrue("参数表少了这一枚：$needle\n${headerOf(code)}", code.contains(needle))
         }
         for (derived in listOf("val semesterStart", "val totalWeeks", "val startLocalDate", "val weekCount")) {
             assertEquals("载体长出了派生字段 $derived（每个 copy 站点都得重算的那种债）", 0, occurrences(code, derived))
@@ -109,15 +109,32 @@ class ChainReadSnapshotWiringGuardTest {
 
         // 构造点全仓只有一处：别处再 `ChainReadSnapshot(` 就是第二份"读四张表"的实现
         // （册子里另一枚出现的 `ChainReadSnapshot(` 是类自己的 header，那一枚算声明不算构造）
-        val constructed = censusPerFile { blanked -> occurrences(blanked, "ChainReadSnapshot(") }
+        //
+        // ⚠️ T297③补（地雷 1）：针法原本是 `occurrences(blanked, "ChainReadSnapshot(")`，
+        // 而那串恰好是 `loadChainReadSnapshot(` 的后缀 —— 于是全仓每一处**读**都被当成**造**：
+        // 仓储层数成 2（它是 1 造 + 1 读）、BackgroundSync 数成 3、ClassProgressScheduler 与
+        // ColdStartRebuild 各数成 1，期望名册那两格永远对不上。相减才是构造点。
+        // 同一个 `assertEquals` 还有第二枚地雷：`constructed.entries` 是 `List<Map.Entry>`，
+        // 而期望那份 `listOf(a to 1, b to 1)` 是 `List<Pair>` —— 两枚永不相等的两个 List，
+        // 这一格从写下的那一刻起就不可能绿（`equals` 逐元素比，`Pair != Map.Entry`）。
+        // 判据本身一个字没动：还是"除类 header 之外全仓只许仓储层构造一次"。
+        // 第三枚地雷（编译级）跟着一起修：原本这里写 `constructed.entries.map { it.key to it.value }`
+        // 再和一份 `List<Pair>` 比 —— K2 在 `entries`（`Set<MutableMap.Entry>`）上推不出 `map` 的 R，
+        // 而那两份 List 本来就永不相等。现在按**键集**比、再逐枚按**构造枚数**比，两条都只判同一件事。
+        val constructed = censusPerFile { blanked ->
+            occurrences(blanked, "ChainReadSnapshot(") - occurrences(blanked, "loadChainReadSnapshot(")
+        }
         assertEquals(
-            "载体的构造点/声明点集合变了（除类自己那枚 header，全仓只许仓储层这一处构造）：\n${constructed.entries.sortedBy { it.key }}",
+            "载体的构造点集合变了（除类自己那枚 header，全仓只许仓储层这一处构造）：\n${constructed.keys.toList().sorted()}",
             listOf(
-                "$MAIN_PREFIX/$repositoryFile" to 1,
-                "$MAIN_PREFIX/$snapshotFile" to 1,
-            ).sortedBy { it.key },
-            constructed.entries.sortedBy { it.key },
+                "$MAIN_PREFIX/$repositoryFile",
+                "$MAIN_PREFIX/$snapshotFile",
+            ).sorted(),
+            constructed.keys.toList().sorted(),
         )
+        for ((file, hits) in constructed) {
+            assertEquals("$file 里载体的构造点不止一枚（每处只许一枚：类文件那枚是声明、仓储层那枚是构造）", 1, hits)
+        }
     }
 
     /** ③ 三处入口各造一次（逐字节 + 读形状的顺序） */
@@ -186,7 +203,15 @@ class ChainReadSnapshotWiringGuardTest {
         }
 
         val scheduler = withoutComments(readMainSource(schedulerFile))
-        val wrapper = normalize(functionBlock(scheduler, "suspend fun rescheduleNextWindow("))
+        // ⚠️ T297③补（地雷 2）：这一手是**表达式体**（`) = rescheduleNextWindow(readClassSwitches = { … },
+        // loadWindowInput = load@{ … }, reschedule = { … })`），实参全是 lambda。
+        // `functionBlock` 那套"从签名后面第一个 `{` 配平到它的 `}`"在这里只会切到**第一枚实参 lambda**
+        // （`readClassSwitches` 那一截，里面只有两枚 prefs 读），而载体那一排在下一枚实参里 ——
+        // 于是 `wrapper.contains(fallback)` 从写下的那一刻起永远红。
+        // 切法跟着盘面改：按 `loadWindowInput` 那枚注入 lambda 配平取块（先例就是
+        // `ClassProgressRescheduleWiringTest` 里的 `balancedBlock(source, "loadWindowInput = load@{")`，
+        // 它钉的同一处、用的是同一种切法）。判据对象没变：这一步吃不吃入口那一份载体。
+        val wrapper = normalize(lambdaBlock(scheduler, "loadWindowInput = load@{"))
         assertTrue("续排那一步不再优先吃载体：$wrapper", wrapper.contains(fallback))
         assertNoRawTableRead("rescheduleNextWindow", wrapper)
 
@@ -370,6 +395,30 @@ class ChainReadSnapshotWiringGuardTest {
         throw IllegalStateException("$signature 的花括号没配平")
     }
 
+    /**
+     * 注入缝上那一枚 lambda 的块：从 [anchor]（含）起，到它之后第一对配平的花括号为止。
+     *
+     * 为什么要有这一枚而不是复用 [functionBlock]：表达体函数（`) = other(…) `）的"函数体"根本没有
+     * `{`，functionBlock 只会切到第一枚实参 lambda 为止。锚点失效照样**抛**，静默跳过等于没有守卫。
+     */
+    private fun lambdaBlock(code: String, anchor: String): String {
+        val at = code.indexOf(anchor)
+        check(at >= 0) { "找不到 $anchor：lambda 改名或挪过家，这条守卫要跟着改" }
+        val open = code.indexOf('{', at + anchor.length)
+        check(open >= at) { "$anchor 之后找不到 lambda 体" }
+        var depth = 0
+        for (index in open until code.length) {
+            when (code[index]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return code.substring(at, index + 1)
+                }
+            }
+        }
+        throw IllegalStateException("$anchor 的 lambda 花括号没配平")
+    }
+
     /** 闸门编排本体的那段（从提前 return 那道判断往后都算它的一半） */
     private fun chainBodyOf(normalizedColdStart: String): String {
         val at = normalizedColdStart.indexOf("internal suspend fun run(")
@@ -415,7 +464,14 @@ class ChainReadSnapshotWiringGuardTest {
         }
     }
 
-    /** 注释与字符串字面量都抹成空白、换行位置不变：整份文件的计数用这份（防止字面量里的「/*」骗过配平） */
+    // ⚠️ T297③补（地雷 3，编译级）：这一行原本写成一行式 KDoc，而正文里出现了字面的
+    // 「斜杠＋星号」那对字符 —— Kotlin 的块注释是**嵌套**的，注释体内那对字符把注释又开了一层，
+    // 于是句尾的 `*/` 只关掉里层，本行以下整片（`blankCommentsAndLiterals` / `findMainJavaDir` /
+    // companion 的 MAIN_PREFIX 全在内）被吞进注释：编译器报 "Unclosed comment" + "Missing '}'"，
+    // 并连带 21 枚 "Unresolved reference"。整个文件从 ③ 落盘那一刻起就没编译过。
+    // 改成行注释（`//` 到行尾为止，不嵌套）并把那对字符用中文念出来，判据一个字没动。
+    // 注释与字符串字面量都抹成空白、换行位置不变：整份文件的计数用这份
+    // （防止字符串字面量里的那对「斜杠加星号」骗过配平）。
     private fun blankCommentsAndLiterals(src: String): String {
         val out = src.toCharArray()
         var i = 0
