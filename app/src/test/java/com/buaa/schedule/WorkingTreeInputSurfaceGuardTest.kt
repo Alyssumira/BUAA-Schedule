@@ -237,7 +237,7 @@ class WorkingTreeInputSurfaceGuardTest {
                 else -> i++
             }
         }
-        return out.toString()
+        return String(out)
     }
 
     private companion object {

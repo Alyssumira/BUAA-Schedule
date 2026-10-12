@@ -213,12 +213,16 @@ class GlassEffectiveTierWiringGuardTest {
                 else -> i++
             }
         }
-        return out.toString()
+        return String(out)
     }
 
     private companion object {
-        const val GOVERNANCE_FILE = "GlassGovernance.kt"
-        const val DECISION_FILE = "GlassJankDecision.kt"
+        // T317：这两格原先写的是裸文件名，而 findMainJavaDir() 交回的是 `app/src/main/java` 那一层，
+        // 于是 File(dir, "GlassGovernance.kt") 指向 app/src/main/java/GlassGovernance.kt —— 盘上没有，
+        // 三格全部停在「找不到」那句 assertTrue 上（改前实测：clean 树 3 failures）。补成相对 java 根的
+        // 真实包路径，与同文件 GLASS_GOVERNANCE_TEST 的写法同一口径。
+        const val GOVERNANCE_FILE = "com/buaa/schedule/core/designsystem/GlassGovernance.kt"
+        const val DECISION_FILE = "com/buaa/schedule/core/designsystem/GlassJankDecision.kt"
         const val GLASS_GOVERNANCE_TEST = "com/buaa/schedule/core/designsystem/GlassGovernanceTest.kt"
 
         const val FORWARDER =
