@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.net.URI
 
 /**
  * T302③：把**「全 `app/src/main` 里再不许出现拿教务 origin 做裸前缀比较」这一形**钉成 0 处，
@@ -45,16 +46,21 @@ import java.io.File
  * `guardReadWorkingTreeFiles` 里整目录进 `tasks.withType<Test>()` 的 `inputs`（T92①，台账 #136），
  * 本次没有新增目录之外的读取面（不读 res/、不读清单、不读脚本），无需再动构建脚本。
  *
- * ## 拦的是哪五步退路
+ * ## 拦的是哪六步退路
  *
  * 1. 把任何一枚调用点换回前缀比较（第①格）。"加一段路径就当防线"那种绕法由第⑥格兜：
  *    `startsWith("https://byxt.buaa.edu.cn/jwapp…")` 在第①格不报（它问的是第三个问题 ——
- *    `maybeCaptureSession` 那条"是不是教务首页路由"的判据，本卡不动、登记在册），
+ *    `maybeCaptureSession` 那条"是不是教务首页路由"的判据，本卡不动、登记在册，并由 **T306 的第⑧格**
+ *    把那枚字面量的免疫力/窄度实测钉死，见下面第 6 步），
  *    但它会把 `BuaaLoginScreen.kt` 的教务 host 枚数从 2 抬到 3 ⇒ 第⑥格红；
  * 2. 在内核里补 android/时钟/时区/权限/`Build.VERSION`/库读取，或把两枚分档折成 Boolean（第③格）；
  * 3. 在别处再刻一枚 authority 刀（第⑤格：四刀的定义只许住在 `domain/url/UrlShape.kt`，各 1 枚）；
  * 4. 把 origin 字面量再抄一份进 `data/` 或 `ui/`（第⑥格）；
- * 5. 把 `:509-511` 那把 URI ＋ `endsWith` 后缀的旧尺子留在盘上，让它与内核并存成第二本档（第⑦格）。
+ * 5. 把 `:509-511` 那把 URI ＋ `endsWith` 后缀的旧尺子留在盘上，让它与内核并存成第二本档（第⑦格）；
+ * 6. **（T306 补）把第三问的那枚路由字面量偷偷改形**：删薄成裸 origin（`…cn"`）⇒ 第①格与第⑥格与本格的
+ *    原文锚点三处一起红；把路由段换成别的路径 ⇒ 本格原文锚点红；整行删掉 ⇒ 本格两处枚数锚点红。
+ *    这一形**不需要**并入内核（它比内核更窄、不更宽，见第⑧格的三条实测），所以裁定＝另一问、不并尺，
+ *    册子从「八格」变「九格」，退路从五步变六步。
  */
 class EduWebOriginSingleRulerGuardTest {
 
@@ -329,6 +335,117 @@ class EduWebOriginSingleRulerGuardTest {
         )
     }
 
+    // ─────────────── ⑧ 第三问那一格：路由前缀 vs 裸 origin 前缀（T306 第 2 问） ───────────────
+
+    /**
+     * 卡面漏的那一问：`ui/importing/BuaaLoginScreen.kt` 里 `maybeCaptureSession` 的那枚字面量
+     * （`startsWith("https://byxt.buaa.edu.cn/jwapp/sys/homeapp/")`）**算不算第四把尺**。
+     *
+     * **裁定＝不算，它是第三个问题**（「是不是教务首页那一条路由」＝页面内抓取的**触发器**），本卡不并尺。
+     * 崩卡 ⓪ 只在那枚提交消息里手写过一枚 `…cn.evil.com/jwapp/…` 的读数，册子里既没有可跑的格、
+     * 也没有把「免疫」与「运气」分开的证据 —— 这一格补上（下面的期望值全部手写，一枚都不从
+     * 被验对象输出求；`routeHit`/`bareHit` 是**待验的表达式**，JDK 的 `URI.host` 只是对表用的独立第二源）。
+     *
+     * 三条实测结论：
+     *
+     * 1. **带路径的整串前缀对仿冒域免疫，而且是构造性质、不是运气**：教务 host 后面紧跟的那枚 `/`
+     *    （字面量的第 24 枚字符）就是 authority 的终结符，它写在字面量**内部** ⇒ 仿冒字符（`.`、`@`、
+     *    粘连后缀）只能落在它前面，一落就顶掉整串。表里 `routeHit = false` 的那六枚仿冒格逐枚如此，
+     *    而每一枚 `routeHit = true` 的格子里 JDK 读出的 host 逐枚都是教务那一台（不变式 A）。
+     * 2. **同一批 URL 换成裸 origin 前缀那一形（改前 `:120` 的写法）立刻全绿**：`.evil.com`、`@evil.com`、
+     *    `cnevil.com`、`:443.evil.com` 六枚仿冒格逐枚 `bareHit = true`，而它们 `URI.host` 逐枚都不是
+     *    教务那一台（不变式 B）—— 那才是 #515 的病体。**免疫的是那枚 `/`，不是「这条判据可靠」**，
+     *    所以这一格同时把盘面上那一行的原文逐字节钉住：把路由段删薄成裸 origin 的那一刻，①（那一形 0 处）、
+     *    ⑥（带引号整串 0 枚）与本格的原文锚点三处一起红。
+     * 3. **它不能被并成 origin 判据、也不能反过来顶掉内核**：`https://byxt.buaa.edu.cn:443/jwapp/sys/homeapp/index.do`
+     *    与 `https://byxt.buaa.edu.cn/` 两枚合法格上路由那一问答「否」而内核那一问答「就绪」——
+     *    并尺就是把抓取触发在还没进 homeapp 的文档上（根路径、SSO 回跳途中），
+     *    而拿路由判据顶内核就是把带显式缺省端口的合法首页判成不就绪。两枚都是别的卡修过的方向。
+     */
+    @Test
+    fun `第三问 带路径的整串前缀免疫仿冒域而裸 origin 前缀不免疫`() {
+        val authorityEnd = BARE_ORIGIN_PREFIX.length
+        assertEquals(
+            "构造性质第 1 半：路由字面量的前 24 枚字符逐字就是裸 origin（两形从这里才开始分家）：",
+            BARE_ORIGIN_PREFIX,
+            ROUTE_PREFIX.take(authorityEnd),
+        )
+        assertEquals(
+            "构造性质第 2 半：紧跟其后的那一枚字符就是 authority 的终结符 `/` —— 它写在字面量**内部**，" +
+                "仿冒字符（`.`、`@`、粘连后缀）只能落在它前面，一落就顶掉整串。这就是「免疫」的全部理由，" +
+                "它是构造性质而不是运气：",
+            "/",
+            ROUTE_PREFIX[authorityEnd].toString(),
+        )
+        assertEquals(
+            "构造性质第 3 半：`://` 之后第一枚 `/` 恰好落在第 $authorityEnd 枚字符上（字面量里没有第二枚斜杠" +
+                "之前还能塞进 host 的位置）：",
+            authorityEnd,
+            ROUTE_PREFIX.indexOf('/', SCHEME_PREFIX.length),
+        )
+        for (cell in ROUTE_TABLE) {
+            assertEquals("路由那一问（${cell.why}）：${cell.url}", cell.routeHit, cell.url.startsWith(ROUTE_PREFIX))
+            assertEquals(
+                "裸 origin 前缀那一形（#515 的病体写法，${cell.why}）：${cell.url}",
+                cell.bareHit,
+                cell.url.startsWith(BARE_ORIGIN_PREFIX),
+            )
+        }
+        // 不变式 A：路由形命中的格子，JDK 的 URI（与手写刀无关的第二把尺）读出的服务器逐枚都是教务那一台
+        // ⇒ 这一形不替外人开门。一枚 routeHit = true 都没有时这条就空转，所以枚数也钉死。
+        val routeHits = ROUTE_TABLE.filter { it.routeHit }
+        assertEquals(
+            "表里 routeHit = true 的合法格必须恰好 2 枚（真首页带查询串 ＋ homeapp 根路径），实到 " + routeHits.size +
+                " 枚（对不上 = 表的靶换了，不变式 A 就成了空转）：",
+            2,
+            routeHits.size,
+        )
+        for (cell in routeHits) {
+            val parsed = URI(cell.url)
+            assertEquals("不变式 A：路由命中的格子里 URI 读出的 host 必是教务那一台：" + cell.url, EduWebOrigin.HOST, parsed.host)
+            assertEquals("不变式 A：scheme 也逐枚是 https（字面量比、不折大小写，只会更窄不会更宽）：" + cell.url, "https", parsed.scheme)
+        }
+        // 不变式 B：「裸前缀命中而路由不命中」那一组按 URI 读出的 host 分两半，两半枚数各钉死 ——
+        // 仿冒那一半（host 不是教务那一台，含 `…:443.evil.com` 那枚 URI.host 读不出＝null）＝ 裸前缀那一形
+        // 说谎的六枚格子；合法那一半（host 仍是教务：显式 `:443` 的首页、教务根路径）＝ 路由那一问**故意**
+        // 答否的两枚，它正是「并尺」会把触发器搬到别的文档上去的那两枚现场。
+        val split = ROUTE_TABLE.filter { it.bareHit && !it.routeHit }
+            .partition { URI(it.url).host == EduWebOrigin.HOST }
+        assertEquals(
+            "裸前缀说谎的仿冒格必须恰好 6 枚（`.evil.com` ×2、`@evil.com` ×2、粘连后缀、端口位挂 `.evil.com`），" +
+                "实到 " + split.second.size + " 枚：" + split.second.joinToString(" / ") { it.url },
+            6,
+            split.second.size,
+        )
+        assertEquals(
+            "路由故意答否的合法格必须恰好 2 枚（显式 `:443` 的首页、教务根路径），实到 " + split.first.size + " 枚：" +
+                split.first.joinToString(" / ") { it.url },
+            2,
+            split.first.size,
+        )
+        val login = blankCommentsKeepingLiterals(readMainSource(LOGIN_SCREEN))
+        assertEquals(
+            "盘面上那一行原文逐字节 1 处（它是**触发器**，本卡不并尺；把它改回裸 origin 或删薄路由段" +
+                "都会同时红 ①⑥ 与这一格）：",
+            1,
+            occurrences(login, ROUTE_GATE_BODY),
+        )
+        assertEquals(
+            "`$LOGIN_SCREEN` 里抹掉注释之后剩下的 `startsWith(` 必须恰好 1 枚，就是上面那一行的路由触发器" +
+                "（多一枚 = 有人又把 origin 拿去做前缀比较；少一枚 = 本格钉的那一形已经不在盘上了）：",
+            1,
+            occurrences(login, "startsWith("),
+        )
+    }
+
+    /** 第三问的表：URL ×（带路径的整串前缀命中 / 裸 origin 前缀命中）× 一句话（期望值全部手写） */
+    private data class RouteCell(
+        val url: String,
+        val routeHit: Boolean,
+        val bareHit: Boolean,
+        val why: String,
+    )
+
     // ---- 判据本体（读形状的探测器） ----
 
     /**
@@ -452,6 +569,102 @@ class EduWebOriginSingleRulerGuardTest {
         const val QUOTED_ORIGIN = "\"https://byxt.buaa.edu.cn\""
         const val QUOTED_ORIGIN_SLASH = "\"https://byxt.buaa.edu.cn/\""
         const val EDU_HOST_LITERAL = "byxt.buaa.edu.cn"
+
+        /** 第三问（⑧）的两形：裸 origin 前缀（#515 的病体写法）与带路由的整串前缀（盘面上那一枚） */
+        const val SCHEME_PREFIX = "https://"
+        const val BARE_ORIGIN_PREFIX = "https://byxt.buaa.edu.cn"
+        const val ROUTE_PREFIX = "https://byxt.buaa.edu.cn/jwapp/sys/homeapp/"
+
+        /** 盘面上 `maybeCaptureSession` 那一行的原文（副钉 = 逐字节，与第④格同法；本卡不并尺，故钉它在原位） */
+        const val ROUTE_GATE_BODY =
+            """if (url?.startsWith("https://byxt.buaa.edu.cn/jwapp/sys/homeapp/") != true) return"""
+
+        /**
+         * 第三问的表：URL × 两形的命中与否 × 一句话。**期望值全部手写**（⓪ 那趟实测的形状推出来的，
+         * 一枚都不从 `startsWith` 的输出求）—— `routeHit` 全 `true` 与全 `false` 都会让不变式 A/B 空转，
+         * 所以两半的枚数在下面各自钉死。
+         */
+        val ROUTE_TABLE = listOf(
+            RouteCell(
+                "https://byxt.buaa.edu.cn/jwapp/sys/homeapp/index.do?ticket=ST-1234",
+                true,
+                true,
+                "SSO 回跳后的真首页：触发器正身，两形都命中（这一格之后它们才分家）",
+            ),
+            RouteCell(
+                "https://byxt.buaa.edu.cn/jwapp/sys/homeapp/",
+                true,
+                true,
+                "homeapp 根：两形都命中",
+            ),
+            RouteCell(
+                "https://byxt.buaa.edu.cn.evil.com/jwapp/sys/homeapp/index.do",
+                false,
+                true,
+                "后缀伪装 ＋ 真教务路径（⓪ 唯一实测过的那一枚，当时记成「运气形状」）",
+            ),
+            RouteCell(
+                "https://byxt.buaa.edu.cn.evil.com/jwapp/sys/homeapp/",
+                false,
+                true,
+                "后缀伪装 ＋ 完整路由段",
+            ),
+            RouteCell(
+                "https://byxt.buaa.edu.cn@evil.com/jwapp/sys/homeapp/index.do",
+                false,
+                true,
+                "userinfo 伪装（URI.host 实测 = evil.com，⓪ 第 8 格）",
+            ),
+            RouteCell(
+                "https://byxt.buaa.edu.cn@evil.com/jwapp/sys/homeapp/",
+                false,
+                true,
+                "userinfo 伪装 ＋ 完整路由段",
+            ),
+            RouteCell(
+                "https://byxt.buaa.edu.cnevil.com/jwapp/sys/homeapp/",
+                false,
+                true,
+                "粘连后缀（没有点也没有 `@`，靠整串对不上）",
+            ),
+            RouteCell(
+                "https://byxt.buaa.edu.cn:443.evil.com/jwapp/sys/homeapp/",
+                false,
+                true,
+                "端口位挂 `.evil.com`：手写刀判畸形、URI.host 读不出（null）、路由形判不命中 —— 三把都 fail-closed",
+            ),
+            RouteCell(
+                "https://byxt.buaa.edu.cn:443/jwapp/sys/homeapp/index.do",
+                false,
+                true,
+                "**合法**首页带显式缺省端口：路由那一问答否、裸前缀那形答是、内核答 OnEduOrigin ⇒ " +
+                    "这一形比 origin 判据更窄（触发器漏放），所以它既不能并成判据也不许反过来顶掉内核",
+            ),
+            RouteCell(
+                "https://byxt.buaa.edu.cn/",
+                false,
+                true,
+                "教务根路径：不是 homeapp 那条路由 ⇒ 触发器不响（并尺就是把抓取触发在还没起 homeapp 的文档上）",
+            ),
+            RouteCell(
+                "HTTPS://BYXT.BUAa.EDU.CN/jwapp/sys/homeapp/index.do",
+                false,
+                false,
+                "大小写混排：两形都不命中（字面量逐字比）—— 内核那一头折一次大小写才认",
+            ),
+            RouteCell(
+                "http://byxt.buaa.edu.cn/jwapp/sys/homeapp/index.do",
+                false,
+                false,
+                "明文降级：字面量里的 `https` 把它挡在触发器外（内核则给它 SchemeDowngraded 那一档）",
+            ),
+            RouteCell(
+                "about:blank",
+                false,
+                false,
+                "WebView 起手那一枚：两形都不命中",
+            ),
+        )
 
         /**
          * 改前的三枚原文（⓪ 实测的字节形状）：探测器必须逐枚报出。
