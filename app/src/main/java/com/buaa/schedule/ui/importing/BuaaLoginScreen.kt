@@ -63,6 +63,8 @@ import com.buaa.schedule.data.import.BuaaInPageFetcher
 import com.buaa.schedule.data.import.BuaaSemesterStart
 import com.buaa.schedule.data.import.redactUrl
 import com.buaa.schedule.data.import.resolveBuaaSemesterStart
+import com.buaa.schedule.domain.url.EduDocument
+import com.buaa.schedule.domain.url.eduDocumentVerdict
 import com.buaa.schedule.ui.ScheduleViewModel
 import java.net.URLEncoder
 
@@ -117,7 +119,11 @@ fun BuaaLoginScreen(
         val fetcher = com.buaa.schedule.data.import.BuaaInPageFetcher
         // R5 F-39：SSO 回跳途中文档可能还停在 sso 域，此时页面内请求打不到教务接口。
         // 注入脚本已钉死绝对 origin，这里只做提示，避免把「没登录」报成「网络差」。
-        if (!web.url.orEmpty().startsWith(com.buaa.schedule.data.import.BuaaWebSession.BYXT_ORIGIN)) {
+        // T302③（在册 #515）：改前这一行是 `web.url.orEmpty().startsWith(BYXT_ORIGIN)` —— **少一枚尾斜杠**，
+        // 于是 `https://byxt.buaa.edu.cn.evil.com/` 与 `https://byxt.buaa.edu.cn@evil.com/` 都能过这道闸门，
+        // "教务系统页面尚未就绪"那句就在外人文档上说了谎（⓪ 实测：裸前缀对这两枚全部命中）。
+        // 现在问 domain/url 那枚内核：它逐段比 scheme/host/port，整段不等就是 NotEduHost，没有前缀可蹭。
+        if (eduDocumentVerdict(web.url) != EduDocument.OnEduOrigin) {
             fetchState = null
             viewModel.showMessage("教务系统页面尚未就绪，请稍后重试", isError = true)
             com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())

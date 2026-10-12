@@ -13,6 +13,10 @@ import androidx.core.content.edit
 import com.buaa.schedule.data.local.BuaaCookieStore
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
+import com.buaa.schedule.domain.url.EduDocument
+import com.buaa.schedule.domain.url.SessionDomain
+import com.buaa.schedule.domain.url.eduDocumentVerdict
+import com.buaa.schedule.domain.url.sessionDomainVerdict
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -43,9 +47,6 @@ object BuaaWebSession {
 
     /** 需要持久化的鉴权域：byxt 自身 + 统一身份认证的 SSO 全局会话 */
     private val COOKIE_HOSTS = listOf("byxt.buaa.edu.cn", "sso.buaa.edu.cn")
-
-    /** 会话 WebView 允许留在其中的域；其余一律 stopLoading + 丢弃 */
-    private const val SESSION_HOST_SUFFIX = ".buaa.edu.cn"
 
     /**
      * 教务站点 origin：会话判定、页面内接口（[BuaaInPageFetcher]）、登录回跳地址
@@ -354,8 +355,13 @@ object BuaaWebSession {
      * 读的是主线程维护的 [lastUrl] 缓存，不碰 WebView：这个方法会在
      * `withImportLock`（Dispatchers.Default）里被调到，跨线程读 `getUrl()`
      * 属于未定义行为（R5 F-36）。
+     *
+     * T302③：判据本身在 `domain/url/EduWebOrigin.kt`（在册 #515）。改前这一行是
+     * `lastUrl?.startsWith("$BYXT_ORIGIN/")` —— 那枚尾斜杠替它挡住了后缀伪装，却也把三枚合法格
+     * （无尾斜杠、`:443`、大小写混排）判成"没有会话"。现在这两档都由内核逐段裁定，本行只问一次、
+     * 不再自己拿 origin 比前缀（守卫第①格钉着那一形全树 0 处）。
      */
-    fun hasSession(): Boolean = lastUrl?.startsWith("$BYXT_ORIGIN/") == true
+    fun hasSession(): Boolean = eduDocumentVerdict(lastUrl) == EduDocument.OnEduOrigin
 
     /** 拉取学年学期列表（复用保留的 byxt WebView 页面上下文） */
     suspend fun fetchTermList(): List<BuaaInPageFetcher.TermOption> {
@@ -509,12 +515,6 @@ object BuaaWebSession {
         }
     }
 
-    /** 判断 URL 是否属于允许留在会话 WebView 里的北航域名（含子域） */
-    private fun isAllowedSessionUrl(url: String?): Boolean {
-        val host = url?.let { runCatching { java.net.URI(it).host }.getOrNull() } ?: return false
-        return host == "buaa.edu.cn" || host.endsWith(SESSION_HOST_SUFFIX)
-    }
-
     /** 撤掉尚未触发的恢复超时；恢复成功或失败都要调，免得超时任务回头去拆下一个实例 */
     private fun cancelRestoreGuard() {
         restoreGuard?.let { mainHandler.removeCallbacks(it) }
@@ -606,18 +606,30 @@ object BuaaWebSession {
             override fun onPageFinished(view: WebView?, url: String?) {
                 if (view == null) return
                 if (url != null) lastUrl = url
-                if (url?.startsWith("$BYXT_ORIGIN/") == true) {
-                    restoreInFlight = false
-                    retain(view, activity)
-                } else if (!isAllowedSessionUrl(url)) {
-                    // 被重定向到站外（SSO 表单页以外的陌生域）：视为会话不可用
-                    abandonRestore(view, "重定向到非北航域: ${redactUrl(url)}")
-                } else {
-                    // 仍在北航域、但停在 SSO 登录页：Cookie 已失效，需要用户重新登录。
-                    // 此前这个分支两不靠 —— restoreInFlight 永久 true（本进程再也不尝试
-                    // 恢复），这个隐藏的 WebView 也永不销毁。这个 WebView 用户碰不到
-                    // （1×1、alpha=0、不收触摸），不可能在这里完成登录，直接拆掉退避。
-                    abandonRestore(view, "会话已失效，需要重新登录: ${redactUrl(url)}")
+                // 两问两档（T302③，在册 #515）：先问「是不是教务 origin」，不认再问「是不是北航会话域」。
+                // 改前这里是 `url?.startsWith("$BYXT_ORIGIN/")` ＋ `isAllowedSessionUrl(url)`（URI.host ＋
+                // endsWith 后缀）两把尺子并存，前者误伤三枚合法格、后者在一枚裸空格 query 上把真教务文档
+                // 判成外站。现在两问都只问 domain/url 那一枚内核。
+                when (eduDocumentVerdict(url)) {
+                    EduDocument.OnEduOrigin -> {
+                        restoreInFlight = false
+                        retain(view, activity)
+                    }
+
+                    else -> when (sessionDomainVerdict(url)) {
+                        SessionDomain.ForeignDomain, SessionDomain.Unparseable -> {
+                            // 被重定向到站外（SSO 表单页以外的陌生域），或者连 host 都读不出来：视为会话不可用
+                            abandonRestore(view, "重定向到非北航域: ${redactUrl(url)}")
+                        }
+
+                        SessionDomain.AllowedBuaaDomain -> {
+                            // 仍在北航域、但停在 SSO 登录页：Cookie 已失效，需要用户重新登录。
+                            // 此前这个分支两不靠 —— restoreInFlight 永久 true（本进程再也不尝试
+                            // 恢复），这个隐藏的 WebView 也永不销毁。这个 WebView 用户碰不到
+                            // （1×1、alpha=0、不收触摸），不可能在这里完成登录，直接拆掉退避。
+                            abandonRestore(view, "会话已失效，需要重新登录: ${redactUrl(url)}")
+                        }
+                    }
                 }
             }
 
