@@ -46,7 +46,7 @@ class WeekViewLineBudgetWiringGuardTest {
                 week.contains("metaLineHeightDp = labelLineHeightDp"),
         )
         assertTrue(
-            "**读形状**：递给内核的卡高与内边距必须是同一处真值（写死 5.dp 就是"预算与可用高度分叉"的老路）",
+            "**读形状**：递给内核的卡高与内边距必须是同一处真值（写死 5.dp 就是「预算与可用高度分叉」的老路）",
             week.contains("cardHeightDp = cardHeight.value.toDouble()") &&
                 week.contains("contentVerticalPaddingDp = CourseCellContentPadding.value.toDouble()"),
         )
@@ -291,8 +291,9 @@ class WeekViewLineBudgetWiringGuardTest {
     /** [needle] 在 [fromMarker] 与下一个 [toLiteral] 之间出现的次数（枚数配平，不靠行号） */
     private fun countBetween(hay: String, fromMarker: String, toLiteral: String): Int {
         val from = hay.indexOf(fromMarker)
+        assertTrue("$fromMarker 找不到：那一支的形状换了，本卡钉的正是它待在哪一支里", from >= 0)
         val to = hay.indexOf(toLiteral, from)
-        assertTrue("$fromMarker 或 $toLiteral 找不到", from >= 0 && to > from)
+        assertTrue("$toLiteral 不在 $fromMarker 之后：顺序倒了就没法说它在哪个分支里", to > from)
         return occurrences(hay.substring(from, to), "Text(")
     }
 
