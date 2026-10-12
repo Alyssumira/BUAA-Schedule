@@ -87,3 +87,26 @@ internal fun glassStaticCapTier(
     tierOff: Int,
     tierStandard: Int,
 ): Int = if (maxMemoryMb <= 128L || cores <= 4) tierOff else tierStandard
+
+/**
+ * 生效档位 = 静态上限与运行时降档**两把钳子**的合取（T315）。
+ *
+ * 判据本体从 `GlassGovernance.effectiveTier` 的函数体逐字搬来，一条表达式都没改：
+ * `preferred` 先被静态上限夹，再（仅当运行时降档存在时）被运行时上限夹。
+ * 为什么要单独成函数：原先那一格唯一覆盖把 `assumeTrue` 的前提写成
+ * `GlassGovernance.effectiveTier(standard) == standard` —— 假设式就是被测函数自己，
+ * 而它的另一枚输入是本机核数，于是「静态判 OFF」的机器（`cores <= 4`，含本仓 CI 那档 4 vCPU）
+ * 整格静默跳过，`effectiveTier` 在全测试树里当场一个字节都不说。判据抽出来当参数、
+ * 表驱动逐格打之后，任何核数上这一格都要说话；设备事实（内存/核数、降档状态）仍留在调用点。
+ *
+ * 纯 JVM 判据边界照旧：本函数不读设备度量、不读时钟，`Runtime` 那两枚探针与
+ * `availableProcessors()` 都只出现在调用点传进来的参数里。
+ */
+internal fun glassEffectiveTier(
+    preferred: Int,
+    staticCap: Int,
+    runtimeCap: Int?,
+): Int {
+    val clamped = preferred.coerceAtMost(staticCap)
+    return if (runtimeCap != null) clamped.coerceAtMost(runtimeCap) else clamped
+}

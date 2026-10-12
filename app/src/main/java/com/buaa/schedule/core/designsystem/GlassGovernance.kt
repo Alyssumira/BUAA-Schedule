@@ -39,12 +39,18 @@ object GlassGovernance {
         glassStaticCapTier(maxMemoryMb, cores, DesignTokens.GLASS_TIER_OFF, DesignTokens.GLASS_TIER_STANDARD)
     }
 
-    /** 用户偏好 → 经设备能力 + 运行时降档钳制后的实际生效档位 */
-    fun effectiveTier(preferred: Int): Int {
-        val runtime = runtimeCap
-        val clamped = preferred.coerceAtMost(staticCap)
-        return if (runtime != null) clamped.coerceAtMost(runtime) else clamped
-    }
+    /**
+     * 用户偏好 → 经设备能力 + 运行时降档钳制后的实际生效档位。
+     *
+     * 判据本体在 `GlassJankDecision.kt` 的 `glassEffectiveTier`（T315 抽出，两条表达式逐字搬，
+     * 阈值与夹取顺序分毫未动）：这里只把两枚设备事实当参数递进去 —— 静态能力上限 [staticCap]
+     * （首次求值后固定，读的是 `Runtime.maxMemory()` 与 `availableProcessors()`）与运行时降档
+     * 上限 [runtimeCap]。抽出去只为了"测试说不说得出话"：改前那一格把 `assumeTrue` 的前提写成
+     * 本函数的返回值，而本函数的另一枚输入就是本机核数 ⇒ 核数判 OFF 的机器上整格静默跳过，
+     * `effectiveTier` 在全测试树里当场一个字节都不说（台账 #561 那一族「唯一覆盖说不了话」）。
+     * 产品行为一条没改：任何核数、任何降档状态下同一枚输入的返回值与改前逐枚相同。
+     */
+    fun effectiveTier(preferred: Int): Int = glassEffectiveTier(preferred, staticCap, runtimeCap)
 
     /**
      * 持续掉帧时的回写入口：每次调用把运行时上限压低一档（最低到 OFF），
