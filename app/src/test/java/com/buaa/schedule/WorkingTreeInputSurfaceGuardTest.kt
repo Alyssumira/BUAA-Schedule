@@ -37,7 +37,10 @@ class WorkingTreeInputSurfaceGuardTest {
     fun everyMarkdownPathReadByATestIsRegisteredAsATestInput() {
         val entries = registeredEntries()
         val readers = markdownReaders()
-        val unregistered = readers.filterKeys { path -> !coveredByAny(path, entries) }.toList().sorted()
+        val unregistered = readers
+            .filterKeys { path -> !coveredByAny(path, entries) }
+            .toList()
+            .sortedBy { pair -> pair.first }
         assertTrue(
             "钉法 = 集合对账（读者 ⊆ 登记）：守卫按文本读到的每一枚 markdown 路径都得登记成测试任务的输入，" +
                 "漏一格就是「改了它却不重跑」那一档假绿。登记面 " + entries.size + " 格：" + entries.sorted() +
@@ -123,7 +126,8 @@ class WorkingTreeInputSurfaceGuardTest {
 
     /**
      * 读者册子：`app/src/test` 下「整条字面量就是一条 markdown 路径」的格。
-     * 行法 = 逐行取双引号字面量，先跳过整行注释（行首 `//`、`/*`、`*`），再只留无空白、无模板、
+     * 行法 = 逐行取双引号字面量，先跳过整行注释（行首两枚斜杠、斜杠紧跟星号、单独一枚星号），
+     * 再只留无空白、无模板、
      * 无转义而以 `.md` 收尾的 —— 报错文案里那种带空白与 `§` 的散文引用（普查数到 10 处）天然落不
      * 进尺子。本文件自己不进册子（同那枚 `assumeTrue` 针的手法）。
      */
