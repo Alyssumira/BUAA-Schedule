@@ -1,5 +1,6 @@
 package com.buaa.schedule.data.local
 
+import com.buaa.schedule.data.repository.FRESH_ROW_PRIMARY_KEY
 import com.buaa.schedule.domain.model.Semester
 
 /**
@@ -42,6 +43,24 @@ import com.buaa.schedule.domain.model.Semester
  * （`saveSemester` / `replaceSemesterCoursesInTx` / `saveSemesterWithRename` / 恢复那两枚由
  * `getByTermCode == null` 闸住的 insert）都在同一趟里 `deleteByTermCode(termCode)` 再插一枚；
  * 只有「顶成当前学期」那一跳（不写新内容）按 id 精确删。
+ *
+ * ## 在册 C1（T304，#514 之外）：「落那一枚新行」这一枚站点曾经交回的是**旧号**
+ *
+ * [SemesterRenameSaveStep.WriteSemesterRow] 的落点是 `data/repository/ScheduleRepository.kt` 的
+ * `applySemesterRowSteps`（`semesterDao.insert(...)`，而 `SemesterDao.insert` 是
+ * `OnConflictStrategy.REPLACE`、`SemesterEntity` 的主键是 `@PrimaryKey(autoGenerate = true)`）。
+ * 改前那一手交回的是步骤本尊带进来的那枚号 —— 而它是设置页从库里读出来又原样递回来的
+ * （`SettingsScreen` 的 `id = semester?.id ?: 0L`）⇒ 同一趟里 [SemesterRenameSaveStep.DeleteRowsForTermCode]
+ * 刚按 termCode 删过那一枚行，带旧号走 REPLACE 命中同一个 rowid ⇒ **不新增行**，
+ * 「最近写入的 = 当前学期」这一句在这一枚站点不成立；那一枚号此刻若被别的 termCode 的行持有
+ * （跨事务的陈旧快照）就被整行顶掉 —— #520/T281（课程侧）与 #527/T287（建课侧）收过的同一族。
+ *
+ * 第⓪问裁的是**缺陷**（判语与四条依据在 T304⓪ 提交），修法是让落点与承诺一致：主键由这枚步骤的
+ * **类体属性** [SemesterRenameSaveStep.WriteSemesterRow.rowToWrite] 供给，恒取同族真源的哨兵
+ * [FRESH_ROW_PRIMARY_KEY]（`data/repository/UndoReinsertIdentity.kt`，T281 落地）⇒ Room 另号。
+ * 落点选类体属性而不是「每枚构造站点各配守卫」，因为这一族的病灶正是调用点忘了抹号。
+ * 这一改**不动** [SEMESTER_ROW_ORDER] 与 [planSemesterRowBump] 的取舍：它们压的就是这句承诺，
+ * 抹号之后写进库的号只会更严格地单调上升（switchSemester 那一路改前就交 `copy(id = 0L)`）。
  *
  * 表驱动单测 `SemesterRowPolicyTest`（同 termCode 两行交出哪一枚 / 兄弟行不被吃掉 /
  * 拒绝档零步骤 / 中途抛 ⇒ 提交集为空）+ 形状与接线守卫 `SemesterRowShapeGuardTest`。
@@ -131,9 +150,59 @@ internal sealed interface SemesterRenameSaveStep {
     /** 写路级 termCode 收口：这一 termCode 已有的行全删，随后插的那一枚成为唯一一行 */
     data class DeleteRowsForTermCode(val termCode: String) : SemesterRenameSaveStep
 
-    /** 落那一枚新行（id 恒 0，由 Room 自增 ⇒ 「最近写入的 = 当前学期」） */
-    data class WriteSemesterRow(val semester: Semester) : SemesterRenameSaveStep
+    /**
+     * 落那一枚新行：交给 DAO 的主键**恒**是同族真源的哨兵 [FRESH_ROW_PRIMARY_KEY]，由
+     * `SemesterEntity` 的 `@PrimaryKey(autoGenerate = true)` 另号 ⇒「最近写入的 = 当前学期」
+     * 在这一枚站点是真的（与 `switchSemester` 那一路的 `copy(id = 0L)` 同形）。
+     *
+     * ⚠️ 改前那一形（T304 之前逐字，登记在册、不许接回去）：写侧交的是这枚步骤带进来的那枚号本尊，
+     * 而它是设置页从库里读出来又原样递回来的 ⇒ REPLACE 命中同一个 rowid、不新增行，
+     * 上一段那句「由 Room 自增」根本没发生；细节见本文件段首「在册 C1」那一节。
+     */
+    data class WriteSemesterRow(val semester: Semester) : SemesterRenameSaveStep {
+
+        /**
+         * 真正交回写侧的那一行 —— 派生字段落在**类体属性**上（本仓只有两条落点：类体属性 /
+         * 每枚构造站点各配守卫），于是构造这一枚步骤的人没有「自己记得抹号」这件事可做，
+         * 写侧也只有 [rowToWrite] 一枚可吃。取值口径是 [semesterWritePrimaryKeyLanding] 的分档本体。
+         *
+         * `semester.id` 本来就是 0L（本来就是新行那一格）时这一手**幂等**：多抹一次还是 0L，
+         * 不许多插一行、也不进任何违规档。
+         */
+        val rowToWrite: Semester = semester.copy(id = FRESH_ROW_PRIMARY_KEY)
+    }
 }
+
+/**
+ * 「这一枚学期行写侧将要交给 DAO 的主键，落不落得成『最近写入的 = 当前学期』」的分档
+ * （T304，#514 之外的在册 C1）。
+ *
+ * 纯 JVM：输入就是写侧将要交出去的那一枚主键（由调用点或表驱动单测递进来），内核不碰库、
+ * 不读钟、也不去问 DAO —— 与 `data/repository/UndoReinsertIdentity.kt` 同一口径。
+ * 两档，**不折成 Boolean**（卡面红线：返回布尔之后调用点各自再判一次就是第二把尺）。
+ *
+ * 尺只有一枚：比较的是同族真源那枚哨兵 [FRESH_ROW_PRIMARY_KEY]，本文件里不许再出现第二枚裸 0L。
+ * 本卡**不调** `undoWritePrimaryKey(...)` —— 它那根 `landsOnSnapshotRow` 轴量的是撤销链的两档
+ * （`RestoreInPlace` 走 `@Update` 按主键匹配、主键一抹平就一个字也写不进去 / 重插族另号），
+ * 而 [SemesterRenameSaveStep.WriteSemesterRow] 这一枚载体只有一档「落新行」，
+ * 递一枚恒为 false 的旗进去等于把分档折回调用点自己判；复用哨兵常量本身才是同构。
+ */
+internal sealed interface SemesterWritePrimaryKeyLanding {
+
+    /** 交出的是哨兵 ⇒ autoGenerate 另号 ⇒「最近写入的 = 当前学期」成立（本来就是新行那一格也在这一档） */
+    data object LandsAsFreshRow : SemesterWritePrimaryKeyLanding
+
+    /** 交出的是快照里的旧号 ⇒ REPLACE 按主键命中同一枚 rowid ⇒ 不新增行、那句承诺落空（病灶那一档） */
+    data class LandsOnSnapshotRow(val snapshotId: Long) : SemesterWritePrimaryKeyLanding
+}
+
+/** 按「写侧将要交出去的那一枚主键」分档；学期行这一族全仓只此一枚尺 */
+internal fun semesterWritePrimaryKeyLanding(handedPrimaryKey: Long): SemesterWritePrimaryKeyLanding =
+    if (handedPrimaryKey == FRESH_ROW_PRIMARY_KEY) {
+        SemesterWritePrimaryKeyLanding.LandsAsFreshRow
+    } else {
+        SemesterWritePrimaryKeyLanding.LandsOnSnapshotRow(handedPrimaryKey)
+    }
 
 /**
  * 「给当前课表改代码」的结论（`renameSemesterCourses` 与合并事务**共用这一枚判据**，

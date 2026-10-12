@@ -653,6 +653,15 @@ class ScheduleRepository(
      * ⚠️ 这一枚函数自己不裹事务，也**不许被拆成两枚事务跑**：调用方必须在同一枚
      * `db.withTransaction` 里把整组跑完 —— #461 的修法本体就落在这条约束上，
      * 形状守卫 `data/local/SemesterRowShapeGuardTest` 按它钉写侧原子性。
+     *
+     * T304（#514 之外的在册 C1）：`WriteSemesterRow` 那一枚吃的是它的**类体属性** `rowToWrite`
+     * （主键恒取同族真源的哨兵 `FRESH_ROW_PRIMARY_KEY`，见 `data/local/SemesterRowPolicy.kt`），
+     * 而不是步骤带进来的那枚号本尊。改前那一手是带旧号走 `semesterDao.insert`（`OnConflictStrategy.REPLACE`）：
+     * 同一趟里 `DeleteRowsForTermCode` 刚按 termCode 删过那一枚行 ⇒ REPLACE 命中同一个 rowid、**不新增行**，
+     * 「最近写入的 = 当前学期」那句承诺落空；那一枚号此刻若被别的 termCode 的行持有（跨事务的陈旧快照）
+     * 就被整行顶掉 —— 与 #520/T281（课程侧）、#527/T287（建课侧）同一族。写侧不许在这里自己抹号
+     * （那才是"调用点记得调"那一形），也不许退回吃 `semester` 本尊：
+     * 形状守卫 `data/local/SemesterRowWriteIdentityGuardTest` 按逐字节钉这一手。
      */
     private suspend fun applySemesterRowSteps(steps: List<SemesterRenameSaveStep>) {
         steps.forEach { step ->
@@ -664,7 +673,7 @@ class ScheduleRepository(
                     semesterDao.deleteByTermCode(step.termCode)
 
                 is SemesterRenameSaveStep.WriteSemesterRow ->
-                    semesterDao.insert(step.semester.toEntity())
+                    semesterDao.insert(step.rowToWrite.toEntity())
             }
         }
     }
