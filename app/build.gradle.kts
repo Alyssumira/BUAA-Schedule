@@ -486,6 +486,19 @@ val guardReadWorkingTreeFiles = files(
     // ⑩ 同一层还要拿 gradle.properties 的 VERSION_NAME/VERSION_CODE 对 provenance 侧车里
     //    "从包里读出来的那对"。改号那一步静默失效（本仓踩过 `if ($Bump)`）时这一格要说得出话。
     "../gradle.properties",
+    // ⑪ 发版手册那一页。`ReleaseArtifactSignerSingleRulerGuardTest` 册子⑥ 逐字读它找三枚针
+    //    （`buaa-schedule-<版本>-debugsigned.apk` 那枚尾巴、「产物层守卫」那一档、手册里那枚调试
+    //    DN 片段恰好 1 处）：路径常量在该文件 `:468`，读它在 `:327`。原先登记面里 docs 一格都没有 ⇒
+    //    实测同一条命令把那页改一笔，`testDebugUnitTest` 判 **UP-TO-DATE**、BUILD SUCCESSFUL、
+    //    盘上还是上一趟那两枚绿 XML（内部 `timestamp` 一字未动）—— 台账 #561 那一族假绿。
+    //    范围 = 普查结果不是倾向：三条独立数据源（`git grep` 的 docs/README 命中、抹注释后逐枚读
+    //    方法体、按"整条字面量就是一条 markdown 路径"那把尺与登记面对账）在 347 枚测试文件里只数出
+    //    **这一枚**真读 docs 内容的格；`../docs` 整目录与 `../README.md` 零读者 ⇒ 按上面那句
+    //    "逐项列的都是上面点过名的守卫真读到的路径"不登记（登记整目录 = 改任一 docs 就重跑全量测试，
+    //    那是拿另一种错换这一种）。
+    //    三向对账由 `WorkingTreeInputSurfaceGuardTest` 钉住：读者没登记 ⇒ 红；登记了没读者（含整目录
+    //    那一档）⇒ 红；登记的路径盘上不存在（写错一个字＝Gradle 眼里的空输入＝静默少一格）⇒ 红。
+    "../docs/RELEASE.md",
 )
 
 tasks.withType<Test>().configureEach {
