@@ -22,7 +22,7 @@ import org.junit.Test
  * 代价（如实写）：以后任何人新增一枚合法助手，本守卫会红，要回来把写死值各 +1（拆解口径见下，
  * 重钉是一行改动；报错消息会念出实到数、期望值与这两棵树的覆盖面）。
  *
- * ## 三格判据（每格都自带一枚「尺还活着」的绝对值／下限）
+ * ## 四格判据（每格都自带一枚「尺还活着」的绝对值／下限）
  * ① 枚数尺（`app/src/test`）：族内声明枚数 == 写死值、物化枚数 == 写死值、两把数同源，
  *    外加逐枚文件对账（同一枚文件里声明数 == 物化数）—— 助手被复制走样时这一格先响。
  * ② 形状尺（`app/src/test` + `app/src/main`）：每一枚族内声明往后做到它所在函数的收尾
@@ -32,6 +32,10 @@ import org.junit.Test
  *    `val out =` 声明」判它指的是字符数组还是别的接收者，指回字符数组的那一档必须 0 枚；
  *    本格钉的是被禁写法总枚数的**下限**（不是等式）—— 它是形状尺，增长本身不是病，
  *    读空了才是；等式那一档由 ① 负责。
+ * ④ 口径尺（`app/src/test` + `app/src/main`，T323 补）：把「抹注释前后两栏读数」这件事本身钉成在册量 ——
+ *    散文能顶高原文计数，顶不动尺子。本格同时钉死上面三枚写死值走的是抹注释那一栏（两栏合流即假绿），
+ *    并回答「有人把助手返回写成 out 的 toString、却在注释里留一句别这么写，会不会被骗过去」：不会 ——
+ *    两栏的差只许出现在注释里，病形只许出现在代码里，各有一格盯着。
  *
  * ## ⓪ 步现量（基点 13759a5，逐格 sed 回读过 5 处原文）
  * - 族内声明：`app/src/test` 131 枚（窄口径 `(src|source|xml)` 与宽口径「任一标识」同数），
@@ -220,6 +224,123 @@ class CommentStrippingHelperShapeGuardTest {
         )
     }
 
+    /**
+     * ④ 口径尺（散文不许移动尺子）：把「抹注释前后两栏读数」这件事本身钉成在册量，并钉死三枚写死值
+     * 走的是哪一栏。本格要回答的问题是：哪天有人把某枚助手的真返回写成「out 的 toString」，却在注释里
+     * 留一句「别这么写」—— 这一格会不会被骗过去。答案是不会，三条理由各钉成一格判据：
+     *   甲 在册散文点名（枚数尺，绝对值）：全仓两栏读数不等的文件必须逐字等于在册那一枚，一枚不多一枚不少；
+     *      散文新点名一处 ⇒ 本格红，红的是「在册清单长了」，要回来抄两栏读数，而不是尺子被顶走了。
+     *   乙 那枚点名文件的六格读数：正形裸 2 ／ 抹 1、病形裸 1 ／ 抹 0、声明两栏都是 1。
+     *      「抹注释后正形只剩 1 枚」是代码事实而不是推测 —— 它那一枚真助手的收尾确实是物化写法，
+     *      注释里第二次提到的那一枚被抹掉了；把它的真返回改成「out 的 toString」，病形抹注释栏立刻从 0 变 1，
+     *      本格与 ① ② 一起红，注释洗不掉代码。
+     *   丙 两栏合流＝假绿（绝对值反向）：test 那棵树的裸原文栏必须仍比抹注释栏高，等号一成立就说明
+     *      要么那句散文被删了（删证据不是修尺），要么扫描器改成了读原文 —— 后者会让 ① 交回 134 对 133。
+     * 另加两把全树定理尺：族内声明那把两栏恒等（注释造不出一枚族内声明，针要的是整行尾巴上那记数组化调用），
+     * 以及抹注释只会删不会造（裸原文栏恒 >= 抹注释栏；反过来说明 blankComments 在动代码）。
+     * 代价（如实写，与甲档同一条）：新增一枚合法助手 ⇒ 裸原文栏与在册点名清单都要回来重钉，别改成 >=。
+     */
+    @Test
+    fun proseInCommentsInflatesTheRawColumnButCannotMoveTheRuler() {
+        val test = scanTree(TEST_ROOT)
+        val main = scanTree(MAIN_ROOT)
+        val all = test.files + main.files
+        val prose = all.firstOrNull { file -> file.relative == PROSE_FILE_REL }
+        val problems = mutableListOf<String>()
+
+        // 甲：两栏读数不等的文件清单，逐字等于在册那一枚
+        val drifters = all
+            .filter { file ->
+                file.rawMaterializations.size != file.materializations.size ||
+                    file.rawArrayToStrings.size != file.arrayToStrings.size
+            }
+            .map { file ->
+                file.relative + "[正形 裸 " + file.rawMaterializations.size + " ／ 抹 " + file.materializations.size +
+                    " ；病形 裸 " + file.rawArrayToStrings.size + " ／ 抹 " + file.arrayToStrings.size + "]"
+            }
+            .sorted()
+        val booked = listOf(PROSE_FILE_REL + "[正形 裸 " + PROSE_FILE_RAW_MATERIALIZATIONS + " ／ 抹 " +
+            PROSE_FILE_STRIPPED_MATERIALIZATIONS + " ；病形 裸 " + PROSE_FILE_RAW_FORBIDDEN + " ／ 抹 " +
+            PROSE_FILE_STRIPPED_FORBIDDEN + "]")
+        if (drifters != booked) {
+            problems.add("两栏读数不等的文件清单 实到 " + drifters.joinToString(" ／ ") +
+                "（共 " + drifters.size + " 枚）／ 在册 " + booked.joinToString(" ／ "))
+        }
+
+        // 丙-1：族内声明那把对散文免疫 —— 两栏必须逐枚文件相等
+        val declDrifters = all
+            .filter { file -> file.rawDecls.size != file.decls.size }
+            .map { file -> file.relative + "（裸 " + file.rawDecls.size + " ／ 抹 " + file.decls.size + "）" }
+            .sorted()
+        if (declDrifters.isNotEmpty()) {
+            problems.add("族内声明那把被注释顶高了：" + declDrifters.joinToString(" ／ ") +
+                " ⇒ 抹注释这一步已经在动代码，不只在动注释")
+        }
+
+        // 丙-2：抹注释只能删不能造
+        val invented = all
+            .filter { file ->
+                file.rawMaterializations.size < file.materializations.size ||
+                    file.rawArrayToStrings.size < file.arrayToStrings.size
+            }
+            .map { file -> file.relative }
+            .sorted()
+        if (invented.isNotEmpty()) {
+            problems.add("抹注释之后反而多出针的文件：" + invented.joinToString(" ／ ") +
+                "（blankComments 在造字，不是在抹字）")
+        }
+
+        // 乙：那枚点名文件的六格读数
+        if (prose != null) {
+            val six = listOf(
+                Triple("正形 裸原文", prose.rawMaterializations.size, PROSE_FILE_RAW_MATERIALIZATIONS),
+                Triple("正形 抹注释", prose.materializations.size, PROSE_FILE_STRIPPED_MATERIALIZATIONS),
+                Triple("病形 裸原文", prose.rawArrayToStrings.size, PROSE_FILE_RAW_FORBIDDEN),
+                Triple("病形 抹注释", prose.arrayToStrings.size, PROSE_FILE_STRIPPED_FORBIDDEN),
+                Triple("声明 裸原文", prose.rawDecls.size, PROSE_FILE_DECLS),
+                Triple("声明 抹注释", prose.decls.size, PROSE_FILE_DECLS),
+            )
+            six.filter { row -> row.second != row.third }
+                .forEach { row -> problems.add(row.first + " 实到 " + row.second + " ／ 写死 " + row.third) }
+        }
+
+        // 口径本身：写死值钉的是抹注释那一栏，而裸原文那一栏也钉成在册量，两栏不许合流
+        if (test.materializationCount != EXPECTED_TEST_MATERIALIZATIONS) {
+            problems.add("口径尺与 ① 的写死值不同源：抹注释栏实到 " + test.materializationCount +
+                " ／ 写死 " + EXPECTED_TEST_MATERIALIZATIONS)
+        }
+        if (test.rawMaterializationCount != EXPECTED_TEST_RAW_MATERIALIZATIONS) {
+            problems.add(TEST_ROOT + " 裸原文栏 实到 " + test.rawMaterializationCount +
+                " ／ 写死 " + EXPECTED_TEST_RAW_MATERIALIZATIONS)
+        }
+        if (test.rawMaterializationCount == test.materializationCount) {
+            problems.add("两栏合流了（都是 " + test.materializationCount + " 枚）：要么那句散文被删了" +
+                "（那是在删证据，不是在修尺），要么扫描器改成了读原文")
+        }
+        if (main.rawDeclCount != main.declCount || main.rawMaterializationCount != main.materializationCount) {
+            problems.add(MAIN_ROOT + " 那棵树两栏不等（声明 裸 " + main.rawDeclCount + " ／ 抹 " + main.declCount +
+                "；正形 裸 " + main.rawMaterializationCount + " ／ 抹 " + main.materializationCount + "）：本卡盘面是相等的")
+        }
+
+        val proseColumns = if (prose == null) {
+            "点名文件读不到：" + PROSE_FILE_REL
+        } else {
+            "正形 裸 " + prose.rawMaterializations.size + "／抹 " + prose.materializations.size +
+                " ｜ 病形 裸 " + prose.rawArrayToStrings.size + "／抹 " + prose.arrayToStrings.size +
+                " ｜ 声明 裸 " + prose.rawDecls.size + "／抹 " + prose.decls.size
+        }
+        assertTrue(
+            "钉法 = 口径尺（甲档绝对值，不是 >=）：三枚写死值钉的是「抹注释之后」那一栏，裸原文那一栏连同它比" +
+                "这一栏高出的枚数一起钉成在册量 —— 散文能顶高原文计数，顶不动尺子。实到两栏：" +
+                TEST_ROOT + " 抹注释栏 " + test.materializationCount + " ／ 裸原文栏 " + test.rawMaterializationCount +
+                " ｜ 写死 " + EXPECTED_TEST_MATERIALIZATIONS + " ／ " + EXPECTED_TEST_RAW_MATERIALIZATIONS +
+                " ｜ 扫过 " + all.size + " 枚 .kt ｜ 在册散文点名 " + PROSE_FILE_REL + "（" + proseColumns + "）" +
+                " ｜ 声明那把两栏恒等：" + (if (declDrifters.isEmpty()) "全树 " + all.size + " 枚成立" else declDrifters.joinToString(" ／ ")) +
+                " ｜ 问题：" + problems.joinToString(" ／ "),
+            problems.isEmpty(),
+        )
+    }
+
     // ---- 读盘与小工具 ------------------------------------------------------------------------------
 
     /**
@@ -291,9 +412,11 @@ class CommentStrippingHelperShapeGuardTest {
         val files = dir.walkTopDown()
             .filter { file -> file.isFile && file.extension == "kt" }
             .map { file ->
+                val raw = file.readText()
                 HelperFile(
                     file.relativeTo(root).path.replace(File.separatorChar, '/'),
-                    blankComments(file.readText()),
+                    raw,
+                    blankComments(raw),
                 )
             }
             .toList()
@@ -322,15 +445,22 @@ class CommentStrippingHelperShapeGuardTest {
     }
 }
 
-private class HelperFile(val relative: String, val text: String) {
+private class HelperFile(val relative: String, val raw: String, val text: String) {
     val decls: List<Int> = helperDeclStarts(text)
     val materializations: List<Int> = occurrencesOf(text, MATERIALIZED)
     val arrayToStrings: List<Int> = occurrencesOf(text, FORBIDDEN)
+
+    // ④ 那格另开的一栏：同一枚文件「抹注释之前」的原文读数。两栏的差就是注释里那些散文。
+    val rawDecls: List<Int> = helperDeclStarts(raw)
+    val rawMaterializations: List<Int> = occurrencesOf(raw, MATERIALIZED)
+    val rawArrayToStrings: List<Int> = occurrencesOf(raw, FORBIDDEN)
 }
 
 private class HelperTree(val root: String, val files: List<HelperFile>) {
     val declCount: Int get() = files.sumOf { file -> file.decls.size }
     val materializationCount: Int get() = files.sumOf { file -> file.materializations.size }
+    val rawDeclCount: Int get() = files.sumOf { file -> file.rawDecls.size }
+    val rawMaterializationCount: Int get() = files.sumOf { file -> file.rawMaterializations.size }
 }
 
 /** 逐枚声明扫过去，只留族内那一档：数组化调用在表达式尾巴上，或同族那枚构造写法在开头 */
@@ -427,6 +557,22 @@ private const val EXPECTED_TEST_DECLS = 133
 private const val EXPECTED_TEST_MATERIALIZATIONS = 133
 private const val EXPECTED_MAIN_DECLS = 1
 private const val EXPECTED_ALL_HELPER_DECLS = 134
+
+/**
+ * ④ 的在册散文点名：全仓唯一一枚「KDoc 里同时逐字引用了正形与病形」的文件（ai/T321 留下的证据，
+ * 那一处登记的是 T317 量过的形状 —— 不许为了让数字对上而删它）。它自己那枚助手是真的：
+ * 声明 1 枚、收尾物化 1 枚，所以抹注释之后正形只剩 1 枚，而裸原文读数是 2 枚。
+ */
+private const val PROSE_FILE_REL =
+    "app/src/test/java/com/buaa/schedule/ui/editor/CourseEditorRedFieldGateWiringGuardTest.kt"
+private const val PROSE_FILE_DECLS = 1
+private const val PROSE_FILE_RAW_MATERIALIZATIONS = 2
+private const val PROSE_FILE_STRIPPED_MATERIALIZATIONS = 1
+private const val PROSE_FILE_RAW_FORBIDDEN = 1
+private const val PROSE_FILE_STRIPPED_FORBIDDEN = 0
+
+/** ④ 的在册量：`app/src/test` 裸原文栏比抹注释栏高 1 枚（134 对 133）；两栏合流＝证据没了 */
+private const val EXPECTED_TEST_RAW_MATERIALIZATIONS = 134
 
 /** 被禁写法在 `app/src/test` + `app/src/main` 的现量下限（34 + 5）：读空了才红，长了不红 */
 private const val EXPECTED_TO_STRING_SITE_FLOOR = 39
