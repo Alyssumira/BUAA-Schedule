@@ -187,7 +187,7 @@ class BackupRulesCoverCredentialStoresTest {
             }
             for (want in CREDENTIAL_ROSTER) {
                 if (entries.none { have -> have == (want.domain to want.fileName) }) {
-                    mismatch += "$label 少了 $want.fileName（domain=${want.domain}）—— ${want.why}"
+                    mismatch += "$label 少了 ${want.fileName}（domain=${want.domain}）—— ${want.why}"
                 }
             }
             for ((domain, path) in entries) {
