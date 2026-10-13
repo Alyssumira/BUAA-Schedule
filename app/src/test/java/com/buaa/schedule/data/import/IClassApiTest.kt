@@ -103,12 +103,19 @@ class IClassApiTest {
 
     // ---- 空体：判失败，不许当成功 ----
 
+    /**
+     * 真空体（服务端什么都没回）那一档。
+     *
+     * 措辞从前是「服务端没有受理这次签到」—— 那是关于服务端的一句断言，而一枚空体只支持
+     * "没有任何受理的证据"这半句（实测的形状是"处理到一半死了"，请求服务端很可能已经收了）。
+     * T349 按卡面 ④ 订正成后者：判失败这件事不变，变的是不替服务端答。
+     */
     @Test
     fun `空响应体一律判失败`() {
         for (raw in listOf("", "\r\n", "\n", "   ")) {
             val result = api.classifySign(IClassRawResponse(200, null, raw.toByteArray(gbk)))
             assertTrue("空体（${raw.toByteArray().size} 字节）被判成了成功", result.isFailure)
-            assertEquals("iClass 回了空响应（服务端没有受理这次签到）", failedMessage(result))
+            assertEquals("iClass 回了空响应（没有任何受理的证据）", failedMessage(result))
         }
     }
 

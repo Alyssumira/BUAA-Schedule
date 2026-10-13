@@ -22,22 +22,34 @@ import java.nio.charset.Charset
  */
 class IClassRejectedException(message: String) : IOException(message)
 
-/** 响应读不出结论：空体、非 JSON、没有 STATUS、HTTP 非 2xx —— 一律按失败处理 */
+/**
+ * 响应读不出结论：空体、非 JSON、没有 STATUS、HTTP 非 2xx、被服务端转走、响应体没读回来 —— 一律按失败处理。
+ *
+ * 「按失败处理」说的是**我们这侧怎么处理**，不是服务端答了什么：这一族只有落到
+ * [Envelope.Rejected] 那一档时那句才是厂商的原文（ERRMSG 逐字），其余各档只许念我们看得见的那半件事。
+ */
 class IClassUnexpectedResponseException(message: String) : IOException(message)
 
 /** 登录被拒（口令错、账号不存在、验证码网关不放行……服务端给什么就说什么） */
 class IClassLoginFailedException(message: String) : IOException(message)
 
 /**
- * 一次 HTTP 往返的**原始**结果：状态码 + `Content-Type` 头 + 响应体字节。
+ * 一次 HTTP 往返的**原始**结果：状态码 + `Content-Type` 头 + 响应体（三态，见 [body]）。
  *
  * 刻意不带任何解析痕迹：外壳判定要能在拿到字节之前就被测到（假响应表），
  * 而 charset 这件事的真相只在响应头里（见 [IClassApi.charsetFor]）。
+ * 也刻意**不带 `Location`**：这一族不跟重定向，把转跳地址留在结构里就等于给它一条通往界面与
+ * logcat 的路，而那条地址是服务端给的、可能带着我们发出去的那枚 `id`。
  */
 class IClassRawResponse(
     val statusCode: Int,
     val contentType: String?,
-    val body: ByteArray,
+    /**
+     * 响应体的三态，不许折成两态：
+     * 非空数组 = 读回来的字节；空数组 = 服务端确实什么都没回；
+     * **null = 我们没把体读回来**（读超时、连接中途断、体损坏）—— 那一档对服务端答了什么一无所知。
+     */
+    val body: ByteArray?,
 )
 
 /**
@@ -53,7 +65,9 @@ fun interface IClassTransport {
     /**
      * @param method `GET`（签到：一次拼接出来的 URL，没有请求体）或 `POST`（登录：form-urlencoded）
      * @param formBody 只在 POST 时有值，已按 UTF-8 编码好
-     * @return 原始响应；HTTP 层失败（连不上、非 2xx 的取不到体）时抛 IOException
+     * @return 原始响应。三档事实各交回各的，谁也不折成谁：3xx 交回状态码本身（**不跟过去**，也不读 `Location`），
+     *         响应体读不回来交回 [IClassRawResponse.body] = null，服务端什么都没回才交回空数组。
+     *         只有连不上、响应行与头都读不到时才抛 IOException。
      */
     fun execute(url: String, method: String, formBody: String?): IClassRawResponse
 }
@@ -61,8 +75,12 @@ fun interface IClassTransport {
 /**
  * 真实传输：HttpURLConnection。
  *
- * 三条"没有"是契约的一部分，这里逐字守着：**不发** Cookie、**不发**鉴权头、**不发**请求体
- * （签到那一次 GET 的全部信息就在那条 URL 上）。UA 不属于鉴权材料，照厂商客户端发。
+ * 四条"没有"是契约的一部分，这里逐字守着：**不发** Cookie、**不发**鉴权头、**不发**请求体
+ * （签到那一次 GET 的全部信息就在那条 URL 上）、**不跟**重定向。
+ * 最后那一条不是风格问题：挂在 URL 上的那枚 `id` 就是这一族全部的鉴权材料，
+ * 跟着服务端给的 `Location` 再发一次，等于把那枚凭证交给契约外的一台主机，
+ * 还把一次签到变成两趟真的把学生标记成已签到的写。转走这件事由上层单独判一档，不由这里决定语义。
+ * UA 不属于鉴权材料，照厂商客户端发。
  */
 object HttpURLConnectionIClassTransport : IClassTransport {
 
@@ -76,7 +94,10 @@ object HttpURLConnectionIClassTransport : IClassTransport {
                 requestMethod = method
                 connectTimeout = CONNECT_TIMEOUT_MILLIS
                 readTimeout = READ_TIMEOUT_MILLIS
-                instanceFollowRedirects = true
+                // 不跟重定向（本文件那四条"没有"里的最后一条）。这一族的全部鉴权材料就挂在那条 URL 的
+                // 查询串上，跟过去就是把 `id` 发给 Location 指去的任意主机，还把一次签到变成两趟写。
+                // 3xx 原样交回，判据在 classifyEnvelope 那一头，这里不替它决定语义。
+                instanceFollowRedirects = false
                 setRequestProperty("User-Agent", USER_AGENT)
                 // 厂商客户端不设 Accept-Encoding：这里也不设，留着让服务端自己决定
                 if (formBody != null) {
@@ -94,7 +115,10 @@ object HttpURLConnectionIClassTransport : IClassTransport {
             } else {
                 connection.inputStream
             }
-            val body = runCatching { stream?.use { it.readBytes() } }.getOrNull() ?: ByteArray(0)
+            // 两档不许折成一档：连流都没给 = 服务端确实什么都没回（空数组）；有流却没把字节读回来 = null，
+            // 那是**我们这侧**的失败（读超时、连接中途断、体损坏），不是服务端的一个答复。
+            // 折成空数组就会顺着 parseEnvelope 的空体判据落成"服务端回了空响应"那句 —— 替服务端说话。
+            val body = if (stream == null) ByteArray(0) else runCatching { stream.use { it.readBytes() } }.getOrNull()
             return IClassRawResponse(code, connection.contentType, body)
         } finally {
             connection?.disconnect()
@@ -111,6 +135,8 @@ object HttpURLConnectionIClassTransport : IClassTransport {
  * 三条本族自己的契约，逐条都是实测/取证结论，别外推：
  * 1. **鉴权材料只有一个 `id`**（登录响应里的 `result.id`），它以查询参数的形式进签到 URL；
  *    没有 token 头、没有 Cookie、没有 refreshToken（所以本类没有续期那一步）；
+ *    正因为全部材料就挂在那条 URL 上，[HttpURLConnectionIClassTransport] **不跟**重定向 ——
+ *    跟一次 3xx 就是把这枚 `id` 交给契约外的一台主机，这条契约的"只有一个"当场就不成立了；
  * 2. **签到是拼接出来的 GET**，不是"字段进 DTO 出"：所以 [signIn] 收的是扫码原文，
  *    中间任何一次"解析再重组"都会把它变成另一条请求（见 [IClassSignUrl]）；
  * 3. **外壳与门户页那一套不是一回事**：`/app` 打头的那一族回 `{STATUS, ERRCODE, ERRMSG}`，
@@ -171,27 +197,46 @@ class IClassApi(
      * - `1` → [Envelope.Rejected]：业务错误，ERRMSG 是给人看的那一句
      * - `2` → [Envelope.Framework]：框架码 100005（实践里是网关/会话那一层的话，不是业务回执）
      * - 其余（实测就是 `0`）→ [Envelope.Accepted]
+     * - 3xx → [Envelope.Redirected]：服务端把这次请求转走了。**不看它的体**，也不跟过去
+     * - 响应体没读回来 → [Envelope.BodyUnreadable]：超时／中途断，那是我们这侧的事，与空体不是一档
      * - 空体（0 字节或只剩 `\r\n`）→ [Envelope.EmptyBody]，**判失败**
      *
      * 空体那一档不是洁癖：实测给任一数字型属性喂非数字值，服务端就回 2 字节 `\r\n` ——
-     * 那是"处理到一半死了"的形状，当成功就是把失败签成"签到完成"。
+     * 那是"处理到一半死了"的形状，当成功就是把失败签成"签到完成"。但它只支持"没有任何受理的证据"
+     * 这半句，不支持"服务端没有受理"那半句：一枚空体里读不出受理没受理，而那一发请求服务端很可能已经收了。
      * 没有 STATUS / 不是 JSON / 不是对象同样落 [Envelope.Unrecognized]，也判失败。
+     *
+     * **判据顺序就是语义**（[classifyEnvelope]）：3xx 排在读体之前、读体排在状态码判档之前。
+     * 反过来的话，一枚 302 附带的那张转跳页会被解成"外壳"，而读不到体那次会被念成"服务端回了空响应" ——
+     * 前者是给 3xx 编造语义，后者是拿我们这侧的失败去断言服务端。两档都另有去处，不许借道空体与 Unrecognized。
      */
     sealed interface Envelope {
         data class Accepted(val root: JsonObject, val result: JsonObject?) : Envelope
         data class Rejected(val serverMessage: String?) : Envelope
         data class Framework(val serverMessage: String?) : Envelope
         data object EmptyBody : Envelope
+
+        /** 服务端回 3xx 把请求转走：我们没跟过去，也不知道转去了哪，这一族的语义里**没有**"签到成功" */
+        data object Redirected : Envelope
+
+        /** 响应体没读回来（读超时、连接中途断、体损坏）：对服务端答了什么一无所知，只许说我们这侧的事 */
+        data object BodyUnreadable : Envelope
+
         data class Unrecognized(val detail: String) : Envelope
     }
 
     /**
-     * 表驱动可测的外壳判定：字节 → 文本（按 charset 规则）→ JSON → [Envelope]。
+     * 表驱动可测的外壳判定：状态码 → 体的三态 → 文本（按 charset 规则）→ JSON → [Envelope]。
      *
-     * 先判空体再解 JSON，顺序反了会把空体报成"不是 JSON"，
-     * 用户读到的是我们造的那句，而不是"服务端什么都没回"。
+     * 先判转走、再判读没读回来、再判空体、最后才解 JSON，顺序反了就把三档折成一档：
+     * 空体那一格若被解到前面，读不到体会被报成"不是 JSON"；3xx 那一格若被解到后面，
+     * 转跳页会被当成业务外壳。用户读到的是我们造的那句，而不是盘上那一个事实。
      */
     fun classifyEnvelope(response: IClassRawResponse): Envelope {
+        // 3xx 一律单独一档，并且**不看体**：认不下的一律不许从体里捞出成功与否（那是编造语义）。
+        if (response.statusCode in 300..399) return Envelope.Redirected
+        // 没读回来与什么都没回是两件事：前者是这一趟往返在我们这侧断了。
+        if (response.body == null) return Envelope.BodyUnreadable
         if (response.statusCode !in 200..299) {
             // 状态码先说话，但如果体里真有外壳，下面一层还能把 ERRMSG 捞出来，所以不在此早退
             val parsed = parseEnvelope(response)
@@ -202,7 +247,10 @@ class IClassApi(
     }
 
     private fun parseEnvelope(response: IClassRawResponse): Envelope {
-        val text = String(response.body, charsetFor(response.contentType))
+        // 空性在这一枚函数里再守一次：它是唯一把字节变成文本的地方，绕过 classifyEnvelope 直接喂它的
+        // 测试与将来第三个调用点都不该拿到"折成零字节的读失败"（本卡钉的就是那一折）。
+        val bytes = response.body ?: return Envelope.BodyUnreadable
+        val text = String(bytes, charsetFor(response.contentType))
         if (text.isBlank()) return Envelope.EmptyBody
         val root = runCatching { json.parseToJsonElement(text) }.getOrNull() as? JsonObject
             ?: return Envelope.Unrecognized("响应不是外壳形状（解不出 JSON 对象）")
@@ -236,7 +284,11 @@ class IClassApi(
 
         is Envelope.Rejected -> Result.failure(IClassRejectedException(envelope.serverMessage ?: "iClass 拒绝了这次签到（服务端未给出原因）"))
         is Envelope.Framework -> Result.failure(IClassRejectedException(envelope.serverMessage ?: "iClass 框架错误（STATUS=2）"))
-        Envelope.EmptyBody -> Result.failure(IClassUnexpectedResponseException("iClass 回了空响应（服务端没有受理这次签到）"))
+        Envelope.EmptyBody -> Result.failure(IClassUnexpectedResponseException("iClass 回了空响应（没有任何受理的证据）"))
+        // 这两档的头念的是**我们看得见的那件事**（被转走 / 没读回来），尾巴那句念的是本地结论。
+        // 一句都不替服务端答：那一发 GET 在服务端很可能已经受理，而我们没有任何证据说它没受理。
+        Envelope.Redirected -> Result.failure(IClassUnexpectedResponseException("iClass 把这次请求转走了（没跟过去，也不知道转去哪），没有任何受理的证据"))
+        Envelope.BodyUnreadable -> Result.failure(IClassUnexpectedResponseException("没把 iClass 的响应体读回来（超时或连接中途断），没有任何受理的证据"))
         is Envelope.Unrecognized -> Result.failure(IClassUnexpectedResponseException(envelope.detail))
     }
 
@@ -253,7 +305,11 @@ class IClassApi(
 
         is Envelope.Rejected -> Result.failure(IClassLoginFailedException(envelope.serverMessage ?: "登录被拒（服务端未给出原因）"))
         is Envelope.Framework -> Result.failure(IClassLoginFailedException(envelope.serverMessage ?: "iClass 框架错误（STATUS=2）"))
-        Envelope.EmptyBody -> Result.failure(IClassLoginFailedException("iClass 回了空响应（登录没有发生）"))
+        // 空体的那一档从前写"登录没有发生"：那是关于服务端的断言，而空体只支持"没有拿到 id"这半句
+        // （这半句还是本地事实 —— 没有 id 就没有会话，[IClassSession] 只在成功时落盘）。
+        Envelope.EmptyBody -> Result.failure(IClassLoginFailedException("iClass 回了空响应（没有拿到 id）"))
+        Envelope.Redirected -> Result.failure(IClassLoginFailedException("iClass 把这次登录请求转走了（没跟过去，也不知道转去哪），没有拿到 id"))
+        Envelope.BodyUnreadable -> Result.failure(IClassLoginFailedException("没把 iClass 的登录响应体读回来（超时或连接中途断），没有拿到 id"))
         is Envelope.Unrecognized -> Result.failure(IClassLoginFailedException(envelope.detail))
     }
 
