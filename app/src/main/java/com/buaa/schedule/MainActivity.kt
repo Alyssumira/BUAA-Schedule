@@ -877,12 +877,12 @@ private fun AppNavHost(
             } else {
                 "iclass_login"
             },
-        )
+        ) { launchSingleTop = true }
     }
     // iClass 那一族的登录页入口（设置页那一行、以及扫码页失败卡都走它）。
     // 它不做"已登录就不进"的判断：这一页本身就是重登一次的地方 —— 存储里那枚 id 失效时，
     // 这是用户唯一的活路，挡在门外就成了第四条静默死路。
-    val openIClassSignIn: () -> Unit = { navController.navigate("iclass_login") }
+    val openIClassSignIn: () -> Unit = { navController.navigate("iclass_login") { launchSingleTop = true } }
     // 设置页这一族跳转回调只在这里构造一次（理由同上 openSpocSignIn：两处各写一份迟早走岔）。
     // SettingsScreen 的这些回调全都带 `= {}` 默认值，而它在根界面与 settings/{section} 子页
     // 各有一次调用点：任何一处漏传一个，那一行点击就是静默 no-op —— 编译不报错、
@@ -890,13 +890,13 @@ private fun AppNavHost(
     // 子页渲染，回调却只写在了只画分类入口的根界面上。（T80 把设置页那一整行入口删了，
     // 统计页现在只剩首页顶栏一枚胶囊 —— 这段病因记的仍是"默认值挂在真入口上"这一族。）
     val openSettingsSection: (com.buaa.schedule.ui.settings.SettingsSection) -> Unit = { section ->
-        navController.navigate("settings/${section.id}")
+        navController.navigate("settings/${section.id}") { launchSingleTop = true }
     }
-    val openCourseManagement: () -> Unit = { navController.navigate("course_management") }
+    val openCourseManagement: () -> Unit = { navController.navigate("course_management") { launchSingleTop = true } }
     // 「学期统计」现在只剩首页顶栏那一枚入口（设置页那一行已由 T80 摘掉），但这一颗
     // 仍然定义在这里而不是就地写在 HomeScreen 的调用点上：路由名一抄两处就会各漂各的，
     // 而 `StatsEntryWiringGuardTest` ①-b 钉的是「全仓一份 openStats 定义、跳的是 "stats"」。
-    val openStats: () -> Unit = { navController.navigate("stats") }
+    val openStats: () -> Unit = { navController.navigate("stats") { launchSingleTop = true } }
     @OptIn(ExperimentalSharedTransitionApi::class)
     SharedTransitionLayout(modifier = Modifier.fillMaxSize()) {
         val sharedTransitionScope = this
@@ -927,9 +927,9 @@ private fun AppNavHost(
         composable("home") {
             CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
                 HomeScreen(
-                    onAddCourse = { navController.navigate("editor/-1") },
-                    onImportBuaa = { navController.navigate("buaa_login") },
-                    onCourseManagement = { navController.navigate("course_management") },
+                    onAddCourse = { navController.navigate("editor/-1") { launchSingleTop = true } },
+                    onImportBuaa = { navController.navigate("buaa_login") { launchSingleTop = true } },
+                    onCourseManagement = { navController.navigate("course_management") { launchSingleTop = true } },
                     onSpocSignIn = openSpocSignIn,
                     // 「学期统计」现在只有这一枚入口（顶栏胶囊）：设置页那一行已由 T80 摘掉。
                     // 这颗回调仍留在 AppNavHost 这一层而不是就地写 lambda —— 路由名只许有一份，
@@ -939,7 +939,7 @@ private fun AppNavHost(
                     headerBandOnScreen = homeHeaderBandOnScreen,
                     // 首页这一支是带的几何主人：量到的实高递上来给统计页当下限（T80-C）
                     onHeaderBandHeightMeasured = { homeHeaderBandHeightPx = it },
-                    onCourseClick = { course -> navController.navigate("editor/${course.id}") },
+                    onCourseClick = { course -> navController.navigate("editor/${course.id}") { launchSingleTop = true } },
                     bottomBarVisible = bottomBarVisible,
                     highlightCourseId = pulseCourseId,
                     onHighlightConsumed = { pulseCourseId = -1L },
@@ -954,7 +954,7 @@ private fun AppNavHost(
                 CourseManagementScreen(
                     viewModel = viewModel,
                     onBack = { navController.popBackStack() },
-                    onEditCourse = { course -> navController.navigate("editor/${course.id}") },
+                    onEditCourse = { course -> navController.navigate("editor/${course.id}") { launchSingleTop = true } },
                 )
             }
         }
@@ -1128,8 +1128,8 @@ private fun AppNavHost(
                     onBack = {
                         if (!navController.popBackStack()) onExitApp()
                     },
-                    onStartBuaaLogin = { navController.navigate("buaa_login") },
-                    onOpenHistory = { navController.navigate("import_history") },
+                    onStartBuaaLogin = { navController.navigate("buaa_login") { launchSingleTop = true } },
+                    onOpenHistory = { navController.navigate("import_history") { launchSingleTop = true } },
                     bottomBarVisible = bottomBarVisible,
                     viewModel = viewModel,
                 )
@@ -1161,7 +1161,7 @@ private fun AppNavHost(
                     // 失败卡上那颗「去登录」的唯一出口（T85 之后全仓只有一条签到登录链，
                     // 从前这里按 `SignInPlatform` 分两族，送错一族就是把用户丢进
                     // 一个这一族根本不需要填的页面 —— 那枚枚举随 SPOC 一起拆了）：
-                    onNeedLogin = { navController.navigate("iclass_login") },
+                    onNeedLogin = { navController.navigate("iclass_login") { launchSingleTop = true } },
                 )
             }
         }
@@ -1175,6 +1175,7 @@ private fun AppNavHost(
                     onLoggedIn = {
                         navController.navigate("spoc_scan") {
                             popUpTo("iclass_login") { inclusive = true }
+                            launchSingleTop = true
                         }
                     },
                 )
