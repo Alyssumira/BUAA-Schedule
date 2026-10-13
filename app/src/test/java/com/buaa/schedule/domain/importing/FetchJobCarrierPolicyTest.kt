@@ -8,17 +8,23 @@ import org.junit.Test
  *
  * 纯 JVM：判据零 android import、零时钟、零设备（本仓硬规则），所以这里连 Robolectric 都不起。
  *
- * ## 逐格点名（本文件 11 枚 @Test / 15 处断言点 / 运行期 48 格读数）
- * 复算尺（@Test 枚数）：`grep -a -o 'tests="[0-9]*"' app/build/test-results/testDebugUnitTest/TEST-com.buaa.schedule.domain.importing.FetchJobCarrierPolicyTest.xml` → 11。
+ * ## 逐格点名（本文件 12 枚 @Test / 16 处断言点 / 运行期 60 格读数）
+ * 复算尺（@Test 枚数）：`grep -a -o 'tests="[0-9]*"' app/build/test-results/testDebugUnitTest/TEST-com.buaa.schedule.domain.importing.FetchJobCarrierPolicyTest.xml` → 12（T337⑤a 按实跑 XML 复算，不是数注释）。
  * 格数按循环展开：4 + 6×3（在飞六枚 × 三档载体）+ 3（webViewRef × 三档）+ 6（加载读数 × COMPOSITION）
- * + 3（名单外 × 三档）+ 8（点火全表）+ 1（AttachOnly 不许改判）+ 4（归零表）+ 1（在飞归属）= 48。
+ * + 12（加载读数 × 另两档 = 6×2，T337⑤a 补）+ 3（名单外 × 三档）+ 8（点火全表）
+ * + 1（AttachOnly 不许改判）+ 4（归零表）+ 1（在飞归属）= 60。
  * ① 名单本体（枚数 + 逐枚）：在飞六枚、平台一枚、登录页加载读数六枚，三族互斥。
  * ② ③ ④ 载体裁定：六枚在飞事实 × 三档载体 = 18 格 ——
  *    `COMPOSITION` 全判 `JobDiesWithDigits`（盘上改前那一形）、
  *    `SNAPSHOT` 全判 `DigitsLie`（**甲档单独用的病**：数字活、作业死 ⇒ 屏上念一具尸体的现在时）、
  *    `PROCESS_HOLDER` 全判 `Supported`。
  * ⑤ WebView 那一枚：`SNAPSHOT` 判 `Unsnapshotable`（卡面证伪档①），另两档放行。
- * ⑥ 与作业无关的六枚加载读数：留在组合上是对的（不许顺手也搬进 holder）。
+ * ⑥ 与作业无关的六枚加载读数：留在组合上是对的（不许顺手也搬进 holder）；另两档也不许误判 ——
+ *    [pageLoadReadingsAreNotMisjudgedOnTheOtherTwoCarriers] 逐枚钉加载读数在 `SNAPSHOT` / `PROCESS_HOLDER`
+ *    仍是 `Supported`（判成 `DigitsLie` / `JobDiesWithDigits` 就是逼页面把与作业无关的读数搬进快照或 holder）。
+ *    这 12 格是 T337⑤ 的 V 臂量出来的：把那两栏一起判死时，改前那 48 格与接线守卫 10 层都一字不红
+ *    —— ⑥ 原先只走 COMPOSITION 那一栏，另两栏没有读者。名单那一族另有一枚 N 臂（在飞名单多收一枚加载读数）
+ *    在 ① 与 ⑥ 当场就红，与这 12 格不是同一个洞。
  * ⑦ 名单外一律 `NotOnRoster`：新增一枚在飞状态却忘了进名单 ⇒ 这一格先红，不许静默放行。
  * ⑧ 点火裁定全表 8 行（三枚 Boolean 穷举）：**第 6 行是本卡的心脏** ——
  *    `askedToFetch=true`（重建后 fetchStarted 仍为真）+ `jobRunning=true` + 同一枚平台
@@ -136,6 +142,21 @@ class FetchJobCarrierPolicyTest {
                 CarrierVerdict.Supported,
                 FetchJobCarrierPolicy.verdict(fact, FactCarrier.COMPOSITION),
             )
+        }
+    }
+
+    @Test
+    fun pageLoadReadingsAreNotMisjudgedOnTheOtherTwoCarriers() {
+        for (carrier in listOf(FactCarrier.SNAPSHOT, FactCarrier.PROCESS_HOLDER)) {
+            for (fact in FetchJobCarrierPolicy.PAGE_LOAD_FACTS) {
+                assertEquals(
+                    "$fact 在 $carrier 档也必须判 Supported：它不属于在飞那一族，判成 DigitsLie / JobDiesWithDigits " +
+                        "就是逼页面把一枚与作业无关的读数搬进快照或 holder —— 那是把寿命与事实配错的**反方向**，" +
+                        "与上一格（留在组合上是对的）合起来才把「加载读数三档都不许误判」钉全（T337⑤a：V 臂扭的就是这两栏）",
+                    CarrierVerdict.Supported,
+                    FetchJobCarrierPolicy.verdict(fact, carrier),
+                )
+            }
         }
     }
 
