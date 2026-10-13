@@ -15,7 +15,10 @@ import com.buaa.schedule.data.local.IClassIdStore
  * ⚠️ **这里没有会过期的东西**：SPOC 的鉴权材料是一枚带 `exp` 的 JWT，所以要预留续期、要解析 `exp`；
  * iClass 的签到请求只带一枚 `id`（`GET …原文…&id=<User.id>`），
  * 所以 [authorized] 就是"盘上有就给你"，服务端认不认由那一次请求自己判
- * （判不出来的时候界面上读到的是服务端的 ERRMSG 原文，见 [IClassApi]）。
+ * （判得出来的时候界面上读到的是服务端给的 ERRMSG 原文；判不出来的那几档 —— 空体、被转走、
+ *  响应体没读回来、非 JSON、没有 STATUS —— 读到的是 [IClassApi] 按档位各写的那一句，
+ *  而那些句子每一句都只念我们看得见的事，不替服务端答。T349 按盘面订正：从前这里写的是
+ *  「判不出来的时候界面上读到的是服务端的 ERRMSG 原文」，那句在盘上从来没有成立过）。
  *
  * ⚠️ 只存 `id`，**绝不存口令**：`id ≠ 学号`（老客户端的 `User` 里 `id` 与 `studentNo`
  * 是两条独立字段，签到只取前者），而登录要的那对 phone/password 只在 [login] 这一趟
@@ -64,7 +67,13 @@ object IClassSession {
      */
     suspend fun authorized(): String? = userId()
 
-    /** 登录并落盘：成功返回服务端给的 `id`，失败原样抛出 [IClassApi] 的异常（消息是 ERRMSG 原文） */
+    /**
+     * 登录并落盘：成功返回服务端给的 `id`，失败原样抛出 [IClassApi] 的异常。
+     *
+     * 消息的来源分两类，各是各的账：外壳 `STATUS=1` 那一档是厂商 ERRMSG 的**逐字原文**，
+     * 判不出外壳的那几档（空体／被转走／响应体没读回来／非 JSON／没有 STATUS／HTTP 非 2xx）
+     * 是 [IClassApi] 按档位各写的那一句 —— 每一句都只念我们看得见的事，不替服务端答。
+     */
     suspend fun login(context: Context, phone: String, password: String): Result<String> =
         api.login(phone, password).onSuccess { id -> save(context, id) }
 

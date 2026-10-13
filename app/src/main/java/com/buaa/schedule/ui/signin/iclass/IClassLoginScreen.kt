@@ -50,8 +50,12 @@ import kotlinx.coroutines.launch
  * 两条路形状不同、要填的字段也不同，所以 T84 刻意没有把它们并成一页的两副面孔；
  * T85 那条被整页拆掉了，"不许送错登录页"这条纪律现在由"根本没有第二页可送"来保证。
  *
- * 失败原因逐字来自服务端 ERRMSG：这一族的中文文案我们一条都没有取证到，
+ * 服务端给的原因逐字来自 ERRMSG（外壳 `STATUS=1` 那一档）：这一族的中文文案我们一条都没有取证到，
  * 加工一个字（"账号或密码错误"这种听上去很合理的猜测）就是编话。
+ * 而**判不出外壳**的那几档 —— 空体、被转走、响应体没读回来、非 JSON、没有 STATUS、HTTP 非 2xx ——
+ * 念的是 [com.buaa.schedule.data.import.IClassApi] 按档位各写好的那一句，每一句只说我们看得见的事：
+ * 被转走那一档不猜转去哪（我们根本不读 `Location`），没读回来那一档连「服务端」三个字都不出现
+ * （那一趟往返断在我们这侧，服务端那侧答了什么，盘上一个证据都没有）。
  *
  * ⚠️ 落盘只有一枚 `result.id`，**口令一个字都不存**：老客户端把 phone + password 明文
  * 写进 SharedPreferences、每次进页面重登一遍 —— 那对口令能过学校统一身份认证，
@@ -126,7 +130,8 @@ fun IClassLoginScreen(
     val statusText = when (phase) {
         LoginPhase.Saved -> "已登录北航 iClass，正在进入扫码页…"
         LoginPhase.Submitting -> "正在登录…"
-        // 失败原因逐字来自服务端 ERRMSG，一个字都不加工，所以这句话在拼接处才碰 serverMessage
+        // 原因那一栏一个字都不加工（服务端给的便是 ERRMSG 原文，判不出外壳时是 IClassApi 按档位写好的那句），
+        // 所以这句话在拼接处才碰 serverMessage
         LoginPhase.Failed -> "登录失败：$serverMessage"
         LoginPhase.Idle -> null
     }
@@ -226,7 +231,8 @@ fun IClassLoginScreen(
  * [IClassLoginScreen] 的阶段（判据在函数体里那一支 `phase` 梯子，这里只负责"这一档按钮上怎么说"）。
  *
  * 分工与扫码页 `ScanUiStatus.kt` 同口径：档位判一次、措辞按档位取，页面不扣住任何一份字面量。
- * 状态句不放进这里，因为失败那一档要说服务器给的原文（逐字来自 ERRMSG，得在拼接处才成形）。
+ * 状态句不放进这里，因为失败那一档要说服务端给的那句话（逐字来自 ERRMSG，或判不出外壳时由
+ * IClassApi 按档位写好），得在拼接处才成形。
  */
 private enum class LoginPhase(val buttonLabel: String) {
     /** 什么都没发生：表单可填、按钮可点 */
