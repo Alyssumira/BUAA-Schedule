@@ -270,14 +270,21 @@ fun CourseEditorScreen(
     }
 
     // 中途返回不再静默丢草稿（P2）：顶部箭头与系统返回键都过这道闸。
+    // ⚠️ 上面那一句在 T345 之前**不成立**：两扇各写各的，而那颗 BackHandler 的 enabled 里多了半句
+    // `!saving` ⇒ 写库那几秒系统返回**直接放行**（不弹确认、草稿当场没了），同屏那颗箭头却照样弹
+    // "丢弃确认"—— 同一件事在两扇门上方向相反。现在两扇都调下面这一枚 `requestBack()`，
+    // enabled 只决定"这一扇要不要拦下来交给它"，拦下来之后怎么办由同一处说了算。
+    // 形状抄 BuaaLoginScreen 那枚 `safeBack()`（全仓唯一另一处"在飞窗＋两扇返回门"，两扇同调一具名 lambda）。
     // 保存成功走的是 onBack() 本身，不经过这里（这一支活着的时候才走得到那一手 ——
     // 它被组合取消时退栈归目的地层，凭据就是上面那一次 `onSaveTailReached()` 报到，T260）；
     // 删除成功压根不在这页退栈 —— 那一档由 MainActivity 编辑器目的地那一侧认领
     // （见删除确认框里那句 ⚠️ 注释，T166）。
+    // ⚠️ `saving` 不再参与返回闸（T345 收掉 #383 后半：一枚旗标兼管三件事的那一半）—— 它现在的读者
+    // 是底栏那句「保存中...」、删除那颗按钮的 `enabled = !saving` 与 editorCanSave 实参表里那次折并。
     fun requestBack() {
         if (isDraftDirty) showDiscardDialog = true else onBack()
     }
-    BackHandler(enabled = isDraftDirty && !saving) { showDiscardDialog = true }
+    BackHandler(enabled = isDraftDirty) { requestBack() }
 
     // 键与写法收口在 courseSharedElementModifier（T52④）；null = 新增课程，那一格没有配对的卡
     val editorSharedModifier = Modifier.courseSharedElementModifier(initialCourse?.id)

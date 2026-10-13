@@ -544,7 +544,26 @@ fun SpocScanScreen(
             .onFailure { cameraError = "$GalleryUnreadablePrefix：${it.message}" }
     }
 
-    BackHandler(enabled = busy, onBack = { })
+    // 两扇返回门同源（T345）：改前这一枚是**空 lambda 纯吞**（在飞时按返回键＝一个字都不发生），而同页顶栏
+    // 那颗箭头**不吃任何闸**（GlassTopBar 里 `onBack` 只决定渲不渲染，没有 enabled 那一档）⇒ 提交在飞时
+    // 按返回键没反应、点箭头却立刻离页，正在飞的那一发签到落到哪儿没人知道。现在两扇都调下面这一枚
+    // `requestBack()`，enabled 只决定"这一扇要不要拦下来交给它"—— 形状抄 BuaaLoginScreen 的 `safeBack()`
+    //（全仓唯一另一处"在飞窗＋两扇返回门"：两扇同调一枚具名 lambda，那就是本仓的先例，不是巧合）。
+    // 在飞时说话用的仍是本页**已有**那张嘴：中心卡那句既有的「正在提交签到…」（resultText），不新造载体；
+    // 这里另留一行 Log.i，把"按了为什么没走"留进取证（口径同上方"点按对焦被忽略"那一支 —— T59③ 对
+    // 静默支路的判罚：吞掉动作必须留痕）。
+    // ⚠️ 本卡按红线没动 `busy` 的定义：它是 `state is SignInState.Submitting`，而本页那颗相册按钮吃的
+    // 是 VM 那颗闸门旗 `inFlight`。两把尺窗口不等长（`dispatchNow` 立旗到 `submitToIClass` 置 Submitting
+    // 之间含 `authorized()` 那一趟），那一段两扇都放行 —— 改前就是这个读数，收它要把 `busy` 删掉
+    //（＝重构这枚读数的定义，本卡不许），登记给编排者。
+    fun requestBack() {
+        if (busy) {
+            Log.i(TAG, "返回被忽略：签到提交在飞（屏幕上那一句说的就是这件事）")
+            return
+        }
+        onBack()
+    }
+    BackHandler(enabled = busy) { requestBack() }
 
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
@@ -649,7 +668,8 @@ fun SpocScanScreen(
         GlassTopBar(
             title = "扫码签到",
             statusBarInset = true,
-            onBack = onBack,
+            // 与上面那颗 BackHandler 同源（T345）：两扇都调 `requestBack()`，不许再各写各的
+            onBack = { requestBack() },
             modifier = Modifier.align(Alignment.TopCenter),
         )
 

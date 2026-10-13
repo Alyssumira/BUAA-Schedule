@@ -86,8 +86,9 @@ import org.junit.Test
  * 12. **C 档编辑器 body 侧（T124c · T166 重钉）**：编辑器页 scope 名下恰好两枚协程，按**写库那一手**的字面身份
  *     （`saveCourseDraft(` / `onDelete(target)`）分档后，每枚体内 `saving = true` / `saving = false` /
  *     `saveError = null` / 那句失败文案各恰好一处，节拍次序逐枚登记；体内 `viewModel.` 0 处；那颗
- *     `BackHandler(enabled = isDraftDirty && !saving)` 与三枚注入 lambda 的签名逐字仍在 ⇒ 朝窄扭
- *     （把 `saving = true` 挪出那一块）红。
+ *     `BackHandler(enabled = isDraftDirty) { requestBack() }`（T345 换了字 —— enabled 里那半句 `!saving`
+ *     摘掉了，两扇返回门改调同一枚具名 lambda；本档钉的仍是"`saving` 留在组合本地"这件事）与三枚注入
+ *     lambda 的签名逐字仍在 ⇒ 朝窄扭（把 `saving = true` 挪出那一块）红。
  *     ⚠️ **`onBack()` 那一格 T166 起了分档**：保存链体内恰好 1 处（普查 ③ 那一支，红线没动）、
  *     **删除链体内恰好 0 处** —— 那枚 scope 绑在组合上，删成之后 MainActivity 的渲染闸门
  *     （`if (!uiState.loading && !courseMissing)`）把编辑器整棵摘出组合、同一刻取消它，挂在它后面的
@@ -326,9 +327,14 @@ class WriteChainReceiverWiringGuardTest {
         const val C_SAVE_ERROR_SAVE_COPY = "saveError = \"保存失败，请重试；草稿已保留\""
         const val C_SAVE_ERROR_DELETE_COPY = "saveError = \"删除失败，请重试\""
 
-        /** `saving` 这一位同时管着那颗返回闸 —— 它是「必须留在组合本地」的硬理由，逐字钉住 */
+        /**
+         * 那颗返回闸逐字钉住。**T345 换了它的字**（`!saving` 从 enabled 里摘掉、两扇返回门改调同一枚
+         * `requestBack()`）—— 本档钉的**性质一枚没动**：`saving` 必须留在组合本地。它现在的三枚读者
+         * （底栏那句「保存中...」/ 删除那颗 `enabled = !saving` / `editorCanSave` 实参表里那次折并）
+         * 没有一枚跟着这趟改动搬走，所以"朝窄扭＝把 `saving = true` 挪出协程体"仍在本格红。
+         */
         const val C_BACK_HANDLER =
-            "BackHandler(enabled = isDraftDirty && !saving) { showDiscardDialog = true }"
+            "BackHandler(enabled = isDraftDirty) { requestBack() }"
 
         /** 编辑器入口的签名：返回语义（`Long?` / `Boolean` / `Unit`）一枚都不许跟着本卡变 */
         const val C_ON_SAVE_SIGNATURE = "onSave: suspend (Course, CourseSaveOptions) -> Long?,"
