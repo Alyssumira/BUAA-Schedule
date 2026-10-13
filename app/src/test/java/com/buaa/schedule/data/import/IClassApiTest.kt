@@ -550,6 +550,247 @@ class IClassApiTest {
         }
     }
 
+    // ==== T349③：源码形状守卫（四枚钉法逐枚点名；锚点读不到就抛 —— 静默跳过的守卫比没有守卫更糟）====
+
+    /** 本文件是全仓唯一一枚读 `IClassApi.kt` 的测试（现量 `grep -rl 'IClassApi.kt' app/src/test` ⇒ 1）⇒ 守卫并进这里，零新建文件 */
+    private fun iClassApiSource(): String {
+        val file = File(findMainJavaDir(), "com/buaa/schedule/data/import/IClassApi.kt")
+        assertTrue("找不到 ${file.path}：文件挪过家的话本卡这几枚守卫要跟着改路径", file.isFile)
+        return file.readText()
+    }
+
+    /**
+     * 抹掉整行注释（保行号），只给"锚点是代码形状"的那几枚判据用。
+     *
+     * 为什么不照抄本仓那一族 `blankComments`：`CommentStrippingHelperShapeGuardTest` 那四枚写死值
+     * 数的是 `val out = ….toCharArray()` ＋ `String(out)` 那一枚**形状**，照抄就等于替编排者把那四枚各 +1
+     * （卡面明令不许朝上重钉）。这一枚换的是**另一种机制**：逐行丢弃 trim 之后以双斜杠、以星号、
+     * 或以块注释起始那两字符开头的行 —— 不在那把尺的宇宙里。
+     *
+     * 覆盖面（诚实写在报错消息之外，别当它没有）：看不见**行尾**注释里的字。`IClassApi.kt` 盘上
+     * 所有注释都是整行的，所以本卡那几枚锚全数抹得到；而本卡禁止的那几枚锚（`?: ByteArray(0)`、
+     * `instanceFollowRedirects` 打回 true、读 `Location`）若哪天只出现在行尾注释里，这一枚抓不到 ——
+     * 那一栏由下面第 ④ 枚（读**原文**的散文↔实现同栏守卫）兜住，它专门读散文。
+     */
+    private fun codeOnly(src: String): String = src.lines().joinToString("\n") { line ->
+        val trimmed = line.trimStart()
+        if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) "" else line
+    }
+
+    /** 从锚点往后做到花括号配平，交回那一段源码（同 `IClassSignInWiringGuardTest` 那一族的刀法） */
+    private fun blockAfter(source: String, anchor: String): String {
+        val at = source.indexOf(anchor)
+        check(at >= 0) { "找不到锚点「$anchor」：写法换过了，这一枚守卫要跟着改" }
+        val open = source.indexOf('{', at)
+        check(open >= at) { "「$anchor」之后找不到左括号" }
+        var depth = 0
+        for (index in open until source.length) {
+            when (source[index]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return source.substring(at, index + 1)
+                }
+            }
+        }
+        throw IllegalStateException("「$anchor」的花括号没配平")
+    }
+
+    private fun occurrences(haystack: String, needle: String): Int {
+        var count = 0
+        var from = 0
+        while (true) {
+            val at = haystack.indexOf(needle, from)
+            if (at < 0) return count
+            count++
+            from = at + needle.length
+        }
+    }
+
+    /** 取锚点所在那一整行；锚点读不到、或者在盘上不止一处，都直接抛（一枚逐字节判据不许同时比两支） */
+    private fun lineWith(source: String, anchor: String): String {
+        val hits = source.lines().filter { it.contains(anchor) }
+        check(hits.isNotEmpty()) { "找不到锚点「$anchor」：那一支分支换写法了，本守卫要跟着改" }
+        check(hits.size == 1) { "锚点「$anchor」在盘上有 ${hits.size} 处，逐字节判据不知道该比哪一支：\n${hits.joinToString("\n")}" }
+        return hits[0]
+    }
+
+    /**
+     * ① 钉法 = **数出现次数**（正向一枚、反向零枚）＋ **读形状**（transport 那一段里没有第二条出站的路）。
+     *
+     * 卡面甲那一笔的源码面：签到那一次 GET 的全部鉴权材料挂在查询串上，所以"不发第二趟"这件事
+     * 只能由源码形状钉 —— 单测里那次 `assertEquals(1, calls)` 数的是 API 到 transport 那一跳，
+     * transport **里面**平台自己去跟那一跳它看不见（列进未验到）。
+     *
+     * 朝宽判红：`instanceFollowRedirects` 扭回 `true` ⇒ 第二枚断言（0 枚）当场不成立；
+     * 有人照 `update/UpdateCheck.kt` 那族自己逐跳 ⇒ `repeat(`/`while`/`getHeaderField(` 从 0 变正 ⇒ 红；
+     * 有人把转跳地址读进结构 ⇒ `Location` 在代码里出现 ⇒ 红。
+     * 朝窄判红：把那一行整枚删掉 ⇒ 正向锚从 1 变 0 ⇒ 红（`blockAfter` 读不到锚点直接抛，不会静默绿）。
+     */
+    @Test
+    fun `签到那一路不发第二趟请求`() {
+        val code = codeOnly(iClassApiSource())
+        assertEquals("instanceFollowRedirects = false 在盘上的落点枚数：", 1, occurrences(code, "instanceFollowRedirects = false"))
+        assertEquals("自动跟随不许以 true 的形式长回来：", 0, occurrences(code, "instanceFollowRedirects = true"))
+
+        val transport = blockAfter(code, "override fun execute(url: String, method: String, formBody: String?): IClassRawResponse {")
+        assertEquals("transport 里构造出站地址只许一次：", 1, occurrences(transport, "URL("))
+        assertEquals("transport 里 openConnection 只许一次（一次 execute = 一趟请求）：", 1, occurrences(transport, "openConnection("))
+        assertEquals("逐跳跟随的那类循环不许出现在 transport 里：", 0, occurrences(transport, "repeat(") + occurrences(transport, "while"))
+        assertEquals("服务端给的转跳头一次都不读（读了就有了通往界面与 logcat 的路）：", 0, occurrences(transport, "getHeaderField("))
+        assertEquals("Location 那三个字不许出现在代码里（只许出现在解释为什么不读它的散文里）：", 0, occurrences(transport, "Location"))
+        // 语义归上层：transport 只交回原始事实。3xx 那一判若在 transport 里，就是同一张梯子写两遍（台账 #455 那一族）
+        assertEquals("3xx 的判档住在 classifyEnvelope，不许在 transport 里各写一遍：", 0, occurrences(transport, "300..399"))
+    }
+
+    /**
+     * ② 钉法 = **数出现次数**（被禁写法 0 枚）＋ **读形状**（三态各一枚、顺序逐枚比下标）。
+     *
+     * 卡面乙那一笔的源码面：`:97` 那一折把"读不回来"变成"零字节"，于是顺着空体判据落成一句关于
+     * 服务端的断言。行为面扭不回来（② 那批格子喂的是手工假响应，不经过 transport），
+     * 所以这一枚是**唯一**能听见那一折被扭回来的格子 —— 变异臂 W 就红在这里。
+     *
+     * 朝宽判红：把读失败重新折回 `?: ByteArray(0)` ⇒ 第一枚断言从 0 变正 ⇒ 红；
+     * 把 `body` 收回非空 `ByteArray` ⇒ 第三枚断言红。
+     * 朝窄判红：把 `parseEnvelope` 里那一枚空性再守删掉 ⇒ 第四枚断言红；
+     * 把 3xx 那一判挪到解体之后 ⇒ 顺序那三枚下标断言红（顺序即语义）。
+     */
+    @Test
+    fun `读体失败不许再折成空体`() {
+        val code = codeOnly(iClassApiSource())
+        assertEquals("被禁的折档写法（读失败 → 零字节）在盘上的枚数：", 0, occurrences(code, "?: ByteArray(0)"))
+        assertEquals("ByteArray(0) 只许留在「连流都没给」那一档：", 1, occurrences(code, "ByteArray(0)"))
+        assertEquals("体的三态必须由类型表达（非空 ByteArray 就折不回 null）：", 1, occurrences(code, "val body: ByteArray?"))
+        assertEquals("classifyEnvelope 那一枚读不回来判档：", 1, occurrences(code, "if (response.body == null) return Envelope.BodyUnreadable"))
+        assertEquals("parseEnvelope 自己也得守一次空性（不许留一条绕过判档就解体的路）：", 1, occurrences(code, "val bytes = response.body ?: return Envelope.BodyUnreadable"))
+
+        val redirectedAt = code.indexOf("response.statusCode in 300..399")
+        val unreadableAt = code.indexOf("response.body == null")
+        val statusAt = code.indexOf("response.statusCode !in 200..299")
+        val emptyAt = code.indexOf("text.isBlank()")
+        check(redirectedAt >= 0 && unreadableAt >= 0 && statusAt >= 0 && emptyAt >= 0) { "四枚判据锚点读不全：梯子形状换过了，本守卫要跟着改" }
+        assertTrue("顺序即语义：3xx 必须排在读体之前（$redirectedAt < $unreadableAt）", redirectedAt < unreadableAt)
+        assertTrue("顺序即语义：读不回来必须排在状态码判档之前（$unreadableAt < $statusAt）", unreadableAt < statusAt)
+        assertTrue("顺序即语义：状态码必须排在解体的空体判据之前（$statusAt < $emptyAt）", statusAt < emptyAt)
+    }
+
+    /**
+     * ③ 钉法 = **读形状**（花括号配平切出 Envelope 那一段）＋ **数出现次数**（名册与分支逐枚对账）。
+     *
+     * 梯子的闭合是双向的：档位枚数、每一档在两枚穷尽 `when` 里各一支、册子（② 那张表）里的名字
+     * 与盘上逐一同名、以及 Envelope 的 KDoc 里每一档都有自己那条 bullet —— 少任何一头都是"各说各话"。
+     *
+     * 朝窄判红：从 `Envelope` 摘掉一枚档位 ⇒ 3+4 那两枚枚数断言与名册断言同时红；
+     * 从 ② 那张表里摘掉一行 ⇒ 册子那枚断言红（`assertEquals` 逐字比名字）；
+     * 新加一档不补 KDoc ⇒ bullet 那一段红。
+     * 朝宽判红：把某一档并到 EmptyBody 那一支（`when` 里少一支）⇒ 该档的分支枚数从 2 变 1；
+     * 档位名换字面量而 KDoc 不动 ⇒ bullet 那一枚红。
+     */
+    @Test
+    fun `梯子的档位与两路分支与册子与 KDoc 四方同名`() {
+        val raw = iClassApiSource()
+        val code = codeOnly(raw)
+        val ladder = blockAfter(code, "sealed interface Envelope {")
+        assertEquals("Envelope 里 data object 的枚数（EmptyBody / Redirected / BodyUnreadable）：", 3, occurrences(ladder, "data object "))
+        assertEquals("Envelope 里 data class 的枚数（Accepted / Rejected / Framework / Unrecognized）：", 4, occurrences(ladder, "data class "))
+        val rungs = Regex("""data (?:object|class) (\w+)""").findAll(ladder).map { it.groupValues[1] }.toList().sorted()
+        assertEquals(
+            "梯子七档逐字点名（少一档或多一档都算删判据）：",
+            listOf("Accepted", "BodyUnreadable", "EmptyBody", "Framework", "Redirected", "Rejected", "Unrecognized"),
+            rungs,
+        )
+        for (rung in rungs) {
+            assertEquals(
+                "档位「$rung」必须在签到与登录两枚穷尽 when 里各有一支（并支就是折档）：",
+                2, occurrences(code, "Envelope.$rung ->"),
+            )
+        }
+        // 册子（② 那张表）与盘上的档位名双向闭合：表里只登记本卡那三档，而这三档必须逐一同名
+        assertEquals(
+            "② 那张册子登记的档位名（顺序即表序）：",
+            listOf("Redirected", "BodyUnreadable", "EmptyBody"),
+            unreadableRungs.map { it.envelope },
+        )
+        assertTrue(
+            "册子里的档位名必须在盘上梯子里读得到（改名不许静默换表）：",
+            unreadableRungs.all { rung -> rung.envelope in rungs },
+        )
+        // KDoc 那一头：Envelope 的判据表里每一档都得有自己的那条 bullet（散文与判据不许各说各话）
+        val docAt = raw.lastIndexOf("/**", raw.indexOf("sealed interface Envelope {"))
+        check(docAt >= 0) { "读不到 Envelope 的 KDoc：判据表挪窝了，本守卫要跟着改" }
+        val doc = raw.substring(docAt, raw.indexOf("sealed interface Envelope {"))
+        for (rung in rungs) {
+            assertTrue("Envelope 的 KDoc 里没有「$rung」那一档的那条 bullet（梯子长了档、判据表没跟上）：\n$doc", doc.contains("[Envelope.$rung]"))
+        }
+    }
+
+    /**
+     * ④ 钉法 = **读原文找锚点**（散文那一栏必须读得到，这一枚**不抹注释**）＋ **数出现次数**。
+     *
+     * 卡面点名的那句「`:56` 那句 KDoc 与实现不许再各说各话」落在这里：
+     * `@return` 那一栏从前承诺"非 2xx 的取不到体时抛 IOException"，而实现（:97）既不抛也不分档 ——
+     * 一句关于行为的散文站在一个不干那件事的代码旁边。这一枚同时读散文与代码，两边各钉一头。
+     *
+     * 朝宽判红：把 `instanceFollowRedirects` 扭回 `true` 而散文不改 ⇒ 代码那一头红；
+     * 把 `@return` 那句改回旧承诺 ⇒ 散文那一头两枚断言红（旧句出现 + 新锚消失）；
+     * 把"三条'没有'"写回来 ⇒ 最后一枚红（第四条不跟重定向是**现在时**的契约，散文退回就是假句）。
+     */
+    @Test
+    fun `execute 的那句 KDoc 与实现同一栏`() {
+        val raw = iClassApiSource()
+        val code = codeOnly(raw)
+        val contractAt = raw.indexOf("@return 原始响应")
+        check(contractAt >= 0) { "读不到 execute 的 @return 那句：契约换了载体，本守卫要跟着改" }
+        val contract = raw.substring(contractAt, raw.indexOf("fun execute(url: String", contractAt))
+        assertTrue("@return 那一栏没写出「响应体读不回来交回 null」那一档：$contract", contract.contains("null"))
+        assertTrue("@return 那一栏没写出 3xx 不跟过去：$contract", contract.contains("3xx") && contract.contains("不跟过去"))
+        assertEquals(
+            "旧的假承诺（非 2xx 取不到体时抛 IOException）不许回到散文里 —— 实现现在交回的是那一档本身：",
+            0, occurrences(raw, "非 2xx 的取不到体"),
+        )
+        // 散文与代码各钉一头：谁单独被扭都不算绿
+        assertEquals("代码那一头必须真的不跟：", 1, occurrences(code, "instanceFollowRedirects = false"))
+        assertTrue("契约那一栏必须把第四条写出来（三条'没有'已经是假句）：", raw.contains("四条\"没有\""))
+        assertEquals("三条'没有'那句现在时的契约不许长回来：", 0, occurrences(raw, "三条\"没有\""))
+    }
+
+    /**
+     * ⑤ 钉法 = **逐字节**（六支分支的句子逐枚比）＋ **数出现次数**（两句关于服务端的旧断言在代码里 0 枚）。
+     *
+     * 卡面 ④ 那一档的源码面：`服务端没有受理这次签到` 与 `登录没有发生` 两句是关于服务端的断言，
+     * 而它们各自的证据（一枚空体 / 一次没读回来的往返）都不支持那半句。
+     * 盘上的散文里**留着**那两句（各自记着"从前写的是什么"）—— 那是过去时记录，按本仓规矩不抹；
+     * 所以这一枚数的是**抹注释之后**的那一栏，比的是六支分支里逐字的句子。
+     *
+     * 朝宽判红：把任一档的句子扭回旧那句 ⇒ 逐字节比对方与 0 枚那两枚同时红；
+     * 朝窄判红：把三档并成一句 ⇒ 逐字节那三组互斥红（与 ② 那枚"三条不同的句子"行为面同命）。
+     */
+    @Test
+    fun `六支分支的句子各自逐字钉住而两句旧断言在代码里归零`() {
+        val code = codeOnly(iClassApiSource())
+        assertEquals("「服务端没有受理这次签到」在代码里的枚数（只许活在过去时的散文里）：", 0, occurrences(code, "服务端没有受理这次签到"))
+        assertEquals("「登录没有发生」在代码里的枚数（同上）：", 0, occurrences(code, "登录没有发生"))
+        val expected = mapOf(
+            "Envelope.Redirected -> Result.failure(IClassUnexpectedResponseException(" to
+                "iClass 把这次请求转走了（没跟过去，也不知道转去哪），没有任何受理的证据",
+            "Envelope.BodyUnreadable -> Result.failure(IClassUnexpectedResponseException(" to
+                "没把 iClass 的响应体读回来（超时或连接中途断），没有任何受理的证据",
+            "Envelope.EmptyBody -> Result.failure(IClassUnexpectedResponseException(" to
+                "iClass 回了空响应（没有任何受理的证据）",
+            "Envelope.Redirected -> Result.failure(IClassLoginFailedException(" to
+                "iClass 把这次登录请求转走了（没跟过去，也不知道转去哪），没有拿到 id",
+            "Envelope.BodyUnreadable -> Result.failure(IClassLoginFailedException(" to
+                "没把 iClass 的登录响应体读回来（超时或连接中途断），没有拿到 id",
+            "Envelope.EmptyBody -> Result.failure(IClassLoginFailedException(" to
+                "iClass 回了空响应（没有拿到 id）",
+        )
+        for ((branch, sentence) in expected) {
+            val line = lineWith(code, branch)
+            assertTrue("分支「$branch」那一支不是逐字的「$sentence」：$line", line.contains("\"$sentence\""))
+        }
+        assertEquals("六支分支枚数（三档 × 两条路）：", 6, occurrences(code, "Envelope.Redirected -> Result.failure(") + occurrences(code, "Envelope.BodyUnreadable -> Result.failure(") + occurrences(code, "Envelope.EmptyBody -> Result.failure("))
+    }
+
     private fun findMainJavaDir(): File {
         var dir: File? = File("").absoluteFile
         repeat(5) {
