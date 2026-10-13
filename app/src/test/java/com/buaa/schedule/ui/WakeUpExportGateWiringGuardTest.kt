@@ -35,6 +35,20 @@ import org.junit.Test
  * 必须**逐字节**是 `compact` 那一行（它摘的是时间里的冒号，不是转义落点：机器生成的 ASCII HH:mm）。
  * N6 那一格同用两种钉法：`course.name` 代码 0 处 / 注释 1 处，`course.displayName` 在体内恰好 1 枚。
  *
+ * ## 三、纯度名册（T351 补的名册枚数与第二把尺）
+ *
+ * ⑤ 那格钉的是「名册在册的判据文件不读库、不读钟、零 android/androidx 出场」。改前名册只有两枚
+ * （`WakeUpJsonText.kt` 与 `WakeUpExportGate.kt`），而本守卫 ② 那格早就在读 `$EXPORTERS` 的源码文本 ——
+ * 也就是这颗文件被本守卫"看见"过，唯独纯度与读钟那一格漏了它 ⇒ 补进名册当场红出三枚体内读钟
+ * （`ScheduleExporters.kt` 的 `LocalDate.now()` 三处，落点见 ① 那段的修）。名册自己也被钉住
+ * （枚数与顺序），因为"摘掉一枚名册条目"这件事不会自己报红。
+ *
+ * 纯度那半改前只认 import 行（取 `import ` 开头的行再看含不含 android）⇒ 全限定写法从它眼下走得过去，
+ * 盘上现量一枚：`ConflictDetector.kt` 的 `@androidx.compose.runtime.Immutable`（该文件零 import 行）。
+ * 现在两把尺一起走，并由 ⑤b 那格反证尺自己是活的：全限定那一形必须报、在册三枚文件与注释散文必须不报。
+ * 第二把尺读的是抹完注释的代码，**字符串字面量保留** ⇒ 判据文件里写 android 族字面量也会报，
+ * 那是本尺点名的误报面（写死在 ⑤b 的第四手里，改尺的人必须连着改那一手）。
+ *
  * ## 反套套逻辑（不许拿"grep 没匹配到"当"全绿"）
  *
  * ① 病灶行、② `jsonStr`、② `replace("\\", "\\\\")`、② `course.name` 四枚都另有"含注释原文里
@@ -122,6 +136,9 @@ class WakeUpExportGateWiringGuardTest {
             "Calendar.getInstance",
         )
         const val PURITY_PROMISE = "零 android / androidx import"
+
+        /** 纯度第二把尺认的族名（带点号 ⇒ `android / androidx` 那种散文写法不在其列） */
+        val ANDROID_FAMILY = listOf("android.", "androidx.")
     }
 
     // ─────────────── ① 主尺（读形状）：判据排在开流之前 ───────────────
@@ -363,18 +380,28 @@ class WakeUpExportGateWiringGuardTest {
     // ─────────────── ⑤ 内核自身的形状与纯度 ───────────────
 
     @Test
-    fun `内核是表驱动的 且两枚判据文件都不读库不读钟`() {
+    fun `内核是表驱动的 且三枚判据文件都不读库不读钟`() {
         val files = listOf(
             Triple("JSON 文本层", TEXT, blankComments(source(TEXT))),
             Triple("落盘闸门", GATE, blankComments(source(GATE))),
+            Triple("导出器本体", EXPORTERS, blankComments(source(EXPORTERS))),
+        )
+        // 名册本身也要钉住（T350 审计报的就是这一格）：本守卫在 ② 那格早就读 $EXPORTERS
+        // （转义落点），却从没把它的读钟与纯度账收进这一格 ⇒ 名册少一枚，那颗文件就没人管。
+        assertEquals(
+            "**钉法 = 数出现次数**：纯度名册必须恰是这 3 枚且顺序如此（实到 " + files.map { it.second } + "）：" +
+                "摘掉任一枚 = 那颗文件的体内读钟与全限定写法当场没人拦，而它不会自己报红 —— " +
+                "名册是这格唯一的输入面，所以输入面自己也得有一格判据",
+            listOf(TEXT, GATE, EXPORTERS),
+            files.map { it.second },
         )
         for ((label, path, code) in files) {
-            val offenders = source(path).lineSequence()
-                .map { it.trim() }
-                .filter { it.startsWith("import ") }
-                .filter { it.contains("android.") || it.contains("androidx.") }
-                .toList()
-            assertEquals("$path 必须零 android / androidx import。实到：" + offenders, emptyList<String>(), offenders)
+            val offenders = androidOffenders(source(path))
+            assertEquals(
+                "$path 必须零 android / androidx **出场**（两把尺：import 行与全限定写法都算）。实到：" + offenders,
+                emptyList<String>(),
+                offenders,
+            )
             for (needle in FORBIDDEN_READS) {
                 assertEquals(
                     "**钉法 = 数出现次数（抹注释）**：$label 文件里「$needle」必须 0 处：读了它，" +
@@ -423,6 +450,58 @@ class WakeUpExportGateWiringGuardTest {
         assertEquals("扫过的码位枚数（0x00..0x1FF = 512 枚）", 512, swept)
     }
 
+    // ─────────────── ⑤b 纯度那把尺自己得是活的（T350 审计：旧尺只认 import 行） ───────────────
+
+    /**
+     * 旧形状逐字是「取 import 行 → 看它含不含 android.」⇒ 全限定写法（盘上现量一枚：
+     * `ConflictDetector.kt` 的 `@androidx.compose.runtime.Immutable`，该文件零 import 行）
+     * 从这把尺眼下走得过去。补第二把尺之后，这一格钉的是**尺本身**：
+     * 摘掉全限定那一支 ⇒ 第一手当场红（朝窄的靶）；把尺宽到"见 android 字样就杀" ⇒
+     * 第三、四手（在册文件与注释散文必须 0 处）当场红（朝宽的靶）。
+     */
+    @Test
+    fun `纯度尺认得全限定写法 也不误伤在册文件与注释散文`() {
+        val fullQualified = """
+            package com.buaa.schedule.domain.sample
+            data class Sample(val weeks: List<Int>)
+            @androidx.compose.runtime.Immutable
+            fun f(): Int = 1
+        """.trimIndent()
+        assertEquals(
+            "**钉法 = 探测器自检**：零 import 行、只有全限定注解那一形必须报 **1** 处（实到 " +
+                androidOffenders(fullQualified) + "）。报 0 = 第二把尺被摘掉了，" +
+                "于是 `@androidx.` 那一族写法可以随便进判据文件而名册一片绿",
+            1,
+            androidOffenders(fullQualified).size,
+        )
+        val importLine = "import androidx.compose.runtime.Immutable\n\nfun f(): Int = 1\n"
+        assertEquals(
+            "**钉法 = 探测器自检**：第一把尺不许因为补了第二把而失效 —— import 那一形仍报 1 处（实到 " +
+                androidOffenders(importLine) + "）",
+            1,
+            androidOffenders(importLine).size,
+        )
+        // 不误伤（朝宽的靶）：三枚在册文件今天两把尺都得交回空表
+        for (path in listOf(TEXT, GATE, EXPORTERS)) {
+            assertEquals(
+                "$path 里的 android 族字样只许长在「零 android / androidx import」那句承诺里（没有点号），" +
+                    "两把尺都不许把它算成出场。实到：" + androidOffenders(source(path)),
+                emptyList<String>(),
+                androidOffenders(source(path)),
+            )
+        }
+        // 不误伤：注释里的散文（盘上现量：WidgetRolloverGate.kt 的 KDoc 逐字写着 android.intent.action.*）
+        val prose = "    /** 系统 `android.intent.action.DATE_CHANGED`（代码里读的是 Intent.ACTION_DATE_CHANGED） */\n" +
+            "    const val DATE_CHANGED = \"android.intent.action.DATE_CHANGED\"\n"
+        assertEquals(
+            "**钉法 = 探测器自检**：注释那一行必须被抹掉、代码里那枚同名字符串字面量必须报出来" +
+                "（两把尺的第二把读的是抹完注释的代码，字符串字面量**保留** ⇒ 判据文件里出现 " +
+                "android 族字面量也算出场 —— 这是本尺点名的误报面，见文件头）：实到 " + androidOffenders(prose) + " 处",
+            1,
+            androidOffenders(prose).size,
+        )
+    }
+
     // ─────────────── ⑥ 文案：三句各归各档（逐字节签名） ───────────────
 
     @Test
@@ -461,6 +540,25 @@ class WakeUpExportGateWiringGuardTest {
     // ---------------- helpers（与 IcsExportGateWiringGuardTest 同写法） ----------------
 
     private fun source(relative: String): String = File(findMainJavaDir(), relative).readText()
+
+    /**
+     * 纯度的两把尺（T350 审计：旧尺只有第一把，全限定写法从它眼下走得过去）：
+     * ① `import` 行里的 android/androidx；② 抹完注释之后**每一行代码**里的 `android.` / `androidx.`
+     * —— 盘上现量的那一形是 `ConflictDetector.kt` 的 `@androidx.compose.runtime.Immutable`（该文件零 import 行）。
+     *
+     * 第二把读的是抹注释的结果：注释里的取证散文（`android.intent.action.DATE_CHANGED` 那种）不算出场，
+     * 而**字符串字面量算**（`blankComments` 一手从不碰字面量）⇒ 这是本尺点名的误报面：
+     * 判据文件里真出现 android 族字面量时它会报，那时要么改判据、要么把这枚文件点名请出名册，不许沉默地放宽尺。
+     */
+    private fun androidOffenders(raw: String): List<String> =
+        blankComments(raw).lineSequence().mapIndexedNotNull { index, line ->
+            val trimmed = line.trim()
+            when {
+                ANDROID_FAMILY.none { trimmed.contains(it) } -> null
+                trimmed.startsWith("import ") -> "第 ${index + 1} 行（import 行）：$trimmed"
+                else -> "第 ${index + 1} 行（全限定写法或字面量）：$trimmed"
+            }
+        }.toList()
 
     private fun occurrences(hay: String, needle: String): Int {
         if (needle.isEmpty()) return 0
