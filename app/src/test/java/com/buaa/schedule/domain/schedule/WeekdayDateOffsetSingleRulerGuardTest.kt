@@ -337,6 +337,22 @@ class WeekdayDateOffsetSingleRulerGuardTest {
                 "第 ⑧ 层那本名册是名字级的，子串尺会把这种测试方法名顶成「有读者」，把死件读成活件",
             lineIdentifiers("assertTrue(isCurrentWeekMatchesCurrentWeek(week))").contains("isCurrentWeek"),
         )
+
+        // ── 第 ⑧ 层读者尺的第三枚坑（本卡在合并态 `ba1bb6b` 复算时实测到，落进尺里）──
+        assertTrue(
+            "**钉法 = 读形状**：抹字符串那一手必须把报错文案里的符号名吞掉 —— 否则别的守卫的散文会顶宽读者册",
+            !lineIdentifiers(withoutStrings("val copy = \"epochMillisToLocalDateTime 在本文件恰 1 枚\"")).contains("epochMillisToLocalDateTime"),
+        )
+        assertTrue(
+            "**钉法 = 读形状**：抹字符串不许顺手把真调用点也吞了（吞了就变成读者册永远空钉，尺朝宽假绿）",
+            lineIdentifiers(withoutStrings("assertEquals(moment, epochMillisToLocalDateTime(millis, zone))")).contains("epochMillisToLocalDateTime"),
+        )
+        assertFalse(
+            "**钉法 = 数出现次数（按文件）**：只在报错文案里念过符号名那枚文件不许进读者册 —— 盘面凭据是 " +
+                "`CountdownClockSingleReadGuardTest` 裸 :540 那一句，它一次都没调用过 `epochMillisToLocalDateTime`",
+            identifierFilesBySymbol(testCodeSources(), SELF_GUARD_FILE)["epochMillisToLocalDateTime"]
+                ?.contains("CountdownClockSingleReadGuardTest.kt") ?: false,
+        )
     }
 
     // ─────────────── ⑧ 死件名册：domain 里「主源零调用」的函数（#616；本卡第 ⓪ 问裁的甲档 = 登记，不删） ───────────────
@@ -357,7 +373,7 @@ class WeekdayDateOffsetSingleRulerGuardTest {
             computed,
         )
 
-        // 名册里每一枚的唯一读者逐枚点名：测试那一格被删掉，本层当场红（#616 说的就是
+        // 名册里每一枚的唯一读者逐枚点名（注释与字符串都抹过，见 testCodeSources）：测试那一格被删掉，本层当场红（#616 说的就是
         // 「测试覆盖着一个生产里不存在的形状」，这句承诺得有尺钉着才不算散文）
         val readersBySymbol = identifierFilesBySymbol(testCodeSources(), SELF_GUARD_FILE)
         for ((symbol, expectedReaders) in SOLE_READERS_OF_THE_DEAD) {
@@ -530,7 +546,16 @@ class WeekdayDateOffsetSingleRulerGuardTest {
         }
     }
 
-    private fun testCodeSources(): List<Pair<String, String>> = rawTestSources().map { it.first to withoutComments(it.second) }
+    /**
+     * 读者册用的那份 test 源码：**注释与字符串字面量都抹掉**。
+     * ⚠️ 本卡在合并态 `ba1bb6b` 上复算时实测到名册尺的第三枚坑：`withoutComments` 故意保留字符串
+     * （main 与本文件的 KDoc 逐字登记着改前那些形状），而别的守卫把自己的报错文案写成字符串，
+     * 里面就念着名册符号的名字 —— `CountdownClockSingleReadGuardTest` 裸 :540 那句「…（epochMillisToLocalDateTime …）」
+     * 于是被读成第二枚读者。读者 = 真调用点，不是文案里念过名字；那一格不订正，读者册就是朝宽的尺：
+     * 真测试那一格删掉，尺照样绿（同文件按文件名排除那一手盖不住别的守卫）。
+     */
+    private fun testCodeSources(): List<Pair<String, String>> =
+        rawTestSources().map { it.first to withoutStrings(withoutComments(it.second)) }
 
     private fun domainCodeSources(): List<Pair<String, String>> = mainSourcesWithCode().filter { it.first.startsWith(DOMAIN_PACKAGE_DIR) }
 
@@ -636,6 +661,48 @@ class WeekdayDateOffsetSingleRulerGuardTest {
         return String(out)
     }
 
+    /** 只抹字符串字面量的内容（连同三引号 raw 串），保留换行与引号本身；注释已由 [withoutComments] 抹过 */
+    private fun withoutStrings(source: String): String {
+        val out = source.toCharArray()
+        var i = 0
+        while (i < out.size) {
+            if (source.startsWith("\"\"\"", i)) {
+                val end = source.indexOf("\"\"\"", i + 3)
+                val stop = if (end < 0) out.size else end
+                for (k in (i + 3) until stop) if (out[k] != '\n') out[k] = ' '
+                i = if (end < 0) out.size else end + 3
+            } else if (out[i] == '"') {
+                var j = i + 1
+                var closed = false
+                while (j < out.size) {
+                    when {
+                        source[j] == '\\' -> j += 2
+                        source[j] == '"' -> { closed = true; break }
+                        source[j] == '\n' -> break
+                        else -> j++
+                    }
+                }
+                for (k in (i + 1) until j) if (out[k] != '\n') out[k] = ' '
+                i = if (closed) j + 1 else j
+            } else if (out[i] == '\'') {
+                // char literal 整对跨过去：不跨的话 `'"'` 里那枚双引号会被当成字符串起点，把后面真代码吞掉一片
+                var k = i + 1
+                while (k < out.size) {
+                    when {
+                        source[k] == '\\' -> k += 2
+                        source[k] == '\'' -> { k++; break }
+                        source[k] == '\n' -> break
+                        else -> k++
+                    }
+                }
+                i = k
+            } else {
+                i++
+            }
+        }
+        return String(out)
+    }
+
     /** 按花括号配平从签名起取整段（含签名） */
     private fun balancedBlock(source: String, signature: String): String {
         val at = source.indexOf(signature)
@@ -730,8 +797,8 @@ class WeekdayDateOffsetSingleRulerGuardTest {
          * 另 4 枚同族的也一并收进来。删件不是本卡的选项（甲档），只登记与点名。
          */
         val MAIN_SOURCE_ZERO_CALL_FUNS = listOf(
-            "dayStatusOf", // PeriodWindows 裸 :145
-            "epochMillisToLocalDateTime", // PeriodWindows 裸 :204
+            "dayStatusOf", // PeriodWindows 裸 :146（合并态 ba1bb6b 复量：改前记的裸 :145 已带漂 +1）
+            "epochMillisToLocalDateTime", // PeriodWindows 裸 :208（合并态 ba1bb6b 复量：改前记的裸 :204 已带漂 +4）
             "isCurrentWeek", // WeekCalculator 裸 :48
             "isInFlightFact", // FetchJobCarrierPolicy 裸 :113
             "owesAMessage", // EditorMissingCourseExit 裸 :98
