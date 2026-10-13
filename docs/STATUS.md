@@ -1332,6 +1332,7 @@
       实测根 intent `flg=0x10000000 … (has extras)`、`rootOfTask=true`）。进程被杀、任务还活着时
       点桌面图标，系统重放它。差别只在生产方是谁，不在新鲜度语义 ⇒ 三档共用一道闸，
       取值域判据（缺省哨兵 -1 / 0、白名单成员、ISO 1..7）仍各判各的。
+      **现状（T340 追记，基点 `63670fb`）**：上面那一段是 T71 当时的取证记录，按台账规矩「过去时不改」，一字未动，只把现值补在这里 —— 那五枚号今天都不在原位，按原文点名的构造逐枚重念：组件格子那枚 `PendingIntent.getActivity` 现在在裸 `:804`（同属那个 `setPendingIntentTemplate(R.id.widget_grid, …)` 块，模板缺省 extra 在裸 `:800`）；每格那一枚在 `WeekGridWidgetService` 的裸 `:178`（`views.setOnClickFillInIntent`）；组件行那枚模板在裸 `:350`（`listTapIntent` 的缺省 extra 在裸 `:346`）；行级那一枚在 `CourseListWidgetService` 的裸 `:267`；通知按钮那枚在 `ReminderNotifications` 的裸 `:519`，且它今天由一枚共用工厂 `launchActivityPendingIntent`（函数头裸 `:508`）产出，全文件 4 处叫它：裸 `:141`（明日预告）、裸 `:484`（课堂实况）、裸 `:488`（课前提醒）、裸 `:499`（扫码签到）⇒ 通知侧的启动意图已经收成一份，这一族今天数工厂而不是数按钮。⇒ 「三枚 extra 的生产方无一例外是 `PendingIntent.getActivity`」这句结论没有被本轮盘面推翻，只是号要重念。⚠️ 本卡点名册内只有指向 WidgetCommon 的那两枚（组件格子、组件行）；其余三枚顺带量到、只登记不重钉。且册内那两枚**不是本轮漂的**：`git diff --stat cb41583..HEAD -- …WidgetCommon.kt` ⇒ 空输出，该文件在起点与本 tip 之间逐字未动 ⇒ 起点即死锚。
       **判据**取「这个 Activity 实例是不是一个**已跑过的**实例的重建」（`savedInstanceState != null`），
       装机实测把四条序列全钉在这条上：冷启动点格子 `saved=false day=5`（认）/ 杀进程后点图标
       `saved=true day=5` + `onNewIntent day=null(LAUNCHER)`（不认）/ 杀进程后再点格子

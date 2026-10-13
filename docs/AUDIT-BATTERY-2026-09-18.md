@@ -745,6 +745,7 @@ adb shell dumpsys jobscheduler | grep -A14 -E "^ +JOB #$UID_TAG" | grep -iE "Min
 **这一项是 P1-① 的验收点之一**：`ensure()` 每 60 秒被组件广播最多调一次（`WidgetCommon.kt:53`），
 但 `ExistingPeriodicWorkPolicy.KEEP`（`WidgetFallbackWorker.kt:76`）意味着它不重置计时。
 若改后 `dumpsys jobscheduler` 里本包 job 的下次触发时间反复回跳，就是有人把 `KEEP` 改成了 `UPDATE`。
+**现状（T340 重钉，基点 `63670fb`）**：上句那两个号都按盘面重定位，两句的机械关系一字未动。①本卡点名册内那枚指向 WidgetCommon 的锚点（原文念的是该文件第 53 行）—— 那一行今天是一句讲 `appWidgetId ≥ 100_000` 跨族分块的 KDoc，与 60 秒无关；按构造找回来是两处：刻度在裸 `:58` 的 `private const val BOOTSTRAP_INTERVAL_MS = 60_000L`，闸在裸 `:115` 的 `if (now - lastBootstrapAt < BOOTSTRAP_INTERVAL_MS) return`（函数头裸 `:113` `bootstrapBackgroundSync`，闸后的裸 `:123` 才是 `runCatching { WidgetFallbackWorker.ensure(context) }`）⇒「每 60 秒最多调一次」这句仍然逐字为真，只是号是死的。⚠️ 这枚死锚不是本轮造成的：`git diff --stat cb41583..HEAD -- …WidgetCommon.kt` ⇒ 空输出，该文件在起点与本 tip 之间逐字未动（`git show cb41583:… | wc -l` 与 `wc -l` 都是 1112），起点上它就死了；那次 1086⇒1112 的搬家真发生过，落在 `b24ca3e`（T329①），而 `git merge-base --is-ancestor b24ca3e cb41583` 返回 0 ⇒ 在起点之前。②同句下一行那枚指向 WidgetFallbackWorker 的锚点（原文念的是该文件第 76 行）顺带量到、**不在本卡点名册内，故只登记不重钉**：那一行今天是一句讲探测跨 binder 的注释，`ExistingPeriodicWorkPolicy.KEEP` 现在落在同文件裸 `:96`，`fun ensure` 的函数头在裸 `:74`。
 
 ### 4.3 强制进入待机并统计唤醒次数（本项目最好用的一组数）
 
