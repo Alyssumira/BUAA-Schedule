@@ -1067,7 +1067,7 @@ private fun AppNavHost(
             }
             CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
                 if (!uiState.loading && !courseMissing) {
-                    CourseEditorScreen(
+                    androidx.compose.runtime.key(courseId) { CourseEditorScreen( // T348：换课即重挂，rememberSaveable 的位置存盘键跟着这一层 key 走（自定义 key 参数在 1.11.3 已 deprecated）
                         initialCourse = course, requestedCourseId = courseId,
                         initialReminder = course?.let { c -> reminders.firstOrNull { it.courseId == c.id } },
                         onSave = { edited, options ->
@@ -1108,7 +1108,7 @@ private fun AppNavHost(
                         // 报到那一手是「收尾所在的 scope 还活着」的唯一出处 —— 目的地层据此不弹。
                         saveInFlight = EditorSaveFinishing.holdsSaveGate(editorSaveFinish),
                         onSaveTailReached = { viewModel.editorSaveTailReached(editorSaveRequestId) },
-                    )
+                    ) }
                 }
             }
         }

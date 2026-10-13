@@ -25,8 +25,13 @@ import org.junit.Test
  *
  * ## 第⓪问裁定（甲：逐处补单顶，不留例外枚）
  * 十八枚逐枚读过，没有一枚是**故意**要叠两枚的：
- * - editor 一族那两处 KDoc 说的是「按 entry 隔离删除旗标」，靠的是不同 courseId ⇒ 不同 args ⇒
- *   单顶本来就不合并（单顶只比栈顶那一枚与逐位相等的 args）；
+ * - editor 一族那两处 KDoc 以前写的是「不同 courseId ⇒ 不同 args ⇒ 单顶本来就不合并」—— **那句已被盘上
+ *   读数推翻**：navigation 2.8.5 反汇编里 `launchSingleTopInternal` 偏移 300/305/308（NC.txt:4980/4982/4983）
+ *   只比 `NavDestination.getId()`、整条函数一枚 arguments 都不比；替换条目走
+ *   `NavBackStackEntry.<init>(NavBackStackEntry, Bundle)`（BSE.txt:166 起），偏移 21/25/29 连
+ *   `viewModelStoreProvider`、`id` 与 `savedState` 一起复用旧条目，只有 arguments 是新的（偏移 15）。
+ *   ⇒ 栈顶已是 `editor/{oldId}` 时再跳不同 courseId：不新增 entry、不换 entry.id、不换 savedState，
+ *   只换 arguments。补单顶治的是「连点叠两枚」，它**不**负责「一屏一门课」—— 那一档归 T348② 那五格；
  * - 同 courseId 连续两枚 entry 唯一组得出来的来路就是连点，那正是要修的形状；
  * - 盘上早有两枚在册的 editor 单顶先例（组件那一路的 `editor/$id`、引导落点的 `editor/-1`），
  *   同一枚 destination、同一条理由 ⇒ 补参数改的是「叠不叠」，不是语义。
@@ -43,6 +48,42 @@ import org.junit.Test
  *   行号与原文打进断言消息。③(b) 反向一格：册子长度必须等于真实调用点数（本仓把这叫「第二枚读者」——
  *   有人新增一枚 `navigate(` 而册子没看见它，这一格必须当场响，尺子不许只会数自己认识的东西）。
  *   ③(c) 写法尺：带单顶的调用式枚数与调用点枚数同源，且不许有反着写的 `launchSingleTop = false`。
+ *
+ * ## T348② 追加的五格：编辑器那 17 枚草稿字段必须与「本屏请求的那门课」同源
+ * 上面那把尺补的是「别叠两枚 entry」，而单顶复用 entry 时（偏移 25/29）**连 savedState 都复用** ⇒
+ * 「一屏一门课」不能靠 entry 隔离，只能靠「重挂判据 + 存盘键」两半一起跟着请求 id 走。落点形状（甲＋乙同批）：
+ * - 乙侧：17 枚草稿字段逐枚 `rememberSaveable(requestedCourseId)` —— 盘上compose 1.11.3 的
+ *   `RememberSaveableKt` 偏移 325 `getValueIfInputsDidntChange`（`SaveableHolder` 偏移 0–18 就是 `Arrays.equals`）
+ *   变了就走偏移 334 的 `init()` ⇒ 治「在屏换课」；
+ * - 甲侧：MainActivity 的渲染闸门块体内一枚 `androidx.compose.runtime.key(courseId) { CourseEditorScreen(…) }`
+ *   —— 它编成 movable group（本仓 `BuaaLoginScreenKt` 里 `key(retryToken)` 那枚唯一调用点交回 1 枚
+ *   `Composer.startMovableGroup`），`GapComposer.updateCompositeKeyWhenWeEnterGroup` 偏移 229+ 把 object key 的
+ *   hashCode 旋进 `compositeKeyHashCode`，而 rememberSaveable 缺省存盘键就是那枚 hash 的 36 进制字符串
+ *   （`RememberSaveableKt` 偏移 48→86–114）⇒ 治「从同一份 savedState 按同位置自动键把 A 的草稿捞回 B」。
+ * - **为什么不走「自定义 key 参数」那一手**（卡面先验说的「keys 同时改重挂判据与 registry 存盘键」在 androidx
+ *   这一族里只有 `key` 形参能改存盘键，位置实参改不了）：compose 1.11.3 已经把 `rememberSaveable(..., key = ...)`
+ *   **标成 @Deprecated**，编译器逐枚报「'rememberSaveable' with a custom 'key' is no longer supported. It
+ *   bypasses positional scoping… Please remove the 'key' parameter to use positional scoping」（r.android.com/3610053）
+ *   —— 拿一枚「官方宣布不再支持」的参数去钉一档不变量，就是给下一次 compose 升级埋一枚静默失效；
+ *   官方指的那一手正是位置分格，也就是上面甲侧那一枚 wrapper。所以本卡落**甲＋乙同批**，不是纯乙。
+ * 册子 = [DRAFT_FIELDS]（17 行，逐枚点名字段名）。
+ * - **钉法族点名：逐字节锚点（抹注释后）＋ 数出现次数 ＋ 一枚读形状**。①（[everyRosteredDraftFieldCarriesTheRequestedCourseIdKey]）
+ *   拿册子逐枚对：每一行的那一行开头必须在盘上恰好一处；②（[keyedDraftCallSitesNeitherOutnumberTheRosterNorFallBackToUnkeyed]）
+ *   是反向格：带请求 id 的调用式枚数**不许多于**在册枚数（也不许少），且裸 `rememberSaveable {` 那一形 0 枚；
+ *   ③（[theCourseIdKeyWrapsTheEditorSubtreeInsideTheRenderGate]）读形状：wrapper 恰好一枚且必须落在渲染闸门块**体内**，
+ *   同时钉「闸门那一行逐字未动」（本卡没拧 `EditorSaveChainTailReceiverGuardTest` 与
+ *   `CourseEditorDeleteExitReceiverGuardTest` 的 `RENDER_GATE`）；④（[requestedCourseIdIsEveryDraftsCompanionArg]）
+ *   是不读册子的独立绝对值尺（`requestedCourseId` 在编辑器文件里 = 17 枚实参 + 1 枚声明 = 18）；
+ *   ⑤（[requestedIdComesFromArgumentsAndCarriesNoDefault]）回到 MainActivity 侧钉键的**来源**：:967 现读 arguments
+ *   那一行逐字、调用点 `requestedCourseId = courseId` 逐字、而形参不许有默认值（`requestedCourseId: Long =` 0 枚）。
+ * - 朝宽怎么红：摘掉某一枚的位置实参（回到裸 `rememberSaveable {`）→ ①那一行念不到原文、②同时红两把
+ *   （带键 16 ≠ 17、裸 1 ≠ 0）、④从 18 掉到 17；把 wrapper 撤一层 → ③红（0 枚）；把 wrapper 挪到闸门外面 →
+ *   ③红（落在块内 = false）。
+ * - 朝窄怎么红：从册子里摘一行 → ②（带键枚数 17 ≠ 册子 16）红；把键的实参换成常量
+ *   （`rememberSaveable(0L)`）→ ①念不到原文、④从 18 掉到 17；新增一枚没进册子的带键字段 → ②红（多于在册）；
+ *   新增一枚裸 rememberSaveable → ②红（unkeyed ≠ 0）；往闸门那一行里塞条件 → ③红（逐字那把先断）。
+ * - 覆盖面边界（如实写）：这五格全是**源码形状**，一行组合期行为都没验到 —— 换课那一下草稿到底丢不丢、
+ *   :290 那枚 shared element 重挂之后跳不跳卡、IME／滚动位置、脉冲是否照旧，都要装机；本卡零设备零 adb。
  *
  * ## 配对口径与覆盖面边界（如实写）
  * - 配对按**源码顺序**逐枚对：第 i 行册子对第 i 枚解析出来的调用式。中间插一枚新调用点会让后面全部错位，
@@ -111,8 +152,12 @@ class MainActivityNavigateSingleTopGuardTest {
     fun rosterGrantsNoExceptionToAnyCallSite() {
         val exempt = ROSTER.filter { row -> !row.singleTopRequired }.map { row -> "#" + row.ordinal + " " + row.name }
         assertTrue(
-            "第⓪问裁定是甲：盘上没有一枚调用点是故意要叠两枚的（editor 一族的「按 entry 隔离删除旗标」" +
-                "靠的是不同 courseId ⇒ 不同 args ⇒ 单顶本来就不合并）。例外档实到 " + exempt.size +
+            "第⓪问裁定是甲：盘上没有一枚调用点是故意要叠两枚的。⚠️ 单顶治的是「连点叠栈」，它**不**负责" +
+                "「一屏一门课」：navigation 2.8.5 盘上读数（NC.txt:4980/4982/4983 = 偏移 300/305/308 只比 " +
+                "NavDestination.getId()；BSE.txt:166 起 = 偏移 21/25/29 把 viewModelStoreProvider、id 与 " +
+                "savedState 一起复用旧条目）说得很清楚 —— 栈顶已是编辑器时再跳不同 courseId 不新建 entry、" +
+                "不换 id、不换 savedState，只换 arguments ⇒ 那一档由本类 T348② 那五格（草稿键与请求 id 同源）钉。" +
+                "例外档实到 " + exempt.size +
                 " 枚 ／ 写死 " + EXPECTED_EXEMPT_ROWS + " 枚：" + exempt.joinToString(" ／ ") +
                 "（要留例外就得连本段判据与类 KDoc 的裁定一起改，别只改表）",
             exempt.size == EXPECTED_EXEMPT_ROWS,
@@ -210,7 +255,154 @@ class MainActivityNavigateSingleTopGuardTest {
         )
     }
 
+    // ---- T348②：编辑器那 17 枚草稿字段与「本屏请求的那门课」同源（五格）---------------------------
+
+    /**
+     * ①（钉法 = 逐字节锚点，抹注释后）：册子逐枚对账。
+     * 每一枚在册草稿字段，盘上那一行开头必须逐字读得到、且只读得到一次。
+     */
+    @Test
+    fun everyRosteredDraftFieldCarriesTheRequestedCourseIdKey() {
+        val code = blankedEditor()
+        val problems = mutableListOf<String>()
+        for (row in DRAFT_FIELDS) {
+            val hits = occurrencesOf(code, row.needle)
+            if (hits != 1) {
+                problems.add(
+                    "#" + row.ordinal + " " + row.name + "：逐字节锚点实到 " + hits + " 处（要 1 处）＝ " + row.needle,
+                )
+            }
+        }
+        assertTrue(
+            "钉法 = 逐字节锚点（表驱动册子逐枚对账）：" + COURSE_EDITOR + " 里 " + DRAFT_FIELDS.size +
+                " 枚草稿字段逐枚点名，每一枚都得带 " + DRAFT_KEY_ARG + " 那枚位置实参 —— 单顶复用同一枚 entry 时" +
+                " id 与 savedState 都不换（2.8.5 偏移 21/25/29），而 compose 1.11.3 里能改 registry 存盘键的自定义" +
+                " `key` 参数已经 deprecated ⇒ 存盘键只能靠 ③ 那枚 key(courseId) 走位置分格；两半缺一枚就是把 A 课" +
+                "的草稿留在屏上写进 B 课的行。问题：" + problems.joinToString(" ／ "),
+            problems.isEmpty(),
+        )
+    }
+
+    /**
+     * ②（钉法 = 数出现次数；本仓把这叫「第二枚读者」）：反向格。
+     * 带请求 id 键的草稿调用式枚数**等于**在册枚数（多一枚＝有人新增了没进册子的键，少一枚＝摘键／换成常量），
+     * 且裸 `rememberSaveable {` 那一形必须 0 枚（新增一枚不带键的草稿字段红在这里）。
+     */
+    @Test
+    fun keyedDraftCallSitesNeitherOutnumberTheRosterNorFallBackToUnkeyed() {
+        val code = blankedEditor()
+        val keyed = occurrencesOf(code, KEYED_DRAFT_CALL)
+        val unkeyed = occurrencesOf(code, UNKEYED_DRAFT_CALL)
+        val total = occurrencesOf(code, ANY_DRAFT_CALL)
+        assertTrue(
+            "钉法 = 数出现次数（反向格）：" + COURSE_EDITOR + " 里带请求 id 的草稿调用式（「" + KEYED_DRAFT_CALL +
+                "…」）枚数必须等于在册枚数 " + EXPECTED_DRAFT_FIELDS + " 枚 —— 不许多（新增一枚没进册子的键）" +
+                "也不许少（摘掉某一枚的键、或把键的实参换成常量）；同时「" + ANY_DRAFT_CALL + "」总枚数也必须等于 " +
+                EXPECTED_DRAFT_FIELDS + " 枚（两把同源 ⇒ 没有第三形），裸「" + UNKEYED_DRAFT_CALL + "」那一形 0 枚。" +
+                "实到：带键 " + keyed + " 枚 ／ 裸 " + unkeyed + " 枚 ／ 带括号总 " + total + " 枚 ／ 册子 " +
+                DRAFT_FIELDS.size + " 行 ／ 写死 " + EXPECTED_DRAFT_FIELDS + " 枚",
+            keyed == EXPECTED_DRAFT_FIELDS && keyed == DRAFT_FIELDS.size && total == EXPECTED_DRAFT_FIELDS &&
+                unkeyed == 0,
+        )
+    }
+
+    /**
+     * ③（钉法 = 读形状，抹注释 + 花括号配平切块）：**甲侧那一半**必须真的站在渲染闸门里面。
+     * `key(courseId) { CourseEditorScreen(…` 是 rememberSaveable 存盘键跟着换课走的唯一合法通道
+     * （compose 1.11.3：自定义 `key` 参数已 deprecated，位置分格是官方指的那一手），而它一旦落到闸门外面，
+     * 换课时重挂的就是整枚目的地（连同那两条退栈协程）—— 那是比串草稿更贵的一次事故。
+     * 本格同时钉「渲染闸门那一行逐字未动」：`if (!uiState.loading && !courseMissing) {` 仍是 1 枚，
+     * 在册的 `EditorSaveChainTailReceiverGuardTest`／`CourseEditorDeleteExitReceiverGuardTest` 才不会被本卡拧红。
+     */
+    @Test
+    fun theCourseIdKeyWrapsTheEditorSubtreeInsideTheRenderGate() {
+        val code = blankedMainActivity()
+        val gateHits = occurrencesOf(code, RENDER_GATE)
+        val wrapperHits = occurrencesOf(code, KEY_WRAPPER_OPEN)
+        var wrapperInsideGate = false
+        if (gateHits == 1 && wrapperHits == 1) {
+            val gateAt = code.indexOf(RENDER_GATE)
+            val gateBodyEnd = balancedBraceEnd(code, code.indexOf('{', gateAt + RENDER_GATE.length - 1))
+            val wrapperAt = code.indexOf(KEY_WRAPPER_OPEN)
+            wrapperInsideGate = wrapperAt > gateAt && wrapperAt < gateBodyEnd
+        }
+        assertTrue(
+            "钉法 = 读形状（花括号配平取闸门块）：\"" + RENDER_GATE + "\" 必须逐字 1 枚（本卡没往这一行里塞东西），" +
+                "=\"" + KEY_WRAPPER_OPEN + "\" 也必须 1 枚，且后者必须落在前者的块**体内** —— 落在外面就是拿整枚目的地" +
+                "去重挂，那两条退栈协程跟着一起重建。实到：闸门 " + gateHits + " 枚 ／ wrapper " + wrapperHits +
+                " 枚 ／ 落在块内 = " + wrapperInsideGate,
+            gateHits == 1 && wrapperHits == 1 && wrapperInsideGate,
+        )
+    }
+
+    /**
+     * ④（钉法 = 数出现次数，**不读册子**的独立绝对值尺）：`requestedCourseId` 在编辑器那一棵里出现的枚数。
+     * 17 枚位置实参 ＋ 形参声明那一枚 ＝ 写死的 18 枚。
+     * 有人把某枚实参换成常量 ⇒ 这一格与 ① 一起红；把它改成**别的**变量（例如 `initialCourse?.id`）
+     * ⇒ ① 红（原文念不到）＋这一格红（枚数掉下来）。
+     */
+    @Test
+    fun requestedCourseIdIsEveryDraftsCompanionArg() {
+        val code = blankedEditor()
+        val mentions = occurrencesOf(code, DRAFT_KEY_ARG)
+        assertTrue(
+            "钉法 = 数出现次数（只认盘，不读册子）：\"" + DRAFT_KEY_ARG + "\" 在 " + COURSE_EDITOR +
+                " 里必须恰好 " + EXPECTED_REQUESTED_ID_MENTIONS + " 枚（" + EXPECTED_DRAFT_FIELDS +
+                " 枚位置实参 ＋ 形参声明 1 枚）—— 键的实参只许是本屏请求的那门课（MainActivity:967 现读 " +
+                "arguments 那一枚），不许是保存后的新 id、不许是 `initialCourse?.id`（它对「查不到」与「新建」" +
+                "两档退化成同一枚值）、不许是常量。实到 " + mentions + " 枚",
+            mentions == EXPECTED_REQUESTED_ID_MENTIONS,
+        )
+    }
+
+    /**
+     * ⑤（钉法 = 逐字节锚点，跨两枚文件）：键的**来源**与**不许带默认值**。
+     * - MainActivity 那一枚 `courseId` 必须仍是现读 arguments（不是 remember 的那份快照）；
+     * - 递进编辑器的必须就是它（`requestedCourseId = courseId` 逐字一枚）；
+     * - 形参必须是不带默认值的 `requestedCourseId: Long,`（`= 0L` 之类的默认值＝给「漏传」留门，
+     *   而漏传就是这一族整条回来）。
+     */
+    @Test
+    fun requestedIdComesFromArgumentsAndCarriesNoDefault() {
+        val activity = blankedMainActivity()
+        val editor = blankedEditor()
+        val problems = mutableListOf<String>()
+        if (occurrencesOf(activity, COURSE_ID_FROM_ARGS) != 1) {
+            problems.add(
+                "MainActivity 侧读请求 id 那一行实到 " + occurrencesOf(activity, COURSE_ID_FROM_ARGS) +
+                    " 处（要 1 处）：「" + COURSE_ID_FROM_ARGS + "」",
+            )
+        }
+        if (occurrencesOf(activity, REQUESTED_ID_PASSED) != 1) {
+            problems.add(
+                "调用点递键那一手实到 " + occurrencesOf(activity, REQUESTED_ID_PASSED) + " 处（要 1 处）：" +
+                    "「" + REQUESTED_ID_PASSED + "」",
+            )
+        }
+        if (occurrencesOf(editor, REQUESTED_ID_PARAM) != 1) {
+            problems.add(
+                "编辑器形参实到 " + occurrencesOf(editor, REQUESTED_ID_PARAM) + " 处（要 1 处）：" +
+                    "「" + REQUESTED_ID_PARAM + "」",
+            )
+        }
+        if (occurrencesOf(editor, REQUESTED_ID_DEFAULTED) != 0) {
+            problems.add(
+                "形参带上了默认值（「" + REQUESTED_ID_DEFAULTED + "」实到 " +
+                    occurrencesOf(editor, REQUESTED_ID_DEFAULTED) + " 枚）＝漏传就是静默 no-op",
+            )
+        }
+        assertTrue(
+            "钉法 = 逐字节锚点（两枚文件同源）：键的实参取自目的地层**这一帧现读**的 arguments，" +
+                "新建（-1）与「查不到」两档因此各有自己的键，谁也不对 null 退化；问题：" +
+                problems.joinToString(" ／ "),
+            problems.isEmpty(),
+        )
+    }
+
     // ---- 读盘与解析（与各 *WiringGuardTest 同一套刀法）---------------------------------------------
+
+    /** 抹注释之后的 CourseEditorScreen 源码文本（T348② 那五格的读盘口；与 MainActivity 同一把刀） */
+    private fun blankedEditor(): String = blankComments(source(COURSE_EDITOR))
 
     /** 盘上每一枚 `navigate(` 调用式：实参表按括号配平、紧随其后的 options lambda 按花括号配平 */
     private fun navigateCallSites(): List<NavigateCall> {
@@ -442,6 +634,86 @@ private const val EXPECTED_EXEMPT_ROWS = 0
 private const val EXPECTED_NAVIGATE_CALL_SITES = 18
 
 private const val MAIN_ACTIVITY = "com/buaa/schedule/MainActivity.kt"
+
+/**
+ * T348② 的册子一行：盘上第 ordinal 枚草稿字段叫什么。
+ * [needle] 就是盘上那一行**开头**的逐字节原文 —— 尾部为什么不上册子：weeksText／creditText／advanceMinutes
+ * 三枚的初值是跨行块，把尾部钉进册子会逼着改动行号（本卡零行漂移），而这一族的判据是「草稿与请求 id 同源」，
+ * 尾部是初值的事、归 baselineDraft 与那些在册尺管。
+ */
+private data class DraftFieldRow(
+    val ordinal: Int,
+    val name: String,
+) {
+    /** 逐字节锚点：`var <字段> by rememberSaveable(requestedCourseId) {` */
+    val needle: String
+        get() = "var " + name + " by rememberSaveable(" + DRAFT_KEY_ARG + ") {"
+}
+
+/**
+ * 17 枚在册草稿字段（bf71058 现量：`grep -c rememberSaveable` 交回 19，其中 :45 是 import、
+ * :109 是注释 ⇒ 真调用点 17 枚）。顺序即盘上源码顺序，与 [everyRosteredDraftFieldCarriesTheRequestedCourseIdKey]
+ * 的逐枚对账同源。
+ */
+private val DRAFT_FIELDS: List<DraftFieldRow> = listOf(
+    DraftFieldRow(1, "name"),
+    DraftFieldRow(2, "teacher"),
+    DraftFieldRow(3, "location"),
+    DraftFieldRow(4, "campus"),
+    DraftFieldRow(5, "day"),
+    DraftFieldRow(6, "startSection"),
+    DraftFieldRow(7, "endSection"),
+    DraftFieldRow(8, "extraPeriods"),
+    DraftFieldRow(9, "weeksText"),
+    DraftFieldRow(10, "alias"),
+    DraftFieldRow(11, "creditText"),
+    DraftFieldRow(12, "colorIndex"),
+    DraftFieldRow(13, "customColor"),
+    DraftFieldRow(14, "reminderEnabled"),
+    DraftFieldRow(15, "advanceMinutes"),
+    DraftFieldRow(16, "partialWeeks"),
+    DraftFieldRow(17, "applyToGroup"),
+)
+
+/** 键的实参那一枚（MainActivity:967 现读 arguments 的请求 id；不许是常量、不许是保存后的新 id） */
+private const val DRAFT_KEY_ARG = "requestedCourseId"
+
+/** 带请求 id 的草稿调用式锚点（位置实参那一枚 —— 存盘键跟着 ③ 那枚 wrapper 走位置分格） */
+private const val KEYED_DRAFT_CALL = "rememberSaveable(" + DRAFT_KEY_ARG + ") {"
+
+/** 裸那一形：新增一枚不带键的草稿字段就红在反向格 */
+private const val UNKEYED_DRAFT_CALL = "rememberSaveable {"
+
+/** 编辑器那一棵里所有 rememberSaveable 调用式（带左括号 ⇒ 不含 import 那一行） */
+private const val ANY_DRAFT_CALL = "rememberSaveable("
+
+/** ⓪/① 步现量写死的在册枚数（反向格的两把尺都对它账） */
+private const val EXPECTED_DRAFT_FIELDS = 17
+
+/** ④ 那把独立绝对值尺：17 枚位置实参 ＋ 形参声明 1 枚 */
+private const val EXPECTED_REQUESTED_ID_MENTIONS = 18
+
+private const val COURSE_EDITOR = "com/buaa/schedule/ui/editor/CourseEditorScreen.kt"
+
+/** ③：渲染闸门那一行逐字（本卡不许往这一行里塞东西 —— 两枚在册守卫都钉它） */
+private const val RENDER_GATE = "if (!uiState.loading && !courseMissing) {"
+
+/** ③：甲侧 wrapper 逐字（不换 import ⇒ 全限定名，行号因此一枚都不漂） */
+private const val KEY_WRAPPER_OPEN =
+    "androidx.compose.runtime.key(courseId) { CourseEditorScreen("
+
+/** ⑤：键的来源那一行逐字（目的地层现读 arguments，不是 remember 住的那份快照） */
+private const val COURSE_ID_FROM_ARGS =
+    "val courseId = backStackEntry.arguments?.getLong(\"courseId\") ?: -1L"
+
+/** ⑤：调用点递键那一手逐字 */
+private const val REQUESTED_ID_PASSED = "initialCourse = course, requestedCourseId = courseId,"
+
+/** ⑤：形参逐字（与 initialCourse 同一条声明行 —— 本卡零行漂移，不动任何锚点行号） */
+private const val REQUESTED_ID_PARAM = "initialCourse: Course?, requestedCourseId: Long,"
+
+/** ⑤：带默认值那一形必须 0 枚（默认值＝漏传就是静默 no-op） */
+private const val REQUESTED_ID_DEFAULTED = "requestedCourseId: Long ="
 
 /** 从文本开头数到 [index] 落在第几行（1-based，与 grep -n 同口径） */
 private fun lineOf(text: String, index: Int): Int {

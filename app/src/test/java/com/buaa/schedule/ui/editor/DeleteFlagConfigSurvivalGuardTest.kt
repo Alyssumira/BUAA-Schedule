@@ -37,9 +37,9 @@ import org.junit.Test
  * 写进 Bundle ⇒ **转屏存活**；restore 那一头 `NavBackStackEntry.updateState()` 里
  * `performAttach()` + `performRestore(savedState)`，之后 `getStateFlow(key, false)` 从回灌好的 map
  * 取值（`SavedStateHandleImpl.getStateFlow` 只在键**不在** map 里时才 put 默认值）⇒ 读得到 true。
- * 另一半：`navigate("editor/{courseId}")` 每次都新建一枚 entry、新建一份 handle ⇒ **天然按 entry
- * 隔离**，不会把「上一 entry 删过课」这面旗带到下一 entry（这也是不许换成
- * `navController.currentBackStackEntry?.savedStateHandle` 或任何全局旗的理由，见第 ⑤ 层）。
+ * 另一半：「按 entry 隔离」只在**新建 entry** 那一路成立 —— 栈顶不是编辑器时 `navigate("editor/{courseId}")`
+ * 才新建一枚 entry、新建一份 handle；栈顶已是编辑器时单顶**复用同一枚 entry**（2.8.5 反汇编：单顶只比
+ * destination.id，替换条目连 id 与 savedState 一起复用 ⇒ 这面旗跟着复用，T348 订正）。全局旗仍然不许。
  *
  * ## 「只点火一次」这条不变式换载体之后怎么剩下来的
  *
