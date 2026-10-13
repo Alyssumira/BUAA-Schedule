@@ -49,6 +49,11 @@ import org.junit.Test
  * 第二把尺读的是抹完注释的代码，**字符串字面量保留** ⇒ 判据文件里写 android 族字面量也会报，
  * 那是本尺点名的误报面（写死在 ⑤b 的第四手里，改尺的人必须连着改那一手）。
  *
+ * 读钟那一半另有一格 ⑤c：甲的**假修法**是「把 `LocalDate.now()` 挪进签名的默认参数位」——
+ * 求值时照样读钟，而只数函数体的那把尺切的是开括号之后的块，正好从它眼下走过去。⑤c 第一手量就是这个差
+ * （函数体那一形报 0），第二手钉本守卫用的 `clockReads`（抹注释后的**整枚文件**）必须报 1，
+ * 第四手把在册那两枚 `today: LocalDate,`（**无默认值**）的枚数钉成 2 —— 假修法一写这一枚就掉下来。
+ *
  * ## 反套套逻辑（不许拿"grep 没匹配到"当"全绿"）
  *
  * ① 病灶行、② `jsonStr`、② `replace("\\", "\\\\")`、② `course.name` 四枚都另有"含注释原文里
@@ -62,6 +67,10 @@ import org.junit.Test
  *   表 ② 那 32 格（`WakeUpJsonTextTest`）跟着整片红；
  * - **朝窄**（把 `exportWakeUpTo` 体内那一手改回判据之前 ⇒ `writeTextToUri` 落在 when 之外）⇒
  *   ① 的顺序格、"开流只在 WriteTruncating 支里"那格、体内恰 1 枚那格**同时红**。
+ * - **T351B 的朝宽臂**（从 ⑤ 的名册里摘掉 `EXPORTERS` 那一枚条目）⇒ 红的**只许**是名册逐字那一手
+ *   （"摘掉一枚条目"这件事在读钟格与纯度格里都不留痕：生产码今天两把尺都是干净的）；
+ * - **T351B 的朝窄臂**（把 `ScheduleExporters` 某一枚函数恢复成体内 `LocalDate.now()`）⇒
+ *   红在 ⑤ 的读钟那一手（点名 `导出器本体` 与那枚 needle）。
  *
  * 只做**源码核对**（JVM，无 Robolectric、无设备、不读时钟）。输入面：本守卫读 `src/main/java`
  * 下的工作树文本，已由 `app/build.gradle.kts` 里 `guardReadWorkingTreeFiles` 整体声明成
@@ -136,6 +145,9 @@ class WakeUpExportGateWiringGuardTest {
             "Calendar.getInstance",
         )
         const val PURITY_PROMISE = "零 android / androidx import"
+
+        /** 甲落地后的参数形状：**无默认值**的必填 today（默认参数位 = 本卡点名的假修法） */
+        const val TODAY_PARAM = "today: LocalDate,"
 
         /** 纯度第二把尺认的族名（带点号 ⇒ `android / androidx` 那种散文写法不在其列） */
         val ANDROID_FAMILY = listOf("android.", "androidx.")
@@ -382,9 +394,9 @@ class WakeUpExportGateWiringGuardTest {
     @Test
     fun `内核是表驱动的 且三枚判据文件都不读库不读钟`() {
         val files = listOf(
-            Triple("JSON 文本层", TEXT, blankComments(source(TEXT))),
-            Triple("落盘闸门", GATE, blankComments(source(GATE))),
-            Triple("导出器本体", EXPORTERS, blankComments(source(EXPORTERS))),
+            Triple("JSON 文本层", TEXT, source(TEXT)),
+            Triple("落盘闸门", GATE, source(GATE)),
+            Triple("导出器本体", EXPORTERS, source(EXPORTERS)),
         )
         // 名册本身也要钉住（T350 审计报的就是这一格）：本守卫在 ② 那格早就读 $EXPORTERS
         // （转义落点），却从没把它的读钟与纯度账收进这一格 ⇒ 名册少一枚，那颗文件就没人管。
@@ -395,8 +407,8 @@ class WakeUpExportGateWiringGuardTest {
             listOf(TEXT, GATE, EXPORTERS),
             files.map { it.second },
         )
-        for ((label, path, code) in files) {
-            val offenders = androidOffenders(source(path))
+        for ((label, path, raw) in files) {
+            val offenders = androidOffenders(raw)
             assertEquals(
                 "$path 必须零 android / androidx **出场**（两把尺：import 行与全限定写法都算）。实到：" + offenders,
                 emptyList<String>(),
@@ -407,21 +419,21 @@ class WakeUpExportGateWiringGuardTest {
                     "**钉法 = 数出现次数（抹注释）**：$label 文件里「$needle」必须 0 处：读了它，" +
                         "「这份文本合不合法 / 这一趟该不该动盘」就不再是纯函数 —— 同一次导出的两次点击" +
                         "可能给出不同结论（本仓口径：这些留在调用点当参数递进来）。" +
-                        "\n  实到枚数：" + occurrences(code, needle),
+                        "\n  实到枚数：" + clockReads(raw, needle),
                     0,
-                    occurrences(code, needle),
+                    clockReads(raw, needle),
                 )
             }
         }
         // 反套套逻辑：纯度那句承诺在**名册里每一枚**文件的注释里都留痕（读到 0 = 上面那串 0 没人负责；
         // 读到 2 = 同一个承诺在同一枚文件里写了两遍，那就有了两把尺）
-        for ((label, path, _) in files) {
+        for ((label, path, raw) in files) {
             assertEquals(
                 "**钉法 = 数出现次数（含注释原文）**：$label（$path）里那句「$PURITY_PROMISE」必须恰好 1 处，实到 " +
-                    occurrences(source(path), PURITY_PROMISE) + " 处：0 处 = 这格钉的纯度没有作者认领；" +
+                    occurrences(raw, PURITY_PROMISE) + " 处：0 处 = 这格钉的纯度没有作者认领；" +
                     "2 处 = 同一句承诺写了两遍（改一处忘一处就长出两把尺）",
                 1,
-                occurrences(source(path), PURITY_PROMISE),
+                occurrences(raw, PURITY_PROMISE),
             )
         }
         // 内核的表是公开的，枚数就是判据覆盖面（运行时反证，不靠 grep）
@@ -502,6 +514,70 @@ class WakeUpExportGateWiringGuardTest {
         )
     }
 
+    // ─────────────── ⑤c 读钟那把尺自己也得是活的（T351 点名的假修法） ───────────────
+
+    /**
+     * 甲的**假修法**逐字是：`fun toWakeUpJson(courses, semester, timeSlots, today: LocalDate = LocalDate.now())`
+     * —— 把体内那枚 `LocalDate.now()` 挪进签名的默认参数位。求值时照样读钟（调用方不传就走钟那一支），
+     * 而"只数函数体"的那把尺切的是开括号之后的块 ⇒ 默认参数正好落在它眼下。**这一格钉的是尺的输入面**：
+     * ⑤ 用的是 `clockReads`（抹注释后的**整枚文件**），四手分别是
+     * ① 只数函数体必须漏（反证，不是验收）、② 本尺对同一形必须报 1、③ 体内那一形照样报 1（不是只管签名）、
+     * ④ 在册那枚文件的 `today` 参数必须是**没有默认值**的那一形且恰 2 枚（假修法一写就当场掉数）。
+     */
+    @Test
+    fun `读钟尺数的是整枚文件 默认参数位那一形不许从它眼下走过去`() {
+        val defaultParam = """
+            package com.buaa.schedule.domain.sample
+
+            fun toSampleJson(
+                courses: List<String>,
+                today: LocalDate = LocalDate.now(),
+            ): String {
+                return courses.joinToString()
+            }
+        """.trimIndent()
+        val block = balancedBlock(blankComments(defaultParam), "fun toSampleJson(", "自检样本 toSampleJson")
+        val bodyOnly = block.substring(block.indexOf('{'))
+        assertEquals(
+            "**钉法 = 探测器自检（反证手）**：只数花括号那一块的那把尺，对默认参数位里的「LocalDate.now」**报 0** —— " +
+                "本尺不许长成这一形（长成这样，甲就有一枚免费的假修法）：实到 " + occurrences(bodyOnly, "LocalDate.now"),
+            0,
+            occurrences(bodyOnly, "LocalDate.now"),
+        )
+        assertEquals(
+            "**钉法 = 探测器自检**：⑤ 用的那一把（clockReads = 抹注释后数整枚文件）对同一形必须报 **1**：实到 " +
+                clockReads(defaultParam, "LocalDate.now"),
+            1,
+            clockReads(defaultParam, "LocalDate.now"),
+        )
+        val inBody = "fun f(courses: List<String>): String {\n    val today = LocalDate.now()\n    return today.toString()\n}\n"
+        assertEquals(
+            "**钉法 = 探测器自检**：体内读钟那一形（改前的真病灶形）在同一把尺下照样报 1 —— " +
+                "这尺不是「只管签名才灵」的那一挡：实到 " + clockReads(inBody, "LocalDate.now"),
+            1,
+            clockReads(inBody, "LocalDate.now"),
+        )
+        val prose = "    /** 改前这里写着 LocalDate.now()（取证散文，抹注释就该它不出场） */\n" +
+            "    val label = \"ok\"\n"
+        assertEquals(
+            "**钉法 = 探测器自检**：注释里的病灶原文必须报 0（⑤ 的抹注释那一手不许把 KDoc 里引用的改前形状" +
+                "判成读钟，否则 ④ 那类取证格全会假红）：实到 " + clockReads(prose, "LocalDate.now"),
+            0,
+            clockReads(prose, "LocalDate.now"),
+        )
+        // 在册那一手：两枚公共函数的 today 都是**无默认值**的必填参数（甲的落地形状），走的还是同一把尺
+        val exportersRaw = source(EXPORTERS)
+        assertEquals(
+            "**钉法 = 逐字节 + 数出现次数（同一把 clockReads）**：$EXPORTERS 里「$TODAY_PARAM」恰好 2 枚" +
+                "（toWakeUpJson 与 toWeeklyText 各一枚，且都不带默认值）。实到 " +
+                clockReads(exportersRaw, TODAY_PARAM) + " 枚 —— " +
+                "写成 `today: LocalDate = LocalDate.now()` 的那一刻这一枚就掉下来（默认参数位没有逗号收尾），" +
+                "而 FORBIDDEN_READS 那一手会同时报 1：假修法两条路都拦",
+            2,
+            clockReads(exportersRaw, TODAY_PARAM),
+        )
+    }
+
     // ─────────────── ⑥ 文案：三句各归各档（逐字节签名） ───────────────
 
     @Test
@@ -559,6 +635,16 @@ class WakeUpExportGateWiringGuardTest {
                 else -> "第 ${index + 1} 行（全限定写法或字面量）：$trimmed"
             }
         }.toList()
+
+    /**
+     * 读钟那把尺的**唯一实现**（⑤ 与 ⑤c 共用同一把，不许在别处再拼一遍）：
+     * 输入是**整枚文件的源码文本**，抹掉注释后数 needle 的枚数。
+     *
+     * 输入面是「整枚文件」而不是「函数体」—— 这正是 T351 裁甲点名的那枚假修法
+     * （`today: LocalDate = LocalDate.now()` 挪进签名的默认参数位）拦得住的原因：默认参数在求值时照样读钟，
+     * 而它长在 `balancedBlock` 取的那一块之外（⑤c 第一手量的就是这个差）。
+     */
+    private fun clockReads(rawSource: String, needle: String): Int = occurrences(blankComments(rawSource), needle)
 
     private fun occurrences(hay: String, needle: String): Int {
         if (needle.isEmpty()) return 0
