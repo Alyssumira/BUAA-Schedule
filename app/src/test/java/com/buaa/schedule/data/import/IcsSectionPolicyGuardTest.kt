@@ -19,7 +19,7 @@ import org.junit.Test
  * 所以"改了源码、单跑守卫拿到 Gradle 缓存绿灯"那一档盖得住；本次没有新增**目录之外**的读取面
  * （不读 res/、不读清单、不读脚本），无需再动构建脚本。
  *
- * ## 五层钉子
+ * ## 六层钉子
  *
  * 1. [病灶不回潮]：`return previous?.number ?: 1` 在 `app/src/main` 恰好 **0** 处，
  *    而它的**形状**（节次那一句：`.number` / `beginSection` / `startSection` / `endSection`
@@ -41,6 +41,12 @@ import org.junit.Test
  *    `colorIndex` 仍吃 `startSection`、`IcsSlot` 的转换只有一处；
  *    两份红线文件（`ScheduleViewModel.kt` / `ScheduleRepository.kt`）对新内核**零引用**
  *    （本卡没碰它们，别的卡要接上去得自己带守卫）。
+ * 6. [周号与周一锚点全 main 各只有一份]（T362/#617 加的一层，被测面从「节次」扩到「同一条 ICS 链的周次维」）：
+ *    `IcsParser.kt` 里 `WeekCalculator.currentWeek(` / `WeekCalculator.mondayOf(` 各恰一处、
+ *    `ChronoUnit` / `DAYS.between` / `minusDays((` / `dayOfWeek.value - 1` 全 0 处；
+ *    `/ 7).toInt() + 1` 与 `dayOfWeek.value - 1).toLong()` 在全 app/src/main 各**恰 1 处**且栖身处要点名
+ *    （前者只能在 `WeekCalculator.kt`、后者只能在 `Semester.kt` 的 `mondayOfWeekAnchor` 体内）；
+ *    另有探测器自检（改前两形各必须抓到 1 处）＋不误伤自检（HomeScreen 那枚别的减法式必须判 0）。
  *
  * 本守卫只读源码，**不证明**运行时行为：判据逐格语义归 `IcsSectionPolicyTest`，
  * parse 产出的课程形状归 `IcsParserSectionWiringTest`。
@@ -54,6 +60,25 @@ class IcsSectionPolicyGuardTest {
         const val VIEW_MODEL = "com/buaa/schedule/ui/ScheduleViewModel.kt"
         const val REPOSITORY = "com/buaa/schedule/data/repository/ScheduleRepository.kt"
         const val COURSE = "com/buaa/schedule/domain/model/Course.kt"
+        const val WEEK_CALCULATOR = "com/buaa/schedule/domain/schedule/WeekCalculator.kt"
+        const val SEMESTER = "com/buaa/schedule/domain/model/Semester.kt"
+        const val HOME_SCREEN = "com/buaa/schedule/ui/home/HomeScreen.kt"
+
+        /** 「除以 7 再加 1」那枚周号算式的字形（全 main 只许 WeekCalculator 一处） */
+        const val WEEK_DIV_SEVEN = "/ 7).toInt() + 1"
+
+        /** 「减掉星期序号归到周一」那枚锚点公式的字形（全 main 只许 mondayOfWeekAnchor 的体内一处） */
+        const val ANCHOR_TO_MONDAY = "dayOfWeek.value - 1).toLong()"
+
+        /** 改前 IcsParser 那一形（探测器自检的靶：抓不到就说明那格 1 是假绿） */
+        const val PRE_FIX_WEEK_FORMULA =
+            "        return (ChronoUnit.DAYS.between(semesterStart, date) / 7).toInt() + 1"
+        const val PRE_FIX_ANCHOR_FORMULA =
+            "            val mondayOfStart = startDate.minusDays((startDate.dayOfWeek.value - 1).toLong())"
+
+        /** 同族但**不是**第二套锚点的那一枚（HomeScreen 按目标星期几回退，本尺不许误伤） */
+        const val HOME_SCREEN_DAY_OFFSET =
+            "            today.minusDays(((today.dayOfWeek.value - dow + 7) % 7).toLong())"
 
         /** 病灶逐字（旧 `IcsParser.sectionOf` 的最后一行） */
         const val LITERAL_SHAP = "return previous?.number ?: 1"
@@ -457,6 +482,95 @@ class IcsSectionPolicyGuardTest {
                 occurrences(code, "resolveIcsPeriod("),
             )
         }
+    }
+
+    // ─────────────── ⑥ 周号算式与周一锚点：全 main 各只有一份（T362/#617） ───────────────
+
+    /**
+     * 第 ⑥ 层钉的是**另一维**的接线：本节次守卫的主体是「节次怎么算」，而 IcsParser 同一条链上还写着
+     * 「周号怎么算」与「哪天算一周的第一天」—— T362 把这两枚抄本换源到 WeekCalculator 之后，
+     * 由本文件顺带把它们钉成册子尺（同一枚被测量文件、同一套读法，不值得为两格新开一枚守卫文件）。
+     *
+     * 正形（ICS 链只问 WeekCalculator）+ 负形（本文件不再自己算）+ 全 main 册子（各恰一处、且处所在哪枚文件）
+     * + 探测器自检（改前那一形喂进来必须抓到、HomeScreen 那枚不同的减法式不许误伤）。
+     */
+    @Test
+    fun `周号算式与周一锚点全 main 各只有一份 而 IcsParser 只问 WeekCalculator`() {
+        val parser = blankCommentsKeepingLiterals(source(PARSER))
+
+        // 正形：两条臂各接线一次 —— 少了就是有人把换源又拆回本地算式，多了就是同一件事问两遍
+        for ((needle, label) in listOf(
+            "WeekCalculator.currentWeek(" to "周号那一维",
+            "WeekCalculator.mondayOf(" to "归一到周一那一维",
+        )) {
+            assertEquals(
+                "**钉法 = 逐字节 + 数出现次数**：`$PARSER` 里 `$needle` 必须恰好一处（$label；实到 " +
+                    occurrences(parser, needle) + " 处）。\n" +
+                    "复算：grep -Fn '$needle' app/src/main/java/$PARSER\n" +
+                    "0 处 = 换源被拆掉、这一维重新就地自己算；2 处 = 同一条链上问了两遍，改其一不改其余",
+                1,
+                occurrences(parser, needle),
+            )
+        }
+
+        // 负形：本文件里那两枚抄本的**字形**必须一处不剩（抹完注释再数，注释里提它们不算出场）
+        for (needle in listOf("ChronoUnit", "DAYS.between", "minusDays((", "dayOfWeek.value - 1")) {
+            assertEquals(
+                "**钉法 = 读形状（抹注释保字面量）**：`$PARSER` 里「$needle」必须 0 处（实到 " +
+                    occurrences(parser, needle) + " 处）：出现一次就是第二套锚点/周号算式又长回来了 —— " +
+                    "WeekCalculator 文件头那句「全应用不再有第二套锚点算法」当场变回假话",
+                0,
+                occurrences(parser, needle),
+            )
+        }
+
+        // 全 main 册子：两枚算式各自只许活在一枚文件里，而且要点名是哪一枚
+        val all = mainSources()
+        for ((needle, home, label) in listOf(
+            Triple(WEEK_DIV_SEVEN, WEEK_CALCULATOR, "「除以 7 再加 1」那枚周号算式"),
+            Triple(ANCHOR_TO_MONDAY, SEMESTER, "「减掉星期序号归到周一」那枚锚点公式"),
+        )) {
+            val holders = all.filter { occurrences(it.code, needle) > 0 }.map { it.path }
+            val count = all.sumOf { occurrences(it.code, needle) }
+            assertEquals(
+                "**钉法 = 数出现次数（全 main 册子）**：$label「$needle」全 app/src/main 只许 **1** 处，且只能长在 " +
+                    "`$home`（实到 $count 处，分布在 $holders）。" +
+                    "多一处 = 第二套同一判据的抄本（本卡收的就是这一族）；0 处 = 唯一那一份被改名或搬家，" +
+                    "尺子跟着挪之前不许留哑",
+                1,
+                count,
+            )
+            assertEquals(
+                "**钉法 = 按文件点名（全 main 册子）**：${label}的栖身处必须逐字就是 `$home`（实到 $holders）",
+                listOf(home),
+                holders,
+            )
+        }
+
+        // 探测器自检（朝宽那一臂）：改前那两形原文喂进同一把尺，必须各数到 1
+        assertEquals(
+            "**钉法 = 抹注释找锚点**：改前 IcsParser 那一形必须被「$WEEK_DIV_SEVEN」抓到（实到 " +
+                occurrences(PRE_FIX_WEEK_FORMULA, WEEK_DIV_SEVEN) +
+                " 处）：数不到就说明这把尺空转，上面那格 1 是假绿",
+            1,
+            occurrences(PRE_FIX_WEEK_FORMULA, WEEK_DIV_SEVEN),
+        )
+        assertEquals(
+            "**钉法 = 抹注释找锚点**：改前 IcsParser 那枚就地重写的锚点必须被「$ANCHOR_TO_MONDAY」抓到（实到 " +
+                occurrences(PRE_FIX_ANCHOR_FORMULA, ANCHOR_TO_MONDAY) + " 处）",
+            1,
+            occurrences(PRE_FIX_ANCHOR_FORMULA, ANCHOR_TO_MONDAY),
+        )
+        // 不误伤（朝窄那一臂）：HomeScreen 那枚是**另一种**减法式（按目标星期几回退，T361 的覆盖面），
+        // 它同样含 `dayOfWeek.value` 与 `.toLong()`，宽一把就会把它算成第二套锚点、本格当场假阳
+        assertEquals(
+            "**钉法 = 反套套逻辑**：`$HOME_SCREEN` 那句 `today.minusDays(((today.dayOfWeek.value - dow + 7) % 7)" +
+                ".toLong())` 必须被这把尺判 0 处（实到 " +
+                occurrences(HOME_SCREEN_DAY_OFFSET, ANCHOR_TO_MONDAY) +
+                " 处）：它不是「归到本周一」那一形，把它杀了就是替别的卡拆东西",
+            0,
+            occurrences(HOME_SCREEN_DAY_OFFSET, ANCHOR_TO_MONDAY),
+        )
     }
 
     // ---------------- 源码核对小工具（与仓内其它静态守卫同一口径）----------------
