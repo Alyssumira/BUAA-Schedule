@@ -20,14 +20,14 @@ object WeekCalculator {
      * @param today 当天日期
      * @return 1..totalWeeks；开学前返回 0；超过总周数返回 totalWeeks + 1 或 null 由调用方处理。
      */
-    fun currentWeek(semesterStart: LocalDate, today: LocalDate = LocalDate.now()): Int {
+    fun currentWeek(semesterStart: LocalDate, today: LocalDate): Int {
         val start = mondayOf(semesterStart)
         if (today.isBefore(start)) return 0
         val days = java.time.temporal.ChronoUnit.DAYS.between(start, today)
         return (days / 7).toInt() + 1
     }
 
-    fun currentWeekOrNull(semesterStart: LocalDate, totalWeeks: Int, today: LocalDate = LocalDate.now()): Int? {
+    fun currentWeekOrNull(semesterStart: LocalDate, totalWeeks: Int, today: LocalDate): Int? {
         val week = currentWeek(semesterStart, today)
         if (week <= 0 || week > totalWeeks) return null
         return week
@@ -36,6 +36,6 @@ object WeekCalculator {
     /**
      * 判断某个教学周是否为当前周。
      */
-    fun isCurrentWeek(semesterStart: LocalDate, week: Int, today: LocalDate = LocalDate.now()): Boolean =
+    fun isCurrentWeek(semesterStart: LocalDate, week: Int, today: LocalDate): Boolean =
         currentWeek(semesterStart, today) == week
 }
