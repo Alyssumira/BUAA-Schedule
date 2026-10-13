@@ -3,6 +3,14 @@ package com.buaa.schedule.domain.schedule
 import com.buaa.schedule.domain.model.mondayOfWeekAnchor
 import java.time.LocalDate
 
+/**
+ * 教学周号换算（纯 JVM 判据）：本文件**零 android / androidx import**、不读时钟、不读库 ——
+ * 「今天」一律由调用点当 `today` 参数递进来，三枚函数的 `today` 都没有默认值
+ * （默认参数位 = 求值时照样读钟的那一形，`ui/WakeUpExportGateWiringGuardTest` 的 ⑤c 那格钉的就是它）。
+ *
+ * 周号上界不在这一层：[currentWeek] 只按自然周往上数，界内/界外由 [currentWeekOrNull]
+ * 判 null、或由调用方自己夹取（见 [currentWeek] 的 @return）。
+ */
 object WeekCalculator {
 
     /**
