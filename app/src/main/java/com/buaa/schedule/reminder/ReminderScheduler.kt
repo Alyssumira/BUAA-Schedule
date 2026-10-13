@@ -389,6 +389,8 @@ object ReminderScheduler {
      *
      * [now] 一次判断只读一次时钟：选窗口、判"在不在上课"、以及喂给 [countingDownTo] 的
      * 开课毫秒全部由它派生（同 [planOnce] 的约束）。
+     * 时区同一条规矩：下面那一手换算只现读一次（改前那一次藏在换算件 `toEpochMillis` 的
+     * 默认参数位里，枚数一样，只是从尺眼下挪到了明面上）。
      */
     internal fun shouldTakeDownClassProgress(
         courses: List<Course>,
@@ -410,7 +412,10 @@ object ReminderScheduler {
             // 屏上画不到的那一周不算"正在上课"，也就没有"这一节的勿扰别动"可保护
             totalWeeks = totalWeeks,
         ) ?: return true
-        if (window.ongoingAt(now.toEpochMillis())) return false
+        // 换算件（domain/schedule/PeriodWindows.kt 里那两枚）的默认时区已摘 ⇒ 这里显式递一枚，
+        // 且只现读这一次：下面那一判吃的就是它（尺在 reminder/CountdownClockSingleReadGuardTest ⑧）。
+        val zone = ZoneId.systemDefault()
+        if (window.ongoingAt(now.toEpochMillis(zone))) return false
         return !countingDownTo(window.courseId, window.startMillis)
     }
 
@@ -439,7 +444,13 @@ object ReminderScheduler {
             LocalDateTime,
             Long,
         ) -> ReminderPlan? = ::planNextReminder,
-    ): ReminderPlan? = search(courses, semesterStart, totalWeeks, timeSlots, reminders, now, now.toEpochMillis())
+    ): ReminderPlan? {
+        // 一次重排里时钟读数只有一只（[now]），时区同理只现读一次：换算件的默认时区已摘，
+        // 这里显式递同一枚给 nowMillis。（再往下 planNextReminder / planTiedReminders 还各带一枚
+        // `zone: ZoneId = ZoneId.systemDefault()` 默认参数 —— 那是本卡范围外的同一形，登记为残账。）
+        val zone = ZoneId.systemDefault()
+        return search(courses, semesterStart, totalWeeks, timeSlots, reminders, now, now.toEpochMillis(zone))
+    }
 
     /**
      * 纯函数：挑出「下一个应触发的提醒」那一**等**的全部课程。

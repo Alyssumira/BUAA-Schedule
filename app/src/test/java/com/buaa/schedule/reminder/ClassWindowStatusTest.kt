@@ -6,6 +6,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDateTime
+import java.time.ZoneId
 
 /**
  * 「这个上课窗口相对此刻是什么状态」的唯一实现。
@@ -20,6 +21,10 @@ import java.time.LocalDateTime
  */
 class ClassWindowStatusTest {
 
+    // 换算件的默认时区已摘（domain/schedule/PeriodWindows.kt 里那两枚 zone 改成必填）：
+    // 这里显式递系统默认时区，逐字保持改前的取值，判据本身不变。
+    private val zone = ZoneId.systemDefault()
+
     private val begin = LocalDateTime.of(2026, 9, 7, 8, 0)
     private val end = LocalDateTime.of(2026, 9, 7, 9, 35)
 
@@ -28,13 +33,13 @@ class ClassWindowStatusTest {
         courseName = "高等数学",
         location = "J3-101",
         sectionText = "第1-2节",
-        startMillis = startAt.toEpochMillis(),
-        endMillis = endAt.toEpochMillis(),
+        startMillis = startAt.toEpochMillis(zone),
+        endMillis = endAt.toEpochMillis(zone),
     )
 
     private val classWindow = window(begin, end)
 
-    private fun millisAt(moment: LocalDateTime) = moment.toEpochMillis()
+    private fun millisAt(moment: LocalDateTime) = moment.toEpochMillis(zone)
 
     @Test
     fun becomesOngoingExactlyAtTheStartSecond() {

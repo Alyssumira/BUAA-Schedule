@@ -7,6 +7,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Test
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.ZoneId
 
 /**
  * 通知面的"快照文案"判据：**相对时间只允许出现在本来就有人重发的载体上**。
@@ -25,10 +26,13 @@ import java.time.LocalDateTime
  */
 class CourseReminderTextTest {
 
+    // 换算件的默认时区已摘（在册 #614 那一格）：显式递系统默认时区，取值与改前逐字一致
+    private val zone = ZoneId.systemDefault()
+
     private val classStart = LocalDateTime.of(2026, 9, 7, 8, 0)
     private val classEnd = LocalDateTime.of(2026, 9, 7, 9, 35)
-    private val startMillis = classStart.toEpochMillis()
-    private val endMillis = classEnd.toEpochMillis()
+    private val startMillis = classStart.toEpochMillis(zone)
+    private val endMillis = classEnd.toEpochMillis(zone)
 
     /**
      * 课前提醒闹钟里的那份窗口：`startMillis` 与 `endMillis` **都是上课时刻**。
@@ -47,8 +51,8 @@ class CourseReminderTextTest {
         courseName = "高等数学",
         location = location,
         sectionText = section,
-        startMillis = at.toEpochMillis(),
-        endMillis = at.toEpochMillis(),
+        startMillis = at.toEpochMillis(zone),
+        endMillis = at.toEpochMillis(zone),
         teacher = teacher,
         week = 3,
         dayOfWeek = 1,

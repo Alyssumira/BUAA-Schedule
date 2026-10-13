@@ -61,6 +61,29 @@ import org.junit.Test
  *   （判据本体一处、接线一处、`armWatchdog(` 三处、宽限量一处）+ **读形状**（判据体与那把尺都零钟）；
  * 7. [watchdogProbeRecognisesTheTwoBadShapes] —— **抹注释找锚点**：根本没有那一手 /
  *    吃签名默认值那一形 / 写在注释里那一形，三形各数到该数的值。
+ *
+ * ## 第 ⑧ 层（ai/T360，在册 #614 ＋ #613 的闹钟链那一半）：**时区**也按"一次渲染一枚"记账
+ *
+ * 前面七层数的是**钟**（`LocalDateTime.now()` / `System.currentTimeMillis()`）。#614 报的是同一条约束的
+ * 另一半：`domain/schedule/PeriodWindows.kt` 文件头写着「时间一律由参数注入，不读系统时钟」，
+ * 而同文件那两枚墙钟毫秒 ↔ LocalDateTime 换算件各带一枚 `zone: ZoneId = ZoneId.systemDefault()` ——
+ * 默认参数位每次求值都现读一次时区。上一张卡已经把同一形在册钉成**假修法**
+ * （`ui/WakeUpExportGateWiringGuardTest` 的 ⑤c：把读钟挪进签名默认值，只数函数体的尺从它眼下走过去），
+ * 所以这里不认"挪个位置"当收口，只认摘掉。摘完的账（三手）：
+ * 8. [theConversionKernelItselfReadsNoClock] —— **数出现次数（抹注释）**：换算件那枚文件里
+ *    `ZoneId.systemDefault(` / `LocalDateTime.now(` / `System.currentTimeMillis(` / `Instant.now` 各 0 处，
+ *    病灶形 0 枚、必填形逐字节各在；另有一手反套套逻辑 —— 那句承诺在**含注释原文**里恰 1 处（0 处＝没人认领）；
+ * 9. [everyCallSiteReadsTheZoneAtMostOncePerRun] —— **读形状**（balancedBlock 取体）：三枚吃换算的函数
+ *    （`rescheduleWindows`、`shouldTakeDownClassProgress`、`planOnce`）体里时区各恰一枚，
+ *    `planNextClassWindow` 体内那一枚也在格里（卡面裁它"改成实话"而不是"改签名"，因为它的两枚读者
+ *    在白名单外），外加一手全 main 册子（`toEpochMillis` 的 import 恰 2 枚）；
+ * 10. [zoneRulerRecognisesTheThreeShapes] —— **抹注释找锚点**：病灶原文那一形必须数到 1（摘之前它就是那个数）、
+ *     摘完却在内联现读那一形必须数到 2（对照"恰一枚"）、写在 KDoc 里那一形抹完必须 0。
+ *
+ * 为什么这一层落在本文件而不新建守卫：本文件就是"同一次渲染只读一次钟"那把在册尺，
+ * 时区只是同一句话的另一半；而且本文件已经带着这一族抹注释助手
+ * （`withoutComments` / `occurrences` / `balancedBlock`），复用它们不新增助手 ⇒
+ * 不动 `CommentStrippingHelperShapeGuardTest` 钉死的族内枚数。
  */
 class CountdownClockSingleReadGuardTest {
 
@@ -458,6 +481,159 @@ class CountdownClockSingleReadGuardTest {
         )
     }
 
+    // ─────────────── ⑧ 换算件不读时区，读时区的调用点每次只读一枚（T360，在册 #614 ＋ #613 闹钟链那一半） ───────────────
+
+    /**
+     * 第 ① 到第 ⑦ 层钉的是"**钟**"（`LocalDateTime.now()` / `System.currentTimeMillis()`）那本账。
+     * 这一层把同一口径延到"**时区**"：墙钟毫秒 ↔ LocalDateTime 那两枚换算件（`domain/schedule/PeriodWindows.kt`）
+     * 改前各自带一枚 `zone: ZoneId = ZoneId.systemDefault()` 默认参数 —— 默认参数位求值时照样在读，
+     * 而它把同一次重排的换算拆成了"每调用一次现读一枚"，还叫同文件 :30 那句「不读系统时钟」变成假话。
+     * 甲（摘默认参数）落地后：换算件自己零读，时区在调用点显式递，且**每个调用点每次只读一枚**。
+     *
+     * 钉法四样各按本格说的这一种：
+     * 1. **数出现次数（抹注释）** —— 换算件那枚文件里 `ZoneId.systemDefault(` 0 处、必填形逐字节 2 枚；
+     *    另有一手反套套逻辑：那句承诺在**含注释原文**里恰好 1 处（0 处就是没人认领这格纯度）；
+     * 2. **读形状**（balancedBlock 取体）—— 三枚吃换算的函数体里时区各恰一枚，
+     *    `planNextClassWindow` 那一枚也在格里（它体内的读取没被签名化，卡面裁的是把它改成实话，
+     *    所以它钉的是"只此一枚"，不是"零枚"）；
+     * 3. **抹注释找锚点**（探测器自检，第 ④⑦ 层同一族）—— 病灶那一形、写在 KDoc 里那一形、
+     *    两手各现读一枚那一形，三形各数到该数的值；
+     * 4. **逐字节** —— 摘完之后两枚换算件的签名原文（默认参数位一写回来就掉数）。
+     */
+    @Test
+    fun theConversionKernelItselfReadsNoClock() {
+        val raw = readMainSource(CONVERSION_FILE)
+        val code = withoutComments(raw)
+
+        for (needle in listOf("ZoneId.systemDefault(", "LocalDateTime.now(", "System.currentTimeMillis(", "Instant.now")) {
+            assertEquals(
+                "**钉法 = 数出现次数（抹注释）**：$CONVERSION_FILE 的代码里「$needle」必须 0 处 —— 文件头那句" +
+                    "「时间一律由参数注入，不读系统时钟」说的就是它自己。改前打脸它的正是本卡摘掉的那两枚默认参数" +
+                    "（默认参数位求值时照样读，只数函数体的尺从它眼下走得过去 = 在册守卫点名的那枚假修法）。实到 " +
+                    occurrences(code, needle) + " 处",
+                0,
+                occurrences(code, needle),
+            )
+        }
+        // 病灶形自己也得数得着（尺不许是瞎的），并且摘完必须是 0
+        assertEquals(
+            "**钉法 = 数出现次数（抹注释）**：病灶形「$DEFAULTED_ZONE_PARAM」在本文件代码里必须 0 处，实到 " +
+                occurrences(code, DEFAULTED_ZONE_PARAM) + " 处 —— 把默认值加回来这一手就红",
+            0,
+            occurrences(code, DEFAULTED_ZONE_PARAM),
+        )
+        // 反套套逻辑：那句承诺在注释里有人认领（含注释原文恰 1 处；2 处就是长出了两把尺）
+        assertEquals(
+            "**钉法 = 数出现次数（含注释原文）**：$CONVERSION_FILE 里那句「$NO_CLOCK_PROMISE」必须恰好 1 处，实到 " +
+                occurrences(raw, NO_CLOCK_PROMISE) + " 处：0 处 = 上面那串 0 没人认领；2 处 = 同一句承诺写了两遍",
+            1,
+            occurrences(raw, NO_CLOCK_PROMISE),
+        )
+        // 摘完之后的必填形（逐字节）：两枚换算件各一枚，写回默认值就当场掉数
+        assertEquals(
+            "**钉法 = 逐字节**：`$TO_EPOCH_SIGNATURE` 必须还在（实到 " +
+                occurrences(code, TO_EPOCH_SIGNATURE) + " 枚）",
+            1,
+            occurrences(code, TO_EPOCH_SIGNATURE),
+        )
+        assertEquals(
+            "**钉法 = 逐字节 + 数出现次数**：必填的 `zone: ZoneId,` 在本文件恰 1 枚（epochMillisToLocalDateTime " +
+                "那枚多行签名），加上面单行签名那一枚共 2 枚换算件；实到 " + occurrences(code, REQUIRED_ZONE_PARAM) + " 枚",
+            1,
+            occurrences(code, REQUIRED_ZONE_PARAM),
+        )
+    }
+
+    @Test
+    fun everyCallSiteReadsTheZoneAtMostOncePerRun() {
+        val progress = withoutComments(readMainSource(PROGRESS_FILE))
+        val scheduler = withoutComments(readMainSource(REMINDER_SCHEDULER_FILE))
+
+        // 三枚吃换算件的函数体：时区各只许现读一枚（改前两枚调用点各吃一枚默认值 = 两枚）
+        val reschedule = balancedBlock(progress, "fun rescheduleWindows(")
+        assertEquals(
+            "**钉法 = 读形状（取体不数整份文件）**：rescheduleWindows 整次重排只许现读一枚时区 —— " +
+                "选窗口之后的两手换算（判\"课还没开始\"、判\"这一节正在上\"）吃同一枚 `zone`。" +
+                "改前是两手各吃一次换算件的默认值（两枚），摘默认参数若写成内联现读就会退回两枚。实到 " +
+                occurrences(reschedule, ZONE_READ) + " 处",
+            1,
+            occurrences(reschedule, ZONE_READ),
+        )
+        // 参照物：planNextClassWindow 体内那一枚是本卡裁"改成实话"而非"改签名"的那一枚
+        // （它的两枚读者 LiveClassResyncer 与 WidgetCommon 都在白名单外）—— 只许一枚，长第二枚就红
+        val planner = balancedBlock(progress, "fun planNextClassWindow(")
+        assertEquals(
+            "**钉法 = 读形状**：planNextClassWindow 体内「$ZONE_READ」恰一枚（它的 KDoc 现在念的是实话："
+                + "可单测但不纯，因为这一枚在）。0 处 = 它被签名化收口了，本层与它同文件那段说明要一起重钉；"
+                + "2 处 = 同一次规划读了两只时区。实到 " + occurrences(planner, ZONE_READ) + " 处",
+            1,
+            occurrences(planner, ZONE_READ),
+        )
+        for ((signature, label) in listOf(
+            "internal fun shouldTakeDownClassProgress(" to "勿扰撤销那判",
+            "internal fun planOnce(" to "一轮重排的那次全量搜索",
+        )) {
+            val body = balancedBlock(scheduler, signature)
+            assertEquals(
+                "**钉法 = 读形状**：$label（$signature）体里「$ZONE_READ」恰一枚，换算那一手吃的就是它。实到 " +
+                    occurrences(body, ZONE_READ) + " 处",
+                1,
+                occurrences(body, ZONE_READ),
+            )
+        }
+        // 换算件在 main 侧的读者只有这两枚文件（新增一枚读者 = 新增一处显式递时区的义务，回来重钉本层）
+        assertEquals(
+            "**钉法 = 数出现次数（全 main 册子）**：`import com.buaa.schedule.domain.schedule.toEpochMillis` " +
+                "在 main 恰 2 枚（ClassProgressScheduler 与 ReminderScheduler）。实到 " +
+                mainOccurrences("import com.buaa.schedule.domain.schedule.toEpochMillis") + " 枚",
+            2,
+            mainOccurrences("import com.buaa.schedule.domain.schedule.toEpochMillis"),
+        )
+    }
+
+    /**
+     * 探测器自检（第 ⑧ 层那三把数拼错就永远数到 0 永远绿）。三形各喂一遍：
+     * - **朝松（病灶原文）**：改前那一行逐字喂进来，默认参数那一形必须数到 1；
+     * - **朝宽（两手各现读一枚）**：把"换算件被摘、调用点没 hoist"那一形喂进来，
+     *   时区读数必须数到 2 —— 与上面那句「恰一枚」互为对照物；
+     * - **朝窄（写在 KDoc 里）**：同一形只出现在注释里，抹完必须 0 处（本仓约定：散文只许当认领，
+     *   不许当证据）。
+     */
+    @Test
+    fun zoneRulerRecognisesTheThreeShapes() {
+        val preFixLine = "fun LocalDateTime.toEpochMillis(zone: ZoneId = ZoneId.systemDefault()): Long ="
+        assertEquals(
+            "尺必须抓得出改前那一形（默认参数位现读时区；实到 " +
+                occurrences(preFixLine, DEFAULTED_ZONE_PARAM) + " 处）",
+            1,
+            occurrences(preFixLine, DEFAULTED_ZONE_PARAM),
+        )
+
+        val twoInlineReads = "        if (window.startsAfter(now.toEpochMillis(ZoneId.systemDefault())) &&\n" +
+            "            classOngoing = window.ongoingAt(now.toEpochMillis(ZoneId.systemDefault())),"
+        assertEquals(
+            "摘掉默认值却在内联现读 = 同一次重排两只时区：这一形必须数到 2（实到 " +
+                occurrences(twoInlineReads, ZONE_READ) + " 处）—— 上面那句「恰一枚」的对照物",
+            2,
+            occurrences(twoInlineReads, ZONE_READ),
+        )
+
+        val quotedInKDoc = """
+            /**
+             * 旧形状登记：`fun LocalDateTime.toEpochMillis(zone: ZoneId = ZoneId.systemDefault())`
+             * 这一形今天不该在换算件上出现。
+             */
+            fun noop() = Unit
+        """.trimIndent()
+        assertEquals(
+            "注释里逐字引用的那一形不许进代码账：原文里在（实到 " +
+                occurrences(quotedInKDoc, DEFAULTED_ZONE_PARAM) + " 处），抹完必须 0 处（实到 " +
+                occurrences(withoutComments(quotedInKDoc), DEFAULTED_ZONE_PARAM) + " 处）",
+            0,
+            occurrences(withoutComments(quotedInKDoc), DEFAULTED_ZONE_PARAM),
+        )
+    }
+
     // ---------------- 源码核对小工具（与本仓守卫同一套写法）----------------
 
     /**
@@ -620,13 +796,21 @@ class CountdownClockSingleReadGuardTest {
         const val CLOCK_LOCAL_DATE_TIME = "LocalDateTime.now()"
         const val PLAN_OWNERSHIP_READ = "ownsCountdownTo(window.courseId, window.startMillis)"
         const val TWO_CLOCK_SHAPE = "isCountingDownTo(window.courseId, window.startMillis)"
-        const val PLAN_TIME_JUDGEMENT = "window.startsAfter(now.toEpochMillis())"
+        const val PLAN_TIME_JUDGEMENT = "window.startsAfter(now.toEpochMillis(zone))"
         const val CLASS_START_CALL = "ReminderNotifications.classStartOf(window),"
         const val SEAM_WIRING = "countingDownTo = ReminderNotifications::ownsCountdownTo"
 
         /** #603 那一跳的两枚实参（逐字节钉）：期限走唯一的宽限尺、状态吃那只已经注入的钟 */
         const val WATCHDOG_FRESH_ARG = "freshDeadlineMillis = ClassProgressDnd.deadlineOfEnd(window.endMillis),"
-        const val WATCHDOG_ONGOING_ARG = "classOngoing = window.ongoingAt(now.toEpochMillis()),"
+        const val WATCHDOG_ONGOING_ARG = "classOngoing = window.ongoingAt(now.toEpochMillis(zone)),"
+
+        /** T360 第 ⑧ 层：换算件（墙钟毫秒 ↔ LocalDateTime）自己的纯度与调用点的时区枚数 */
+        const val CONVERSION_FILE = "com/buaa/schedule/domain/schedule/PeriodWindows.kt"
+        const val ZONE_READ = "ZoneId.systemDefault("
+        const val DEFAULTED_ZONE_PARAM = "zone: ZoneId = ZoneId.systemDefault"
+        const val REQUIRED_ZONE_PARAM = "zone: ZoneId,"
+        const val TO_EPOCH_SIGNATURE = "fun LocalDateTime.toEpochMillis(zone: ZoneId): Long ="
+        const val NO_CLOCK_PROMISE = "时间一律由参数注入，不读系统时钟"
 
         const val TWO_ARGUMENT_DECLARATION =
             "fun isCountingDownTo(courseId: Long, classStartMillis: Long): Boolean ="

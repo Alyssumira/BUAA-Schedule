@@ -106,7 +106,10 @@ class ReminderRescheduleRoundTest {
 
         // "这一段还没开始"与"触发时刻过了没有"两个判据必须读同一只钟
         assertEquals(now, seenNow)
-        assertEquals(now.toEpochMillis(), seenMillis)
+        // seenMillis 是生产那一侧算出来的：planOnce 现读的是**系统默认时区**（换算件的默认值已摘，
+        // 它现在显式递自己那枚）。这里必须按同一枚时区换算，本文件那枚 Asia/Shanghai 的 `zone`
+        // 只喂给下面 search 缝里的排程判据 —— 拿它比 seenMillis 就把断言押在 CI 机的默认时区上了。
+        assertEquals(now.toEpochMillis(ZoneId.systemDefault()), seenMillis)
     }
 
     /**

@@ -36,8 +36,9 @@ import java.time.temporal.ChronoUnit
  * ## 兜底口径（三份实现里挑一份，其余两处向它对齐）
  * 段末下课时间取段内**最后一个有配置的节**；一个都没有时按
  * [DEFAULT_CLASS_MINUTES] 兜底成"一节 45 分钟"。缺**上课**时间的段直接跳过 ——
- * 兜底成 08:00 会凭空造出一节早上 8 点的课（这条在闹钟链上踩过，注释仍留在
- * `ClassProgressScheduler`）。
+ * 兜底成 08:00 会凭空造出一节早上 8 点的课（这条在闹钟链上踩过；那条纪律的注释真身在
+ * `reminder/ReminderScheduler.kt` 里 nextOccurrence 的 KDoc —— 改前这一句把它指到了
+ * `ClassProgressScheduler`，那个文件里只剩一句讲「08:00→18:15 整窗罩住白天」的别事）。
  */
 object PeriodWindows {
 
@@ -191,19 +192,22 @@ fun snapshotRedeadlineMillis(shownMinutes: Long, toMillis: Long): Long =
     if (shownMinutes <= 0L) toMillis
     else toMillis - (shownMinutes - 1L) * PeriodWindows.MINUTE_MILLIS
 
-// ---- 墙钟毫秒 ↔ LocalDateTime：唯一一份换算 ----
-// 闹钟排程要的是 epoch 毫秒，窗口算法要的是 LocalDateTime。此前两处各自 `ZoneId.systemDefault()`
-// 现算，于是同一次渲染/同一次重排里会读两次时钟；两次之间正好跨过节次边界时，
-// "此刻正在上第几节"与"离下一节还有多久"就会各说各话。
+// ---- 墙钟毫秒 ↔ LocalDateTime：闹钟/提醒那条排铃链上的换算件 ----
+// 说清楚它管多大一片：这两枚函数是**这条链**（ClassProgressScheduler 排双铃、ReminderScheduler 排
+// 课前提醒）唯一的换算落点；上面那段「此前两处各自现算时区」的历史账在它们这里已经收掉。
+// 全仓另有旁路若干处（日历同步、组件、界面与明日预告那些文件里仍各写各的 atZone/ofEpochMilli），
+// 那是台账 #613 登记的在册残账 —— 本卡按卡面边界一枚都不动，所以这句不许再念成「全仓唯一一份换算」。
+// 两枚件的时区**一律必填、不给默认值**：给了默认值就等于在本文件「不读系统时钟」那句承诺上
+// 留一个自己打脸的口（同一形已被在册守卫钉成假修法：挪进默认参数位照样在读，只是躲开只数函数体的尺）。
 
-/** [LocalDateTime] → epoch 毫秒 */
-fun LocalDateTime.toEpochMillis(zone: ZoneId = ZoneId.systemDefault()): Long =
+/** [LocalDateTime] → epoch 毫秒。[zone] 由调用点递进来，本文件不读时区也不读钟 */
+fun LocalDateTime.toEpochMillis(zone: ZoneId): Long =
     atZone(zone).toInstant().toEpochMilli()
 
 /** epoch 毫秒 → [LocalDateTime]；<=0 是"这一端时刻缺失"的哨兵，返回 null 而不是 1970 年 */
 fun epochMillisToLocalDateTime(
     millis: Long,
-    zone: ZoneId = ZoneId.systemDefault(),
+    zone: ZoneId,
 ): LocalDateTime? = if (millis <= 0L) null else runCatching {
     java.time.Instant.ofEpochMilli(millis).atZone(zone).toLocalDateTime()
 }.getOrNull()

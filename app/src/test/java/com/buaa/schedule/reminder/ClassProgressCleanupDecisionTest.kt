@@ -476,7 +476,7 @@ class ClassProgressCleanupDecisionTest {
         }
         assertTrue(
             "判据没有把同一个 now 换算成毫秒交给 ongoingAt（选窗口与判在不在上课必须同源）：\n$body",
-            body.contains("now.toEpochMillis()"),
+            body.contains("now.toEpochMillis(zone)"),
         )
         // 「正在上课」与「在不在数倒计时」的口径都不许在这里重写一遍：窗口的开课毫秒
         // 只许作为实参喂给注入的倒计时判据，一次都不许出现在比较式里

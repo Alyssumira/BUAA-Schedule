@@ -235,7 +235,14 @@ object ClassProgressScheduler {
      *
      * 注意包含**正在上课**的那一次：此前只找 `now` 之后的开始时间，
      * 于是"上课进行中"会跳到再下一节，与本类下课铃撤销本次通知的口径不一致。
-     * 纯函数，可单测。
+     *
+     * 可单测（时间由 [now] 注入），但它**不是纯函数**：窗口算完要落成墙钟毫秒，
+     * 那一手吃的是函数体内现读的那一枚 `ZoneId.systemDefault()`（整枚函数只读这一次）。
+     * 改前这里写着「纯函数，可单测。」—— 在册 #613 点名的就是这句与那次读取自相矛盾。
+     * 摘掉这次读取要动本枚函数的签名，而它的读者有两枚在白名单外
+     * （`reminder/LiveClassResyncer.kt` 与 `widget/WidgetCommon.kt` 那两枚「下一节课」），
+     * 所以卡面裁的是把这句改成实话、把那一次读取钉成"恰一枚"（尺在
+     * `reminder/CountdownClockSingleReadGuardTest` 第 ⑧ 层），不是在这里加参数。
      *
      * @param totalWeeks 学期总周数，喂给 [TermWeekGate.isInTermWeek]：**`reminder/` 目录下每一枚
      *   调用点都必须显式递它**（课堂铃链 `rescheduleWindows`、勿扰判据
@@ -368,6 +375,11 @@ object ClassProgressScheduler {
         // 整次重排只读一次时钟：下面既要拿它选窗口、又要拿它判"课还没开始"，
         // 两次各读各的就会在跨过节次边界的那一秒选出上一节、却按下下一节的清理分支。
         val now = LocalDateTime.now()
+        // 时区同一条规矩：也只读一次，喂给下面两手换算（判"课还没开始"、判"这一节正在上"）。
+        // 改前这两手各吃换算件签名的默认值 ⇒ 一次重排现读两回时区；换算件的默认值已摘
+        // （domain/schedule/PeriodWindows.kt 里那两枚 zone 现在必填，文件头「不读系统时钟」那句
+        // 从此对它自己成立），时区就必须在调用点显式递 —— 递两次就是本行白写一遍。
+        val zone = ZoneId.systemDefault()
         val window = planNextClassWindow(
             courses = courses,
             semesterStart = semesterStart,
@@ -379,7 +391,7 @@ object ClassProgressScheduler {
             cancelAll(context)
             return true
         }
-        if (window.startsAfter(now.toEpochMillis()) &&
+        if (window.startsAfter(now.toEpochMillis(zone)) &&
             // 课前倒计时挂的就是这节即将到来的课（同一通知 id）。
             // 此前这里无条件把"课还没开始"当成下课铃被吞的遗留收干净，
             // ReminderReceiver 自己触发的重排会在倒计时下发后一秒内把它拆掉 ——
@@ -391,7 +403,7 @@ object ClassProgressScheduler {
             // "一次判断两只钟"—— 两次读数之间隔着上面那轮全量窗口搜索（毫秒到几十毫秒级），
             // 跨秒那一瞬两处会先掉个儿：注入的 now 说还没开始、真钟说已开始 ⇒ 守卫当场失效，
             // 当场拆掉的恰恰是"这一节正要开始、勿扰正要生效"的那一秒。
-            // 时间判没有丢，它归上面那句 startsAfter(now.toEpochMillis())。
+            // 时间判没有丢，它归上面那句 startsAfter(now.toEpochMillis(zone))。
             !ReminderNotifications.ownsCountdownTo(window.courseId, window.startMillis)
         ) {
             CourseFluidService.stop(context)
@@ -412,7 +424,7 @@ object ClassProgressScheduler {
         // reminder/CountdownClockSingleReadGuardTest 第 ① 层）。
         ClassProgressDnd.alignWatchdogToNewFrame(
             context,
-            classOngoing = window.ongoingAt(now.toEpochMillis()),
+            classOngoing = window.ongoingAt(now.toEpochMillis(zone)),
             freshDeadlineMillis = ClassProgressDnd.deadlineOfEnd(window.endMillis),
         )
         return schedule(context, window)
