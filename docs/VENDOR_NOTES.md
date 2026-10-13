@@ -202,7 +202,7 @@
     **本轮再修（17:08）**：chip 必须保持**纯文本、无 span、尽量短**（SleepDown 的取证是
     长文案会让倒计时在岛上渲染失败），故统一为 `chipCountdownLabel()` 的「N分钟」，
     自检固定「自检中」。
-  - **岛上出现约 1–2 秒一次的 remove→add 抖动**（O，非缺陷）：同窗口内同期在岛的
+  - **岛上出现约 1–2 秒一次的 remove→add 抖动**（O，非缺陷）**【订正（T355 后补 · 本条判 (A)、原句一字不抹）**：句中那半句「`postSelfTest` 全仓只有一个点击入口」是**代码自述**、不是那天机上读到的东西，而它今天不成立 —— 那个符号全仓零命中（复算 `grep -rn 'postSelfTest' app/` ⇒ 0 行；`grep -rl 'SelfTest\|selfTest' app/src/main --include=*.kt` ⇒ 0 枚文件，连 `IslandDiagnostics` 里当年那枚 `lastSelfTestVerdict` 也一并没了），设置页那枚「发一条」自检入口连同符号一起被拆走；它括注的那枚行号（同一枚 SettingsScreen 文件的裸 `:1297`）今天写的是提醒方式分段控件的 `selectedIndex =`（复算 `awk 'NR==1297' app/src/main/java/com/buaa/schedule/ui/settings/SettingsScreen.kt`）。⇒ 本条观察照 (A) 留着，那天那条「不是我们重复 `notify()`」的判定不重开；但今天再看见同款抖动，这半句不能当今天的尺，得按现存代码重新取证】**：同窗口内同期在岛的
     `com.qoder.mobile.cn` 的 key 也有 133 次同类事件，而 `postSelfTest` 全仓只有一个
     点击入口（`SettingsScreen.kt:1297`）。判定为 HyperOS 自己按秒刷 `TimerTextEffectView`
     时重建视图，不是我们重复 `notify()`；若将来发现真课表也跟着闪，再回头核这条。
