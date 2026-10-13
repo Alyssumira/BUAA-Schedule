@@ -51,7 +51,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.rememberCoroutineScope
 import com.buaa.schedule.BuildConfig
 import com.buaa.schedule.core.designsystem.DesignTokens
 import com.buaa.schedule.core.designsystem.GlassSurface
@@ -60,6 +59,7 @@ import com.buaa.schedule.core.designsystem.LocalSemanticColors
 import com.buaa.schedule.core.designsystem.LocalSemanticPlate
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.data.import.BuaaInPageFetcher
+import com.buaa.schedule.data.import.BuaaImportJob
 import com.buaa.schedule.data.import.BuaaSemesterStart
 import com.buaa.schedule.data.import.redactUrl
 import com.buaa.schedule.data.import.resolveBuaaSemesterStart
@@ -98,162 +98,66 @@ fun BuaaLoginScreen(
     val context = LocalContext.current
     val termCode by viewModel.buaaTermCode.collectAsState()
     // 登录完成后在 WebView 页面内抓取课表（byxt 凭证无法外带，见 BuaaInPageFetcher）
+    // 平台那一枚的合法载体是进程内 holders（BuaaWebSession / 本卡的 BuaaImportJob），
+    // **不许**改 rememberSaveable：WebView 不可快照，塞进 savedInstanceState 是错的（在册 #412 的证伪档①）。
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
-    var fetchState by remember { mutableStateOf<String?>(null) }
+    // 六枚**在飞事实**（fetchState / fetchWeek / fetchTotal / fetchStarted / fetchCancelled / importPrepared）
+    // 的载体是进程内 holder `data/import/BuaaImportJob`，不再是组合 —— 判据在
+    // `domain/importing/FetchJobCarrierPolicy`：在飞事实的载体寿命必须 ≥ 作业寿命。
     // 抓取进度的分子分母单独留成数值：换文案只是眨眼，有分数才画得出确定性进度条。
     // 19 周逐周请求在网络差时要跑几十秒，用户需要一个"还在走"的证据（M5）
-    var fetchWeek by remember { mutableIntStateOf(0) }
-    var fetchTotal by remember { mutableIntStateOf(0) }
-    var fetchStarted by remember { mutableStateOf(false) }
-    var fetchCancelled by remember { mutableStateOf(false) }
-    // 抓取结果已交给导入预览、正等页面跳转：保留底部状态卡，
-    // 别让「WebView 已被收走 + fetchState 已清空」把这一页留成一块空白。
-    var importPrepared by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    LaunchedEffect(webViewRef, fetchStarted) {
-        val web = webViewRef ?: return@LaunchedEffect
-        if (!fetchStarted) return@LaunchedEffect
-        importPrepared = false
-        // 登录成功 → byxt 页面已就绪，页面上下文 fetch 拉课表（原生栈复刻不出凭证 → 401，
-        // 唯一可靠路径是 WebView 页面内 fetch，见 BuaaInPageFetcher）
-        val fetcher = com.buaa.schedule.data.import.BuaaInPageFetcher
-        // R5 F-39：SSO 回跳途中文档可能还停在 sso 域，此时页面内请求打不到教务接口。
-        // 注入脚本已钉死绝对 origin，这里只做提示，避免把「没登录」报成「网络差」。
-        // T302③（在册 #515）：改前这一行是 `web.url.orEmpty().startsWith(BYXT_ORIGIN)` —— **少一枚尾斜杠**，
-        // 于是 `https://byxt.buaa.edu.cn.evil.com/` 与 `https://byxt.buaa.edu.cn@evil.com/` 都能过这道闸门，
-        // "教务系统页面尚未就绪"那句就在外人文档上说了谎（⓪ 实测：裸前缀对这两枚全部命中）。
-        // 现在问 domain/url 那枚内核：它逐段比 scheme/host/port，整段不等就是 NotEduHost，没有前缀可蹭。
-        if (eduDocumentVerdict(web.url) != EduDocument.OnEduOrigin) {
-            fetchState = null
-            viewModel.showMessage("教务系统页面尚未就绪，请稍后重试", isError = true)
-            com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
-            onBack()
-            return@LaunchedEffect
-        }
-        fetchState = "正在获取学年学期列表..."
-        // 新一轮从 0 开始：否则「重新获取」会先闪一下上一轮的 N/N 满格
-        fetchWeek = 0
-        fetchTotal = 0
-        val terms = fetcher.fetchTermList(web)
-        if (terms.isEmpty()) {
-            fetchState = null
-            viewModel.showMessage("获取学期列表失败，请稍后重试", isError = true)
-            com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
-            onBack()
-        } else {
-            val selectedTerm = terms.firstOrNull { it.selected }?.code
-                ?: terms.first().code
-            fetchState = "正在获取学期信息（学期 $selectedTerm）..."
-            val info = fetcher.fetchSemesterInfo(web, selectedTerm)
-            val totalWeeks = info.totalWeeks
-            // ── 闸门：开学日认不出来就当场返回，**一行课表都不抓**（T196②）──
-            //
-            // 改前的次序是「抓完二十周再判开学日」：`resolveBuaaSemesterStart` 长在
-            // `fetchSemesterCourses` 之后的 `else` 支里，于是开学日取不到时用户已经等完整轮逐周抓取
-            // （每周一到两次页面内 fetch），最后听到一句「已保留原课表未做改动，请稍后重试」——
-            // 那一轮空转正好是 20 周，因为失败档的 `totalWeeks` 是硬写的 20。
-            // 对照本仓另一路：静默刷新 `data/import/BuaaWebSession.kt` 的 `refreshSchedule` 次序本来就是
-            // 对的（拿信息 → 立刻判 → 才逐周抓），首次导入这一路照它改。
-            //
-            // **两枚失败档的优先级在这里定死**（次序即成本次序，不是语义次序）：
-            // 1. 先判开学日 `resolveBuaaSemesterStart` —— 便宜的一枚：它只吃已经拿到手的那枚串，
-            //    零页面内 fetch，认不出来整轮逐周抓取根本不必开始；
-            // 2. 再判 `outcome.failedWeeks` 与 `outcome.courses.isEmpty()` —— 贵的那两枚：
-            //    它们要有逐周抓取的结果才谈得上，而那句「抓取未完成：第 … 周失败」的措辞一个字没改。
-            //    判据本体不许在这里复刻，两枚都只读 `SemesterFetchOutcome` 的现成结论。
-            //
-            // 开学日只认 getTermWeeks 第 1 周的 startDate（过 mondayOf 归一成周一）。
-            // **认不出来就不动学期**，口径对齐静默刷新那一路（BuaaWebSession.refreshSchedule
-            // 的 `?: existingStartDate ?: return Result.failure(...)`；首次导入手里没有
-            // existingStartDate，所以那一等落到"报错 + 返回"）。
-            // 旧形状是 `runCatching { mondayOf(LocalDate.parse(rawStart)) }.getOrDefault(rawStart)`
-            // —— 兜底值正是 parse 失败的那枚原串，坏日期因此原样进 Semester.startDate 并落库，
-            // 此后 Semester.startLocalDate 恒 null（周课表空网格、提醒链 cancelAll、
-            // 组件停在"假期中"、设置页念出并回写这串垃圾）。也不许换成"今天所在周的周一"：
-            // 提前导入下一学期时那是一枚猜出来的日期，整表日期与周次编号一起偏。
-            // 判据本体在 resolveBuaaSemesterStart（纯 JVM、零时钟），这里只取它的结论。
-            when (val start = resolveBuaaSemesterStart(info.firstWeekMonday)) {
-                is BuaaSemesterStart.Undetermined -> {
-                    // 提前返回也要先把登录 WebView 保住再报错（T196② 复核过的那一行）：
-                    // retain 原先只长在逐周抓取之后，闸门搬到抓取之前以后，这一支要是照旧不掉 retain，
-                    // 用户返回时 AndroidView.onRelease 会当场 destroy 那枚 WebView —— 已经登录的 byxt
-                    // 会话跟着丢，下一次导入得重新走 SSO。形状与这一趟另两枚提前返回（页面没就绪 /
-                    // 学期列表为空）一致：retain → 清状态 → 报错 → onBack。
-                    // **不**把 retain 提前到 fetchSemesterInfo 之前：那会在页面内请求还在跑的时候
-                    // 把 WebView 转挂隐藏宿主，改的是抓取链的宿主而不是这一格的次序。
-                    com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
-                    fetchState = null
-                    // 文案按两维分档（T196④）：**有没有拿到一枚串**（start.raw）与
-                    // **页面到底答没答、答成什么样**（info.missingReason，五档早返回一一对应）。
-                    // 映射本体是纯函数 semesterStartFailureMessage（同包、零 android、照
-                    // ImportCompletionCopy 的先例），那七句由 SemesterStartFailureCopyTest 表驱动钉住；
-                    // 这里只递两枚现成的事实，不在页面里再判一次日期、也不在这里长第二本原因表。
-                    viewModel.showMessage(
-                        semesterStartFailureMessage(raw = start.raw, reason = info.missingReason),
-                        isError = true,
-                    )
-                    onBack()
-                }
-                is BuaaSemesterStart.Resolved -> {
-                    fetchState = "正在逐周获取课表（学期 $selectedTerm）..."
-                    val outcome = fetcher.fetchSemesterCourses(
-                        webView = web,
-                        termCode = selectedTerm,
-                        totalWeeks = totalWeeks,
-                        onProgress = { week, total ->
-                            fetchWeek = week
-                            fetchTotal = total
-                            fetchState = "正在获取课表：第 $week/$total 周..."
-                        },
-                    )
-                    // 保留登录 WebView（byxt 页面上下文，供刷新课表复用）
-                    com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
-                    fetchState = null
-                    when {
-                        // 有周次没抓到：宁可让用户重试，也不能用不完整的结果覆盖既有课表
-                        // （覆盖导入是"先清空该学期再写入"，没抓到的周次会被连带删掉）
-                        outcome.failedWeeks.isNotEmpty() -> {
-                            viewModel.showMessage(
-                                "抓取未完成：第 ${outcome.failedWeeks.joinToString("、")} 周失败，" +
-                                    "已保留原课表未做改动，请稍后重试",
-                                isError = true,
-                            )
-                            onBack()
-                        }
-                        outcome.courses.isEmpty() -> {
-                            viewModel.showMessage("教务系统未返回该学期课程（可能未选课）", isError = true)
-                            onBack()
-                        }
-                        else -> {
-                            val termName = terms.firstOrNull { it.code == selectedTerm }?.name ?: selectedTerm
-                            val semester = com.buaa.schedule.domain.model.Semester(
-                                termCode = selectedTerm,
-                                termName = termName,
-                                startDate = start.monday.toString(),
-                                totalWeeks = totalWeeks,
-                            )
-                            // 进入导入预览（不直接落库），随后跳到导入页让用户确认。
-                            // 用 Outcome 版解析：缺教师/按整学期兜底的条数要作为警告带进预览，
-                            // 此前走 parseArrangedList 把警告整个丢掉了
-                            val parsed = com.buaa.schedule.data.import.BuaaScheduleParser
-                                .parseArrangedListOutcome(outcome.courses, selectedTerm, totalWeeks)
-                            val parseWarnings = buildList {
-                                if (parsed.fallbackWeekCourses > 0) {
-                                    add("${parsed.fallbackWeekCourses} 条课程缺少教师/周次信息，已按整学期展示，请核对")
-                                }
-                                if (parsed.unknownTeacherCourses > 0 && parsed.fallbackWeekCourses == 0) {
-                                    add("${parsed.unknownTeacherCourses} 条课程缺少教师信息")
-                                }
-                            }
-                            viewModel.previewBuaaCourses(semester, parsed.courses, parseWarnings)
-                            importPrepared = true
-                            onImportPrepared()
-                        }
-                    }
-                }
+    // 改前这一族是七枚 `by remember { mutable… }`：转屏（Manifest 零枚 configChanges ⇒ 必重建 Activity）
+    // 一次就把它们清零，连带把下面那枚 effect 的键清掉 ⇒ 作业被取消、进度退回 0/N、结论句消失。
+    val importProgress = BuaaImportJob.progress.collectAsState().value
+    val fetchState = importProgress.fetchState
+    val fetchWeek = importProgress.fetchWeek
+    val fetchTotal = importProgress.fetchTotal
+    val fetchStarted = importProgress.fetchStarted
+    val fetchCancelled = importProgress.fetchCancelled
+    val importPrepared = importProgress.importPrepared
+    val leavePage = onBack
+    val openPreviewPage = onImportPrepared
+    // 页面出口每次组合挂一枚上来：转屏后旧那一枚被摘掉、新那一枚接上，
+    // 作业只朝**当前活着**的那一枚说话（否则那句结论会写进一具已经作废的组合里）。
+    val host = remember(context, viewModel, leavePage, openPreviewPage) {
+        object : BuaaImportJob.Host {
+            override val pageContext: Context get() = context
+            override fun showMessage(message: String, isError: Boolean) {
+                viewModel.showMessage(message, isError = isError)
+            }
+
+            override suspend fun previewBuaaCourses(
+                semester: com.buaa.schedule.domain.model.Semester,
+                courses: List<com.buaa.schedule.domain.model.Course>,
+                warnings: List<String>,
+            ) {
+                viewModel.previewBuaaCourses(semester, courses, warnings)
+            }
+
+            override fun onBack() {
+                leavePage()
+            }
+
+            override fun onImportPrepared() {
+                openPreviewPage()
             }
         }
     }
+    LaunchedEffect(webViewRef) {
+        // ⚠️ 键表里只有平台，没有 fetchStarted：把扳机放进键表 = 「键被清零 ⇒ effect 重跑 ⇒ 从头再抓」，
+        //    那是把几十秒作废后重新开始，不叫恢复（在册 #412 的证伪档②，同 MainActivity 那句「不许按
+        //    courseMissing 重启」一个道理）。点不点火由 holder 的闸门按 FetchJobCarrierPolicy 裁。
+        webViewRef?.let { BuaaImportJob.attachPlatform(it) }
+    }
+    DisposableEffect(host) {
+        // 作业本体的**文本**长在页面层这一枚文件里（闸门次序、两句失败措辞一字未改），
+        // 作用域交给 holder —— 这一行就是「被组合销毁」与「不被组合销毁」的分界。
+        BuaaImportJob.attach(host) { web, progress -> fetchBuaaScheduleInPage(web, progress) }
+        onDispose { BuaaImportJob.detach(host) }
+    }
+    // 作业本体见文件末尾的 fetchBuaaScheduleInPage：文本留在这枚文件（四枚在册守卫的针因此一字不改），
+    // 跑的作用域在 data/import/BuaaImportJob —— 改前它是组合上那一格
+    // `LaunchedEffect(webViewRef, fetchStarted) { … }`，键被清零就是把整轮作废。
     var loadProgress by remember { mutableIntStateOf(0) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var loadStarted by remember { mutableStateOf(false) }
@@ -269,7 +173,13 @@ fun BuaaLoginScreen(
 
     // 状态条文案：抓取进度 / 加载失败 / 已取消 —— 集中到底部浮动卡，不挤压 WebView。
     // （此前这些提示放在 WebView 上方，把网页压掉一小截，页面显得"尺寸不适配"）
-    val fetchStateText = fetchState
+    // 转屏打断过一轮时这句进度话必须说实话：这一轮是从头再取的，不是刚才那一轮的延续
+    // —— 作业与读数同住 holder，可页面脚下那枚 WebView 随旧组合一起销毁了（续跑要 startWeek，在册残账）。
+    val fetchStateText = if (importProgress.interruptedByRebuild && fetchState != null) {
+        "$fetchState\n（刚才转屏打断了一轮，这一轮从头再取；登录会话仍在，不必重登）"
+    } else {
+        fetchState
+    }
     val loadErrorText = loadError
     val statusText = when {
         importPrepared -> "课程已获取完成，正在打开导入预览…"
@@ -367,9 +277,9 @@ fun BuaaLoginScreen(
                                     onMainFrameError = { loadError = it },
                                     onRenderGone = { retryToken++ },
                                     onLoggedIn = {
-                                        if (!fetchStarted) {
-                                            fetchStarted = true
-                                        }
+                                        // 要求抓取 = 把 fetchStarted 落进 holder（点不点火由闸门裁：
+                                        // 已经在飞的那一轮绝不重跑，平台换枚才再点一次）
+                                        BuaaImportJob.askToFetch()
                                     },
                                 ).also { webViewRef = it },
                                 FrameLayout.LayoutParams(
@@ -453,10 +363,9 @@ fun BuaaLoginScreen(
                         if (showCancelAction) {
                             Button(
                                 onClick = {
-                                    // fetchStarted 是本 LaunchedEffect 的 key：置 false 即取消抓取协程
-                                    fetchStarted = false
-                                    fetchCancelled = true
-                                    fetchState = null
+                                    // 取消的是 holder 上那一支作业（改前它靠把 fetchStarted 折成 false
+                                    // 让组合里那枚 effect 的键变化来取消 —— 同一只手在转屏时也这么杀了作业）
+                                    BuaaImportJob.cancel()
                                     webViewRef?.let { web ->
                                         com.buaa.schedule.data.import.BuaaWebSession.retain(
                                             web,
@@ -477,14 +386,176 @@ fun BuaaLoginScreen(
                         if (fetchCancelled) {
                             Button(
                                 onClick = {
-                                    fetchCancelled = false
-                                    fetchStarted = true
+                                    // 取消档收回 + 重新要求抓：要不要真的点火仍由 holder 的闸门裁
+                                    BuaaImportJob.askAgain()
                                 },
                                 modifier = cardAction,
                             ) { Text("重新获取") }
                             TextButton(onClick = { safeBack() }, modifier = cardAction) {
                                 Text("返回")
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 抓取作业本体（T336② 从组合里那一格 `LaunchedEffect(webViewRef, fetchStarted)` 原样搬出来）。
+ *
+ * 搬走的只有**长在哪枚作用域上**：文本留在这枚文件（闸门次序、retain 的位置、两句失败措辞、开学日那一档
+ * 分档一字未改 ⇒ `SemesterGateOrderingGuardTest` / `BuaaSemesterStartWiringGuardTest` /
+ * `SemesterInfoReasonGuardTest` / `EduWebOriginSingleRulerGuardTest` 四枚在册守卫的针仍落在同一枚文件里），
+ * 而跑的作用是 [BuaaImportJob] 的进程级 scope —— 组合销毁不再等于作业销毁。
+ *
+ * 读数经 [BuaaImportJob.ProgressWriter]（那六枚在飞事实的载体就是它），出口经 [BuaaImportJob.Host]
+ * （每次组合重新挂上来的那一枚 ⇒ 转屏后那句结论不会写进一具已经作废的组合）。
+ * 方法名 `showMessage` / `previewBuaaCourses` / `onBack` / `onImportPrepared` 与页面原来直接调的那几枚逐字同名，
+ * 所以这一段的正文只少了 `viewModel.` 那一层前缀。
+ */
+private suspend fun BuaaImportJob.Host.fetchBuaaScheduleInPage(
+    web: WebView,
+    progress: BuaaImportJob.ProgressWriter,
+) {
+    val context = pageContext
+    with(progress) {
+        importPrepared = false
+        // 登录成功 → byxt 页面已就绪，页面上下文 fetch 拉课表（原生栈复刻不出凭证 → 401，
+        // 唯一可靠路径是 WebView 页面内 fetch，见 BuaaInPageFetcher）
+        val fetcher = com.buaa.schedule.data.import.BuaaInPageFetcher
+        // R5 F-39：SSO 回跳途中文档可能还停在 sso 域，此时页面内请求打不到教务接口。
+        // 注入脚本已钉死绝对 origin，这里只做提示，避免把「没登录」报成「网络差」。
+        // T302③（在册 #515）：改前这一行是 `web.url.orEmpty().startsWith(BYXT_ORIGIN)` —— **少一枚尾斜杠**，
+        // 于是 `https://byxt.buaa.edu.cn.evil.com/` 与 `https://byxt.buaa.edu.cn@evil.com/` 都能过这道闸门，
+        // "教务系统页面尚未就绪"那句就在外人文档上说了谎（⓪ 实测：裸前缀对这两枚全部命中）。
+        // 现在问 domain/url 那枚内核：它逐段比 scheme/host/port，整段不等就是 NotEduHost，没有前缀可蹭。
+        if (eduDocumentVerdict(web.url) != EduDocument.OnEduOrigin) {
+            fetchState = null
+            showMessage("教务系统页面尚未就绪，请稍后重试", isError = true)
+            com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
+            onBack()
+            return
+        }
+        fetchState = "正在获取学年学期列表..."
+        // 新一轮从 0 开始：否则「重新获取」会先闪一下上一轮的 N/N 满格
+        fetchWeek = 0
+        fetchTotal = 0
+        val terms = fetcher.fetchTermList(web)
+        if (terms.isEmpty()) {
+            fetchState = null
+            showMessage("获取学期列表失败，请稍后重试", isError = true)
+            com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
+            onBack()
+        } else {
+            val selectedTerm = terms.firstOrNull { it.selected }?.code
+                ?: terms.first().code
+            fetchState = "正在获取学期信息（学期 $selectedTerm）..."
+            val info = fetcher.fetchSemesterInfo(web, selectedTerm)
+            val totalWeeks = info.totalWeeks
+            // ── 闸门：开学日认不出来就当场返回，**一行课表都不抓**（T196②）──
+            //
+            // 改前的次序是「抓完二十周再判开学日」：`resolveBuaaSemesterStart` 长在
+            // `fetchSemesterCourses` 之后的 `else` 支里，于是开学日取不到时用户已经等完整轮逐周抓取
+            // （每周一到两次页面内 fetch），最后听到一句「已保留原课表未做改动，请稍后重试」——
+            // 那一轮空转正好是 20 周，因为失败档的 `totalWeeks` 是硬写的 20。
+            // 对照本仓另一路：静默刷新 `data/import/BuaaWebSession.kt` 的 `refreshSchedule` 次序本来就是
+            // 对的（拿信息 → 立刻判 → 才逐周抓），首次导入这一路照它改。
+            //
+            // **两枚失败档的优先级在这里定死**（次序即成本次序，不是语义次序）：
+            // 1. 先判开学日 `resolveBuaaSemesterStart` —— 便宜的一枚：它只吃已经拿到手的那枚串，
+            //    零页面内 fetch，认不出来整轮逐周抓取根本不必开始；
+            // 2. 再判 `outcome.failedWeeks` 与 `outcome.courses.isEmpty()` —— 贵的那两枚：
+            //    它们要有逐周抓取的结果才谈得上，而那句「抓取未完成：第 … 周失败」的措辞一个字没改。
+            //    判据本体不许在这里复刻，两枚都只读 `SemesterFetchOutcome` 的现成结论。
+            //
+            // 开学日只认 getTermWeeks 第 1 周的 startDate（过 mondayOf 归一成周一）。
+            // **认不出来就不动学期**，口径对齐静默刷新那一路（BuaaWebSession.refreshSchedule
+            // 的 `?: existingStartDate ?: return Result.failure(...)`；首次导入手里没有
+            // existingStartDate，所以那一等落到"报错 + 返回"）。
+            // 旧形状是 `runCatching { mondayOf(LocalDate.parse(rawStart)) }.getOrDefault(rawStart)`
+            // —— 兜底值正是 parse 失败的那枚原串，坏日期因此原样进 Semester.startDate 并落库，
+            // 此后 Semester.startLocalDate 恒 null（周课表空网格、提醒链 cancelAll、
+            // 组件停在"假期中"、设置页念出并回写这串垃圾）。也不许换成"今天所在周的周一"：
+            // 提前导入下一学期时那是一枚猜出来的日期，整表日期与周次编号一起偏。
+            // 判据本体在 resolveBuaaSemesterStart（纯 JVM、零时钟），这里只取它的结论。
+            when (val start = resolveBuaaSemesterStart(info.firstWeekMonday)) {
+                is BuaaSemesterStart.Undetermined -> {
+                    // 提前返回也要先把登录 WebView 保住再报错（T196② 复核过的那一行）：
+                    // retain 原先只长在逐周抓取之后，闸门搬到抓取之前以后，这一支要是照旧不掉 retain，
+                    // 用户返回时 AndroidView.onRelease 会当场 destroy 那枚 WebView —— 已经登录的 byxt
+                    // 会话跟着丢，下一次导入得重新走 SSO。形状与这一趟另两枚提前返回（页面没就绪 /
+                    // 学期列表为空）一致：retain → 清状态 → 报错 → onBack。
+                    // **不**把 retain 提前到 fetchSemesterInfo 之前：那会在页面内请求还在跑的时候
+                    // 把 WebView 转挂隐藏宿主，改的是抓取链的宿主而不是这一格的次序。
+                    com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
+                    fetchState = null
+                    // 文案按两维分档（T196④）：**有没有拿到一枚串**（start.raw）与
+                    // **页面到底答没答、答成什么样**（info.missingReason，五档早返回一一对应）。
+                    // 映射本体是纯函数 semesterStartFailureMessage（同包、零 android、照
+                    // ImportCompletionCopy 的先例），那七句由 SemesterStartFailureCopyTest 表驱动钉住；
+                    // 这里只递两枚现成的事实，不在页面里再判一次日期、也不在这里长第二本原因表。
+                    showMessage(
+                        semesterStartFailureMessage(raw = start.raw, reason = info.missingReason),
+                        isError = true,
+                    )
+                    onBack()
+                }
+                is BuaaSemesterStart.Resolved -> {
+                    fetchState = "正在逐周获取课表（学期 $selectedTerm）..."
+                    val outcome = fetcher.fetchSemesterCourses(
+                        webView = web,
+                        termCode = selectedTerm,
+                        totalWeeks = totalWeeks,
+                        onProgress = { week, total ->
+                            fetchWeek = week
+                            fetchTotal = total
+                            fetchState = "正在获取课表：第 $week/$total 周..."
+                        },
+                    )
+                    // 保留登录 WebView（byxt 页面上下文，供刷新课表复用）
+                    com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
+                    fetchState = null
+                    when {
+                        // 有周次没抓到：宁可让用户重试，也不能用不完整的结果覆盖既有课表
+                        // （覆盖导入是"先清空该学期再写入"，没抓到的周次会被连带删掉）
+                        outcome.failedWeeks.isNotEmpty() -> {
+                            showMessage(
+                                "抓取未完成：第 ${outcome.failedWeeks.joinToString("、")} 周失败，" +
+                                    "已保留原课表未做改动，请稍后重试",
+                                isError = true,
+                            )
+                            onBack()
+                        }
+                        outcome.courses.isEmpty() -> {
+                            showMessage("教务系统未返回该学期课程（可能未选课）", isError = true)
+                            onBack()
+                        }
+                        else -> {
+                            val termName = terms.firstOrNull { it.code == selectedTerm }?.name ?: selectedTerm
+                            val semester = com.buaa.schedule.domain.model.Semester(
+                                termCode = selectedTerm,
+                                termName = termName,
+                                startDate = start.monday.toString(),
+                                totalWeeks = totalWeeks,
+                            )
+                            // 进入导入预览（不直接落库），随后跳到导入页让用户确认。
+                            // 用 Outcome 版解析：缺教师/按整学期兜底的条数要作为警告带进预览，
+                            // 此前走 parseArrangedList 把警告整个丢掉了
+                            val parsed = com.buaa.schedule.data.import.BuaaScheduleParser
+                                .parseArrangedListOutcome(outcome.courses, selectedTerm, totalWeeks)
+                            val parseWarnings = buildList {
+                                if (parsed.fallbackWeekCourses > 0) {
+                                    add("${parsed.fallbackWeekCourses} 条课程缺少教师/周次信息，已按整学期展示，请核对")
+                                }
+                                if (parsed.unknownTeacherCourses > 0 && parsed.fallbackWeekCourses == 0) {
+                                    add("${parsed.unknownTeacherCourses} 条课程缺少教师信息")
+                                }
+                            }
+                            previewBuaaCourses(semester, parsed.courses, parseWarnings)
+                            importPrepared = true
+                            onImportPrepared()
                         }
                     }
                 }
@@ -704,6 +775,9 @@ private fun createSsoWebView(
 private fun FrameLayout.releaseChildren() {
     for (i in 0 until childCount) {
         (getChildAt(i) as? WebView)?.let { web ->
+            // 作业脚下那一枚平台正随组合销毁：先给 holder 留痕（由它按 FetchJobCarrierPolicy 的闸门
+            // 决定「换到新平台再点一次」），再走原来的 stopLoading + destroy —— 销毁次序一字未改。
+            com.buaa.schedule.data.import.BuaaImportJob.detachPlatform(web)
             web.stopLoading()
             web.destroy()
         }
