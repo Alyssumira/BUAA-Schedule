@@ -43,9 +43,15 @@ import org.junit.Test
  * （`ScheduleExporters.kt` 的 `LocalDate.now()` 三处，落点见本卡第 ① 步对生产码的修，改后由 ⑤ 的读钟一手与 ⑤c 一起钉）。名册自己也被钉住
  * （枚数与顺序），因为"摘掉一枚名册条目"这件事不会自己报红。
  *
+ * T358 把名册从 3 枚扩到 4 枚，第四枚是 `WeekCalculator.kt`（在册 #604 收窄那一半）。它入册的连带义务
+ * 是同批落地的两条：① 摘掉 `currentWeek` / `currentWeekOrNull` / `isCurrentWeek` 三枚 `today` 的
+ * `LocalDate.now()` 默认值（否则 ⑤ 的 FORBIDDEN_READS 那一手对它报 3）；② 它的 KDoc 里写恰好一句
+ * 「零 android / androidx import」承诺（否则 ⑤ 末尾那手反套套逻辑读到 0 处当场红）。
+ * ⚠️ 名册的字面表在两处：⑤ 的期望表与 ⑤b 的「不误伤」那一手 —— 只改一处就是本仓点名的"两把尺"形状。
+ *
  * 纯度那半改前只认 import 行（取 `import ` 开头的行再看含不含 android）⇒ 全限定写法从它眼下走得过去，
  * 盘上现量一枚：`ConflictDetector.kt` 的 `@androidx.compose.runtime.Immutable`（该文件零 import 行）。
- * 现在两把尺一起走，并由 ⑤b 那格反证尺自己是活的：全限定那一形必须报、在册三枚文件与注释散文必须不报。
+ * 现在两把尺一起走，并由 ⑤b 那格反证尺自己是活的：全限定那一形必须报、在册四枚文件与注释散文必须不报。
  * 第二把尺读的是抹完注释的代码，**字符串字面量保留** ⇒ 判据文件里写 android 族字面量也会报，
  * 那是本尺点名的误报面（写死在 ⑤b 的第四手里，改尺的人必须连着改那一手）。
  *
@@ -83,6 +89,7 @@ class WakeUpExportGateWiringGuardTest {
         const val GATE = "com/buaa/schedule/domain/schedule/WakeUpExportGate.kt"
         const val TEXT = "com/buaa/schedule/domain/schedule/WakeUpJsonText.kt"
         const val EXPORTERS = "com/buaa/schedule/domain/schedule/ScheduleExporters.kt"
+        const val WEEK_CALCULATOR = "com/buaa/schedule/domain/schedule/WeekCalculator.kt"
         const val COPY = "com/buaa/schedule/ui/settings/WakeUpExportCopy.kt"
         const val VIEW_MODEL = "com/buaa/schedule/ui/ScheduleViewModel.kt"
 
@@ -392,19 +399,20 @@ class WakeUpExportGateWiringGuardTest {
     // ─────────────── ⑤ 内核自身的形状与纯度 ───────────────
 
     @Test
-    fun `内核是表驱动的 且三枚判据文件都不读库不读钟`() {
+    fun `内核是表驱动的 且四枚判据文件都不读库不读钟`() {
         val files = listOf(
             Triple("JSON 文本层", TEXT, source(TEXT)),
             Triple("落盘闸门", GATE, source(GATE)),
             Triple("导出器本体", EXPORTERS, source(EXPORTERS)),
+            Triple("周号计算器", WEEK_CALCULATOR, source(WEEK_CALCULATOR)),
         )
         // 名册本身也要钉住（T350 审计报的就是这一格）：本守卫在 ④ 那格早就读 $EXPORTERS
         // （转义落点），却从没把它的读钟与纯度账收进这一格 ⇒ 名册少一枚，那颗文件就没人管。
         assertEquals(
-            "**钉法 = 数出现次数**：纯度名册必须恰是这 3 枚且顺序如此（实到 " + files.map { it.second } + "）：" +
+            "**钉法 = 数出现次数**：纯度名册必须恰是这 4 枚且顺序如此（实到 " + files.map { it.second } + "）：" +
                 "摘掉任一枚 = 那颗文件的体内读钟与全限定写法当场没人拦，而它不会自己报红 —— " +
                 "名册是这格唯一的输入面，所以输入面自己也得有一格判据",
-            listOf(TEXT, GATE, EXPORTERS),
+            listOf(TEXT, GATE, EXPORTERS, WEEK_CALCULATOR),
             files.map { it.second },
         )
         for ((label, path, raw) in files) {
@@ -493,8 +501,8 @@ class WakeUpExportGateWiringGuardTest {
             1,
             androidOffenders(importLine).size,
         )
-        // 不误伤（朝宽的靶）：三枚在册文件今天两把尺都得交回空表
-        for (path in listOf(TEXT, GATE, EXPORTERS)) {
+        // 不误伤（朝宽的靶）：四枚在册文件今天两把尺都得交回空表
+        for (path in listOf(TEXT, GATE, EXPORTERS, WEEK_CALCULATOR)) {
             assertEquals(
                 "$path 里的 android 族字样只许长在「零 android / androidx import」那句承诺里（没有点号），" +
                     "两把尺都不许把它算成出场。实到：" + androidOffenders(source(path)),
