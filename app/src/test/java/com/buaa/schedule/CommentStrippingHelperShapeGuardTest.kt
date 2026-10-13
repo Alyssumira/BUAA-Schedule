@@ -84,18 +84,35 @@ import org.junit.Test
  * - 两棵树族内总枚数（② 那格的覆盖面尺）：135 → **136** = test 135 + main 1（EXPECTED_MAIN_DECLS 一字未动）
  * 代价照旧在册：再新增一枚合法助手 ⇒ 这几枚各 +1、④ 的差值那格不动。
  *
+ * ## 再一次重钉（T338①）：并行卡各自钉的跨树尺都不代表合并态，本卡把四枚钉回合并对象上
+ * 合并对象 = `gate/21` tip（cb41583，同时含 T335 与 T336 两支）。T336④ 那枚写死值是**在它自己那棵树上**量的，
+ * 那棵树里只有它那枚新守卫（`ui/importing/BuaaImportJobCarrierWiringGuardTest`）；可 `gate/21` 上还并进了
+ * T335④ 的新守卫 `ui/editor/ExternalCourseGoneWiringGuardTest`，它**也带一枚同族助手**
+ * （该文件盘面声明 1 枚、物化 1 枚，是真助手不是散文 ⇒ 逐枚文件对账仍零枚不平）。于是合并态比 T336 钉的值各高 1 枚。
+ * 本卡 ⓪ 步在合并对象上实跑仪器（`--rerun-tasks`，报错消息念的「实到 ／ 写死」）：
+ * - 声明：135 → **136**（守卫侧与裸原文两栏同数，④ 的「声明那把两栏恒等」全树 614 枚当场成立）
+ * - 物化：守卫侧（抹注释后）135 → **136**；裸原文 136 → **137**；两栏差仍恰 1 枚，来源仍是 ⓪ 步在册的那枚散文文件
+ *   （`ui/editor/CourseEditorRedFieldGateWiringGuardTest.kt` 的一句 KDoc 逐字引用了正形，六格读数一字未动）
+ * - 两棵树族内总枚数（② 那格的覆盖面尺）：136 → **137** = test 136 + main 1（EXPECTED_MAIN_DECLS 一字未动，main 那把没漂）
+ * 三棵树把这件事说干净了：基点 a28098b 的 134/135 → T336 自己那棵树 135/136 → 合并态 gate/21（含 T335 那枚新守卫）136/137。
+ * **差的来源不是谁量错了，是「并行卡各自的新守卫文件各带一枚助手，跨树绝对尺在合并态必然高于任何单支」** ——
+ * 下一枚并行卡再带一枚助手，这几枚又各 +1；照 ⓪ 步跑仪器读合并对象，别照上一枚卡的卡面读。
+ * 代价照旧在册：④ 的差值那格（两栏各差 1 枚）不受这类新增影响，它只认那一枚在册散文文件。
+ *
  * ## 重测这两把尺（两栏都要念，别只念一栏）
  * 写在这里的命令一律把括号写成方括号类，所以它们一个字都不匹配本文件自己的针 —— 这条理由从 T323 起
  * 才真正要紧：④ 那格数的是抹注释**之前**的原文，「反正注释会被抹掉」不再替这些命令免检。
  * 拼针的那几枚常量（TO_ARRAY 那一族）用「拆开来写」同一招自免，散文把自己数进册子的路只有这一条。
- * - 声明：`grep -rhoE 'val out = [A-Za-z_][A-Za-z0-9_]*[.]toCharArray[(][)]' app/src/test | wc -l` → T336 起 135
+ * - 声明：`grep -rhoE 'val out = [A-Za-z_][A-Za-z0-9_]*[.]toCharArray[(][)]' app/src/test | wc -l` → 合并态（gate/21，T338 重钉）136
+ *   （T336 单支那棵树上曾是 135 —— 跨树尺，别拿单支读数当合并态）。
  *   这一把两栏同数：族内声明写不进注释（针要的是整行尾巴上那记数组化调用），散文顶不动它。
- * - 物化：`grep -rhoE 'String[(]out[)]' app/src/test | wc -l` → 裸原文 136 ／ 守卫侧（抹注释后）135
+ * - 物化：`grep -rhoE 'String[(]out[)]' app/src/test | wc -l` → 裸原文 137 ／ 守卫侧（抹注释后）136
  *   写死值钉的是守卫侧那一栏；两栏差的那 1 枚由 ④ 单独钉成在册量，不是「已知误差」。
  * 对不上就照上面两节的拆解重钉，别把判据改成 >=。
  *
  * ## 覆盖面边界（如实写，别当它没有）
- * - ② 的函数体是「声明处往后花括号配平到收尾」切出来的。基点树 133 枚（合并态 134 枚，T336 起 135 枚）全部切得干净：
+ * - ② 的函数体是「声明处往后花括号配平到收尾」切出来的。基点树 133 枚（T332 的合并态 134 枚、T336 单支那棵树 135 枚、
+ *   本卡 gate/21 的合并态 136 枚，数的都是 `app/src/test` 那一棵）全部切得干净：
  *   T323 本趟实跑念的是配平 134 ／ 退回「声明处到下一枚声明」那一档 0 枚；万一将来某枚函数体里有不配平的
  *   括号混进字符串，那一枚会退回较宽的窗口并计入消息里的「退回档」枚数 —— 判据不变，窄在哪一眼看得见。
  * - 物化写法只认 `String` 包 out 这一种字面量。`out.concatToString()` 之类在盘面上是 0 枚，
@@ -140,7 +157,7 @@ class CommentStrippingHelperShapeGuardTest {
 
     /**
      * ② 形状尺：每一枚族内声明做到它所在函数的收尾，那段里必须物化、不得出现被禁写法。
-     * 本格同时断言切到的枚数等于两棵树的族内总枚数（T336 起 136），一枚都没切到时不会当成绿。
+     * 本格同时断言切到的枚数等于两棵树的族内总枚数（合并态 gate/21 是 137，T338 重钉），一枚都没切到时不会当成绿。
      */
     @Test
     fun everyCharArrayHelperMaterializesItsArrayInsteadOfCallingToStringOnIt() {
@@ -254,7 +271,7 @@ class CommentStrippingHelperShapeGuardTest {
      *      注释里第二次提到的那一枚被抹掉了；把它的真返回改成「out 的 toString」，病形抹注释栏立刻从 0 变 1，
      *      本格与 ① ② 一起红，注释洗不掉代码。
      *   丙 两栏合流＝假绿（绝对值反向）：test 那棵树的裸原文栏必须仍比抹注释栏高，等号一成立就说明
-     *      要么那句散文被删了（删证据不是修尺），要么扫描器改成了读原文 —— 后者会让 ① 交回 136 对 135。
+     *      要么那句散文被删了（删证据不是修尺），要么扫描器改成了读原文 —— 后者会让 ① 交回 137 对 136。
      * 另加两把全树定理尺：族内声明那把两栏恒等（注释造不出一枚族内声明，针要的是整行尾巴上那记数组化调用），
      * 以及抹注释只会删不会造（裸原文栏恒 >= 抹注释栏；反过来说明 blankComments 在动代码）。
      * 代价（如实写，与甲档同一条）：新增一枚合法助手 ⇒ 裸原文栏与在册点名清单都要回来重钉，别改成 >=。
@@ -365,7 +382,7 @@ class CommentStrippingHelperShapeGuardTest {
     /**
      * 抹注释保行号、字符串不动：与 `WorkingTreeInputSurfaceGuardTest` 同一写法。
      * 最后那一句是本守卫自己钉着的那一档物化写法 —— 换成「out 的 toString」就是本卡点名的病，
-     * 而 ① 那格会当场念出「实到 0 枚／写死 134 枚」（W 臂量过的正是这一档）。
+     * 而 ① 那格会当场念出「实到 0 枚／写死 136 枚」（W 臂量过的正是这一档）。
      */
     private fun blankComments(src: String): String {
         val out = src.toCharArray()
@@ -569,15 +586,16 @@ private const val MAIN_ROOT = "app/src/main"
  * 口径 = 本守卫内部「抹注释之后」的那份文本，不是裸 grep。
  * 拆解：基点 13759a5 的 131 枚 ＋ T320 本守卫自己那枚助手 1 枚 ＋ T321 带进来的同族第二枚助手 1 枚
  * ＋ T332 那枚新守卫（domain/schedule/SemesterWeekCountWiringGuardTest）助手 1 枚
- * ＋ T336 那枚新守卫（ui/importing/BuaaImportJobCarrierWiringGuardTest）助手 1 枚 = 135（T323 钉的是 133、T332 钉的是 134）。
- * 裸 grep 在物化这把上念的是 136，多的那 1 枚是散文；它没被丢掉，由 ④ 那格按在册量单独钉住。
+ * ＋ T336 那枚新守卫（ui/importing/BuaaImportJobCarrierWiringGuardTest）助手 1 枚
+ * ＋ T335 那枚新守卫（ui/editor/ExternalCourseGoneWiringGuardTest）助手 1 枚 = 136（T323 钉的是 133、T332 钉的是 134）。
+ * 裸 grep 在物化这把上念的是 137，多的那 1 枚是散文；它没被丢掉，由 ④ 那格按在册量单独钉住。
  * 为什么钉守卫侧那一栏而不是裸的那一栏：写死值必须是仪器自己观测得到的数，否则是一把永远读不到
  * 自己的死尺；而绝对值要听的那件事（扫描器失明 ⇒ 实到 0）在这一栏照样当场响。见类 KDoc 的重钉记录。
  */
-private const val EXPECTED_TEST_DECLS = 135
-private const val EXPECTED_TEST_MATERIALIZATIONS = 135
+private const val EXPECTED_TEST_DECLS = 136
+private const val EXPECTED_TEST_MATERIALIZATIONS = 136
 private const val EXPECTED_MAIN_DECLS = 1
-private const val EXPECTED_ALL_HELPER_DECLS = 136
+private const val EXPECTED_ALL_HELPER_DECLS = 137
 
 /**
  * ④ 的在册散文点名：全仓唯一一枚「KDoc 里同时逐字引用了正形与病形」的文件（ai/T321 留下的证据，
@@ -592,8 +610,8 @@ private const val PROSE_FILE_STRIPPED_MATERIALIZATIONS = 1
 private const val PROSE_FILE_RAW_FORBIDDEN = 1
 private const val PROSE_FILE_STRIPPED_FORBIDDEN = 0
 
-/** ④ 的在册量：`app/src/test` 裸原文栏比抹注释栏高 1 枚（136 对 135）；两栏合流＝证据没了 */
-private const val EXPECTED_TEST_RAW_MATERIALIZATIONS = 136
+/** ④ 的在册量：`app/src/test` 裸原文栏比抹注释栏高 1 枚（137 对 136）；两栏合流＝证据没了 */
+private const val EXPECTED_TEST_RAW_MATERIALIZATIONS = 137
 
 /** 被禁写法在 `app/src/test` + `app/src/main` 的现量下限（34 + 5）：读空了才红，长了不红 */
 private const val EXPECTED_TO_STRING_SITE_FLOOR = 39
