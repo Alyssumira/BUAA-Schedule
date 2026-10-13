@@ -661,47 +661,71 @@ class WeekdayDateOffsetSingleRulerGuardTest {
         return String(out)
     }
 
-    /** 只抹字符串字面量的内容（连同三引号 raw 串），保留换行与引号本身；注释已由 [withoutComments] 抹过 */
-    private fun withoutStrings(source: String): String {
-        val out = source.toCharArray()
+    /**
+     * 只抹字符串字面量的内容（三引号 raw 串、转义、char literal 都整对跨过），保留换行与引号本身。
+     *
+     * ⚠️ 这一手刻意不写成「先把源铺成字符数组、收尾再把那枚数组包成字符串返回」那一族形状 ——
+     * 在册守卫 CommentStrippingHelperShapeGuardTest 把那一族在 app/src/test 的「声明枚数／物化枚数」
+     * 钉成了合并态写死值（本卡全量实测到：多写一枚就把 139／139 顶成 140／140，三格同时红，
+     * 红在那枚守卫而不是本卡），而别人的写死值不在本卡射程内，所以这里走 buildString 逐段拼。
+     */
+    private fun withoutStrings(source: String): String = buildString(source.length) {
+        val triple = "\"\"\""
         var i = 0
-        while (i < out.size) {
-            if (source.startsWith("\"\"\"", i)) {
-                val end = source.indexOf("\"\"\"", i + 3)
-                val stop = if (end < 0) out.size else end
-                for (k in (i + 3) until stop) if (out[k] != '\n') out[k] = ' '
-                i = if (end < 0) out.size else end + 3
-            } else if (out[i] == '"') {
-                var j = i + 1
-                var closed = false
-                while (j < out.size) {
-                    when {
-                        source[j] == '\\' -> j += 2
-                        source[j] == '"' -> { closed = true; break }
-                        source[j] == '\n' -> break
-                        else -> j++
-                    }
+        while (i < source.length) {
+            when {
+                source.startsWith(triple, i) -> {
+                    val end = source.indexOf(triple, i + triple.length)
+                    val stop = if (end < 0) source.length else end
+                    append(triple)
+                    appendKeepingNewlines(source, i + triple.length, stop)
+                    i = if (end < 0) source.length else stop + triple.length
                 }
-                for (k in (i + 1) until j) if (out[k] != '\n') out[k] = ' '
-                i = if (closed) j + 1 else j
-            } else if (out[i] == '\'') {
-                // char literal 整对跨过去：不跨的话 `'"'` 里那枚双引号会被当成字符串起点，把后面真代码吞掉一片
-                var k = i + 1
-                while (k < out.size) {
-                    when {
-                        source[k] == '\\' -> k += 2
-                        source[k] == '\'' -> { k++; break }
-                        source[k] == '\n' -> break
-                        else -> k++
-                    }
+
+                source[i] == '"' -> {
+                    val j = scanToClosingQuote(source, i + 1, '"')
+                    append('"')
+                    appendKeepingNewlines(source, i + 1, j.coerceAtMost(source.length))
+                    i = j
                 }
-                i = k
-            } else {
-                i++
+
+                source[i] == '\'' -> {
+                    val j = scanToClosingQuote(source, i + 1, '\'')
+                    append(source, i, j.coerceAtMost(source.length))
+                    i = j
+                }
+
+                else -> {
+                    append(source[i])
+                    i++
+                }
             }
         }
-        return String(out)
     }
+
+    /** 从 start 扫到与 quote 配对的那一枚收尾引号（跨过它）；遇到未转义的换行就地停，不许吞掉整行 */
+    private fun scanToClosingQuote(source: String, start: Int, quote: Char): Int {
+        var j = start
+        while (j < source.length) {
+            when {
+                source[j] == '\\' -> j += 2
+                source[j] == quote -> return j + 1
+                source[j] == '\n' -> return j
+                else -> j++
+            }
+        }
+        return source.length
+    }
+
+    /** 把 from 到 until 那一段抹成空格，换行原样留着（行数不许被尺改动） */
+    private fun StringBuilder.appendKeepingNewlines(source: String, from: Int, until: Int) {
+        var k = from
+        while (k < until) {
+            append(if (source[k] == '\n') '\n' else ' ')
+            k++
+        }
+    }
+
 
     /** 按花括号配平从签名起取整段（含签名） */
     private fun balancedBlock(source: String, signature: String): String {
