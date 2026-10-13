@@ -119,10 +119,11 @@ import org.junit.Test
  * 写在这里的命令一律把括号写成方括号类，所以它们一个字都不匹配本文件自己的针 —— 这条理由从 T323 起
  * 才真正要紧：④ 那格数的是抹注释**之前**的原文，「反正注释会被抹掉」不再替这些命令免检。
  * 拼针的那几枚常量（TO_ARRAY 那一族）用「拆开来写」同一招自免，散文把自己数进册子的路只有这一条。
- * - 声明：`grep -rhoE 'val out = [A-Za-z_][A-Za-z0-9_]*[.]toCharArray[(][)]' app/src/test | wc -l` → 合并态（gate/21，T338 重钉）136，
- *   T344② 之后本树 137（跨树尺，别拿单支读数当合并态）。
+ * - 声明：`grep -rhoE 'val out = [A-Za-z_][A-Za-z0-9_]*[.]toCharArray[(][)]' app/src/test | wc -l` → 合并态（gate/22，
+ *   T344②＋T345③＋T346① 三枚并行卡合进来之后，编排者 ⓪ 步现量）**139**（历史读数：gate/21 合并态 136、
+ *   T344 单支那棵树 137 —— 跨树尺，别拿单支读数当合并态）。
  *   这一把两栏同数：族内声明写不进注释（针要的是整行尾巴上那记数组化调用），散文顶不动它。
- * - 物化：`grep -rhoE 'String[(]out[)]' app/src/test | wc -l` → 裸原文本树 138 ／ 守卫侧（抹注释后）137
+ * - 物化：`grep -rhoE 'String[(]out[)]' app/src/test | wc -l` → 合并态（同上，现量）裸原文 **140** ／ 守卫侧（抹注释后）**139**
  *   写死值钉的是守卫侧那一栏；两栏差的那 1 枚由 ④ 单独钉成在册量，不是「已知误差」。
  * 对不上就照上面两节的拆解重钉，别把判据改成 >=。
  *
@@ -609,10 +610,10 @@ private const val MAIN_ROOT = "app/src/main"
  * 为什么钉守卫侧那一栏而不是裸的那一栏：写死值必须是仪器自己观测得到的数，否则是一把永远读不到
  * 自己的死尺；而绝对值要听的那件事（扫描器失明 ⇒ 实到 0）在这一栏照样当场响。见类 KDoc 的重钉记录。
  */
-private const val EXPECTED_TEST_DECLS = 137
-private const val EXPECTED_TEST_MATERIALIZATIONS = 137
+private const val EXPECTED_TEST_DECLS = 139
+private const val EXPECTED_TEST_MATERIALIZATIONS = 139
 private const val EXPECTED_MAIN_DECLS = 1
-private const val EXPECTED_ALL_HELPER_DECLS = 138
+private const val EXPECTED_ALL_HELPER_DECLS = 140
 
 /**
  * ④ 的在册散文点名：全仓唯一一枚「KDoc 里同时逐字引用了正形与病形」的文件（ai/T321 留下的证据，
@@ -628,7 +629,7 @@ private const val PROSE_FILE_RAW_FORBIDDEN = 1
 private const val PROSE_FILE_STRIPPED_FORBIDDEN = 0
 
 /** ④ 的在册量：`app/src/test` 裸原文栏比抹注释栏高 1 枚（138 对 137）；两栏合流＝证据没了 */
-private const val EXPECTED_TEST_RAW_MATERIALIZATIONS = 138
+private const val EXPECTED_TEST_RAW_MATERIALIZATIONS = 140
 
 /** 被禁写法在 `app/src/test` + `app/src/main` 的现量下限（34 + 5）：读空了才红，长了不红 */
 private const val EXPECTED_TO_STRING_SITE_FLOOR = 39
