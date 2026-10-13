@@ -73,8 +73,35 @@ object ScheduleExporters {
         )
         val start = startMonday.toString()
         // 这一枚数同时写进 `maxWeek`（见下面那行）⇒ 它就是这份导出件自己声明的学期上界，
-        // 周次裁剪判的必须是它，不能另找一把尺（T222，#307）
-        val totalWeeks = semester?.totalWeeks ?: CourseConstraints.MAX_TOTAL_WEEKS
+        // 周次裁剪判的必须是它，不能另找一把尺（T222，#307）。
+        //
+        // ⚠️ #602 与 #397 的交点改的就是**这一枚数的出处**（判据只有两等，第三等一概不许有）：
+        // ① 学期行**自己**说得上话（那一枚周数 > 0）⇒ 用它，裁剪也判它 —— #307 那半条一字未动；
+        // ② 说不上话（没有学期行，或那一行是 0 / 负数：那压根不是一枚周数）⇒ 用**这份文件实际
+        //    覆盖到的最晚一周**，它是从课程自己交出的周次里读出来的可观察事实，不是任何一枚常数。
+        // 改前第二等兜的是 `semester?.totalWeeks ?: CourseConstraints.MAX_TOTAL_WEEKS`（= 30）：
+        // 屏上没有任何一枚学期说过"这学期 30 周"，导出件却自己声明了它；而且这一枚**带牙齿** ——
+        // 裁剪判的就是它，于是第 31 周以后的真课次被裁进对方 App 看不见的地方（本卡 ① 步现量：
+        // 课次 1、2、35 ⇒ 交回 startWeek 1 / endWeek 2）。脏学期行那两等更直接：0 与 -5 被**原样**
+        // 写进 maxWeek，配全量 endWeek ⇒ 正撞下面那句 `endWeek > maxWeek`（现量 endWeek 3 / 12 配 maxWeek 0）。
+        // 两枚账（写进 maxWeek 的、递进裁剪的）今天仍是**同一个局部量** ⇒ 不许长成两把尺。
+        // 第二等里"界内一枚都不裁"是可证的：没有任何一枚周次能超过全体在写课程的最大周号；
+        // 而**下界那一判照样有牙齿**（第 0 周与负周次不是教学周，这一判不需要学期事实 ——
+        // SemesterWeekDates.mondayOf 对 week < 1 交回 null ⇒ isInTermWeek 答"不在学期内"）。
+        // 判不出时的安全侧在这一条链上是**原样出场**而不是不出场（[TermWeekGate.weeksInsideTerm] 的成文
+        // 口径：两枚学期事实都在手上才裁，任一枚取不到就原样交回；写出去的数据收不回来，
+        // 而"裁掉它"要说得出确证在学期外，编出来的上界说不出这一句）。
+        // 脏值答"没有上界"与 [SemesterWeekCount.readable] 同一口径，但这里**不接那枚具名读数**：
+        // 它还把上界夹到 30，会改掉那本册子差异表里「学期行 999 ⇒ 判据尺不夹上界」那一格
+        // （#395 / #404 那一族的既有口径）⇒ 逐字登记进回执「需要跨卡配合」，不在这里顺手并尺。
+        val termCeiling = semester?.totalWeeks?.takeIf { it > 0 }
+        // 第二等顶上前面的位置用这一枚：真正会写进 courses 的那些课（两档 drop 的册子已经数清了）
+        // 覆盖到的最晚一周。拿全体入参的周号来算会把"没节次所以整条不写"那些课也报进上界，
+        // 那又是一枚文件自己没展示过的数。
+        val coveredMaxWeek = courses.filter { WakeUpDropTally.wakeUpDrop(it) == null }
+            .flatMap { it.weeks }
+            .maxOrNull() ?: 0
+        val totalWeeks = termCeiling ?: coveredMaxWeek
 
         fun compact(time: String): String = time.replace(":", "") + "00"
 
@@ -100,8 +127,11 @@ object ScheduleExporters {
             // （WakeUp 按 `startDate` + `startWeek..endWeek` + `type` 推日期，学期结束后那一周照样排课），
             // 而那是离开本应用的数据，我们无从收回。
             // 判据走 [TermWeekGate.weeksInsideTerm]（与排铃两条链、冲突判定、ICS/系统日历同一枚符号），
-            // 递进去的上界就是这份导出件**自己声明**的那一枚 `maxWeek` ⇒ 没有学期行时也在判：
-            // 那一档判不出的是"这学期到底几周"，不是"这一周超出我自己写的范围"。
+            // 递进去的上界就是这份导出件**自己声明**的那一枚 `maxWeek`（上面那两枚账是同一个局部量，
+            // 不是第二把尺）：学期行说得上话 ⇒ 判的是真学期上界；说不上话 ⇒ 判的是这份文件自己覆盖到
+            // 的最晚一周，于是那一等里"界内的课次一枚都不被裁"是构造出来的事实。
+            // （#602 改前这一位在没有学期行时顶的是那枚常数 30 ⇒ 第 31 周以后的**真课次**被一枚
+            // 屏上从没出现过的数裁走，而它已经离开本应用了。）
             // ⚠️ 整门课都在学期外时（裁完交回空表）这里**照旧让它出场**，不另加一枚 `return@mapNotNull null`：
             // 那等于多出第三档"没进导出件"，要同时改 `WakeUpDropTally` 的档位与 `wakeUpExportMessage`
             // 那句报数 —— 两枚文件都不在本卡白名单里（那句的"门 / 段"措辞是 #308 的地盘）
