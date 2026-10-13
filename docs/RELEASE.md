@@ -186,9 +186,12 @@ CI 用 `BUAA_KEYSTORE_BASE64` 等环境变量传同一组值（secrets 存不了
   签到链是北航 iClass），但它 §1.3 量的是 **ML Kit 解码库本身**的体积代价 —— 与是哪一族的签到
   码无关，iClass 用的还是同一颗 `barcode-scanning`，所以那组数字仍然作数。引用时只引体积账，
   别把里面的行号 / 哈希锚点照抄到当前代码。
-- **剪枝只按 `.so` 文件名做**：`packaging.jniLibs.excludes` 里逐条列出
-  `lib/<非arm64>/libbarhopper_v3.so`。**不要**改用 `ndk.abiFilters`，也**不要**写
-  `lib/x86/**` 这类目录通配 —— 两者都会连带裁掉 `libandroidx.graphics.path.so`，
+- **剪枝只按 `.so` 文件名做**：`packaging.jniLibs.excludes` 里逐条列出**两颗**库 × 三档非 arm64 ABI
+  （`armeabi-v7a`／`x86`／`x86_64`），合起来 **6** 条 —— `lib/<非arm64>/libbarhopper_v3.so`
+  （ML Kit，主力解码引擎）与 `lib/<非arm64>/libzxingcpp_android.so`（zxing-cpp，兜底引擎，
+  **T66 起清单里是两颗**，裁法与理由同一款：按文件名点名裁，`arm64-v8a` 那一档一颗都不许动）。
+  **不要**改用 `ndk.abiFilters`，也**不要**写
+  `lib/x86/**` 这类目录通配 —— 这两种写法都会连带裁掉 `libandroidx.graphics.path.so`，
   那个 ABI 目录一旦全空，该档设备装包时命中 `INSTALL_FAILED_NO_MATCHING_ABIS`，
   **整个 App 装不上**，而不只是扫码功能不可用。
 - **MLKit 的解码库只有 arm64-v8a**，这是换取体积的代价。缺库时抛的
