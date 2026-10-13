@@ -17,7 +17,10 @@ import java.time.LocalDate
  *
  * 现在周次先过 [TermWeekGate.weeksInsideTerm]（与排铃两条链、冲突判定、ICS/系统日历同一枚符号），
  * 递进去的上界**就是这份导出件自己写出去的那一枚 `maxWeek`** ⇒ 两行不可能再互相打脸。
- * 没有学期行那一档也按它判：那一档判不出的是"这学期到底几周"，不是"这一周超出我自己写的范围"。
+ * 而这一枚上界只有两等出处（T356，#602）：学期行自己给得出就用它；给不出（没有学期行，
+ * 或那一行是 0 / 负数）就用**这份文件实际覆盖到的最晚一周** —— 改前第二等兜的是那枚常数 30，
+ * 于是"没有学期行"那一档交回的是一份自己声明「这学期 30 周」的导出件，而裁剪还判着它。
+ * 逐格的出处账在 `WakeUpMaxWeekSourceTest`（本文件只留 #307 那一族的裁剪账）。
  *
  * ⚠️ [cells] 里那几档 `expected = null` 的格子钉的是**今天还留着的那一格**：
  * 整门课都在学期外时它照旧出场。把它判成"没进导出件"要多出一档 drop，
@@ -157,30 +160,36 @@ class WakeUpExportTermTrimTest {
     }
 
     /**
-     * **没有学期行**那一档：`totalWeeks` 取不到 ⇒ 用 `CourseConstraints.MAX_TOTAL_WEEKS`，
-     * 而那一枚正是同时写进 `maxWeek` 的数 ⇒ 判的还是"这份导出件自己声明的范围"，
-     * 不是"随便猜一个学期"（台账 #236 那族 `?: 20` 造出「这学期 20 周」的账就断在这里）。
+     * **没有学期行**那一档（T356 改判，#602）：这一枚上界取不到 ⇒ 顶上来的必须是**这份文件自己覆盖到的
+     * 最晚一周**（可观察事实），而不是那枚常数 —— 改前兜的正是 `CourseConstraints.MAX_TOTAL_WEEKS`（= 30），
+     * 于是屏上没有任何一枚学期说过"这学期 30 周"，导出件却自己声明了它，且裁剪判的就是它。
+     * 名字里那句"声明的上界仍被遵守"今天**照旧成立**（写进 maxWeek 的与递进裁剪的是同一个局部量），
+     * 变的只是这一枚数从哪儿来（台账 #236 那族 `?: 20` 造出「这学期 20 周」的账也断在这一格）。
      */
     @Test
     fun withoutSemesterRowTheDeclaredCeilingIsStillHonoured() {
-        val ceiling = CourseConstraints.MAX_TOTAL_WEEKS
-        val exported = export(listOf(course(listOf(1, 2, ceiling + 5))), null)
-        assertEquals("没有学期行时 maxWeek 写的是那枚上限常数", ceiling, exported.maxWeek)
+        val exported = export(listOf(course(listOf(1, 2, 35))), null)
         assertEquals(
-            "超出自己声明的 maxWeek 的那一周照样得裁掉（没有学期行 ≠ 什么都不判）",
-            listOf(Exported.Entry(1, 2, 0)),
+            "没有学期行时 maxWeek = 这份文件覆盖到的最晚一周（35），不是那枚常数 30",
+            35,
+            exported.maxWeek,
+        )
+        assertEquals(
+            "第 31 周以后的真课次不再被一枚编出来的上界裁走（本卡 ① 步现量：改前这一格交回的是 startWeek 1 / endWeek 2）",
+            listOf(Exported.Entry(1, 35, 0)),
             exported.entries,
         )
         // ⚠️ 夹具必须是**奇偶混合**的三周（崩卡那枚代理写的是 `listOf(1, 25)`，两枚都是奇数 ⇒
         // `type` 走的是"单周"那一支 = 1，而它把期望写成 0 ⇒ 这一格当场红，与裁周次这一维无关）。
         // 期望那三格（startWeek 1 / endWeek 25 / type 0）照崩卡原文不动，改的是夹具：
-        // 这一格判的是"1..maxWeek 之内的周次一律留下"，奇偶混合才不越界到 type 那一档去。
+        // 这一格判的是"上界之内的周次一律留下"，奇偶混合才不越界到 type 那一档去。
         val insideCeiling = export(listOf(course(listOf(1, 24, 25))), null)
         assertEquals(
-            "而 1..maxWeek 之内的周次一律留下：判不出「这学期几周」时不裁界内",
+            "而上界之内的周次一律留下：判不出「这学期几周」时不裁界内（上界就是这批周号里最大那一枚 ⇒ 构造上不裁）",
             listOf(Exported.Entry(1, 25, 0)),
             insideCeiling.entries,
         )
+        assertEquals("同一份文件里 maxWeek 与 endWeek 同源（这一等里两者相等）", 25, insideCeiling.maxWeek)
     }
 
     /**
