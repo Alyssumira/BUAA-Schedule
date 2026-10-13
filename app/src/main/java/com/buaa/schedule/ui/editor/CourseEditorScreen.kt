@@ -81,7 +81,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CourseEditorScreen(
-    initialCourse: Course?,
+    initialCourse: Course?, requestedCourseId: Long,
     onSave: suspend (Course, CourseSaveOptions) -> Long?,
     onDelete: suspend (Course) -> Boolean,
     onBack: () -> Unit,
@@ -106,12 +106,12 @@ fun CourseEditorScreen(
      */
     onSaveTailReached: () -> Unit,
 ) {
-    // 草稿字段全部用 rememberSaveable：旋转/进程恢复后不丢输入
-    var name by rememberSaveable { mutableStateOf(initialCourse?.name ?: "") }
-    var teacher by rememberSaveable { mutableStateOf(initialCourse?.teacher ?: "") }
-    var location by rememberSaveable { mutableStateOf(initialCourse?.location ?: "") }
-    var campus by rememberSaveable { mutableStateOf(initialCourse?.campus ?: "") }
-    var day by rememberSaveable { mutableIntStateOf(initialCourse?.dayOfWeek ?: 1) }
+    // 下面 17 枚草稿字段逐枚带两枚键：位置实参 = 本屏请求的那门课、`key` 前缀 = 同一枚（跨转屏存活、跨课程不串；T348）
+    var name by rememberSaveable(requestedCourseId, key = "kn-$requestedCourseId") { mutableStateOf(initialCourse?.name ?: "") }
+    var teacher by rememberSaveable(requestedCourseId, key = "kt-$requestedCourseId") { mutableStateOf(initialCourse?.teacher ?: "") }
+    var location by rememberSaveable(requestedCourseId, key = "klo-$requestedCourseId") { mutableStateOf(initialCourse?.location ?: "") }
+    var campus by rememberSaveable(requestedCourseId, key = "kca-$requestedCourseId") { mutableStateOf(initialCourse?.campus ?: "") }
+    var day by rememberSaveable(requestedCourseId, key = "kd-$requestedCourseId") { mutableIntStateOf(initialCourse?.dayOfWeek ?: 1) }
     // 节次按**连续段**回填：此前用 startPeriod(min)/endPeriod(max) 初始化，于是
     // 一门 1-2 + 9-10 的课只改一下老师的名字，保存时 parsePeriods 就会把 1..10
     // 展开成连续块——非连续节次被静默拉直（P0）。
@@ -123,31 +123,31 @@ fun CourseEditorScreen(
     val initialExtraPeriods = periodDraft.extraPeriods
     // 「这门课本身就没有节次」与「用户把格子清空了」是两件事，提示分得开才不误导
     val courseHadNoPeriods = periodDraft.courseHadNoPeriods
-    var startSection by rememberSaveable { mutableStateOf(initialStartSection) }
-    var endSection by rememberSaveable { mutableStateOf(initialEndSection) }
-    var extraPeriods by rememberSaveable { mutableStateOf(initialExtraPeriods) }
-    var weeksText by rememberSaveable {
+    var startSection by rememberSaveable(requestedCourseId, key = "ks-$requestedCourseId") { mutableStateOf(initialStartSection) }
+    var endSection by rememberSaveable(requestedCourseId, key = "ke-$requestedCourseId") { mutableStateOf(initialEndSection) }
+    var extraPeriods by rememberSaveable(requestedCourseId, key = "kx-$requestedCourseId") { mutableStateOf(initialExtraPeriods) }
+    var weeksText by rememberSaveable(requestedCourseId, key = "kw-$requestedCourseId") {
         mutableStateOf(
             initialCourse?.weeks?.let { WeekParser.toDisplayString(it).removeSuffix("周") }
                 ?: "1-16"
         )
     }
-    var alias by rememberSaveable { mutableStateOf(initialCourse?.alias ?: "") }
+    var alias by rememberSaveable(requestedCourseId, key = "kal-$requestedCourseId") { mutableStateOf(initialCourse?.alias ?: "") }
     // 学分留空 = 不知道，0 = 教务明说这门课 0 学分，两者在统计页是两个说法，
     // 所以初值只在非 null 时才写成字符串（空串不能被 toDoubleOrNull 吃成 0.0）
-    var creditText by rememberSaveable {
+    var creditText by rememberSaveable(requestedCourseId, key = "kcr-$requestedCourseId") {
         mutableStateOf(initialCourse?.credit?.let { if (it % 1.0 == 0.0) it.toLong().toString() else it.toString() } ?: "")
     }
-    var colorIndex by rememberSaveable { mutableIntStateOf(initialCourse?.colorIndex ?: 0) }
-    var customColor by rememberSaveable { mutableStateOf(initialCourse?.customColorArgb) }
-    var reminderEnabled by rememberSaveable { mutableStateOf(initialReminder?.enabled ?: ReminderSetting.DEFAULT_ENABLED) }
+    var colorIndex by rememberSaveable(requestedCourseId, key = "kci-$requestedCourseId") { mutableIntStateOf(initialCourse?.colorIndex ?: 0) }
+    var customColor by rememberSaveable(requestedCourseId, key = "kcc-$requestedCourseId") { mutableStateOf(initialCourse?.customColorArgb) }
+    var reminderEnabled by rememberSaveable(requestedCourseId, key = "kre-$requestedCourseId") { mutableStateOf(initialReminder?.enabled ?: ReminderSetting.DEFAULT_ENABLED) }
     // 提前量初值 = 那一行里的值；没有那一行时**念得出默认值**（原来这里是一枚裸字面量 "10"，
     // 与 domain 那枚同源却各写各的 —— 枚数册子由 reminder/ReminderDefaultSingleSourceGuardTest 钉）
-    var advanceMinutes by rememberSaveable {
+    var advanceMinutes by rememberSaveable(requestedCourseId, key = "kam-$requestedCourseId") {
         mutableStateOf(initialReminder?.advanceMinutes?.toString() ?: ReminderSetting.DEFAULT_ADVANCE_MINUTES.toString())
     }
-    var partialWeeks by rememberSaveable { mutableStateOf(false) }
-    var applyToGroup by rememberSaveable { mutableStateOf(false) }
+    var partialWeeks by rememberSaveable(requestedCourseId, key = "kp-$requestedCourseId") { mutableStateOf(false) }
+    var applyToGroup by rememberSaveable(requestedCourseId, key = "kag-$requestedCourseId") { mutableStateOf(false) }
     var showColorPicker by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var saving by remember { mutableStateOf(false) }

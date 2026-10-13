@@ -796,9 +796,9 @@ private fun UpdateDialogHost(context: Context) {
  *   `NavBackStackEntryState`（它的构造里逐枚调 `entry.saveState(bundle)`），那份 Bundle 随
  *   `rememberSaveable` 落进实例状态；转屏后新 controller `restoreState` 时按同一枚 entry id 回灌 ⇒
  *   旗还在。
- * - **按 entry 隔离**：`navigate("editor/{courseId}")` 每次都新建一枚 entry + 新建一份 handle ⇒
- *   不会把「上一 entry 删过课」这面旗带到下一 entry（换到 `rememberSaveable` 之外另立一枚全局旗
- *   就会犯这个错）。
+ * - **按 entry 隔离只覆盖"新建 entry"那一路（T348 订正）**：栈顶不是编辑器时 `navigate("editor/{courseId}")`
+ *   才新建一枚 entry + 新建一份 handle ⇒ 不带上一 entry 的旗；栈顶已是编辑器时单顶**复用同一枚 entry**
+ *   （navigation 2.8.5 反汇编：只比 destination.id、不比 args，替换条目连 id 与 savedState 一起复用）⇒ 旗跟着复用。
  */
 private const val DELETE_REQUESTED_BY_THIS_ENTRY = "com.buaa.schedule.editor.DELETE_REQUESTED_BY_THIS_ENTRY"
 
@@ -979,7 +979,7 @@ private fun AppNavHost(
             // `remember` 的那枚 MutableState 长在 composition 上、**不跨配置变化**：「删除已在途」这
             // 一刻转屏 ⇒ 值丢回 false ⇒ 下面那枚协程三条条件里少掉旗标这一条 ⇒ 不弹栈 ⇒ 用户停在
             // 一页渲染成空的编辑器上、要再按一次返回。换到 savedStateHandle 之后同一面旗转屏存活，
-            // 而它仍然只属于这一条 entry（每次 navigate("editor/{id}") 新建一枚 entry + 一份 handle）。
+            // 而它仍然只属于这一条 entry（栈顶已是编辑器时 navigate("editor/{id}") 复用同一枚 entry + 同一份 handle ⇒ 旗跟着复用，T348）。
             val deleteRequestedByThisEntry by backStackEntry.savedStateHandle
                 .getStateFlow(DELETE_REQUESTED_BY_THIS_ENTRY, false)
                 .collectAsState()
@@ -1068,7 +1068,7 @@ private fun AppNavHost(
             CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
                 if (!uiState.loading && !courseMissing) {
                     CourseEditorScreen(
-                        initialCourse = course,
+                        initialCourse = course, requestedCourseId = courseId,
                         initialReminder = course?.let { c -> reminders.firstOrNull { it.courseId == c.id } },
                         onSave = { edited, options ->
                             // T260：领号 + 立旗都排在 await **之前**（同删除链那枚旗的理由 ——
