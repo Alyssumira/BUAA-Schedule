@@ -5950,3 +5950,26 @@ T309 的靶子按先例写进 ⑤b 那枚方法体内（不新开 `@Test`），�
 **环境账（本轮两次三番挡我的那两条，落笔在此便于下次直接抄）**：① 任何 gradle 调用起手 `export JAVA_HOME=D:/AndroidSDK/jdk-21` —— Android Studio 的 JBR 已升到 25.0.2，Kotlin 2.3.10 的 `com.intellij.util.lang.JavaVersion.parse` 对它抛 `IllegalArgumentException: 25.0.2`，症状是 10 秒红且零枚测试起跑；PATH 里没有 `java`（`java -version` 报 command not found），所以探针行必须显式指 JAVA_HOME。② 本机总内存 31.8 GB，R8 的 `optimizedResourceShrinking` 是内存大户；跑冷三步期间**不再并发任何会跑 gradle 的臂**，且崩掉的 JVM 会留 `hs_err_pid*.log`／`replay_pid*.log` 在 worktree 根上 —— 它们让 `porcelain` 不为 0，会自己把下一趟 STEP0 硬闸挡下来。
 
 下一批已排：**T358**（#604 收窄那一半 ＋ #396：摘 `WeekCalculator` 裸 `:23/:30/:39` 三枚默认参数读钟、把名册从 3 枚扩到 4 枚、订正两枚假 KDoc ＋ 第三处会变假的注释；卡面现量读数与两道墙（`FORBIDDEN_READS` 会报 3、`PURITY_PROMISE` 缺一句）都记在 #612）、**#613**（「唯一一份换算」之外 9 处旁路 ＋ `ClassProgressScheduler` 裸 `:238` 自称纯函数却 `:269` 体内读时区）、**#614**（`PeriodWindows` 裸 `:30` 的注入承诺打折）、**#615／#616／#617**（薄三枚，可并一张 docs 卡）、#607／#608／#610／#611、#532 落地卡（纯 docs）。push 与发版仍等用户点头。
+
+### 55 `gate/25`（T358 一张卡，9 枚）：三枚「默认参数位读钟」摘掉，而一张名册从 3 枚扩到 4 枚要走**两处**字面表
+
+合并对象 `239ef4d`（BASE `ac7163d`、on_top 9、`git status --porcelain` 0 枚），master `--ff-only` 收下；远端仍 `d3cc73f`、**未推 195 枚**，push 与发版**都未获批、本轮未问**。改动面 7 枚文件、`+37/−18`：main 四枚（`WeekCalculator.kt` 摘三枚默认值 ＋ 补那句纯度承诺、`TermWeekGate.kt`／`WidgetNavigation.kt`／`WidgetDataSynchronizer.kt` 三处假话与一枚死号）、test 三枚（名册守卫 `WakeUpExportGateWiringGuardTest.kt` ＋ `TermWeekGateTest.kt` ＋ `TermWeekGateSingleSourceGuardTest.kt`）。我这侧冷三步全绿：STEP1 RC 0（APK **7,323,703 B**）、STEP2 RC 0（370 枚 XML、**2,859 tests／0 failures／0 errors／0 skipped**、`xml_before=0`、`FROM_CACHE=0`、`Execution failed` 0 枚、XML 时间戳 20:07:45.548Z→20:08:28.898Z 落在本次窗口内）、STEP3 RC 0（lint **0 error／19 warning**）、`BUILD SUCCESSFUL` **3** 枚 == 步数、`insufficient memory` 0 枚。四把尺：`@Test` 静态尺 **2,859** == XML 总数 **2,859**（配对闭合，⚠️ 本档**净增 0 手** —— 那张卡改的是既有格子里的断言与散文，没开新格；报「+N 手」前先分清「新增格子」与「改判据」）；`guard_files` **128**（零枚新守卫）；test 树 `.kt` **364**；docs 锚点 **588／25** 一字未漂；助手形状那四枚写死值 **139／139／140／140** 未动（这张卡没碰助手）。
+
+包体账：gate/24 的 7,323,700 → 本档 **7,323,703（+3 B）**，落在噪声带里 ⇒ **不立地板、不归因给代码**；对 10-13 那档 7,321,392 累计 +2,311 B，那一段仍按 §54 口径挂着「超出噪声带但未二次独立复现」，不作已立地板。
+
+**① 这张卡最值钱的一手是把「名册扩一枚文件」的真实工序量出来了**：那张名册在盘上有**两处字面表**（期望表 ＋ 第二把尺里 `for (path in listOf(...))` 那一手），只扩一处会静默留下两套覆盖面 —— STEP0 硬针因此钉 `roster_4_tables=2`（两处都要扩）与 `roster_3_left=0`。⚠️ 同族第一把墙是 `PURITY_PROMISE` 那句「零 android / androidx import」必须在**含注释原文**里恰 1 处 ⇒ 新入册文件得先补 KDoc 才可能绿；第二把墙是 ⑤c 那格只数 `$EXPORTERS` 里的 `today: LocalDate,` == 2，不许顺手扩。入一册 = 三道墙同批走。
+
+**② 「假话会转抄」第二次实证，且比第一次更严重**：我卡面点名三处会因摘默认值而变假的句子，交回的是**五处**（多的两处在 `TermWeekGate` 那枚文件与它的同名测试里，都是上一轮别的卡转抄过去的散文）。⇒ 在册 #396 那一族的尺现在只能当**下界**用；下次派同族卡，卡面那句要写成「至少这几处，逐枚 grep 该符号的调用点与散文引用」，不要枚举。
+
+**③ 摘默认值是行为 no-op —— 这句从推断升成读数**：main 里 20 处调用点枚枚显式递 `today`，`isCurrentWeek` 在 main 零调用 ⇒ 摘掉默认值不改任何答案，只把「忘了递就读钟」那个口子关掉。⚠️ 同族假修法（把 `LocalDate.now()` 挪进默认参数位）已由 ⑤c 单独钉住，两条路都有格子拦。
+
+**我这轮的五处自坑／违规，全部落盘复验过**：
+- **§54 里我自己把锚点纪律写坏了**：那一节有 10 枚「文件名 ＋ `:NNN`」连写，把全仓 docs 尺从 588／25 顶到 597／26；改回时先上 `perl -CSD -i` ⇒ 替换串里的中文**被双重编码成 mojibake**（`裸` → `è£¸`）而 rc 照样 0，`git checkout --` 整篇回退，改写成一次性 node 脚本（显式 `"utf8"`、只在 §54 之后生效、逐条打印 hits、复算行数与 mojibake）才修回 588／25，单独一枚 commit `ac7163d`。教训：**带中文字面量的批量改写一律走 `.mjs`，跑完必验 mojibake ＋ 行数守恒。**
+- **我的卡面把一枚尺的路径写成一枚不存在的文件**：那条尺逐字是 `grep -rhoE '[A-Za-z0-9_.-]+[.]kt:[0-9]+' docs README.md`（⚠️ 是**两条路径**：`docs` 目录 ＋ 根 `README.md`），我转述成「`docs/README.md`」⇒ 这轮两张并行卡各报一次「这枚尺不可跑」。盘面真值：`.kt:` 588、`.md:` 25、并集 613（＝588＋25，与卡上自报的 613 对得上）。⇒ 往后卡面引用尺要**连命令一起贴**，别只报路径。
+- **卡面对一张不存在的在册条目发了卡**：我给 T359 的卡面写「其余同族在册：#538／#539」，那两枚编号根本不在台账里（它们是我自己任务表里的行号）。它交回时点名为「无中生有，不许当打折」。⇒ 卡面引用在册编号前，先 `grep` 台账确认那两枚编号存在。
+- **冷门禁 STEP1 首趟又被内存咬死在 `minifyReleaseWithR8`**（崩因逐字：`insufficient memory ... malloc failed to allocate 3164496 bytes`，死的是 `-Xmx4g -XX:MaxMetaspaceSize=1g` 那枚 daemon；同对象首趟 STEP2 却给 2,859／skipped=4 —— §53 第 4 条**第三次**兑现）。处置同上轮：清掉我自己那两枚崩溃残骸、**独占**重跑 STEP1，产物在场后 STEP2 重跑把 skipped 4→0；没杀任何进程、没跑 `gradle --stop`。⚠️ 环境新读数：这台机 CommitLimit 从 ~70 GB 掉到 **56.8 GB**、FreeCommit 一度只剩 ~6 GB ⇒ R8 那一格现在每次都在悬崖边；页面文件属系统设置，我不自己动，**要动需用户点头**。
+- **我违反了自己 §54 写下的纪律**：§54 说「跑冷三步期间不再并发任何会跑 gradle 的臂」，而这轮我在 STEP2 起跑后把三张会跑 gradle 的卡派了出去 —— 结果三步仍全绿。⇒ 那条纪律被我自己写宽了：真正的悬崖只在 **STEP1 的 `minifyReleaseWithR8` 那一格**（崩的是 R8 的 native malloc，不是通用内存）。纪律收窄成：R8 那一格在飞时不并发 gradle 臂；STEP2／STEP3 期间可以。下一档若 STEP1 再崩要复验这条有没有被高估。
+
+未验到（本轮新增 3 格，全部只有真机能判）：摘掉默认值后 `WeekCalculator` 三枚签名在组件刷新链与 `WidgetNavigation` 那一条上的实屏周号；「学期外前／后＝同一枚说法」在顶栏与今日页的字形；名册扩到 4 枚之后 —— ⚠️ 那把尺的 `FORBIDDEN_READS` 含 `LocalDateTime`／`TimeZone`／`ZoneId` 三枚 needle ⇒ `PeriodWindows` 那枚文件**结构上进不了那枚名册**（它整个文件都在传 `LocalDateTime`），所以「换算件自带默认时区」这一族只能靠**另造的形状尺**拦（本轮 T360 已落）。加上在册 #98 扫码页四态、#524 日期族、T281、T332 那句「共 0 周」弹窗、T335 屏上句、T336／T337 转屏续挂、T344／T345／T346 三枚卡各自的屏幕行为 —— **门禁绿灯对这些一个字都不背书**。
+
+下一批已排：**gate/26**＝T360（#613／#614：换算件两枚默认时区摘掉 ＋ 三处假话订正 ＋ 在册守卫第 ⑧ 层）＋ T362（#617：`IcsParser` 周号与周一锚点换源走 `WeekCalculator` ＋ 在册守卫第 ⑥ 层册子尺）；**T361B** 回收卡（#615／#616：那张卡的代理在 150 回合上限处断在①与②之间，分支 ref 上已有 ⓪ 裁定 ＋ ① 实现两枚、工作树干净 ⇒ 落点是「只差变异自证与门禁」，按既定正解续派而非重派）；T359 只读审计交回 9 枚候选（重 1／中 4／薄 4，最重是 #296「今明两栏组件行预算吃手抄 13dp，且被一枚绿测试把标称尺钉死」）已转在册。#607／#608／#610／#611、#532 落地卡（纯 docs）继续排队。push 与发版仍等用户点头。
