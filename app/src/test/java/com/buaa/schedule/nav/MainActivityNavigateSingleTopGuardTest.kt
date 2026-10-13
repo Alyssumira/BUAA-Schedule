@@ -1,6 +1,7 @@
 package com.buaa.schedule.nav
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -118,6 +119,97 @@ class MainActivityNavigateSingleTopGuardTest {
         )
     }
 
+    /**
+     * ③(a) 独立尺（钉法族 = 数出现次数）：**不读册子**，抹注释后逐枚解析盘上每一处 `navigate(`，
+     * 缺单顶就红，并把那一枚的行号与原文打进断言消息。
+     *
+     * 这一格与 ②-a 判的是同一件事，但走的是两把独立的尺：②-a 拿册子去对盘（改表能绕过它），
+     * 这一格只认盘（改表绕不过它，摘掉册子也不影响它）。在册那四枚的写法本来就是字面 options lambda，
+     * 所以这一格不给「换个写法也算对」的余地：认的是 options lambda 里那一句字面量赋值。
+     */
+    @Test
+    fun everyNavigateCallExpressionInMainActivityCarriesLaunchSingleTop() {
+        val calls = navigateCallSites()
+        val offenders = calls.filter { call -> !call.singleTop }.map { call ->
+            "第 " + call.ordinal + " 枚（" + call.describe() + "）"
+        }
+        assertTrue(
+            "钉法 = 数出现次数（只认盘，不读册子）：" + MAIN_ACTIVITY + " 里每一枚 navigate( 调用式" +
+                "都必须带「" + SINGLE_TOP + "」—— 同一 route 同 args 叠两枚 back-stack entry 的代价是" +
+                "返回键要按两下才出得去（带 popUpTo inclusive 的那一枚连点登录还会把扫码页叠两枚）。" +
+                "实到 " + calls.size + " 枚调用式 ｜ 缺单顶 " + offenders.size + " 枚：" +
+                offenders.joinToString(" ／ ") + "（原文与行号逐枚点名，不许只报枚数）",
+            offenders.isEmpty(),
+        )
+    }
+
+    /**
+     * ③(b) 反向一格（本仓把这叫「第二枚读者」）：册子长度必须等于盘上真实调用点数，且两把都等于
+     * ⓪ 步现量写死的那一枚 18。有人新增一枚 `navigate(` 而册子根本没看见它 —— 这一格必须当场响，
+     * 尺子不许只会数自己认识的东西；反过来摘掉册子里的一行（朝窄那一臂）也一样红在这里。
+     */
+    @Test
+    fun rosterLengthEqualsTheRealNavigateCallSiteCount() {
+        val calls = navigateCallSites()
+        val problems = mutableListOf<String>()
+        if (calls.size != EXPECTED_NAVIGATE_CALL_SITES) {
+            problems.add(
+                "盘上实到 " + calls.size + " 枚调用式 ／ ⓪ 步现量写死 " + EXPECTED_NAVIGATE_CALL_SITES +
+                    " 枚（裸 grep 原文 20 行 − KDoc 散文 2 行 = 18 枚）",
+            )
+        }
+        if (ROSTER.size != calls.size) {
+            problems.add(
+                "册子 " + ROSTER.size + " 行 ／ 盘上 " + calls.size + " 枚：" +
+                    (if (ROSTER.size < calls.size) {
+                        "有人新增了 navigate( 调用点而册子没登记它"
+                    } else {
+                        "册子里有盘上没有的调用点（被摘掉或改了形状）"
+                    }) +
+                    " ｜ 盘上逐枚：" + calls.joinToString(" ／ ") { call -> "#" + call.ordinal + " " + call.describe() } +
+                    " ｜ 册子逐枚：" + ROSTER.joinToString(" ／ ") { row -> "#" + row.ordinal + " " + row.name },
+            )
+        }
+        if (ROSTER.size != EXPECTED_NAVIGATE_CALL_SITES) {
+            problems.add("册子 " + ROSTER.size + " 行 ／ 写死 " + EXPECTED_NAVIGATE_CALL_SITES + " 行")
+        }
+        for (row in ROSTER) {
+            if (row.ordinal != ROSTER.indexOf(row) + 1) {
+                problems.add("册子顺序被重排：#" + row.ordinal + " " + row.name + " 不在第 " + (ROSTER.indexOf(row) + 1) + " 位")
+            }
+        }
+        assertEquals(
+            "钉法 = 反向一格（数出现次数）：册子与盘必须同源同数，两把都等于 ⓪ 步现量那一枚绝对值 —— " +
+                "新增一枚调用点而册子没看见它，红在这一格（本仓把这叫「第二枚读者」）。问题：" +
+                problems.joinToString(" ／ "),
+            0,
+            problems.size,
+        )
+    }
+
+    /**
+     * ③(c) 写法尺：带单顶的枚数与调用点枚数同源，且不许有反着写的那一枚。
+     * 拦的是两档漂法：把某一枚单顶包进助手（在册四枚全是字面 options lambda，包起来就是换了写法），
+     * 以及往某枚调用式里塞 `launchSingleTop = false`（那一枚字面上"有"单顶、语义上恰恰是要叠两枚）。
+     */
+    @Test
+    fun singleTopOccurrencesAreOnePerCallSiteAndNoneOfThemIsFalse() {
+        val code = blankedMainActivity()
+        val written = occurrencesOf(code, SINGLE_TOP)
+        val negated = occurrencesOf(code, SINGLE_TOP_FALSE)
+        val calls = navigateCallSites()
+        val withoutTheirOwn = calls.filter { call -> !call.options.contains(SINGLE_TOP) }
+            .map { call -> "#" + call.ordinal + "（" + call.describe() + "）" }
+        assertTrue(
+            "钉法 = 数出现次数（在册写法同源）：" + MAIN_ACTIVITY + " 里「" + SINGLE_TOP + "」的代码级枚数" +
+                "必须等于 navigate( 调用点枚数（每枚调用式自己带一行，谁也不替谁带），" +
+                "且「" + SINGLE_TOP_FALSE + "」枚数为 0。实到单顶 " + written + " 枚 ／ 调用点 " + calls.size +
+                " 枚 ／ 反写 " + negated + " 枚 ／ 自己没带的那几枚：" + withoutTheirOwn.joinToString(" ／ ") +
+                "（注释里的命中已被抹掉，不计入任何一把）",
+            written == calls.size && negated == 0 && withoutTheirOwn.isEmpty(),
+        )
+    }
+
     // ---- 读盘与解析（与各 *WiringGuardTest 同一套刀法）---------------------------------------------
 
     /** 盘上每一枚 `navigate(` 调用式：实参表按括号配平、紧随其后的 options lambda 按花括号配平 */
@@ -150,6 +242,18 @@ class MainActivityNavigateSingleTopGuardTest {
 
     /** 抹注释之后的 MainActivity 源码文本（长度与换行位置不变，报错消息里的行号因此可信） */
     private fun blankedMainActivity(): String = blankComments(source(MAIN_ACTIVITY))
+
+    /** 数一枚针在文本里出现几次（与同族守卫同一把尺；注释已在文本里抹掉） */
+    private fun occurrencesOf(text: String, needle: String): Int {
+        var count = 0
+        var from = 0
+        while (true) {
+            val at = text.indexOf(needle, from)
+            if (at < 0) return count
+            count++
+            from = at + needle.length
+        }
+    }
 
     /** 从 [open] 那枚左括号配平到与之匹配的右括号，交回右括号下标 */
     private fun balancedParenEnd(code: String, open: Int): Int {
@@ -325,11 +429,17 @@ private val ROSTER: List<NavigateCallSite> = listOf(
 /** 钉的是「在册写法」那一句字面量：改一个字符就红 */
 private const val SINGLE_TOP = "launchSingleTop" + " = true"
 
+/** 反着写的那一枚：字面上"有"单顶、语义上恰恰要叠两枚，③(c) 那格数它 0 枚 */
+private const val SINGLE_TOP_FALSE = "launchSingleTop" + " = false"
+
 /** 调用式锚点：`navigate(` 紧跟左括号，`navigateTopLevel(` 这一族同名字落不进尺子 */
 private const val NAVIGATE_CALL = "navigate" + "("
 
 /** ② 裁定钉死：例外档写死 0 枚 */
 private const val EXPECTED_EXEMPT_ROWS = 0
+
+/** ⓪ 步现量写死的调用点枚数：裸 grep 原文 20 行 − KDoc 散文 2 行 = 18 枚（③(b) 那格的绝对值） */
+private const val EXPECTED_NAVIGATE_CALL_SITES = 18
 
 private const val MAIN_ACTIVITY = "com/buaa/schedule/MainActivity.kt"
 
