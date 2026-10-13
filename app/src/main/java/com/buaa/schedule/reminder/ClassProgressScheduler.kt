@@ -398,6 +398,23 @@ object ClassProgressScheduler {
             ReminderNotifications.cancelClassOngoing(context)
             ClassProgressDnd.restore(context)
         }
+        // 勿扰看门狗跟着新帧走（#603）：上面那句 cancel 只撤双铃，而那只看门狗与 prefs 里的
+        // 恢复期限都是**排铃那一刻**按当时的墙钟/默认时区算出来的旧帧值 —— 它唯一的排程点是
+        // ClassProgressDnd.enter，而 enter 唯一的调用点是上课铃那一刻。用户改时间 / 跨时区之后
+        // 这一跳（清单里那唯一入口 WidgetRefreshReceiver → BackgroundSync.rescheduleRemindersAndBells
+        // → 这里）是新帧的下课时刻唯一已经在手上的地方：双铃按它重排了，看门狗不能还按旧的走，
+        // 否则勿扰在一个错误的墙钟时刻解除，而 selfCheck 判的也是那个旧帧值。
+        // 六档判据在 ClassProgressDnd.watchdogRearmDecision：没进勿扰 / 新帧这一轮没有正在上的课 /
+        // 新期限算不出 / 那格期限从来没写过 / 期限本来就跟着新帧走过 —— 五种情况一格都不许动，
+        // 只有第六档才重排。classOngoing 必须显式判：这里选出的窗口是"最早一个还没结束的"，
+        // 下课之后它就是**下一节**，照下一节的下课时刻推那一格遗留记录 = 把恢复点推后一整节课。
+        // 读数吃的是上面那只已经注入的 now：整次重排只读一只钟（口径见
+        // reminder/CountdownClockSingleReadGuardTest 第 ① 层）。
+        ClassProgressDnd.alignWatchdogToNewFrame(
+            context,
+            classOngoing = window.ongoingAt(now.toEpochMillis()),
+            freshDeadlineMillis = ClassProgressDnd.deadlineOfEnd(window.endMillis),
+        )
         return schedule(context, window)
     }
 

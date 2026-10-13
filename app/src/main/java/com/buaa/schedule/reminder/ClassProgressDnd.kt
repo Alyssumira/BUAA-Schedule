@@ -164,13 +164,161 @@ object ClassProgressDnd {
         return true
     }
 
-    /** 恢复期限 = 下课 + 宽限；下课时刻不可用时按兜底上限从此刻算 */
+    /**
+     * 「时间类变化之后，那只勿扰看门狗到底该不该跟着新帧挪」的分档结论，一共六档
+     * （判据本体见 [watchdogRearmDecision]）。
+     *
+     * 为什么不折成一枚 Boolean（本仓那一族的口径，同 `domain/widget/WidgetRolloverGate`）：
+     * 五种"不动手"各有各的原因，而它们的**后果不同** —— `NoClassInSession` 是"这一格遗留归
+     * [restore]，替下一节课把恢复点推后就是推迟一次该发生的恢复"，`AlreadyCurrent` 是"根本不用
+     * 付 binder"。折成布尔就只剩"没动"，下一次读代码的人无从知道该动没动。
+     */
+    internal enum class WatchdogRearm {
+        /** 没进过勿扰（没有原状态记录）：一条闹钟、一格 prefs 都不许动 */
+        NoWatchdogToMove,
+
+        /**
+         * 新帧这一轮**没有"正在上的那一节"**（挑出来的是下一节 / 根本没有窗口）。
+         *
+         * 这一档是这一手最容易写坏的地方：[ClassProgressScheduler.rescheduleWindows] 选的是
+         * "最早一个还没结束的窗口"，下课之后（或用户把钟拨过这一节之后）它就是**下一节**，
+         * 而上一节课那一格记录可能还在（[restore] 因权限被撤而失败时刻意保留记录）。
+         * 照下一节的下课时刻去重排 = 替一格已经没有主人的记录把恢复点推后一整节课。
+         * 那笔账归 [restore] / [selfCheck]，不归这里。
+         */
+        NoClassInSession,
+
+        /** 算不出新帧的下课时刻（节次表缺下课时间那一族窗口）：宁可按旧帧挂着，也不凭空造一条期限 */
+        NoFreshDeadline,
+
+        /**
+         * 那格期限从来没写过（0）：旧版本留下的记录，[selfCheck] 本来就按"已过期限"处理它
+         * （见那一份的说明）。这里不许替它造一条新帧期限 —— 那等于把一次已经到点的恢复推迟。
+         */
+        LegacyRecordWithoutDeadline,
+
+        /** 期限本来就跟着新帧走过（改时间没挪动这一节 / 上课铃重放那一手已经重建过）：一次 binder 都不许多付 */
+        AlreadyCurrent,
+
+        /** 唯一该动手的那一档：prefs 里那一格期限与那只闹钟一起改写到新帧 */
+        Rearm,
+    }
+
+    /**
+     * 判据本体：**零 Context、零 android、四枚输入全是注入的标量、体内一处钟都不读**。
+     *
+     * 连"要不要读钟"都不发生：[classOngoing] 由调用点拿那只**已经注入的** `now` 走
+     * [ClassProgressScheduler.ClassWindow.ongoingAt] 算好再递进来（本仓成文禁令的另一半 ——
+     * 判据要"现在几点"就当参数递进来，函数体不读钟；`domain/schedule/TodayPlanner.kt`
+     * 那份类注释逐字写着「函数体不读 `LocalDate.now()`」，[restoreIfStale] 与
+     * [ClassProgressScheduler.armStartBell] 那两族 seam 是同一套形状）。
+     * 收成这样的代价与前两处相同："接线到底注没注对那几样"只能按源码形状核对
+     * （本模块没有 Robolectric，`getSharedPreferences` 是抛 "not mocked" 的桩），
+     * 买到的是**这六档在 JVM 里逐档量得出来**。
+     *
+     * 档位的先后不许换：
+     * 1. `NoWatchdogToMove` 排最前 = "没进过勿扰就不要动用户设置"那条不变量（见 [restore]）；
+     * 2. `NoClassInSession` 抢在其余之前 = 没有主人的记录一格都不许推（见那一档）；
+     * 3. `LegacyRecordWithoutDeadline` 排在 `AlreadyCurrent` 之前 = 两者同时成立（0 == 0）时
+     *    走"旧记录不归这里"那一档，而不是"本来就一致"那一档。
+     *
+     * 为什么六档里没有「新期限本身都已经过点了」这一档：[classOngoing] 为真就意味着
+     * `此刻 < 下课时刻 < 下课 + 宽限 = fresh`（end 取开区间，与 ongoingAt 同一把尺），
+     * 那一档在这一跳里取不到值。写出来就是一枚假档位，表里也就没有它的一行。
+     *
+     * @param hasSavedFilter 即"这一轮进过勿扰、记着用户原本的状态"（`dnd_saved_interruption_filter`）
+     * @param classOngoing 新帧这一轮到底有没有"正在上的那一节"（调用点用注入的钟走 ongoingAt）
+     * @param storedDeadlineMillis prefs 里那一格**旧帧**期限（`dnd_restore_deadline`；0 = 没写过）
+     * @param freshDeadlineMillis 按新帧重算出来的期限；算不出就是 null（见 [deadlineOfEnd]）
+     */
+    internal fun watchdogRearmDecision(
+        hasSavedFilter: Boolean,
+        classOngoing: Boolean,
+        storedDeadlineMillis: Long,
+        freshDeadlineMillis: Long?,
+    ): WatchdogRearm = when {
+        !hasSavedFilter -> WatchdogRearm.NoWatchdogToMove
+        !classOngoing -> WatchdogRearm.NoClassInSession
+        freshDeadlineMillis == null -> WatchdogRearm.NoFreshDeadline
+        storedDeadlineMillis <= 0L -> WatchdogRearm.LegacyRecordWithoutDeadline
+        storedDeadlineMillis == freshDeadlineMillis -> WatchdogRearm.AlreadyCurrent
+        else -> WatchdogRearm.Rearm
+    }
+
+    /**
+     * 课堂铃重排那一跳顺手把勿扰看门狗也对齐到**新帧**（#603）。
+     *
+     * 病灶：本仓每一枚闹钟都是唤醒档 ＋**绝对 epoch 毫秒**，毫秒是**排铃那一刻**按当时的
+     * 系统时间/默认时区算出来的。用户改时间或跨时区之后系统派发 TIME_SET / TIMEZONE_CHANGED，
+     * 唯一入口（`widget/WidgetRefreshReceiver`）那一跳会经 [ClassProgressScheduler.rescheduleWindows]
+     * 用新帧把双铃重排一遍 —— 但那只看门狗不在双铃里：它唯一的排程点是 [enter]，而 enter
+     * 唯一的调用点是**上课铃那一刻**。于是"下课 + 宽限"那一格期限连同闹钟一起停在旧帧，
+     * 勿扰就在一个错误的墙钟时刻解除（早解还是晚解取决于偏移方向），而 [selfCheck] 判的
+     * 也是那一个旧帧值。
+     *
+     * 为什么不写成 `WidgetRefreshReceiver` 里另起一步，而要吃现成的重排那一跳：那一侧**拿不到**
+     * 这一节课的下课时刻 —— prefs 只存旧帧的毫秒，"排铃那一刻用的是哪个默认时区"全仓没有
+     * 任何地方记着，那只 PendingIntent 的 extras 系统侧也读不回来；
+     * 要从新帧反推就得把 [ClassProgressScheduler.planNextClassWindow] 那轮全量窗口搜索
+     * 再跑一遍。而调用点刚刚算完新帧的 `window.endMillis`、整次重排且只读了一只钟
+     * （`reminder/CountdownClockSingleReadGuardTest` 第 ① 层钉的就是它）：新帧就在手上。
+     *
+     * 为什么不能只靠"已过期的上课铃立即重放 ⇒ 重新 enter"那条**已经存在**的通路：那条通路确实
+     * 会把期限与闹钟一起写回新帧（本卡复算过，它在"课还在上"那一支是走得到的），但它靠一枚
+     * **闹钟**去更新一格 **prefs 事实**，而这条路本仓从没钉过（全仓零枚守卫写过 `armWatchdog`），
+     * 且它的前提正是这只看门狗要防的那件事 —— ROM 吞闹钟。落在那一支上的现场就是 #603。
+     *
+     * 为什么不先 [cancelWatchdog] 再排（卡面那一手）：两只闹钟共用同一枚 requestCode
+     * （[REQUEST_DND_WATCHDOG]）与同一份 PendingIntent，`armWatchdog` 用
+     * `FLAG_UPDATE_CURRENT` 再 set 一次就是**顶替**，这正是 [enter] 在两节连排的课之间
+     * 已经在做的那一手（它自己也不先 cancel）。而 [cancelWatchdog] 里带着
+     * `operation.cancel()` —— 那会把 PI 记录整条摘掉，随后那一手 set 万一抛（ROM 收紧
+     * 精确闹钟就是这条链已知的失败点），现场就从"闹钟在旧帧"变成"根本没有闹钟"。
+     *
+     * 整块吞异常（与 [enter] / [selfCheck] 同一条规矩：这一步是从广播协程里调的，
+     * 抛出去只是把"双铃已经排好"那一半也带走）。失败只留一行痕迹、不向外报结论 ——
+     * 这一手不动就是"保持现状"，而现状已经由那只旧帧闹钟兜着。
+     *
+     * @param classOngoing 新帧这一轮**正在上**这一节吗；假 ⇒ 一格都不许动（[WatchdogRearm.NoClassInSession]）
+     * @param freshDeadlineMillis 新帧的"下课 + 宽限"（[deadlineOfEnd]）；null = 算不出
+     */
+    fun alignWatchdogToNewFrame(context: Context, classOngoing: Boolean, freshDeadlineMillis: Long?) {
+        runCatching {
+            val prefs = prefs(context)
+            val stored = prefs.getLong(KEY_DND_DEADLINE, 0L)
+            if (watchdogRearmDecision(
+                    hasSavedFilter = prefs.contains(KEY_SAVED_FILTER),
+                    classOngoing = classOngoing,
+                    storedDeadlineMillis = stored,
+                    freshDeadlineMillis = freshDeadlineMillis,
+                ) != WatchdogRearm.Rearm
+            ) return
+            // 取证行：改前/改后两格毫秒都在，量"这一节课的勿扰到底被挪到了哪一秒"只能靠它
+            Log.i(TAG, "勿扰看门狗按新帧重排 $stored -> $freshDeadlineMillis")
+            // 期限先落 prefs、再重排闹钟：[selfCheck] 判的就是那一格，
+            // 只挪闹钟不改格子等于闹钟在新帧、判据还在旧帧。
+            // null 那一档在判据里就叫 NoFreshDeadline 拦下了，走到这里必然是有值的：
+            // 只做类型收敛，不再兜第二种值（兜了就等于两处各有一套"算不出怎么办"）。
+            val fresh = freshDeadlineMillis ?: return
+            prefs.edit { putLong(KEY_DND_DEADLINE, fresh) }
+            armWatchdog(context, fresh)
+        }.onFailure { Log.w(TAG, "勿扰看门狗按新帧重排失败", it) }
+    }
+
+    /**
+     * 「下课 + 宽限」这一把尺的唯一出处：**不读钟**，下课时刻不可用时交回 null
+     * （由调用方决定兜底 —— [deadlineOf] 退到 [FALLBACK_LIMIT_MINUTES]，
+     * [ClassProgressScheduler.rescheduleWindows] 那一跳则干脆不动，见 [WatchdogRearm.NoFreshDeadline]）。
+     *
+     * 从 [deadlineOf] 里分出来是为了让"新帧重算期限"那一跳复用同一把尺：宽限量在两处各写
+     * 一遍，改一处就是一格旧帧期限与一格新帧期限用不同的余量。
+     */
+    internal fun deadlineOfEnd(endMillis: Long): Long? =
+        if (endMillis > 0L) endMillis + RESTORE_GRACE_MINUTES * 60_000L else null
+
+    /** 恢复期限 = 下课 + 宽限；下课时刻不可用时按兜底上限从此刻算（那只钟只读在这一行） */
     private fun deadlineOf(endMillis: Long): Long =
-        if (endMillis > 0L) {
-            endMillis + RESTORE_GRACE_MINUTES * 60_000L
-        } else {
-            System.currentTimeMillis() + FALLBACK_LIMIT_MINUTES * 60_000L
-        }
+        deadlineOfEnd(endMillis) ?: System.currentTimeMillis() + FALLBACK_LIMIT_MINUTES * 60_000L
 
     /**
      * 排看门狗闹钟（Android 12+ 无精确闹钟权限时逐档降级）。
