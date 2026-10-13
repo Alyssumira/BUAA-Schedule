@@ -10,6 +10,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.LocalDate
 
 /**
  * T279②：WakeUp 导出件的 JSON 文本层 —— 表驱动逐格钉 [WakeUpJsonText]（纯 JVM、零时钟、零 android）。
@@ -345,6 +346,7 @@ class WakeUpJsonTextTest {
             listOf(dirty),
             Semester(termCode = "T", termName = "2026 秋\r学期", startDate = "2026-09-07", totalWeeks = 19),
             emptyList(),
+            LocalDate.of(2026, 9, 15),
         )
         // 改前这里出场 6 枚裸 C0：名称的 CRLF 两枚 + 教师的 CR + 地点的 LF + 学期名两处各一枚
         assertEquals("整份文档里裸 C0 必须 0 枚", 0, rawControlCount(json))
@@ -375,7 +377,12 @@ class WakeUpJsonTextTest {
      */
     @Test
     fun `time 那一枚装着JSON的字符串现在合法而内容一字不变`() {
-        val json = ScheduleExporters.toWakeUpJson(listOf(course(name = "高等数学")), semester, emptyList())
+        val json = ScheduleExporters.toWakeUpJson(
+            listOf(course(name = "高等数学")),
+            semester,
+            emptyList(),
+            LocalDate.of(2026, 9, 15),
+        )
         val tree = Json.parseToJsonElement(json).jsonObject
         val tableInfo = tree["tableInfo"]!!.jsonObject
         val perDay = tableInfo["nodesPerDay"]!!.jsonPrimitive.content.toInt()
@@ -418,7 +425,12 @@ class WakeUpJsonTextTest {
         val aliased = course(name = "高级语言程序设计", alias = "  英语（三）  ")
         val noAlias = course(name = "高等数学 B", alias = null)
         val blankAlias = course(name = "离散数学", alias = "   ")
-        val json = ScheduleExporters.toWakeUpJson(listOf(aliased, noAlias, blankAlias), semester, emptyList())
+        val json = ScheduleExporters.toWakeUpJson(
+            listOf(aliased, noAlias, blankAlias),
+            semester,
+            emptyList(),
+            LocalDate.of(2026, 9, 15),
+        )
         val names = Json.parseToJsonElement(json).jsonObject["courses"]!!.jsonArray.map {
             it.jsonObject["name"]!!.jsonPrimitive.content
         }
@@ -433,7 +445,7 @@ class WakeUpJsonTextTest {
     fun `没有别名的课 导出件与改前逐字节相同`() {
         // 不连坐那一格：本卡换了字段取法，但无别名的课（绝大多数）一个字都不该变
         val plain = course(name = "高等数学 A", teacher = "李四", location = "主楼 101")
-        val json = ScheduleExporters.toWakeUpJson(listOf(plain), semester, emptyList())
+        val json = ScheduleExporters.toWakeUpJson(listOf(plain), semester, emptyList(), LocalDate.of(2026, 9, 15))
         assertTrue("课程对象应逐字节含这一串（字段顺序与枚数都没动）：$json", json.contains(
             """{"name":"高等数学 A","teacher":"李四","position":"主楼 101","day":1,""" +
                 """"startNode":1,"step":2,"startWeek":1,"endWeek":3,"type":0,"color":0}""",

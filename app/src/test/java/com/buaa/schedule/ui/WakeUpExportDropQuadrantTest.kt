@@ -16,6 +16,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.LocalDate
 
 /**
  * T203：WakeUp 导出件把课丢下的**两档**（没有节次 = T27、没有周次 = #237）与调用方那句报数。
@@ -56,7 +57,12 @@ class WakeUpExportDropQuadrantTest {
     )
 
     private fun wakeUp(courses: List<Course>): String =
-        ScheduleExporters.toWakeUpJson(courses = courses, semester = null, timeSlots = emptyList())
+        ScheduleExporters.toWakeUpJson(
+            courses = courses,
+            semester = null,
+            timeSlots = emptyList(),
+            today = LocalDate.of(2026, 9, 7), // 固定日期：本格判的是"写出去几段"，不是起始日
+        )
 
     /** 导出件里课程数组的条数：`"day":` 只在课程对象里出现（顶层与 tableInfo 都没有这一列） */
     private fun exportedEntries(json: String): Int {

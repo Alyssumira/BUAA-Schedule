@@ -413,17 +413,17 @@ class WakeUpExportGateWiringGuardTest {
                 )
             }
         }
-        // 反套套逻辑：纯度那句承诺在两份判据文件的注释里都留痕
-        assertEquals(
-            "**钉法 = 数出现次数（含注释原文）**：闸门文件里那句纯度承诺恰好 1 处（读到 0 = 上面那串 0 没人负责）",
-            1,
-            occurrences(source(GATE), PURITY_PROMISE),
-        )
-        assertEquals(
-            "**钉法 = 数出现次数（含注释原文）**：JSON 文本层文件里那句纯度承诺恰好 1 处",
-            1,
-            occurrences(source(TEXT), PURITY_PROMISE),
-        )
+        // 反套套逻辑：纯度那句承诺在**名册里每一枚**文件的注释里都留痕（读到 0 = 上面那串 0 没人负责；
+        // 读到 2 = 同一个承诺在同一枚文件里写了两遍，那就有了两把尺）
+        for ((label, path, _) in files) {
+            assertEquals(
+                "**钉法 = 数出现次数（含注释原文）**：$label（$path）里那句「$PURITY_PROMISE」必须恰好 1 处，实到 " +
+                    occurrences(source(path), PURITY_PROMISE) + " 处：0 处 = 这格钉的纯度没有作者认领；" +
+                    "2 处 = 同一句承诺写了两遍（改一处忘一处就长出两把尺）",
+                1,
+                occurrences(source(path), PURITY_PROMISE),
+            )
+        }
         // 内核的表是公开的，枚数就是判据覆盖面（运行时反证，不靠 grep）
         assertEquals(7, WakeUpJsonText.SHORT_ESCAPES.size)
         assertEquals(32, WakeUpJsonText.CONTROL_RANGE.count())

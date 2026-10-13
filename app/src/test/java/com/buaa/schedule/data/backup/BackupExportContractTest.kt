@@ -8,6 +8,7 @@ import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.LocalDate
 
 /**
  * 备份格式契约。
@@ -67,6 +68,8 @@ class BackupExportContractTest {
             listOf(course),
             semester,
             TimeSlotProfile.DEFAULT,
+            // 学期行里的 startDate 是枚好日期 ⇒ 这一枚 today 进不了输出（表驱动那格钉的就是"进不了"）
+            LocalDate.of(2026, 9, 15),
         )
 
         // WakeUp 是另一套 schema（courses[].day/startNode/step/startWeek…），
@@ -81,6 +84,7 @@ class BackupExportContractTest {
             listOf(course),
             semester,
             TimeSlotProfile.DEFAULT,
+            LocalDate.of(2026, 9, 15),
         )
         // 反向确认导出器本身没坏（两个功能应各自可用）
         assertTrue(wakeUp.contains("\"tableInfo\""))

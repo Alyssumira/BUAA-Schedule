@@ -16,6 +16,15 @@ ui/（Compose 界面 + 各自的 state）
 ```
 
 - `domain/` 不依赖 Android 类，全部逻辑都应该是可 JVM 单测的纯函数。
+  - **「不依赖」按两种形状判**：`import android…` / `import androidx…` 那一行，以及不写 import 的**全限定写法**
+    （`@androidx.compose.runtime.Immutable` 那一形）—— 只数 import 行的那把尺看不见后者，
+    所以两把尺一起走才算这条判据（在册守卫的纯度那一格钉的就是这两把，名册点名哪几枚文件由那一格自己钉）。
+  - **编译期稳定性注解这一条今天是有意的例外**：`domain/model/Course.kt` 与 `domain/schedule/ConflictDetector.kt`
+    给数据类挂的 `@Immutable` 只喂 Compose 的稳定性推断、不进任何 JVM 判据，本仓允许它留在 domain 的数据类上；
+    例外到此为止 —— 判据本体（被名册点名的那些文件）两种形状都一枚不许出场。
+  - **「纯函数」还包括不读时钟**：今天／现在这类事实由调用点当参数递进来（`today: LocalDate`），
+    判据本体自己读钟就不是可 JVM 单测的纯函数 —— 同一次操作的两次点击可能给出两个结论，
+    而且那格永远没法用固定日期测（`ScheduleExporters` 的两枚公共函数就是这一条的落点）。
 - `data/local/` 之外**不允许**直接碰 Room；写库一律走 Repository。
 - ViewModel 用 `withImportLock` 把所有导入入口互斥，避免并发抓取/写入。
 

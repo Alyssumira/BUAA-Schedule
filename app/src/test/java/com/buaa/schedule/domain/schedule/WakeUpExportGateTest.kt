@@ -7,6 +7,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.LocalDate
 
 /**
  * T279②：把「WakeUp 导出到底该不该碰用户选中的那个文件」那一判钉成表驱动单测（纯 JVM、零时钟注入面）。
@@ -296,7 +297,7 @@ class WakeUpExportGateTest {
             course(name = "没有周次的课", periods = listOf(1, 2), weeks = emptyList()),
             course(name = "两档都缺的课", periods = emptyList(), weeks = emptyList()),
         )
-        val json = ScheduleExporters.toWakeUpJson(courses, null, emptyList())
+        val json = ScheduleExporters.toWakeUpJson(courses, null, emptyList(), LocalDate.of(2026, 9, 15))
         val drops = WakeUpDropTally.tally(courses)
         val written = courses.size - drops.droppedCourses
         assertEquals("三门课都落进两档 drop 之一（一门只落一档）", 3, drops.droppedCourses)

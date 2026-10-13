@@ -17,6 +17,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.LocalDate
 
 /**
  * 「这门课没有节次」时，**定位/导出**那几条链上的落点。
@@ -57,6 +58,8 @@ class EmptyPeriodPlacementTest {
         courses = courses,
         semester = null,
         timeSlots = emptyList(),
+        // 没有学期行 ⇒ 这一枚 today 就是导出件自己声明的起始日（固定值，本格判的是节次不是日期）
+        today = LocalDate.of(2026, 9, 7),
     )
 
     // —— 可达性：空节次的 Course 不是虚构的输入 ——

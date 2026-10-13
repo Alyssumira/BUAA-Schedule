@@ -2273,10 +2273,13 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 return@launch
             }
             val json = withContext(Dispatchers.Default) {
+                // 「今天」出自 dayTicker 滴进 uiState 的那一枚值（不是这里再读一次时钟）：
+                // 顶栏「第 N 周」与这份导出件的兜底起始日必须同源于一次读数，跨零点时才会说同一天。
                 com.buaa.schedule.domain.schedule.ScheduleExporters.toWakeUpJson(
                     courses,
                     semester,
                     repository.getTimeSlots(),
+                    uiState.value.today,
                 )
             }
             // 不进导出件的课有**两档**（T27 没有节次 / T203 没有周次），两档都得报数，且一门只落一档：

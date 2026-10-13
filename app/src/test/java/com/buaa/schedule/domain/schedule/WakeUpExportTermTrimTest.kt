@@ -5,6 +5,7 @@ import com.buaa.schedule.domain.model.Semester
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.LocalDate
 
 /**
  * T222 病灶 3（#307）**WakeUp 那条导出链**的表驱动格子。
@@ -28,12 +29,23 @@ class WakeUpExportTermTrimTest {
     private val semesterStart = "2026-09-07"
     private val termWeeks = 19
 
-    private fun semester(weeks: Int = termWeeks) = Semester(
+    /**
+     * 三枚**固定**的「今天」（T351 裁 甲：导出器自己一枚钟都不读 ⇒ 这三档才第一次成为可测的输入）。
+     * 学期 2026-09-07 起 19 周 ⇒ 期末那一周是 2027-01-11..17。
+     */
+    private val todayInTerm = LocalDate.of(2026, 9, 15)
+    private val todayBeforeTerm = LocalDate.of(2026, 8, 31)
+    private val todayAfterTerm = LocalDate.of(2027, 2, 1)
+
+    private fun semester(weeks: Int = termWeeks, startDate: String = semesterStart) = Semester(
         termCode = "T",
         termName = "本学期",
-        startDate = semesterStart,
+        startDate = startDate,
         totalWeeks = weeks,
     )
+
+    /** 学期行的 startDate 是一枚 parse 当场拒掉的形（教务脏数据）⇒ 兜底那一档与「没有学期行」同一判据 */
+    private fun malformedSemester() = semester(startDate = "07/09/2026")
 
     private fun course(weeks: List<Int>, periods: List<Int> = listOf(1, 2), day: Int = 1) = Course(
         id = 1L,
@@ -45,14 +57,19 @@ class WakeUpExportTermTrimTest {
         weeks = weeks,
     )
 
-    private class Exported(val maxWeek: Int, val entries: List<Entry>) {
+    private class Exported(val maxWeek: Int, val startDate: String, val entries: List<Entry>) {
         data class Entry(val startWeek: Int, val endWeek: Int, val type: Int)
     }
 
-    /** 只把三枚周次字段捞出来：本卡动的是它们，别的（节次、颜色、day）一格都不该变。 */
+    /** 只把三枚周次字段与那枚 startDate 捞出来：别的（节次、颜色、day）一格都不该变。 */
     private fun parse(json: String): Exported {
         val maxWeek = Regex("\"maxWeek\":(\\d+)").find(json)?.groupValues?.get(1)?.toInt()
             ?: error("导出件里没有 maxWeek 那一行：$json")
+        // 顶层与 tableInfo 各写一枚 startDate（同一个 `start` 局部量）：两枚都捞出来比一遍，
+        // 只数第一枚的话，"两份真相"那种形状（顶层用今天、tableInfo 用行里的日期）就量不出来。
+        val starts = Regex("\"startDate\":\"([^\"]*)\"").findAll(json).map { it.groupValues[1] }.toList()
+        assertEquals("导出件里 startDate 恰好两枚（顶层 + tableInfo）：$json", 2, starts.size)
+        assertEquals("两枚 startDate 必须同源（实到 $starts）：$json", starts.first(), starts.last())
         val entries = Regex("\"startWeek\":(-?\\d+),\"endWeek\":(-?\\d+),\"type\":(-?\\d+)").findAll(json).map {
             Exported.Entry(
                 it.groupValues[1].toInt(),
@@ -60,11 +77,11 @@ class WakeUpExportTermTrimTest {
                 it.groupValues[3].toInt(),
             )
         }.toList()
-        return Exported(maxWeek, entries)
+        return Exported(maxWeek, starts.first(), entries)
     }
 
-    private fun export(courses: List<Course>, row: Semester?): Exported =
-        parse(ScheduleExporters.toWakeUpJson(courses, row, emptyList()))
+    private fun export(courses: List<Course>, row: Semester?, today: LocalDate = todayInTerm): Exported =
+        parse(ScheduleExporters.toWakeUpJson(courses, row, emptyList(), today))
 
     private data class Cell(
         val name: String,
@@ -175,8 +192,8 @@ class WakeUpExportTermTrimTest {
     fun clippingWeeksChangesNothingElseInTheExportedCourse() {
         val inTerm = course(listOf(1, 2))
         val withPhantom = course(listOf(1, 2, 20, 21))
-        val jsonInTerm = ScheduleExporters.toWakeUpJson(listOf(inTerm), semester(), emptyList())
-        val jsonPhantom = ScheduleExporters.toWakeUpJson(listOf(withPhantom), semester(), emptyList())
+        val jsonInTerm = ScheduleExporters.toWakeUpJson(listOf(inTerm), semester(), emptyList(), todayInTerm)
+        val jsonPhantom = ScheduleExporters.toWakeUpJson(listOf(withPhantom), semester(), emptyList(), todayInTerm)
 
         val bodyInTerm = jsonInTerm.substringAfter("\"courses\":[")
         val bodyPhantom = jsonPhantom.substringAfter("\"courses\":[")
@@ -187,6 +204,50 @@ class WakeUpExportTermTrimTest {
         )
         assertTrue("界内那条的 endWeek 仍是 2（没被裁过头）", bodyInTerm.contains("\"endWeek\":2"))
         assertTrue("越界那条的 endWeek 被收在 2 ⇒ 不再写 21", !bodyPhantom.contains("\"endWeek\":21"))
+    }
+
+    @Test
+    fun `学期起始日三档 乘 今天三档 九格逐格钉死`() {
+        val rows = listOf(
+            // (格名, 学期行, 递进来的今天, 导出件该声明的 startDate)
+            "存在·今天落在学期内" to Triple(semester(), todayInTerm, "2026-09-07"),
+            "存在·今天落在学期前" to Triple(semester(), todayBeforeTerm, "2026-09-07"),
+            "存在·今天落在学期后" to Triple(semester(), todayAfterTerm, "2026-09-07"),
+            "缺失·今天落在学期内（周二 ⇒ 回本周一）" to Triple(null, todayInTerm, "2026-09-14"),
+            "缺失·今天落在学期前（周一 ⇒ 原样出场）" to Triple(null, todayBeforeTerm, "2026-08-31"),
+            "缺失·今天落在学期后（周一 ⇒ 原样出场）" to Triple(null, todayAfterTerm, "2027-02-01"),
+            "畸形·今天落在学期内" to Triple(malformedSemester(), todayInTerm, "2026-09-14"),
+            "畸形·今天落在学期前" to Triple(malformedSemester(), todayBeforeTerm, "2026-08-31"),
+            "畸形·今天落在学期后" to Triple(malformedSemester(), todayAfterTerm, "2027-02-01"),
+        )
+        for ((name, cell) in rows) {
+            val (row, today, expected) = cell
+            // 每格显式喂 today（改前三档里有两档压根测不了：导出器自己读钟，期望值只能跟着跑测试那天漂）
+            assertEquals(name, expected, export(listOf(course(listOf(1, 2))), row, today).startDate)
+        }
+    }
+
+    /**
+     * 九格之外的两枚反证：
+     * - 今天**三档互不相同**才算钉住了「today 真进了输出」（缺失/畸形两档里三格各给一枚不同日期）；
+     * - 学期行里那枚好日期把三枚 today 全**吃掉**（三格同值）⇒ 参数位没有渗进"有学期行"那一档。
+     * 再加历史值那一格：startDate 不是周一（教务给过周日）时仍归一到周一 —— 归一那一手没被裁成"直接写行里的值"。
+     */
+    @Test
+    fun `today 只在判不出那一档进输出 而历史值仍归一到周一`() {
+        val fallbacks = listOf(todayInTerm, todayBeforeTerm, todayAfterTerm).map {
+            export(listOf(course(listOf(1, 2))), null, it).startDate
+        }
+        assertEquals("三枚 today 交出三枚不同日期（缺学期行那一档 today 确实进了输出）：$fallbacks", 3, fallbacks.distinct().size)
+        val present = listOf(todayInTerm, todayBeforeTerm, todayAfterTerm).map {
+            export(listOf(course(listOf(1, 2))), semester(), it).startDate
+        }
+        assertEquals("有学期行时三枚 today 交出同一枚日期（today 进不了这一档）：$present", 1, present.distinct().size)
+        assertEquals(
+            "startDate 是周日（2026-09-13）那一档仍归一到周一，且用的**不是** today：今天递一枚学期外的",
+            "2026-09-07",
+            export(listOf(course(listOf(1, 2))), semester(startDate = "2026-09-13"), todayBeforeTerm).startDate,
+        )
     }
 
     /** 两档 drop 的形状不许被本卡改成三档（`WakeUpExportDropShapeGuardTest` 按源码数，这枚按输出数）。 */

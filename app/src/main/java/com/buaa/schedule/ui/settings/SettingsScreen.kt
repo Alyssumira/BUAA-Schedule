@@ -1650,7 +1650,7 @@ fun SettingsScreen(
                     summary = "生成纯文本周课表，可粘贴到聊天工具",
                     onClick = {
                         val text = com.buaa.schedule.domain.schedule.ScheduleExporters.toWeeklyText(
-                            state.courses, state.semester, state.timeSlots, null,
+                            state.courses, state.semester, state.timeSlots, null, state.today,
                         )
                         val clipboard = exportContext.getSystemService(Context.CLIPBOARD_SERVICE)
                             as android.content.ClipboardManager

@@ -11,7 +11,9 @@ import com.buaa.schedule.domain.model.weekdayLabel
 import java.time.LocalDate
 
 /**
- * 数据导出（纯函数，可单测）：
+ * 数据导出（纯判据，可单测）：本仓口径 —— 零 android / androidx import（纯度那把尺按**两种形状**判：
+ * `import` 行与 `@androidx.…` 全限定写法都算出场，钉在册守卫的 ⑤ 那格）、不读时钟、不读时区、不读库 ——
+ * 「今天」由调用点当参数递进来（两枚公共函数各收一枚 `today`，同一次导出只读一次钟）。
  * - [toWakeUpJson]：WakeUp 课程表兼容 JSON——用户可把它导入 WakeUp 继续用，
  *   降低迁移成本（schema 参照社区通用格式：name/position/day/startNode/step/startWeek/endWeek/type/color）。
  * - [toWeeklyText]：纯文本周课表，便于粘贴到聊天工具。
@@ -49,18 +51,25 @@ object ScheduleExporters {
      *     （RFC 8259 §7 的另一手：串内引号必须转义；审计只点了裸换行那一手）。
      *     现在这一枚也走 [WakeUpJsonText.literal]：sanitize 对机器生成的 ASCII 是一次空操作，
      *     escape 把串内的引号折成 `\"` ⇒ 交回的文件合法，而 `time` 的**内容**一字不变
-     *     （对方解析出来的仍是那串节点表）。`compact` 那一手只是把冒号摘掉，不是转义落点。 */
+     *     （对方解析出来的仍是那串节点表）。`compact` 那一手只是把冒号摘掉，不是转义落点。
+     *
+     * @param today 「今天」的唯一出处 = 调用点（`ScheduleViewModel.exportWakeUpTo` 递的是
+     *   `uiState.today`，即 dayTicker 的滴答值）：内核读钟就不是纯判据 —— 同一次导出的两次点击
+     *   可能给出不同结论，而没有学期行时「第 1 周周一」会跟着屏幕外的时刻漂（T351 裁 甲）。 */
     fun toWakeUpJson(
         courses: List<Course>,
         semester: Semester?,
         timeSlots: List<TimeSlot>,
+        today: LocalDate,
     ): String {
         val slots = if (timeSlots.isNotEmpty()) timeSlots else TimeSlotProfile.DEFAULT
-        // WakeUp 按「startDate=第 1 周周一」推周次；无学期时用今天兜底必须先归一到周一，
-        // 否则对方 App 里整表课程错位最多 6 天
+        // WakeUp 按「startDate=第 1 周周一」推周次；没有学期行、或那枚 startDate 畸形时，兜底用的是
+        // **调用点递进来的那枚 today**（内核一枚钟都不读），且必须先归一到周一，
+        // 否则对方 App 里整表课程错位最多 6 天。
+        // 两手吃同一枚 today：改前这里读两次 LocalDate.now()，正好跨过零点时 parse 那一手与兜底那一手
+        // 会拿到两枚不同的日期（同一次导出两只钟 = #338 那一族的形状）。
         val startMonday = WeekCalculator.mondayOf(
-            runCatching { LocalDate.parse(semester?.startDate ?: LocalDate.now().toString()) }
-                .getOrDefault(LocalDate.now())
+            semester?.startDate?.let { raw -> runCatching { LocalDate.parse(raw) }.getOrNull() } ?: today
         )
         val start = startMonday.toString()
         // 这一枚数同时写进 `maxWeek`（见下面那行）⇒ 它就是这份导出件自己声明的学期上界，
@@ -127,16 +136,23 @@ object ScheduleExporters {
      *
      * 一行里的地点与节次走 [joinMeta]：教务确实给过没有教室、也没有节次的行，
      * 那时缺的那一段连同 " · " 一起不出场，而不是留下 "高等数学 · " 这种像被截断的尾巴。
+     *
+     * @param today 「今天」的唯一出处 = 调用点：设置页那一枚递的是 `uiState.today`
+     *（dayTicker 的滴答值，跨午夜由它推进），与同一屏顶栏「第 N 周」吃的是同一次读数。
      */
     fun toWeeklyText(
         courses: List<Course>,
         semester: Semester?,
         timeSlots: List<TimeSlot>,
         week: Int?,
+        today: LocalDate,
     ): String {
         val slots = if (timeSlots.isNotEmpty()) timeSlots else TimeSlotProfile.DEFAULT
+        // 「哪一周是本周」按调用点递进来的 today 算，内核不读钟（与 ui 层 combine 里那一枚
+        // currentWeekOrNull 同一形状）：同一屏上的顶栏周次与这份导出件必须来自同一次读数，
+        // 否则跨过零点时标题念「第 N 周」而正文裁的是上一周。
         val targetWeek: Int? = week ?: semester?.startLocalDate?.let { start ->
-            WeekCalculator.currentWeekOrNull(start, semester.totalWeeks, LocalDate.now())
+            WeekCalculator.currentWeekOrNull(start, semester.totalWeeks, today)
         }
         val header = buildString {
             append(semester?.termName?.let { "$it · " } ?: "")

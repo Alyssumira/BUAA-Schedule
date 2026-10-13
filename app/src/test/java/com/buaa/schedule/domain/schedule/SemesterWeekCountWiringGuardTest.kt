@@ -55,7 +55,7 @@ import org.junit.Test
  * ## 如实写（覆盖面边界与已知不等）
  * - 只扫 `app/src/main/java` 下的 `.kt`，读的是**工作树**（已在 `app/build.gradle.kts` 的
  *   `guardReadWorkingTreeFiles` 输入面里，T92①）；零 android import、零 Robolectric、零时钟、零设备。
- * - 夹取那把尺只认「coerceIn 下界 1、上界 MAX_TOTAL_WEEKS」这一形。`ScheduleExporters.kt:68` 那枚
+ * - 夹取那把尺只认「coerceIn 下界 1、上界 MAX_TOTAL_WEEKS」这一形。`ScheduleExporters.kt:77` 那枚
  *   `semester?.totalWeeks ?: CourseConstraints.MAX_TOTAL_WEEKS` 是**兜底**不是夹取，不在本册子里
  *   —— 它在台账 #395 那一档、本卡白名单外（导出链行为不许顺手改）⇒ 登记为欠账，见回执。
  * - `SemesterStats.kt:238` 末尾那一枚夹取在册（它防的是退路那把课程周号尺越界，不是学期行），
