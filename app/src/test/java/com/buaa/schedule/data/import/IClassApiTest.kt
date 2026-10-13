@@ -2,6 +2,7 @@ package com.buaa.schedule.data.import
 
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -19,6 +20,10 @@ import java.nio.charset.Charset
  *   那一档是这条链上最坏的假成功（用户不会去核对，而课堂出勤记录真的没写上）；
  * - **空体判失败** ⇒ 实测喂给数字型属性一个非数字值，服务端回 2 字节 `\r\n`，
  *   那是"处理到一半死了"，不是"签成了"；
+ * - **T349：转走／读不回来／真空体是三档，不许折成一档** ⇒ 屏上那句逐字走到失败卡第一行
+ *   （`SignInViewModel.fail()`）与登录页那句「登录失败：…」（`IClassLoginScreen.serverMessage`），
+ *   所以每一档各自规定"必须念什么、绝对不许念什么"：读不回来那一档对服务端的答复一无所知，
+ *   连「服务端」三个字都不许上屏；3xx 那一档不许从那张转跳页的体里捞出成功；
  * - **ERRMSG 逐字透传** ⇒ 厂商的中文文案我们一条都没有，也没有分类，
  *   包一层"签到失败"就把唯一那条真信息吃掉了；
  * - **charset 先看头、没有就 GBK** ⇒ 厂商客户端就是这么初始化 charset 的，
@@ -312,6 +317,237 @@ class IClassApiTest {
             assertTrue("空凭据本该失败：$pair", runBlocking { api2.login(pair.first, pair.second) }.isFailure)
         }
         assertEquals("空凭据居然还发了请求", 0, calls)
+    }
+
+    // ==== T349：三档 × 两条路（假响应表驱动，逐格点名"屏上那句到底断言了谁"）====
+
+    /**
+     * 一格三样东西：档位名、递进 `classify*` 的假响应、以及**屏上那一句**的归属判据。
+     *
+     * "屏上那句"不是内部状态，是逐字走到用户眼前的那两行：
+     * - 签到：`classifySign(...)` 的异常 message → `SignInViewModel.fail()`（:298-302）→
+     *   `SignInState.Failed.reason` → 那张失败卡的第一行；
+     * - 登录：`classifyLogin(...)` 的异常 message → `IClassLoginScreen` 的 `serverMessage` →
+     *   「登录失败：$serverMessage」那一句。
+     * 所以 say / notSay 数的是**那句话在替谁说话**：
+     * - `EmptyBody`：零字节本身是响应的一部分，所以有资格说「iClass 回了空响应」；
+     *   但说不了「服务端没有受理」/「登录没有发生」—— 一枚空体里读不出受理没受理；
+     * - `BodyUnreadable`：盘上关于服务端的答复**一个事实都没有**（我们连体都没拿回来），
+     *   所以它的句子连「服务端」三个字都不许出现，只许念我们这侧断了；
+     * - `Redirected`：3xx 状态码是我们真读到的，所以能说「把这次请求转走了」；
+     *   但不许说转去哪（`Location` 我们根本不读），更不许从那张转跳页的体里捞出成功。
+     */
+    private data class UnreadableRung(
+        val name: String,
+        /** 与 `IClassApi.Envelope` 里那一档逐字同名的枚号（名册闭合由 ③ 那枚守卫吃它） */
+        val envelope: String,
+        val response: IClassRawResponse,
+        val signSay: List<String>,
+        val signNotSay: List<String>,
+        val loginSay: List<String>,
+        val loginNotSay: List<String>,
+    )
+
+    /** 那一枚挂在查询串上的 id：假响应的体里故意把它写进了转跳地址，为的是抓住"凭证上屏" */
+    private val credential = "2488752"
+
+    private val unreadableRungs = listOf(
+        UnreadableRung(
+            name = "服务端把请求转走了（3xx）",
+            envelope = "Redirected",
+            response = IClassRawResponse(
+                302,
+                "text/html",
+                """<a href="https://evil.example.com/p?from=8181&id=$credential">moved</a>""".toByteArray(Charsets.UTF_8),
+            ),
+            signSay = listOf("转走", "没跟过去"),
+            signNotSay = listOf("成功", "服务端没有受理", "读回来", "evil.example.com", "https", "http", "id=", credential),
+            loginSay = listOf("转走", "没有拿到 id"),
+            loginNotSay = listOf("成功", "登录没有发生", "读回来", "evil.example.com", "https", "http", "id=", credential),
+        ),
+        UnreadableRung(
+            name = "响应体没读回来（超时／中途断）",
+            envelope = "BodyUnreadable",
+            response = IClassRawResponse(200, null, null),
+            signSay = listOf("没把", "读回来"),
+            // 这一档最要紧的一格：它对服务端的答复一无所知，所以一个字都不许替服务端说
+            signNotSay = listOf("服务端", "回了空", "空响应", "成功", "转走", "没有受理"),
+            loginSay = listOf("没把", "读回来", "没有拿到 id"),
+            loginNotSay = listOf("服务端", "回了空", "空响应", "成功", "转走", "登录没有发生"),
+        ),
+        UnreadableRung(
+            name = "真空体（服务端回了零字节）",
+            envelope = "EmptyBody",
+            response = IClassRawResponse(200, null, ByteArray(0)),
+            signSay = listOf("回了空响应", "没有任何受理的证据"),
+            signNotSay = listOf("没有受理", "读回来", "转走", "成功"),
+            loginSay = listOf("回了空响应", "没有拿到 id"),
+            loginNotSay = listOf("登录没有发生", "读回来", "转走", "成功"),
+        ),
+    )
+
+    /** 三档在签到那一路：逐格点名屏上第一行念的是谁 */
+    @Test
+    fun `三档假响应在签到那一路各念各的`() {
+        for (rung in unreadableRungs) {
+            val result = api.classifySign(rung.response)
+            assertTrue("「${rung.name}」那一档本该失败，却判成了签成", result.isFailure)
+            val message = failedMessage(result)
+            for (needle in rung.signSay) {
+                assertTrue("「${rung.name}」那句里没有「$needle」，读起来不像这一档：$message", message.contains(needle))
+            }
+            for (banned in rung.signNotSay) {
+                assertFalse("「${rung.name}」那句替不该说话的一方说了话（含「$banned」）：$message", message.contains(banned))
+            }
+            assertTrue(
+                "读不出结论的三档要落成 IClassUnexpectedResponseException（界面据此不给「去登录」出口）：${rung.name}",
+                result.exceptionOrNull() is IClassUnexpectedResponseException,
+            )
+        }
+    }
+
+    /** 三档在登录那一路：同一张表的另外两格，落点是 IClassLoginScreen 那句「登录失败：…」 */
+    @Test
+    fun `三档假响应在登录那一路各念各的`() {
+        for (rung in unreadableRungs) {
+            val result = api.classifyLogin(rung.response)
+            assertTrue("「${rung.name}」那一档本该失败，却把 id 交出去了", result.isFailure)
+            assertNull("「${rung.name}」那一档交回了 id（等于拿一条读不懂的响应去建会话）", result.getOrNull())
+            val message = failedMessage(result)
+            for (needle in rung.loginSay) {
+                assertTrue("「${rung.name}」那句里没有「$needle」，读起来不像这一档：$message", message.contains(needle))
+            }
+            for (banned in rung.loginNotSay) {
+                assertFalse("「${rung.name}」那句替不该说话的一方说了话（含「$banned」）：$message", message.contains(banned))
+            }
+            assertTrue(
+                "登录那一路三档都要落成 IClassLoginFailedException（登录页据它决定给不给重登表单）：${rung.name}",
+                result.exceptionOrNull() is IClassLoginFailedException,
+            )
+        }
+    }
+
+    /**
+     * 三档两两不折成同一句 —— 这一格钉的就是卡面乙那一笔本身。
+     *
+     * 从前 :97 那一折让「读不回来」与「真空体」交回同一个 `ByteArray(0)`，于是两档在屏上是同一句话；
+     * 把那一折扭回来（变异臂 W）时，上面两枚逐格判据仍然全绿（它们各自喂的假响应没变），
+     * **只有这一格会红**：它不认档位名，只认"两句话是不是同一句"。
+     */
+    @Test
+    fun `读不回来与真空体与转走是三条不同的句子`() {
+        val sign = unreadableRungs.map { failedMessage(api.classifySign(it.response)) }
+        val login = unreadableRungs.map { failedMessage(api.classifyLogin(it.response)) }
+        assertEquals("签到那三档折成了同一句（读失败又被当成空体）：", 3, sign.toSet().size)
+        assertEquals("登录那三档折成了同一句：", 3, login.toSet().size)
+        // 而"我们这侧断了"那一档与"服务端回了零字节"那一档必须能靠主语分开
+        val unreadable = sign[1]
+        val empty = sign[2]
+        assertTrue("读不回来那句没有站在我们这侧：$unreadable", unreadable.contains("读回来") && !unreadable.contains("回了"))
+        assertTrue("真空体那句没有站在服务端那一侧：$empty", empty.contains("回了空响应"))
+    }
+
+    /**
+     * `classifyEnvelope` 交回的必须是那一档本身，不是"事后由措辞反推的一档"。
+     *
+     * 卡面 ⑤ 的朝窄臂（在册册子里摘掉一枚档位）红在这一格与 ③ 的名册闭合那一格上：
+     * 档位被并掉时 message 可能还是那句人话，而档位名先没。
+     */
+    @Test
+    fun `三档假响应各落回自己那一档`() {
+        for (rung in unreadableRungs) {
+            assertEquals("「${rung.name}」落错了档：", rung.envelope, api.classifyEnvelope(rung.response).javaClass.simpleName)
+        }
+    }
+
+    /**
+     * 3xx 的体里就算躺着一枚完整的"签成了"外壳，也不许捞出成功 —— 硬约束 2 的行为面。
+     *
+     * 这一格是"顺序即语义"的唯一实测面：把 3xx 那一判挪到解体之后，
+     * 这一格当场从失败翻成成功（而它翻过去就是这条链上最贵的那枚假成功：用户不再核对，
+     * 而课堂出勤记录其实没写上 —— 见 classifySign 的 KDoc）。
+     */
+    @Test
+    fun `转走那一档不许从体里捞出成功`() {
+        val signed = IClassRawResponse(
+            302,
+            null,
+            """{"STATUS":0,"ERRCODE":"100","result":{"stuSignStatus":"1","id":"$credential"}}""".toByteArray(Charsets.UTF_8),
+        )
+        val sign = api.classifySign(signed)
+        assertTrue("302 附带的外壳被当成签成了", sign.isFailure)
+        assertTrue("那句没念「转走」这件事：${failedMessage(sign)}", failedMessage(sign).contains("转走"))
+        val login = api.classifyLogin(signed)
+        assertTrue("302 附带的外壳被当成拿到了 id", login.isFailure)
+        assertNull("登录那一路从转跳响应里交回了 id（等于拿一条没跟过去的响应建会话）", login.getOrNull())
+    }
+
+    /** 读不回来排在状态码判档之前：一枚 500 而体没读回来时，说的是"没读回来"而不是"服务端没给原因" */
+    @Test
+    fun `读不回来那一档排在状态码之前`() {
+        val unreadable = api.classifySign(IClassRawResponse(500, null, null))
+        assertTrue("500 + 没读回来居然判成成功", unreadable.isFailure)
+        assertEquals(
+            "这一格该落 BodyUnreadable，而不是替服务端答「没给出业务原因」：",
+            "没把 iClass 的响应体读回来（超时或连接中途断），没有任何受理的证据",
+            failedMessage(unreadable),
+        )
+        // 反过来：500 且体读回来了，那一档仍然走状态码那一支（在册判据不许被新档顺手吃掉）
+        val withBody = api.classifySign(body("""{"STATUS":0}""", status = 500))
+        assertTrue("500 + 有体应当落 Unrecognized：${failedMessage(withBody)}", failedMessage(withBody).contains("500"))
+    }
+
+    /**
+     * 三档经接线缝（`signIn` / `login` 各一枚假 transport）也各落各的，并且**只发一趟**。
+     *
+     * `assertEquals(1, seen.size)` 这一格管的是 API 那一侧：一次 `signIn` 只叫一次 `execute`。
+     * transport 里面那一侧（平台会不会自己去跟那一跳）管不到，也不该由单测假装管到了 ——
+     * 它由 ③ 那枚源码形状守卫钉 + 列入未验到（真机那一次 3xx 到底由谁发的）。
+     */
+    @Test
+    fun `三档经签到与登录的接线缝各发且只发一趟`() {
+        for (rung in unreadableRungs) {
+            var calls = 0
+            val fake = IClassTransport { _, _, _ -> calls++; rung.response }
+            val signOutcome = runBlocking { IClassApi(fake).signIn(realCode, credential) }
+            assertEquals("「${rung.name}」那一路签到发了 ${calls} 趟（本该恰好一趟）", 1, calls)
+            assertTrue("「${rung.name}」那一路签到居然成功了", signOutcome.isFailure)
+            assertEquals(
+                "签到接线缝上的那句与档位表不是同一句：",
+                failedMessage(api.classifySign(rung.response)),
+                failedMessage(signOutcome),
+            )
+
+            var loginCalls = 0
+            val loginFake = IClassTransport { _, _, _ -> loginCalls++; rung.response }
+            val loginOutcome = runBlocking { IClassApi(loginFake).login("13800000000", "se cret") }
+            assertEquals("「${rung.name}」那一路登录发了 ${loginCalls} 趟（本该恰好一趟）", 1, loginCalls)
+            assertTrue("「${rung.name}」那一路登录居然拿到了 id", loginOutcome.isFailure)
+            assertEquals(
+                "登录接线缝上的那句与档位表不是同一句：",
+                failedMessage(api.classifyLogin(rung.response)),
+                failedMessage(loginOutcome),
+            )
+        }
+    }
+
+    /**
+     * 凭证不上一条能被人读到的路：三档在两路上交回的消息里都不许出现 URL、host、端口、参数名与那枚 id。
+     *
+     * 3xx 那一格的体里故意写了 `https://evil.example.com/p?from=8181&id=…`：
+     * 服务端给的转跳地址只要有一条被带进消息，它就顺着失败卡上屏、顺着 `Log.w` 进 logcat
+     * （口径同 `ScanReject` 那一族「只有形状，没有原文也没有参数值」—— 那张码是滚动码，
+     *  完整原文给出去等于把"还能再签一次"交给任何拿到这台设备的人）。
+     */
+    @Test
+    fun `三档那六句话里一个字的凭证都没有`() {
+        for (rung in unreadableRungs) {
+            for (message in listOf(failedMessage(api.classifySign(rung.response)), failedMessage(api.classifyLogin(rung.response)))) {
+                for (banned in listOf("iclass", "buaa", "8181", "8081", "evil", "http", "://", "courseSchedId", "timestamp", "id=", credential)) {
+                    assertFalse("屏上那句话里带了「$banned」（凭证或地址外流）：$message", message.contains(banned))
+                }
+            }
+        }
     }
 
     private fun findMainJavaDir(): File {
