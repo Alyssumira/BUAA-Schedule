@@ -30,8 +30,15 @@ import org.junit.Test
  *    + **逐字节**（签名交回 sealed 档位，不是 Boolean）；
  * 6. [theUpperBoundHasASingleSource] —— **逐字节**（上界取自 SemesterStats.TOTAL_DAYS 那一行）
  *    + **数出现次数**（内核体内没有第二枚 7 当界用）；
- * 7. [probeRecognisesThePreFixShape] —— **抹注释找锚点**：改前那三形喂进同一把尺各数到该数的值，
- *    而写在 KDoc 散文里的那些引用抹完必须 0 处（防"锚点拼错的假绿"，也防"把散文当证据"）。
+ * 7. [probeRecognisesThePreFixShape] —— **抹注释找锚点 + 读形状**：改前那三形喂进同一把尺各数到该数的值，
+ *    而写在 KDoc 散文里的那些引用抹完必须 0 处（防"锚点拼错的假绿"，也防"把散文当证据"）；
+ *    并自检第 ⑧ 层那两把探测器（声明尺认三形且不认 `private fun`、分词尺不许从长名里切出短名）；
+ * 8. [theMainSourceZeroCallRosterIsClosedAndNamed] —— **数出现次数（domain 全册）+ 按文件 + 逐字节**：
+ *    把「主源零调用」那批死件钉成一本**闭合名册**（台账 #616 要的正是枚数），逐枚点名唯一读者。
+ *    本层只登记、不删件；同名重载里死掉的那一枚名字级尺看不见，改按签名行与调用点字面逐字节钉；
+ * 9. [theKernelPointersNameTheRightGuardCellAndRightLine] —— **逐字节读 raw KDoc**：本格钉的**对象就是那句
+ *    散文本身**（注释把读者指到错的守卫格子／错的针尖行，台账 #615）。第 ⑦ 层禁的是"拿散文当代码
+ *    形状的证据"，这里钉的是"散文自己说了哪几个字"，两件事不冲突，所以这一层**故意不抹注释**。
  */
 class WeekdayDateOffsetSingleRulerGuardTest {
 
@@ -305,6 +312,185 @@ class WeekdayDateOffsetSingleRulerGuardTest {
                 "否则第 ⑦ 层那两枚对照物就是空摆的",
             mainSourcesWithRaw().any { occurrences(it.second, ".plusDays((course.dayOfWeek - 1).toLong())") > 0 },
         )
+
+        // ── 第 ⑧ 层那两把探测器的自检（本卡实测出的一枚坑，落进尺里）──
+        // 声明正则少闭一枚括号 ⇒ 伴生对象初始化抛 PatternSyntaxException，本文件九格全红、
+        // 而红点不在任何一枚断言上（ExceptionInInitializerError / NoClassDefFoundError）。
+        // 名册尺要是探测器坏了却没人查，「实到」就能悄悄变成空集，整本名册跟着空钉。
+        assertEquals(
+            "**钉法 = 读形状**：声明尺必须认得裸 `fun`／带修饰符的 `internal suspend fun`／扩展形 `fun Foo.bar(` " +
+                "三形并交出函数名（名册靠它才只登记非 private 声明）",
+            listOf("dayStatusOf", "owesAMessage", "today"),
+            listOf(
+                FUN_DECLARATION.find("fun dayStatusOf(day: LocalDate): String?")?.groupValues?.get(1),
+                FUN_DECLARATION.find("internal suspend fun owesAMessage(mins: Int)")?.groupValues?.get(1),
+                FUN_DECLARATION.find("fun WeekCalculator.today(): Int")?.groupValues?.get(1),
+            ),
+        )
+        assertFalse(
+            "**钉法 = 读形状**：`private fun` 不许被声明尺认进这本名册 —— 名册口径写的是「非 private」，" +
+                "它要是匹配上了，一枚没人调的私有助手就会被当成死件登记，尺就不再是它自述的那一把",
+            FUN_DECLARATION.containsMatchIn("private fun hidden(): Int = 1"),
+        )
+        assertFalse(
+            "**钉法 = 读形状**：分词尺不许从 `isCurrentWeekMatchesCurrentWeek` 里切出 `isCurrentWeek` —— " +
+                "第 ⑧ 层那本名册是名字级的，子串尺会把这种测试方法名顶成「有读者」，把死件读成活件",
+            lineIdentifiers("assertTrue(isCurrentWeekMatchesCurrentWeek(week))").contains("isCurrentWeek"),
+        )
+    }
+
+    // ─────────────── ⑧ 死件名册：domain 里「主源零调用」的函数（#616；本卡第 ⓪ 问裁的甲档 = 登记，不删） ───────────────
+
+    @Test
+    fun theMainSourceZeroCallRosterIsClosedAndNamed() {
+        val computed = domainFunctionsWithNoMainSourceCall()
+
+        assertEquals(
+            "**钉法 = 数出现次数（domain 全册）+ 读形状**：`app/src/main/java/com/buaa/schedule/domain` 下面，" +
+                "「main 侧除了自己那一枚声明行之外零调用」的非 private `fun`，必须与名册逐枚相等。" +
+                "尺 = 抹注释后按标识符分词（子串尺会把 `isCurrentWeekMatchesCurrentWeek` 那种测试方法名也算进来），" +
+                "声明行自己不算调用。多一枚 = 主源里又长出一枚没人调的函数；少一枚 = 有人把名册里某一枚接上了生产、" +
+                "或整枚删了。两种都要回来重钉这本名册 —— 本卡不许它悄悄复活，也不许悄悄变死。" +
+                "\n名册：" + MAIN_SOURCE_ZERO_CALL_FUNS.sorted() +
+                "\n实到：" + computed.sorted(),
+            MAIN_SOURCE_ZERO_CALL_FUNS.toSet(),
+            computed,
+        )
+
+        // 名册里每一枚的唯一读者逐枚点名：测试那一格被删掉，本层当场红（#616 说的就是
+        // 「测试覆盖着一个生产里不存在的形状」，这句承诺得有尺钉着才不算散文）
+        val readersBySymbol = identifierFilesBySymbol(testCodeSources(), SELF_GUARD_FILE)
+        for ((symbol, expectedReaders) in SOLE_READERS_OF_THE_DEAD) {
+            assertEquals(
+                "**钉法 = 数出现次数（按文件）**：名册里「$symbol」的读者册必须恰是 $expectedReaders。" +
+                    "本守卫自己把符号名写进了名册串，它不算读者（已按文件名排除 —— 这是名册尺的第二枚坑：" +
+                    "钉名册的那格文件自己会把自己读成第二枚读者）。实到：" + (readersBySymbol[symbol] ?: emptySet<String>()),
+                expectedReaders,
+                readersBySymbol[symbol] ?: emptySet<String>(),
+            )
+        }
+
+        // ── 名字级尺看不见的那一手：同名重载里死掉的那一枚（在册 #616 的第 5 枚就住在这里）──
+        val periodWindows = withoutComments(readMainSource(PERIOD_WINDOWS_FILE))
+        val todayPlanner = withoutComments(readMainSource(TODAY_PLANNER_FILE))
+        assertEquals(
+            "**钉法 = 数出现次数（按文件）**：`periodWindowsOf` 三枚重载都在，main 出现册子 = 本文件 6 枚" +
+                "（3 枚声明 + 3 处内部自调）+ TodayPlanner 1 枚 + 闹钟链 2 枚（1 枚 import + 1 处调用）。" +
+                "多一枚 = 有人给吃 `List<TimeSlot>` 的那枚重载接上了生产调用；少一枚 = 有一枚重载被删。" +
+                "⚠️ 这一手看不见「把某一处调用从 Map 重载挪到 List<TimeSlot> 重载」那一形（挪动不改枚数），" +
+                "要看那一形得做参数类型解析，不在文本尺射程内",
+            mapOf(PERIOD_WINDOWS_FILE to 6, TODAY_PLANNER_FILE to 1, PROGRESS_FILE to 2),
+            mainLineCountBySymbol("periodWindowsOf"),
+        )
+        assertEquals(
+            "**钉法 = 逐字节**：主源零调用那一枚重载（`periodWindowsOf` 吃 `List<TimeSlot>` 的那一形）的签名行必须还在 —— " +
+                "名册钉的是「它活着而 main 没人调」，不许悄悄删掉让那句口径失去宿主",
+            1,
+            occurrences(periodWindows, "    timeSlots: List<TimeSlot>,"),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数（按文件）+ 逐字节**：`minutesUntil` 在 main = 两枚声明 + 两处调用，" +
+                "两处调用都在 TodayPlanner 且吃的是 `LocalTime` 那一形 ⇒ `LocalDateTime` 那枚重载 main 零调用。" +
+                "调用点换成 LocalDateTime、或摘掉任一枚重载，这本册子就会动",
+            mapOf(PERIOD_WINDOWS_FILE to 2, TODAY_PLANNER_FILE to 2),
+            mainLineCountBySymbol("minutesUntil"),
+        )
+        assertEquals(
+            "**钉法 = 逐字节**：`minutesUntil(from: LocalDateTime, to: LocalDateTime)` 那枚签名必须恰一处",
+            1,
+            occurrences(periodWindows, "fun minutesUntil(from: LocalDateTime, to: LocalDateTime): Long ="),
+        )
+        for (needle in listOf("minutesUntil(now, it.start)", "minutesUntil(now, it.end)")) {
+            assertEquals(
+                "**钉法 = 逐字节**：TodayPlanner 那一手「$needle」必须恰一处（判定 LocalDateTime 重载死在主源的参照物）",
+                1,
+                occurrences(todayPlanner, needle),
+            )
+        }
+        assertEquals(
+            "**钉法 = 逐字节**：那两处调用的接收者 `now` 必须仍声明成 `now: LocalTime,` —— 它是「这两手落在 " +
+                "LocalTime 重载上」的唯一凭据；把它换成 LocalDateTime 就等于把 :173 那枚重载接回生产，本层要红",
+            1,
+            occurrences(todayPlanner, "now: LocalTime,"),
+        )
+
+        // ── 「死宿主里的口径声明」那一枚：LEGAL_DAY_RANGE（#615 的第二处）──
+        assertEquals(
+            "**钉法 = 数出现次数（全 main 册子）**：`LEGAL_DAY_RANGE` 在 main（抹注释后）只剩自己那一行声明 —— " +
+                "写侧 normalize 与读侧三处推导都不读它。谁把它接上生产或删掉，都要回来改这一格与同文件那句 KDoc",
+            1,
+            occurrences(mainCode(), "LEGAL_DAY_RANGE"),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数（按文件）**：`LEGAL_DAY_RANGE` 的读者册必须恰是 WeekdayDateOffsetTest 一枚文件",
+            setOf(WEEKDAY_DATE_OFFSET_TEST_FILE),
+            identifierFilesBySymbol(testCodeSources(), SELF_GUARD_FILE)["LEGAL_DAY_RANGE"] ?: emptySet<String>(),
+        )
+    }
+
+    // ─────────────── ⑨ 指路自检：注释不许把读者送到错的守卫格子／错的针尖行 ───────────────
+
+    @Test
+    fun theKernelPointersNameTheRightGuardCellAndRightLine() {
+        val raw = readMainSource(KERNEL_FILE) // 这一格**故意不抹注释**：钉的对象就是那句散文本身
+        val code = withoutComments(raw)
+
+        assertEquals(
+            "**钉法 = 逐字节读 raw KDoc**：内核那段指路句必须把「上界只有一个出处」这一判送到**第 ⑥ 层**" +
+                "（`theUpperBoundHasASingleSource`）那一格，且恰一句",
+            1,
+            occurrences(raw, "第 ⑥ 层按"),
+        )
+        assertEquals(
+            "**钉法 = 逐字节读 raw KDoc**：「第 ⑤ 层」必须 0 处 —— 第 ⑤ 层钉的是「纯 JVM、不折成 Boolean」，" +
+                "跟「上界只有一个出处」不相干；W 臂把这句改回去红的就是这一手",
+            0,
+            occurrences(raw, "第 ⑤ 层"),
+        )
+        assertEquals(
+            "**钉法 = 逐字节读 raw KDoc**：指路句钉的针尖必须是 `const val LAST_DAY_INDEX: Int = " +
+                "SemesterStats.TOTAL_DAYS` 那一行；raw 里两处（声明本体 + 指路句逐字引用它）",
+            2,
+            occurrences(raw, SINGLE_UPPER_BOUND_LINE),
+        )
+        assertEquals(
+            "**钉法 = 逐字节**：同一行针尖抹掉注释后在 main 仍恰一处 —— 这正是第 ⑥ 层数的那枚，两把尺对得上",
+            1,
+            occurrences(mainCode(), SINGLE_UPPER_BOUND_LINE),
+        )
+        assertEquals(
+            "**钉法 = 逐字节读 raw KDoc**：不许再把那枚针尖说成 `[LEGAL_DAY_RANGE] 那一行` —— 守卫全文没有出现" +
+                "过这个符号（第 ⑥ 层数的是 LAST_DAY_INDEX 那一行）",
+            0,
+            occurrences(raw, "[LEGAL_DAY_RANGE] 那一行"),
+        )
+        assertEquals(
+            "**钉法 = 逐字节读 raw KDoc**：「共用的那把尺」那半句必须 0 处 —— 它替 main 侧承诺「写侧与读侧三处" +
+                "都用这一枚区间」，而 main 一处都不读它（同层上面那枚枚数尺就是反证）",
+            0,
+            occurrences(raw, "共用的那把尺"),
+        )
+        assertEquals(
+            "**钉法 = 逐字节读 raw KDoc**：越上界那一档的注释里不许再写裸 `> 7` —— 同文件 LAST_DAY_INDEX 的 KDoc " +
+                "自己写着「不是再写一遍 7」，散文里钉第二枚 7 就是同一判据的第二个出处",
+            0,
+            occurrences(raw, "> 7"),
+        )
+        assertEquals(
+            "**钉法 = 逐字节读 raw KDoc**：「第 ①② 层按 dayOffsetOrReject( 数调用点」那半句仍然成立，" +
+                "两处调用点册子（① 逐字节整行、② 全 main 枚数）都在这本守卫里",
+            1,
+            occurrences(raw, "第 ①② 层"),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数**：内核体内（抹注释）拿数字当上界那一族照旧 0 处 —— 本格动了两句注释，" +
+                "不许顺手把代码里的那把尺挪走（与第 ⑥ 层同口径，这里再数一遍，防「改注释时误伤代码」）",
+            0,
+            occurrences(
+                balancedBlock(code, "object WeekdayDateOffset {"),
+                "> 7",
+            ) + occurrences(balancedBlock(code, "object WeekdayDateOffset {"), "in 1..7"),
+        )
     }
 
     // ─────────────── 小工具（抄自 reminder/TermWeekGateSingleSourceGuardTest） ───────────────
@@ -332,6 +518,73 @@ class WeekdayDateOffsetSingleRulerGuardTest {
     }
 
     private fun mainCode(): String = mainSourcesWithCode().joinToString("\n") { it.second }
+
+    // ── 第 ⑧⑨ 层用的那两把尺：按标识符分词（不是子串），声明行自己不算调用 ──
+
+    private fun rawTestSources(): List<Pair<String, String>> {
+        val root = findTestJavaDir()
+        val files = root.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
+        assertTrue("${root.path} 下一个 .kt 都没有，路径不对", files.isNotEmpty())
+        return files.map {
+            root.toPath().relativize(it.toPath()).toString().replace(File.separatorChar, '/') to it.readText().replace("\r\n", "\n")
+        }
+    }
+
+    private fun testCodeSources(): List<Pair<String, String>> = rawTestSources().map { it.first to withoutComments(it.second) }
+
+    private fun domainCodeSources(): List<Pair<String, String>> = mainSourcesWithCode().filter { it.first.startsWith(DOMAIN_PACKAGE_DIR) }
+
+    private fun lineIdentifiers(line: String): Set<String> = IDENTIFIER_TOKEN.findAll(line).map { it.value }.toSet()
+
+    /** domain 里非 private 的 `fun` 声明：name -> 它自己那些「文件:行」 */
+    private fun domainFunctionDeclarations(): Map<String, Set<String>> {
+        val declarations = HashMap<String, MutableSet<String>>()
+        for ((file, code) in domainCodeSources()) {
+            code.lines().forEachIndexed { index, line ->
+                val match = FUN_DECLARATION.find(line.trim()) ?: return@forEachIndexed
+                declarations.getOrPut(match.groupValues[1]) { HashSet() }.add("$file:${index + 1}")
+            }
+        }
+        return declarations
+    }
+
+    /**
+     * domain 里「main 侧除自己那枚声明行之外零调用」的函数名。
+     * ⚠️ 名字级尺：同名重载里死掉的那一枚在这里看不见（另一枚同名的活着就把整族算成活的），
+     *    所以第 ⑧ 层除了这本册子，还逐字节钉着那两枚重载的签名行与调用点。
+     */
+    private fun domainFunctionsWithNoMainSourceCall(): Set<String> {
+        val declarations = domainFunctionDeclarations()
+        val sites = HashMap<String, MutableSet<String>>()
+        for ((file, code) in mainSourcesWithCode()) {
+            code.lines().forEachIndexed { index, line ->
+                for (token in lineIdentifiers(line)) sites.getOrPut(token) { HashSet() }.add("$file:${index + 1}")
+            }
+        }
+        return declarations.mapNotNull { (name, ownDeclarationSites) ->
+            val usedElsewhere = (sites[name] ?: emptySet()).filterNot { it in ownDeclarationSites }
+            if (usedElsewhere.isEmpty()) name else null
+        }.toSet()
+    }
+
+    /** symbol -> 出现过它的那些文件（可按文件名排除某一枚，比如本守卫自己：它把符号名写进了名册串） */
+    private fun identifierFilesBySymbol(entries: List<Pair<String, String>>, excludeFile: String): Map<String, Set<String>> {
+        val out = HashMap<String, MutableSet<String>>()
+        for ((file, code) in entries) {
+            if (file.endsWith(excludeFile.substringAfterLast('/'))) continue
+            code.lines().forEach { line ->
+                for (token in lineIdentifiers(line)) out.getOrPut(token) { HashSet() }.add(file)
+            }
+        }
+        return out
+    }
+
+    /** main 里某一枚标识符按文件数的「出现过它的那些行」枚数 */
+    private fun mainLineCountBySymbol(symbol: String): Map<String, Int> =
+        mainSourcesWithCode()
+            .map { it.first to it.second.lines().count { line -> lineIdentifiers(line).contains(symbol) } }
+            .filter { it.second > 0 }
+            .toMap()
 
     /** 只抹注释、保留字符串字面量：main 与本文件的 KDoc 都逐字登记着改前那些形状 */
     private fun withoutComments(source: String): String {
@@ -423,6 +676,16 @@ class WeekdayDateOffsetSingleRulerGuardTest {
         throw IllegalStateException("找不到 app/src/main/java：当前目录 ${File("").absolutePath}")
     }
 
+    private fun findTestJavaDir(): File {
+        var dir: File? = File("").absoluteFile
+        repeat(6) {
+            val hit = listOf("src/test/java", "app/src/test/java").map { File(dir, it) }.firstOrNull { it.isDirectory }
+            if (hit != null) return hit
+            dir = dir?.parentFile
+        }
+        throw IllegalStateException("找不到 app/src/test/java：当前目录 ${File("").absolutePath}")
+    }
+
     private companion object {
         const val KERNEL_FILE = "com/buaa/schedule/domain/schedule/WeekdayDateOffset.kt"
         const val COURSE_CONSTRAINTS_FILE = "com/buaa/schedule/domain/schedule/CourseConstraints.kt"
@@ -441,5 +704,58 @@ class WeekdayDateOffsetSingleRulerGuardTest {
         const val OFFSET_USE = ".plusDays(dayTier.offsetDays)"
         const val REJECT_PROCEED = "if (dayTier !is WeekdayOffset.Accepted) continue"
         const val REJECT_NULL = "if (dayTier !is WeekdayOffset.Accepted) return null"
+
+        // ── 第 ⑧⑨ 层：死件名册与指路自检 ──
+
+        /** 名册尺的扫描面：domain 那一目录（台账 #616 的口径就是「domain 里主源零调用的函数」） */
+        const val DOMAIN_PACKAGE_DIR = "com/buaa/schedule/domain/"
+
+        const val PERIOD_WINDOWS_FILE = "com/buaa/schedule/domain/schedule/PeriodWindows.kt"
+        const val TODAY_PLANNER_FILE = "com/buaa/schedule/domain/schedule/TodayPlanner.kt"
+
+        /** 第 ⑥ 层逐字节钉的那一行针尖（第 ⑨ 层要确认指路句点的正是它） */
+        const val SINGLE_UPPER_BOUND_LINE = "const val LAST_DAY_INDEX: Int = SemesterStats.TOTAL_DAYS"
+
+        const val SELF_GUARD_FILE = "com/buaa/schedule/domain/schedule/WeekdayDateOffsetSingleRulerGuardTest.kt"
+        const val WEEKDAY_DATE_OFFSET_TEST_FILE = "com/buaa/schedule/domain/schedule/WeekdayDateOffsetTest.kt"
+        const val PERIOD_WINDOWS_TEST_FILE = "com/buaa/schedule/domain/schedule/PeriodWindowsTest.kt"
+        const val WEEK_CALCULATOR_EDGE_TEST_FILE = "com/buaa/schedule/domain/schedule/WeekCalculatorEdgeTest.kt"
+        const val EDITOR_MISSING_COURSE_EXIT_TEST_FILE = "com/buaa/schedule/domain/editor/EditorMissingCourseExitTest.kt"
+        const val FETCH_JOB_CARRIER_POLICY_TEST_FILE = "com/buaa/schedule/domain/importing/FetchJobCarrierPolicyTest.kt"
+
+        /**
+         * 名册（基点 `239ef4d` 现量，本卡第 ⓪ 问复算逐枚点开过）：domain 里「main 侧除声明外零调用」的函数。
+         * 在册 #616 说「5 枚不是 2 枚」——那 5 枚是 `PeriodWindows` ＋ `WeekCalculator` 那一族（含一枚
+         * 同名重载里死掉的，住不进这本名字级册子，由下面逐字节那两手钉着）；本卡把尺伸到整个 domain 目录，
+         * 另 4 枚同族的也一并收进来。删件不是本卡的选项（甲档），只登记与点名。
+         */
+        val MAIN_SOURCE_ZERO_CALL_FUNS = listOf(
+            "dayStatusOf", // PeriodWindows 裸 :145
+            "epochMillisToLocalDateTime", // PeriodWindows 裸 :204
+            "isCurrentWeek", // WeekCalculator 裸 :48
+            "isInFlightFact", // FetchJobCarrierPolicy 裸 :113
+            "owesAMessage", // EditorMissingCourseExit 裸 :98
+            "popsBackStack", // EditorMissingCourseExit 裸 :93
+            "shareCodeStreamStoppedCopy", // ShareCodeSizeGate 裸 :160 —— main 与 test 两侧都零读者
+        )
+
+        /** 名册里每一枚的唯一读者（空集 = 全仓除定义外没人读它） */
+        val SOLE_READERS_OF_THE_DEAD = mapOf(
+            "dayStatusOf" to setOf(PERIOD_WINDOWS_TEST_FILE),
+            "epochMillisToLocalDateTime" to setOf(PERIOD_WINDOWS_TEST_FILE),
+            "isCurrentWeek" to setOf(WEEK_CALCULATOR_EDGE_TEST_FILE),
+            "isInFlightFact" to setOf(FETCH_JOB_CARRIER_POLICY_TEST_FILE),
+            "owesAMessage" to setOf(EDITOR_MISSING_COURSE_EXIT_TEST_FILE),
+            "popsBackStack" to setOf(EDITOR_MISSING_COURSE_EXIT_TEST_FILE),
+            "shareCodeStreamStoppedCopy" to emptySet<String>(),
+        )
+
+        val IDENTIFIER_TOKEN = Regex("[A-Za-z_][A-Za-z0-9_]*")
+
+        /** `private fun` 天生不进册（修饰符不在这一串里），所以下面不必再单独排除它 */
+        val FUN_DECLARATION = Regex(
+            "^(?:public |internal |open |override |abstract |suspend |inline |final |infix |operator |external )" +
+                "*fun (?:[A-Za-z_][A-Za-z0-9_]*\\.)?([A-Za-z_][A-Za-z0-9_]*)\\(",
+        )
     }
 }

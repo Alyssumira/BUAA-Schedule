@@ -68,14 +68,23 @@ sealed class WeekdayOffset {
     /** 越下界（`dayOfWeek < 1`）：偏移为负 ⇒ 那一手会把课推到**上一周的周日** */
     data class BeforeWeek(override val dayOfWeek: Int, override val offsetDays: Long) : WeekdayOffset()
 
-    /** 越上界（`dayOfWeek > 7`）：偏移 ≥ 7 ⇒ 那一手会把课推到**下一周的周一** */
+    /**
+     * 越上界（`dayOfWeek > [WeekdayDateOffset.LAST_DAY_INDEX]`）：交回的那个数不小于同一枚上界 ⇒
+     * 那一手会把课推到**下一周的周一**。
+     *
+     * 这一行原本写的是裸 `7`：它说的正是「上界」那一维，而同文件 [LAST_DAY_INDEX] 自己的 KDoc
+     * 已经写明上界「取自 SemesterStats.TOTAL_DAYS，不是再写一遍 7」——散文里再钉一枚 7 就是
+     * 同一条判据的第二个出处（守卫第 ⑥ 层收的就是这个族），所以这里改点名那枚常量。
+     */
     data class AfterWeek(override val dayOfWeek: Int, override val offsetDays: Long) : WeekdayOffset()
 }
 
 /**
  * [WeekdayOffset] 的算法本体。单独一枚 `object` 是为了让「星期那一维的尺」在源码里有一个
- * 可以逐字节点名的宿主（守卫第 ①② 层按 `dayOffsetOrReject(` 数调用点，第 ⑤ 层按
- * [LEGAL_DAY_RANGE] 那一行钉「上界只有 SemesterStats.TOTAL_DAYS 一个出处」）。
+ * 可以逐字节点名的宿主（守卫 `WeekdayDateOffsetSingleRulerGuardTest` 第 ①② 层按
+ * `dayOffsetOrReject(` 数调用点，第 ⑥ 层按逐字节针尖
+ * `const val LAST_DAY_INDEX: Int = SemesterStats.TOTAL_DAYS` 钉「上界只有
+ * SemesterStats.TOTAL_DAYS 一个出处」，第 ⑧⑨ 层钉死件名册与这两句指路本身）。
  */
 object WeekdayDateOffset {
 
@@ -90,7 +99,18 @@ object WeekdayDateOffset {
      */
     const val LAST_DAY_INDEX: Int = SemesterStats.TOTAL_DAYS
 
-    /** 合法区间：写侧 [CourseConstraints.normalize] 与读侧三处推导共用的那把尺 */
+    /**
+     * 合法区间的**具名登记**：两端就是 [FIRST_DAY_INDEX] 与 [LAST_DAY_INDEX]，与内核判据同源。
+     *
+     * ⚠️ 别把它念成「运行时那把尺」—— main 侧今天一处都不读它：判据在 [dayOffsetOrReject] 体里
+     * 问的是那两枚端点，写侧 [CourseConstraints.normalize] 与读侧三处推导都只吃交回的档位，
+     * 没有一处拿这个 `IntRange` 去夹取。它唯一的读者是 `WeekdayDateOffsetTest` 里
+     * `legalRangeIsWhatTheKernelAcceptsAndNothingElse` 那一格。
+     *
+     * 这一枚「死宿主里的口径声明」连同 domain 里主源零调用的那些函数一起钉在名册尺上
+     * （`WeekdayDateOffsetSingleRulerGuardTest` 第 ⑧ 层）：谁把它接上生产、谁把它删掉、
+     * 谁又长出第三枚同形状的，都要回来重钉名册 —— 不许悄悄复活，也不许悄悄变死。
+     */
     val LEGAL_DAY_RANGE: IntRange = FIRST_DAY_INDEX..LAST_DAY_INDEX
 
     /**
