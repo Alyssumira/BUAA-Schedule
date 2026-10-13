@@ -26,7 +26,7 @@
 | 链路 | 方法 | 位置 | 说明 |
 | --- | --- | --- | --- |
 | 页面内抓取（**生产在用**） | `GET` + query string | `BuaaInPageFetcher.kt` | 走 byxt WebView 页面内 `fetch`，凭证随页面 Cookie 自动带上 |
-| 原生网络栈（仅 debug 的 Cookie 粘贴入口） | `POST` + form | `BuaaApi.kt` | 复刻不出页面上下文凭证，正式登录流程不用它 |
+| 原生网络栈（**已整条拆除**：`4b3f10e`（2026-09-18）删掉最后一枚实现文件，本仓再无一枚对应代码） | `POST` + form | ——（无现存文件可指） | 复刻不出页面上下文凭证，正式登录流程不用它；当年那枚 debug 的 Cookie 粘贴入口与实现一起删了。这一行留在原地的唯一理由是「别把它重建回来」，为什么复刻不出来由下面那一段解释 |
 
 `type=term`（整学期一次拉取）已由 `BuaaScheduleParserTest` / `SemesterCoursesCompletenessTest`
 覆盖验证可用；生产仍按周（`type=week`）循环抓取，以兼容部分课程周次不均匀的排课。
