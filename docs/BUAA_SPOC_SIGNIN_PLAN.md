@@ -241,6 +241,12 @@ Compose 封装替代（先按标准做法，体积数据出来后再决定砍）
 **扫码页** `ui/signin/SpocScanScreen.kt`（新）：
 1. 未授予 CAMERA → 系统授权弹窗（`rememberLauncherForActivityResult`，
    口径同 `MainActivity.kt:111`）；拒绝后留在页面给「相册识别」出口。
+   **现状（T339 复算，基点 `cb41583`）：这一枚连写不是"漂了"，它在上一批文档基点上就已经指错了地方** ——
+   `git show 259f786:app/src/main/java/com/buaa/schedule/MainActivity.kt` 的第 111 行是 `import com.buaa.schedule.widget.WidgetNavigation`，跟权限启动器无关。
+   按本句点名的构造（`registerForActivityResult` 那一枚系统授权弹窗）重钉，今值 = 裸 `:127`「`private val notificationPermissionLauncher = registerForActivityResult(`」，
+   它上面裸 `:126` 是同一块的 KDoc「`/** Android 13+ 通知权限：启动即申请一次（用户拒绝后不再骚扰，可在设置里开） */`」
+   （复算 `awk 'NR>=126 && NR<=129' app/src/main/java/com/buaa/schedule/MainActivity.kt` ⇒ 四行逐字读回）⇒ **本句那句"口径同"按现值仍成立，只有指路的那枚数要换成裸 `:127`**；
+   本行那枚 `111` 按 (A) 类留在原位不抹（整段是 T85 已拆那条链的方案正文，见页首横幅）。
 2. 已授予且 native 可用 → `Preview` + `ImageAnalysis`（`STRATEGY_KEEP_ONLY_LATEST`）
    → MLKit `BarcodeScanning.getDefaultScanner()`，约束：仅 `FORMAT_QR_CODE`、
    `inputImageRotationDegree` 跟随传感器方向、扫码成功即 `close` 分析流（防重复提交）。

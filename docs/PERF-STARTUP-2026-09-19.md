@@ -190,6 +190,12 @@ getter 的两条约束（已写进注释）：它在 `sLock` 里面被第一个�
 
 ### 4.1 接线（`MainActivity.kt:210-213`）
 
+**现状（T339 重钉，基点 `cb41583`）：本小节标题那枚连写今天落在裸 `:259-262`** —— 那四行逐字读回是
+「`ScanChainWarmUp.scheduleAfterFirstFrame(`」/「`scope = (application as BUAAApplication).applicationScope,`」/「`context = applicationContext,`」/「`)`」
+（复算 `awk 'NR>=259 && NR<=262' app/src/main/java/com/buaa/schedule/MainActivity.kt`），与下面那段代码块逐字同形 ⇒ **接线本身没有变过，只有行号漂了 49 行**；
+标题里那组 `210-213` 是 09-19 那版的读数，按 (A) 类留着不抹。⚠️ 本档那一枚 `MainActivity` 锚点与本页 §4.5 末尾那枚（下面第 419 行）今天漂的是**同一个 49 行**，
+所以这两枚可以用一把尺一起重钉；但**别把它当全仓的统一偏移** —— 同一枚文件在别的档里被点过的那几枚（`148`、`153`、`158`、`358`、`901-907`、`928`）各漂各的，逐枚按构造定位才钉得准（同下面那一格与本页 §4.5 末尾那一格）。
+
 ```kotlin
 ScanChainWarmUp.scheduleAfterFirstFrame(
     scope = (application as BUAAApplication).applicationScope,
@@ -417,6 +423,9 @@ adb pull /data/misc/perfetto-traces/scan.pftrace
 重新构建一份 APK。这比加开关便宜，也正是"不新增配置项"这条红线的用途。
 如果 ③ 量出来收益接近零，**这张卡的第三件事就该整体删掉**（净代价只有 §4.4 那笔常驻内存），
 删法就是 `MainActivity.kt:210` 那一次调用 + `ScanChainWarmUp.kt` + 它的 8 条守卫用例（T18b 之后）。
+**现状（T339 重钉，基点 `cb41583`）：本行那枚连写今天落在裸 `:259`**（`ScanChainWarmUp.scheduleAfterFirstFrame(` 那一行的起头，与 §4.1 标题那枚是同一个 49 行漂移），
+而那"8 条守卫用例"今天是 **10 条**（复算 `grep -c '^[[:space:]]*@Test' app/src/test/java/com/buaa/schedule/ui/signin/ScanChainWarmUpTest.kt` ⇒ 10；本行那个 8 是 T18b 那一档的读数、按 (A) 类留着）。
+`ScanChainWarmUp.kt` 本身盘上仍在（复算 `ls app/src/main/java/com/buaa/schedule/ui/signin/ScanChainWarmUp.kt` ⇒ 存在）⇒ 这一句"删法"今天仍然按形状成立，只有两枚数要按现值读。
 → **实测结论：收益不是零**（`.so` 的 dlopen + 解码器构造约 340 ms，且是在没点开扫码页的情况下
 发生的），所以这一档留着；但改前的两档顺序是错的，由 **T18b** 换序，读数见 §8 ③。
 

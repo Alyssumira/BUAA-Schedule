@@ -292,7 +292,10 @@ val willRemind = semesterStart != null && courses.isNotEmpty() &&
 时 ① 已经走了 `ClassProgressScheduler.cancelAll` 分支。搜索成本见
 `ReminderScheduler.kt:231-239`：`for (week in course.weeks.sorted())` × `for (segment in segments)`
 × 全部课程，`.minByOrNull` 收口——**每个候选都要展开节次段**（`toPeriodSegments`）。
-`MainActivity.kt:238-239` 的注释给了这门课的量级："课程上限 2000"。
+`MainActivity.kt:238-239` 的注释给了这门课的量级："课程上限 2000"。**现状（T339 重钉，基点 `cb41583`）：那一行注释今天落在裸 `:312`**，
+`awk 'NR==312' app/src/main/java/com/buaa/schedule/MainActivity.kt` 逐字读回「`// 对每门课展开「剩余周次 × 节次段」（课程上限 2000），`」⇒ 引号里那半句"课程上限 2000"一字未动，
+本句结论照旧成立；它上面那枚裸 `:311` 是同一注释块的前一行（「`// ⚠️ 必须离开 Main：resync 里的 planNextClassWindow 是普通阻塞函数，`」）。
+本行上面那组 `238-239` 是 09-18 那版的读数、按 (A) 类留着不抹；它也不是"整文件统一偏移"能算出来的（`MainActivity` 从 1,258 行长到 1,477 行、窗口不止一扇）。
 搜索成本不是"课数"而是"**(当前周次−1) × 节次段数 × 课程数**"——`nextOccurrence`
 与 `nextOrCurrentWindow` 都是周次升序遍历、只在第一个"尚未结束"的窗口处 return
 （`ReminderScheduler.kt:231-238`、`ClassProgressScheduler.kt:200-213`），

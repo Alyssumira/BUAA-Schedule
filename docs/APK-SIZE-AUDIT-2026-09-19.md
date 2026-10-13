@@ -479,6 +479,15 @@ T11/T12/T13 的设备侧证据各读一句），而这些行只有 release 才�
   —— 4 条逐条点开源码都在 `BuildConfig.DEBUG` 门后，属常量折叠 + 整程序死代码消除，**设计如此**；
   第 5 条 `data/import/SpocSession.kt:112` 是脚本切分假阳性（`${if (… "(空)" …)}` 里的引号把字面量截断），
   其静态前缀 `SPOC 会话已保存` 手工按字节查是 ALIVE。
+  **现状（T339 复算，基点 `cb41583`）：这五枚里今天只剩两枚读得回去，本卡逐枚点名、不编新号。**
+  ① `MainActivity.kt` 那一枚今天落在裸 `:161`（逐行读回 `android.util.Log.d("GlassDiag", "$name=$value")`，它上面裸 `:159` 仍是 `if (BuildConfig.DEBUG) {`
+  ⇒ 本行那句"在 DEBUG 门后"**一字未动**；复算 `awk 'NR>=159 && NR<=161' app/src/main/java/com/buaa/schedule/MainActivity.kt`）；
+  ② `GlassJankMonitor.kt` 那枚仍给 `val debug = BuildConfig.DEBUG`（复算 `awk 'NR==70' app/src/main/java/com/buaa/schedule/core/designsystem/GlassJankMonitor.kt` ⇒ 逐字同 ⇒ **未漂**，那枚连写不用改）；
+  ③ `BuaaLoginScreen.kt` 那枚今天落在裸 `:600` 读出的是 `// umi 抛 "Cannot read properties of null …" → 白屏、不发 API 请求` 那一行**注释**、不是 Log 调用 ⇒ 号漂了，
+  本卡只登记"**未验到**"（要重钉得先按 `BuildConfig.DEBUG` 门在那枚 1,000+ 行的文件里重新定位，本卡不猜号）；
+  ④⑤ `ui/signin/SpocLoginScreen.kt` 与 `data/import/SpocSession.kt` 那两枚**盘上已经没有这两枚文件**（T85 拆掉智学北航 SPOC 那一族；复算
+  `find app/src/main -name 'Spoc*.kt'` ⇒ 只剩 `ui/signin/SpocScanScreen.kt` 一枚，`SpocLoginScreen.kt`/`SpocSession.kt` 零枚）⇒ 两枚死锚按 (A) 类留在本行不抹，
+  而它们连带把本行那句"第 5 条是脚本切分假阳性"变成了一件**没有对象的事**（那个字面量所在的文件已经不在了）。
 - 反向对照（同一脚本 B 段，只认代码字面量、注释里的假字面量不算）：1,917 条字面量里
   **106 条查无（5.5%）** ⇒ 常量池确实被 R8 重建过，"字面量在 dex 里"不是恒真命题。
 
