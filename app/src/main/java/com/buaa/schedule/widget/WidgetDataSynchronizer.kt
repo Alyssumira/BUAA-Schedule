@@ -105,7 +105,7 @@ object WidgetDataSynchronizer {
      * 2. **"组件引用了、本轮 keys 不含"是可达状态。** 学期重命名会把旧 termCode 的学期行删掉
      *    （`ScheduleRepository.kt:400`，入口 `ScheduleViewModel.kt:482`），而组件的绑定原样留着
      *    那个字符串（`WidgetBindingStore.kt:49` 从 prefs 读回，只有 `onDeleted` 会清，如
-     *    `TodayWidgetProvider.kt:54`）。于是该 key 每轮被 `deleteKeysNotIn` 删掉、再由读侧回退
+     *    `TodayWidgetProvider.kt:33`）。于是该 key 每轮被 `deleteKeysNotIn` 删掉、再由读侧回退
      *    主库并就地补写（`WidgetDataCache.kt:78-88`）—— 快照表里本来就存着 keys 之外的行，
      *    "keys == 表里全部行"这个前提不成立；反过来 keys 里也常有空学期没人绑。
      *    两个集合互不包含，所以"只写被引用的 key"不是省几份编码，而是要先造一套引用枚举、
