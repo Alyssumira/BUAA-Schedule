@@ -3,15 +3,15 @@ package com.buaa.schedule.data.import
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.TimeSlot
 import com.buaa.schedule.domain.model.TimeSlotProfile
+import com.buaa.schedule.domain.schedule.WeekCalculator
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
-import java.time.temporal.ChronoUnit
 
 /**
  * 轻量 ICS 解析器，覆盖常用课程表导出格式（VEvent + RRULE 每周重复）。
  *
- * 由于 App 使用“教学周”而不是绝对日期，需要传入学期开学日期（周一）来换算周次。
+ * 由于 App 使用“教学周”而不是绝对日期，需要传入学期开学日期来换算周次；周号与归一到周一都只问 [WeekCalculator]。
  * 时间到节次的映射用调用方传入的节次表（导出/导入同一份表才幂等），未传时退回默认 14 节。
  *
  * 落不进节次表的事件**整条跳过**（T192）：DTSTART/DTEND 换算出的钟点要能落成节次号才成课，
@@ -140,7 +140,7 @@ object IcsParser {
                 if (isWeekly && byDays.isNotEmpty()) byDays else listOf(startDate.dayOfWeek)
             // COUNT 限的是总次数；拆成多条星期序列后按均摊近似（UNTIL 语义不受影响）
             val perSeriesCount = count?.let { (it + weekdays.size - 1) / weekdays.size }
-            val mondayOfStart = startDate.minusDays((startDate.dayOfWeek.value - 1).toLong())
+            val mondayOfStart = WeekCalculator.mondayOf(startDate)
 
             weekdays.forEach { dow ->
                 // 锚定 DTSTART 所在周（周一起算）里该星期几的日子；早于 DTSTART 的首周
@@ -215,10 +215,21 @@ object IcsParser {
         }
     }
 
-    private fun dateToWeek(date: LocalDate, semesterStart: LocalDate): Int {
-        if (date.isBefore(semesterStart)) return 0
-        return (ChronoUnit.DAYS.between(semesterStart, date) / 7).toInt() + 1
-    }
+    /**
+     * 日期 → 教学周。周号算式与归一到周一**一律问 [WeekCalculator]**（T362/#617）：
+     * 这两维此前在本文件里各有一份抄本 ——
+     * 一份是就地重写的 `minusDays((dayOfWeek.value - 1))`（与 `domain/model/Semester.kt` 里
+     * [com.buaa.schedule.domain.model.mondayOfWeekAnchor] 逐字符同形的那一枚），
+     * 另一份是 `(DAYS.between(semesterStart, date) / 7) + 1` 且**不**对 semesterStart 归一。
+     * 后者与 [WeekCalculator.currentWeek] 的差只在「开学日不是周一」那一维上：
+     * 生产递进来的 semesterStart 两条臂都已过 mondayOfWeekAnchor
+     * （`ScheduleViewModel` 的 `semester.startLocalDate ?: mostRecentMonday()`），那一维今天拿不到值；
+     * 但按本仓 [com.buaa.schedule.domain.schedule.WeekCalculator] 文件头那句
+     * 「全应用不再有第二套锚点算法」，算式只许留一份，差集不该押在"调用点恰好归过一"上。
+     * 学期外那一档（0）由调用点的 `week in 1..weekUpperBound` 那道闸处理，语义与 [WeekCalculator.currentWeek] 的 0 同形。
+     */
+    private fun dateToWeek(date: LocalDate, semesterStart: LocalDate): Int =
+        WeekCalculator.currentWeek(semesterStart, date)
 
     private fun extractLine(block: String, name: String): String? {
         val regex = lineRegexFor(name, optionalParams = true)
