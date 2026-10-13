@@ -30,10 +30,13 @@ class WeeklyTextExportTest {
     )
 
     /**
-     * 三枚**固定**的「今天」（T351 裁 甲：文本导出器自己一枚钟都不读，这三档才第一次成为可测的输入）。
-     * 学期 2026-09-07（周一）起 19 周 ⇒ 第 2 周是 09-14..20，期末那一周是 2027-01-11..17。
+     * 四枚**固定**的「今天」（T351 裁 甲：文本导出器自己一枚钟都不读，这些档才第一次成为可测的输入）。
+     * 学期 2026-09-07（周一）起 19 周 ⇒ 第 2 周是 09-14..20，第 3 周是 09-21..27，期末那一周是 2027-01-11..17。
+     * `todayInTermNextWeek` 是反证格要用的第二枚"学期内"：学期外那两枚（前／后）在标题上**同一档**
+     * （currentWeekOrNull 都交回 null ⇒ 「假期中 · 全学期课程」），拿它们凑"三种说法"是假反证。
      */
     private val todayInTerm = LocalDate.of(2026, 9, 15)
+    private val todayInTermNextWeek = LocalDate.of(2026, 9, 21)
     private val todayBeforeTerm = LocalDate.of(2026, 8, 31)
     private val todayAfterTerm = LocalDate.of(2027, 2, 1)
 
@@ -113,18 +116,32 @@ class WeeklyTextExportTest {
     }
 
     /**
-     * 九格的两手反证（防"三格写成同一枚期望值"那种恒绿）：
-     * - 有学期行那一档：三枚 today 交出**三枚不同**标题 ⇒ today 真的进了这一档的输出；
+     * 九格的三手反证（防"三格写成同一枚期望值"那种恒绿）：
+     * - 有学期行那一档：三枚 today 交出**三枚不同**标题 ⇒ today 真的进了这一档的输出。
+     *   **这手里用的两枚"学期内"不能换成「学期前 + 学期后」**：`currentWeekOrNull` 在学期外一律交回
+     *   null，标题就折进同一档「假期中 · 全学期课程」（盘面现量），前／后两枚 today 在这一档**量不出差异** ⇒
+     *   拿它们当"三枚不同"的反证是假反证（本格第一次跑红就红在这里：期望 3 种说法，实到 2 种）。真正的反证只能取
+     *   学期内的两枚不同周次 ＋ 学期外的一枚。
+     * - 学期外那一手反过来钉：前与后交出**同一枚**标题 —— 那是同一档的真值，不是 today 没渗进输出；
      * - 没有学期行那一档：三枚 today 交出**同一枚**标题 ⇒ 判不出当前周时没有偷偷再读一次钟。
      * 另加一整篇逐字格（含正文那两行）钉住"标题改了、正文的裁周也跟着改"是同一枚 today 决定的。
      */
     @Test
     fun `today 只在判得出当前周那一档进标题 整篇正文也逐字钉住`() {
         val course = course("高等数学", listOf(1, 2), weeks = listOf(2))
-        val headers = listOf(todayInTerm, todayBeforeTerm, todayAfterTerm).map {
+        // 学期内两枚（第 2 周、第 3 周）＋ 学期外一枚：这三枚才交得出三种说法
+        val headers = listOf(todayInTerm, todayInTermNextWeek, todayBeforeTerm).map {
             ScheduleExporters.toWeeklyText(listOf(course), row(), emptyList(), null, it).lineSequence().first()
         }
-        assertEquals("三枚 today 在三档学期内／外上给出三种说法：$headers", 3, headers.distinct().size)
+        assertEquals("三枚 today（学期内两枚不同周次 + 学期外一枚）给出三种说法：$headers", 3, headers.distinct().size)
+        val outsideTerm = listOf(todayBeforeTerm, todayAfterTerm).map {
+            ScheduleExporters.toWeeklyText(listOf(course), row(), emptyList(), null, it).lineSequence().first()
+        }
+        assertEquals(
+            "学期外那一档：今天在前还是在后是同一枚说法（currentWeekOrNull 两档都交回 null ⇒ 全学期）：$outsideTerm",
+            1,
+            outsideTerm.distinct().size,
+        )
         val noSemester = listOf(todayInTerm, todayBeforeTerm, todayAfterTerm).map {
             ScheduleExporters.toWeeklyText(listOf(course), null, emptyList(), null, it).lineSequence().first()
         }
@@ -140,9 +157,11 @@ class WeeklyTextExportTest {
             ScheduleExporters.toWeeklyText(listOf(course), row(), emptyList(), null, todayBeforeTerm),
         )
         assertEquals(
-            "整篇逐字（第 3 周没课那一格）：标题说第 3 周，正文就得如实说本周没有课",
-            "本学期 · 第 3 周\n\n本周没有课",
-            ScheduleExporters.toWeeklyText(listOf(course), row(), emptyList(), null, LocalDate.of(2026, 9, 21)),
+            "整篇逐字（第 3 周没课那一格）：标题说第 3 周，正文就得如实说本周没有课 —— " +
+                "盘面现量：空课那一支在标题后只换**一枚**行（源码里是 header + \"\\n\" + 那句），" +
+                "与有课那一支换两枚行不同形；本格钉的是它今天的形状，不是本卡改出来的",
+            "本学期 · 第 3 周\n本周没有课",
+            ScheduleExporters.toWeeklyText(listOf(course), row(), emptyList(), null, todayInTermNextWeek),
         )
     }
 }
