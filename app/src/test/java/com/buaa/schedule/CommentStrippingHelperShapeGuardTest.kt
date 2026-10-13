@@ -99,27 +99,30 @@ import org.junit.Test
  * 下一枚并行卡再带一枚助手，这几枚又各 +1；照 ⓪ 步跑仪器读合并对象，别照上一枚卡的卡面读。
  * 代价照旧在册：④ 的差值那格（两栏各差 1 枚）不受这类新增影响，它只认那一枚在册散文文件。
  *
- * ## 再一次重钉（T345③ ＋ T346① 两枚并行卡，合并态各 +2）
- * 这两枚各自在自己的树上把四枚写死值各 +1（每枚新守卫自带一枚同族合法助手，写法都是逐字抄在册那一枚、
- * 没有造新形状），两枚树面零交集 ⇒ 谁都不代表合并对象。合并态（gate/22）现量＝**各 +2**：
- * - 声明：136 → **138**（守卫侧与裸原文两栏同数这条定理不动）
- * - 物化：守卫侧（抹注释后）136 → **138**；裸原文 137 → **139**；两栏差仍恰 1 枚，来源仍是 ⓪ 步在册那枚散文文件
- * - 两棵树族内总枚数（② 那格的覆盖面尺）：137 → **139** = test 138 + main 1（EXPECTED_MAIN_DECLS 一字未动）
- * 两枚新守卫各自点名：`ui/ReturnDoorPairingGuardTest`（T345③，钉「一屏两扇返回门必须同调一枚具名 lambda」，
+ * ## 再一次重钉（T344② ＋ T345③ ＋ T346① 三枚并行卡，合并态各 +3）
+ * 三枚各自在自己的树上把四枚写死值各 +1（每枚新守卫自带一枚同族合法助手，写法都是逐字抄在册那一枚、
+ * 没有造新形状），三枚树面零交集 ⇒ 谁都不代表合并对象。合并态（gate/22）由编排者现量＝**各 +3**：
+ * - 声明：136 → **139**（守卫侧与裸原文两栏同数这条定理不动）
+ * - 物化：守卫侧（抹注释后）136 → **139**；裸原文 137 → **140**；两栏差仍恰 1 枚，来源仍是 ⓪ 步在册那枚散文文件
+ * - 两棵树族内总枚数（② 那格的覆盖面尺）：137 → **140** = test 139 + main 1（EXPECTED_MAIN_DECLS 一字未动）
+ * 三枚新守卫各自点名：`ui/ReturnDoorPairingGuardTest`（T345③，钉「一屏两扇返回门必须同调一枚具名 lambda」，
  * 在册 T333-04／#383 后半，助手抄自 `ui/editor/CourseEditorSaveErrorClearPairingGuardTest`）、
  * `ui/stats/StatsDrillStateSurvivalGuardTest`（T346①，钉「统计页钻取那三枚的存活尺只许一把」，同屏另一头是
  * showConflictWizard 那枚 saveable、在册例外是 statsBandHeightPx 那枚量出来的占位高度，助手抄自
- * `ui/stats/StatsT82WiringGuardTest`）。两枚的 KDoc 都没逐字引用那两枚针 ⇒ 散文栏不进、④ 的差值那格不动。
+ * `ui/stats/StatsT82WiringGuardTest`）、`nav/MainActivityNavigateSingleTopGuardTest`（T344②，在册 T333-01：
+ * MainActivity 那 18 枚 `navigate(` 调用点里缺单顶的逐枚点名，助手抄自 `ui/home/StatsEntryWiringGuardTest`
+ * 那一族；同文件里另有一行 `val out = mutableListOf…` 不是族内声明、尾巴上没有那记数组化调用，归类尺按构造看不见它）。
+ * 三枚的 KDoc 都没逐字引用那两枚针 ⇒ 散文栏不进、④ 的差值那格不动。
  * 代价照旧在册：再新增一枚合法助手 ⇒ 这几枚各 +1、④ 的差值那格不动。
  *
  * ## 重测这两把尺（两栏都要念，别只念一栏）
  * 写在这里的命令一律把括号写成方括号类，所以它们一个字都不匹配本文件自己的针 —— 这条理由从 T323 起
  * 才真正要紧：④ 那格数的是抹注释**之前**的原文，「反正注释会被抹掉」不再替这些命令免检。
  * 拼针的那几枚常量（TO_ARRAY 那一族）用「拆开来写」同一招自免，散文把自己数进册子的路只有这一条。
- * - 声明：`grep -rhoE 'val out = [A-Za-z_][A-Za-z0-9_]*[.]toCharArray[(][)]' app/src/test | wc -l` → 合并态（gate/21，T338 重钉）136
- *   （T336 单支那棵树上曾是 135 —— 跨树尺，别拿单支读数当合并态）。
+ * - 声明：`grep -rhoE 'val out = [A-Za-z_][A-Za-z0-9_]*[.]toCharArray[(][)]' app/src/test | wc -l` → 合并态（gate/21，T338 重钉）136，
+ *   T344② 之后本树 137（跨树尺，别拿单支读数当合并态）。
  *   这一把两栏同数：族内声明写不进注释（针要的是整行尾巴上那记数组化调用），散文顶不动它。
- * - 物化：`grep -rhoE 'String[(]out[)]' app/src/test | wc -l` → 裸原文 137 ／ 守卫侧（抹注释后）136
+ * - 物化：`grep -rhoE 'String[(]out[)]' app/src/test | wc -l` → 裸原文本树 138 ／ 守卫侧（抹注释后）137
  *   写死值钉的是守卫侧那一栏；两栏差的那 1 枚由 ④ 单独钉成在册量，不是「已知误差」。
  * 对不上就照上面两节的拆解重钉，别把判据改成 >=。
  *
@@ -170,7 +173,7 @@ class CommentStrippingHelperShapeGuardTest {
 
     /**
      * ② 形状尺：每一枚族内声明做到它所在函数的收尾，那段里必须物化、不得出现被禁写法。
-     * 本格同时断言切到的枚数等于两棵树的族内总枚数（合并态 gate/21 是 137，T338 重钉），一枚都没切到时不会当成绿。
+     * 本格同时断言切到的枚数等于两棵树的族内总枚数（合并态 gate/21 是 137，T338 重钉；T344② 之后本树 138），一枚都没切到时不会当成绿。
      */
     @Test
     fun everyCharArrayHelperMaterializesItsArrayInsteadOfCallingToStringOnIt() {
@@ -600,8 +603,9 @@ private const val MAIN_ROOT = "app/src/main"
  * 拆解：基点 13759a5 的 131 枚 ＋ T320 本守卫自己那枚助手 1 枚 ＋ T321 带进来的同族第二枚助手 1 枚
  * ＋ T332 那枚新守卫（domain/schedule/SemesterWeekCountWiringGuardTest）助手 1 枚
  * ＋ T336 那枚新守卫（ui/importing/BuaaImportJobCarrierWiringGuardTest）助手 1 枚
- * ＋ T335 那枚新守卫（ui/editor/ExternalCourseGoneWiringGuardTest）助手 1 枚 = 136（T323 钉的是 133、T332 钉的是 134）。
- * 裸 grep 在物化这把上念的是 137，多的那 1 枚是散文；它没被丢掉，由 ④ 那格按在册量单独钉住。
+ * ＋ T335 那枚新守卫（ui/editor/ExternalCourseGoneWiringGuardTest）助手 1 枚 = 136（T323 钉的是 133、T332 钉的是 134）
+ * ＋ T344 那枚新守卫（nav/MainActivityNavigateSingleTopGuardTest）助手 1 枚 = 137（T338 钉的是 136）。
+ * 裸 grep 在物化这把上念的是 138，多的那 1 枚是散文；它没被丢掉，由 ④ 那格按在册量单独钉住。
  * 为什么钉守卫侧那一栏而不是裸的那一栏：写死值必须是仪器自己观测得到的数，否则是一把永远读不到
  * 自己的死尺；而绝对值要听的那件事（扫描器失明 ⇒ 实到 0）在这一栏照样当场响。见类 KDoc 的重钉记录。
  */
