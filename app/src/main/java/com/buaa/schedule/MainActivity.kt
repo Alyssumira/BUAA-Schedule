@@ -88,8 +88,10 @@ import com.buaa.schedule.core.designsystem.motionSpecFor
 import com.buaa.schedule.core.designsystem.rememberReduceMotion
 import com.buaa.schedule.core.designsystem.BUAAScheduleTheme
 import com.buaa.schedule.domain.editor.EditorDraftIdentity
+import com.buaa.schedule.domain.editor.EditorMissingCourseExit
 import com.buaa.schedule.domain.editor.EditorSaveFinishing
 import com.buaa.schedule.domain.editor.EditorSaveSentinel
+import com.buaa.schedule.domain.editor.MissingCourseExitVerdict
 import com.buaa.schedule.ui.ScheduleViewModel
 import com.buaa.schedule.core.designsystem.liquid.LiquidBottomTab
 import com.buaa.schedule.ui.editor.CourseEditorScreen
@@ -985,9 +987,35 @@ private fun AppNavHost(
             // 那一处翻 false，删课不会再翻 ⇒ 这条协程只在「首帧/切学期后数据第一次到位」那一刻
             // 点火。⚠️ 不许把它改成按 courseMissing 重启（那会把这一档变成「数据还没到就误弹」，
             // R5 F-41 的原意就丢了），删掉那一档由下面第二条认领。
+            // T335（台账 #388）：这一档以前**只退栈不出声** —— 组件上那一行撞上课表刷新（课已被删）时，
+            // 用户看见的是白一帧、然后一句话不说地被弹回原页，读作「组件坏了」。现在由目的地层在
+            // **退栈之前**念一句：话写进 VM 那枚跨配置变化存活的 `importMessage`（不是 composition 上的
+            // remember，载体这一层与 T177 把旗从 remember 搬到 savedStateHandle 是同一把尺），
+            // `popBackStack()` 之后首页重新组合、它自己那枚读消息口的协程新起一帧就读到这一句 ⇒ 话不会被
+            // 退栈那一帧吃掉。四档的账在 `domain/editor/EditorMissingCourseExit.kt`：其中「本页自己删的」
+            // 那一档**不许**念 —— 对着用户亲手删掉的课谎报死因，就是同屏两句打脸那一族。
+            // ⚠️ 协程的键仍然是 (courseId, uiState.loading) 两枚，那枚删除旗不许加进来：加进来就是
+            // 旗翻真的那一刻两条协程各弹一次 ⇒ 连 pop 两格、用户被多退一层。
             androidx.compose.runtime.LaunchedEffect(courseId, uiState.loading) {
-                if (!uiState.loading && courseMissing) {
-                    navController.popBackStack()
+                when (
+                    EditorMissingCourseExit.verdictOf(
+                        dataLoaded = !uiState.loading,
+                        courseMissing = courseMissing,
+                        deletionRequestedByThisEntry = deleteRequestedByThisEntry,
+                    )
+                ) {
+                    MissingCourseExitVerdict.PopWithMessage -> {
+                        viewModel.showMessage("这门课已不在当前课表里，可能已被最近一次刷新移除")
+                        navController.popBackStack()
+                    }
+
+                    MissingCourseExitVerdict.PopWithoutMessage -> navController.popBackStack()
+
+                    // 两档「什么都不做」点名写出来，不折成 else：以后内核多一档就是编译期要补的一格，
+                    // 而不是被 else 咽掉的一格（台账 #370/#251-04 那一族）。
+                    MissingCourseExitVerdict.CourseIsOnScreen,
+                    MissingCourseExitVerdict.DataNotReadyYet,
+                    -> Unit
                 }
             }
             // 本页自己删掉了这门课 ⇒ 退栈由**目的地层**执行。这条协程长在 NavHost 的那一条
