@@ -5,7 +5,13 @@
 
 ## 一句话总结
 
-**课表数据只存在本机，网络只跟北航官方域名通信，没有任何第三方 SDK、遥测或云同步。**
+**课表数据存在本机，随系统自动备份迁移（鉴权材料被显式排除，见「备份规则」）；网络只跟北航官方
+域名与 Gitee（每天一次的更新检查）通信，没有任何第三方 SDK、遥测或自建云同步。**
+
+> 这一句从前写的是「课表数据只存在本机，网络只跟北航官方域名通信」，两句都念错了盘，T340 按盘面订正：
+> 课表库确实**不**排除备份（会离开本机），后台也确实**会**打 Gitee（出处见「网络通信」第一节）。
+> 屏上那句「课表、提醒与节次时间只保存在本机，不上传任何个人数据」（设置页「数据与隐私」一节）
+> 与本表是**两本账**，登记为在册候选 #417，本卡不改代码。
 
 ## 数据清单
 
@@ -33,15 +39,38 @@ Local Storage / IndexedDB —— 那才是跨设备真正可用的 SSO 凭证）
 （密钥在设备安全硬件里），但把会话材料复制到别的设备没有任何正当用途，所以直接不迁移。
 课表数据库**不**排除 —— 否则换机丢课表。
 
-> 这份名单不是靠人记得的：`BackupRulesCoverCredentialStoresTest` 扫源码里每一处
-> `KeystoreBlobStore(...)` 实例化、取出 prefs 名，逐个要求它出现在上面两份文件的对应块里。
-> 加一枚凭证存储却忘了登记，`testDebugUnitTest` 直接红。（`spoc_token_store.xml` 不在它的
-> 射程内 —— 对应的代码已删，那一行是给老设备残留留的，只能靠注释与本表守着。）
+> 这份名单不是靠人记得的：`BackupRulesCoverCredentialStoresTest`（T330 交的那枚）现在有**两路**判据。
+> 从前这里只写了推导那一路，而单靠那一路判不住五条里的三条 —— 本段按盘面订正：
+>
+> - **逐字册子那一路（主判据）**：测试文件末尾写死一枚 `CREDENTIAL_ROSTER`（5 项，与本表上面那五枚
+>   一一对应），要求 `backup_rules.xml` 的 `<cloud-backup>` 与 `<device-transfer>` 两块、
+>   `backup_rules_legacy.xml` 的 `<full-backup-content>` 一块，**每一块**枚数都等于 5 且逐字等于册子 ——
+>   少一枚、多一枚、换掉 `domain` 都红。三块不许折成「任一块含该名就算过」：`cloud-backup` 与
+>   `device-transfer` 是两个独立通道，`full-backup-content` 是 API ≤ 30 那一本，少任何一块就是那条通道上 quietly 没排除。
+> - **推导那一路**：扫源码里每一处 `KeystoreBlobStore(...)` 实例化、取出 prefs 名，逐个要求它出现在名单里。
+>   这一路只数得出 **2** 枚（`buaa_cookie_store`、`iclass_id_store`，本树复算于 `63670fb`），
+>   所以它**从来就盖不住整张名单** —— 从前那句「扫每一处实例化、逐个要求」把尺子的射程念宽了。
+>
+> ⚠️ 从前那句「`spoc_token_store.xml` 不在它的射程内 …… 只能靠注释与本表守着」**已经不成立**：
+> 它现在由逐字册子那一格管着（管它的是册子那一格，不是推导那一格）。那一行仍是给老设备残留留的，
+> 报错消息里点名「老设备残留行，不许跟着删」。
+> 代价也跟着变大：加一枚凭证存储要改两份 xml 的三块 **加**这张册子；只改代码不改册子不会是静默的。
 
 ## 网络通信
 
-- 只与北航官方域通信：`sso.buaa.edu.cn`（统一身份认证）、教务 `byxt` 页面及其接口、
-  北航 iClass（竞业达「轻新课堂」）`iclass.buaa.edu.cn`（登录与课堂签到）。不含任何第三方接口。
+- 与北航官方域通信：`sso.buaa.edu.cn`（统一身份认证）、教务 `byxt` 页面及其接口、
+  北航 iClass（竞业达「轻新课堂」）`iclass.buaa.edu.cn`（登录与课堂签到）。
+- ⚠️ **本应用还会打 Gitee** —— 从前这半句写的是「不含任何第三方接口」，按盘面作废（复算于 `63670fb`）。
+  全应用唯一的后台出网点是更新检查：一次 `GET https://gitee.com/api/v5/repos/alyssumira/buaa-schedule/releases?per_page=100`
+  （`UpdateInfo.kt` 里的 `RELEASES_API_URL`，唯一读者是 `UpdateCheck.kt` 的 `fetchReleases()`）。
+  请求头只有 `Accept: application/json` 与 `User-Agent: BUAA-Schedule/<版本号>` ——
+  **版本号确实发出去了**，课表、学号、凭据一个都不带。节奏是每天第一次打开应用查一次，
+  手动检查不受限；闸口在 `UpdateCheckGate.admit`，未同意隐私时判成 `BlockedByPrivacy`、一次都不出网。
+  应用内下载安装包只认 `gitee.com` 及其子域（`TRUSTED_DOWNLOAD_HOSTS`），直链被别的域名给出就不装。
+  设置页那一行早就这么念了（「每天第一次打开时自动检查一次 Gitee Releases（本机唯一的后台联网项…）」），
+  引导页也明写了「只发送版本号」—— 是**本文档**落后于盘面与界面，不是界面落后于盘面。
+- 设置页「作者 / 项目仓库」两行另有 `github.com` 的镜像地址，但那是**交给系统浏览器**的外部跳转
+  （`openExternalUrl`），本应用自己不向 `github.com` 发起任何请求。
 - 课堂签到发往 `https://iclass.buaa.edu.cn:8181/app/course/stu_scan_sign.action`：一条**拼接出来的
   GET**，参数就是你在课堂上扫到的那条二维码原文（实测形如 `courseSchedId=…&timestamp=…`）
   逐字带过去，末尾拼一枚 `&id=<签到标识>`。**没有请求体、没有 Cookie、没有鉴权头**，
@@ -94,15 +123,30 @@ Local Storage / IndexedDB —— 那才是跨设备真正可用的 SSO 凭证）
 | `INTERNET` | 北航教务登录与课表抓取、北航 iClass（轻新课堂）登录与课堂签到 | 普通权限，安装即生效 |
 | `POST_NOTIFICATIONS` | 上课提醒、上下课铃常驻通知 | 启动时自动申请一次（API 33+）；「提醒可靠性」页可再次申请，永久拒绝后跳转通知设置 |
 | `SCHEDULE_EXACT_ALARM` | 课表提醒精确触发、桌面组件零点跨天刷新 | 特殊权限（API 31+，Android 14 默认拒绝）；「提醒可靠性」页与组件配置页提供授权跳转，未授权时提醒退化为非精确 |
+| `POST_PROMOTED_NOTIFICATIONS` | 实况通知**上岛**（澎湃超级岛 / ColorOS 流体云）—— 见下面那段订正 | 装在清单里即声明（`AndroidManifest.xml:16`）；`android.Manifest.permission` 里这个常量只存在于 android-37，compileSdk 36 只能引字面量 |
 | `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_SPECIAL_USE` | 课程实况前台服务（澎湃实况窗 / 流体云） | 普通权限，服务启动即用 |
 | `ACCESS_NOTIFICATION_POLICY` | 上课自动勿扰、下课后恢复 | 首次开启勿扰功能时跳转系统「勿扰访问」授权页 |
 | `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | 「提醒可靠性」页引导关闭电池优化（仅跳转系统设置用） | 用户点击对应引导项时弹系统确认框 |
 | `RECEIVE_BOOT_COMPLETED` | 开机后重排提醒 | 普通权限 |
+| `WAKE_LOCK` | 短时 PARTIAL_WAKE_LOCK（5 秒、带超时自动释放），包住上课闹钟广播里的查库与全量重排 —— Doze 下 CPU 中途入睡会把重排打断 | 普通权限，广播内申请、到点自释（`WakeLocks.kt` 的 `newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, …)`，`AndroidManifest.xml:34`） |
 | `READ_CALENDAR` / `WRITE_CALENDAR` | 日历同步（用户显式选择目标日历后才读写） | 点击「同步到系统日历」或「移除已同步日程」时申请；永久拒绝后提供「去系统设置」跳转 |
+| `REQUEST_INSTALL_PACKAGES` | 应用内更新下载完 APK 后调起系统安装器 | **不会自动获得**：只能由更新链把用户引导到「安装未知应用」开关手动放行（`Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES`，`AndroidManifest.xml:42`）；未放行时不拦路，退回浏览器打开发布页 |
+| `com.android.launcher.permission.INSTALL_SHORTCUT` | 桌面快捷方式 / 小组件固定（「一键添加」） | 由 Launcher 声明、随本应用安装授予（`AndroidManifest.xml:48`）；不声明时部分 Launcher（国产 ROM 为主）让 `requestPinAppWidget` 静默返回 false，点了毫无反应 |
 
-「常驻通知有没有被系统折叠」读的是 API 36 的 `canPostPromotedNotifications()`，
-这是只读探针、**不需要权限**，所以本应用不声明 `POST_PROMOTED_NOTIFICATIONS`
-（此前声明了却没有申请路径，属"文档承诺 > 代码行为"，R5 §7 / F-C10）。
+「常驻通知有没有被系统折叠」读的是 API 36 的 `canPostPromotedNotifications()`，这是只读探针、
+**不需要权限** —— 但从前由这句推出来的结论「所以本应用不声明 `POST_PROMOTED_NOTIFICATIONS`」
+**念错了盘，T340 订正**：清单现在就声明着它（`AndroidManifest.xml:16`）。R5 F-C10 当年正是拿
+「查询不需要权限」为由把它删掉的，那句话只对了一半 —— 查询不需要，**发**这类通知需要（Android 17 起）。
+删掉之后真机（澎湃 OS 4 / Android 17）的表现是「通知正常显示、一个也不上岛」，且系统不给任何回调，
+所以清单注释里明写着「别再以商店审核为由删除」（`AndroidManifest.xml:14`）。
+它没有运行时申请路径，属"清单声明即生效、拿不到就静默不上岛"那一档。
+
+上表现值按 `app/src/main/AndroidManifest.xml` 逐枚对过（复算于 `63670fb`）：清单声明 **15 枚**权限名
+（`FOREGROUND_SERVICE` 与 `FOREGROUND_SERVICE_SPECIAL_USE` 并一行、`READ_CALENDAR` 与 `WRITE_CALENDAR`
+并一行，故表里是 13 行）。从前这张表**漏了 4 枚** —— `POST_PROMOTED_NOTIFICATIONS`、`WAKE_LOCK`、
+`REQUEST_INSTALL_PACKAGES`、`com.android.launcher.permission.INSTALL_SHORTCUT`（在册 #361 / #285
+点名的那一族），本轮补齐；「用途」与「申请时机」两栏都取自清单里那四条声明各自上面的注释块，
+不是从界面文案推的。
 
 桌面小组件本身不需要任何运行时权限；它依赖的精确闹钟授权状态在组件配置页
 有诊断提示。
