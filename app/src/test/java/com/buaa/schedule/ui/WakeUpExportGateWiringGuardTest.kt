@@ -38,9 +38,9 @@ import org.junit.Test
  * ## 三、纯度名册（T351 补的名册枚数与第二把尺）
  *
  * ⑤ 那格钉的是「名册在册的判据文件不读库、不读钟、零 android/androidx 出场」。改前名册只有两枚
- * （`WakeUpJsonText.kt` 与 `WakeUpExportGate.kt`），而本守卫 ② 那格早就在读 `$EXPORTERS` 的源码文本 ——
+ * （`WakeUpJsonText.kt` 与 `WakeUpExportGate.kt`），而本守卫 ④ 那格（转义唯一落点）早就在读 `$EXPORTERS` 的源码文本 ——
  * 也就是这颗文件被本守卫"看见"过，唯独纯度与读钟那一格漏了它 ⇒ 补进名册当场红出三枚体内读钟
- * （`ScheduleExporters.kt` 的 `LocalDate.now()` 三处，落点见 ① 那段的修）。名册自己也被钉住
+ * （`ScheduleExporters.kt` 的 `LocalDate.now()` 三处，落点见本卡第 ① 步对生产码的修，改后由 ⑤ 的读钟一手与 ⑤c 一起钉）。名册自己也被钉住
  * （枚数与顺序），因为"摘掉一枚名册条目"这件事不会自己报红。
  *
  * 纯度那半改前只认 import 行（取 `import ` 开头的行再看含不含 android）⇒ 全限定写法从它眼下走得过去，
@@ -398,7 +398,7 @@ class WakeUpExportGateWiringGuardTest {
             Triple("落盘闸门", GATE, source(GATE)),
             Triple("导出器本体", EXPORTERS, source(EXPORTERS)),
         )
-        // 名册本身也要钉住（T350 审计报的就是这一格）：本守卫在 ② 那格早就读 $EXPORTERS
+        // 名册本身也要钉住（T350 审计报的就是这一格）：本守卫在 ④ 那格早就读 $EXPORTERS
         // （转义落点），却从没把它的读钟与纯度账收进这一格 ⇒ 名册少一枚，那颗文件就没人管。
         assertEquals(
             "**钉法 = 数出现次数**：纯度名册必须恰是这 3 枚且顺序如此（实到 " + files.map { it.second } + "）：" +
