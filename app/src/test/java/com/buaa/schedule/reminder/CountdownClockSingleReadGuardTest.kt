@@ -45,6 +45,22 @@ import org.junit.Test
  *    + **数出现次数**（全仓各恰一处定义）：这一层就是卡面那句"不是冗余、别合并成一枚"；
  * 4. [probeRecognisesThePreFixShape] —— **抹注释找锚点**：改前那两形（链上直接吃两枚参数的谓词、
  *    体内自己读钟的判据体）喂进同一把尺各数到该数的值，写在 KDoc 里的引用抹完必须 0 处。
+ *
+ * ## 第 ⑤ 层（ai/T354，在册 #603）：同一只钟还得把勿扰看门狗带到新帧
+ *
+ * 时间类变化那一跳（清单里唯一的入口 `WidgetRefreshReceiver` → `BackgroundSync.rescheduleRemindersAndBells`
+ * → 本文件的宿主 `rescheduleWindows`）会把 11 枚绝对毫秒闹钟里的 10 枚重排到新帧，
+ * 唯独漏那只看门狗 —— 它唯一的排程点是 `ClassProgressDnd.enter`，而 enter 唯一的调用点是上课铃。
+ * 修法吃的是本文件第 ① 层那条既有约束：**新帧的下课时刻与那只已经注入的 `now` 就在这同一跳里**，
+ * 所以补排收在 `rescheduleWindows` 而不是另起一步（另起那一步拿不到下课时刻，见
+ * `ClassProgressDnd.alignWatchdogToNewFrame` 的说明）。五层钉法：
+ * 5. [theWatchdogHopHandsOverTheNewFrameNotASecondClock] —— **逐字节**（两枚实参各恰一处）
+ *    + **读形状**（`ongoingAt` 必须显式吃注入的读数，写成吃签名默认值的 `ongoingAt()` 就长了第二只钟）
+ *    + **数出现次数**（这一跳只驱动一次、`LocalDateTime.now()` 仍是枚一）；
+ * 6. [theNewFrameCriterionAndRulerExistInExactlyOnePlace] —— **数出现次数（全 main 册子）**
+ *   （判据本体一处、接线一处、`armWatchdog(` 三处、宽限量一处）+ **读形状**（判据体与那把尺都零钟）；
+ * 7. [watchdogProbeRecognisesTheTwoBadShapes] —— **抹注释找锚点**：根本没有那一手 /
+ *    吃签名默认值那一形 / 写在注释里那一形，三形各数到该数的值。
  */
 class CountdownClockSingleReadGuardTest {
 
@@ -274,6 +290,174 @@ class CountdownClockSingleReadGuardTest {
         )
     }
 
+    // ─────────────── ⑤ #603 看门狗跟着新帧走：接线只在这一跳、判据只此一份 ───────────────
+
+    /**
+     * 重排那一跳确实把新帧的下课时刻交给了看门狗那一步，而且**吃的是同一只已经注入的钟**。
+     *
+     * 这一层要拦的是 seam 那一族的固有取舍（判据本体搬到 JVM 表驱动那边去了，
+     * 见 `reminder/DndWatchdogTimeFrameRearmDecisionTest`）：接线到底注没注对那三样，
+     * 只有按源码形状核对才量得到。两头各钉一次：
+     * - **逐字节**：两枚实参各恰一处（写错的形态是"把 `window.endMillis` 原样递过去"——
+     *   那就绕过了 [ClassProgressDnd.deadlineOfEnd] 那把唯一的宽限尺）；
+     * - **读形状**：`ongoingAt` 必须显式吃那只钟 —— 它有一个
+     *   `nowMillis: Long = System.currentTimeMillis()` 的**签名默认值**，
+     *   写成无实参的 `ongoingAt()` 编译得过、测试也照样绿，但那条链上就长了第二只钟
+     *   （台账 #265 那一族的形状，与本守卫第 ① 层同一本账）。
+     */
+    @Test
+    fun theWatchdogHopHandsOverTheNewFrameNotASecondClock() {
+        val progress = withoutComments(readMainSource(PROGRESS_FILE))
+        val reschedule = balancedBlock(progress, "fun rescheduleWindows(")
+
+        assertEquals(
+            "**钉法 = 数出现次数**：`rescheduleWindows` 里驱动看门狗那一步只许一处" +
+                "（多一处 = 同一格期限被两处各改各的）。实到 " +
+                occurrences(reschedule, "ClassProgressDnd.alignWatchdogToNewFrame(") + " 处",
+            1,
+            occurrences(reschedule, "ClassProgressDnd.alignWatchdogToNewFrame("),
+        )
+        assertEquals(
+            "**钉法 = 逐字节**：新帧的期限必须经由唯一那把宽限尺（`$WATCHDOG_FRESH_ARG`；实到 " +
+                occurrences(reschedule, WATCHDOG_FRESH_ARG) + " 处）—— 直接递 `window.endMillis` " +
+                "就是把「下课 + 宽限」摊成第二处",
+            1,
+            occurrences(reschedule, WATCHDOG_FRESH_ARG),
+        )
+        assertEquals(
+            "**钉法 = 逐字节 + 读形状**：`classOngoing` 必须吃那只已经注入的 `now`" +
+                "（`$WATCHDOG_ONGOING_ARG`；实到 " + occurrences(reschedule, WATCHDOG_ONGOING_ARG) +
+                " 处）。0 处 = 这一判没人做，下一节课的下课时刻也会替上一节的遗留记录推走恢复点",
+            1,
+            occurrences(reschedule, WATCHDOG_ONGOING_ARG),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数（负钉）**：无实参的 `ongoingAt()`（吃签名默认值 = 体内现读真钟）" +
+                "在这一跳里必须 0 处，否则整次重排就有两只钟。实到 " +
+                occurrences(reschedule, "ongoingAt()") + " 处",
+            0,
+            occurrences(reschedule, "ongoingAt()"),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数**：这一跳仍然只读一次 `LocalDateTime.now()`（第 ① 层那枚数，" +
+                "看门狗那一手不许把它变成两枚）。实到 " + occurrences(reschedule, CLOCK_LOCAL_DATE_TIME) + " 处",
+            1,
+            occurrences(reschedule, CLOCK_LOCAL_DATE_TIME),
+        )
+    }
+
+    /**
+     * 判据与那把尺都只此一份，且全仓只有重排那一跳驱动它。
+     *
+     * - **数出现次数（全 main）**：`fun watchdogRearmDecision(` 恰一处、
+     *   `alignWatchdogForNewFrame` 的调用点恰一处 = 第②处接线（比如直接在
+     *   `WidgetRefreshReceiver` 里另起一步）不许长出来 —— 那一侧拿不到这一节课的下课时刻，
+     *   要么白跑一遍全量窗口搜索、要么把旧帧的毫秒当新帧用（在册 #603 的病灶就在那儿）；
+     * - **数出现次数**：`armWatchdog(` 在 `ClassProgressDnd.kt` 里恰三处 = 定义 + `enter`
+     *   （上课铃）+ 新帧那一步，第四处就是有人另写了一遍排程；
+     * - **读形状**：判据体内零钟 —— 它的输入只有四枚标量，"现在几点"由调用点折成
+     *   `classOngoing` 递进来（本仓成文禁令）。
+     */
+    @Test
+    fun theNewFrameCriterionAndRulerExistInExactlyOnePlace() {
+        val dnd = withoutComments(readMainSource(DND_FILE))
+        val criterion = balancedBlock(dnd, "internal fun watchdogRearmDecision(")
+        val ruler = balancedLineAfter(dnd, "internal fun deadlineOfEnd(endMillis: Long): Long? =")
+
+        assertEquals(
+            "**钉法 = 数出现次数（全 main）**：六档判据的本体全仓只许一处，实到 " +
+                mainOccurrences("internal fun watchdogRearmDecision(") + " 处",
+            1,
+            mainOccurrences("internal fun watchdogRearmDecision("),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数（全 main）**：`ClassProgressDnd.alignWatchdogToNewFrame(` 的调用点" +
+                "全仓只许一处（就是 rescheduleWindows 那一跳）。实到 " +
+                mainOccurrences("ClassProgressDnd.alignWatchdogToNewFrame(") + " 处",
+            1,
+            mainOccurrences("ClassProgressDnd.alignWatchdogToNewFrame("),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数**：`ClassProgressDnd.kt` 里 `armWatchdog(` 恰三处 = 定义 + enter" +
+                "（上课铃那一手）+ 新帧那一步；第四处就是又长了一遍排程。实到 " +
+                occurrences(dnd, "armWatchdog(") + " 处",
+            3,
+            occurrences(dnd, "armWatchdog("),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数**：「下课 + 宽限」的宽限量只许一处（[ClassProgressDnd.deadlineOfEnd]），" +
+                "两处各写一遍就是一格旧帧期限与一格新帧期限用不同的余量。实到 " +
+                occurrences(dnd, "RESTORE_GRACE_MINUTES * 60_000L") + " 处",
+            1,
+            occurrences(dnd, "RESTORE_GRACE_MINUTES * 60_000L"),
+        )
+        for (sneak in listOf(CLOCK_EPOCH_MILLIS, "LocalDateTime.now(", "ongoingAt(", "Date(", "SystemClock.")) {
+            assertFalse(
+                "**钉法 = 读形状**：六档判据的体里出现「$sneak」= 它开始自己读钟/自己判课堂状态，" +
+                    "表驱动那族就量不到它，而调用点那只钟与它读的那只可以在跨秒那一瞬先掉个儿" +
+                    "（本守卫第 ① 层的病灶形状）。\n实到体：$criterion",
+                criterion.contains(sneak),
+            )
+        }
+        for (sneak in listOf(CLOCK_EPOCH_MILLIS, "SystemClock.", "LocalDateTime.now(")) {
+            assertFalse(
+                "**钉法 = 读形状**：「下课 + 宽限」那把尺读了钟（$sneak）就不是纯算了 —— " +
+                    "兜底那两支各读各的，同一节课的期限在两处能差出一次读数的间隔：\n$ruler",
+                ruler.contains(sneak),
+            )
+        }
+    }
+
+    /**
+     * 探测器自检（第 ⑤ 层那两枚锚点拼错就永远数到 0 永远绿）。
+     *
+     * - **朝松**：改前那一形（这一跳根本没有看门狗那一步）喂进来，
+     *   `alignWatchdogToNewFrame(` 数到 0 处 —— 与第 ⑤ 层那句「恰一处」互为对照物；
+     *   把 `ongoingAt` 写成吃签名默认值那一形喂进来，`ongoingAt()` 必须数到 1 处；
+     * - **朝窄**：同一句形状写在 KDoc 里、抹完注释必须 0 处（本文件的注释逐字写着那些名字）。
+     */
+    @Test
+    fun watchdogProbeRecognisesTheTwoBadShapes() {
+        val absentHop = "        return schedule(context, window)"
+        assertEquals(
+            "探测器必须认得出「改前那一手 = 这一跳根本没有看门狗那一步」（实到 " +
+                occurrences(absentHop, "ClassProgressDnd.alignWatchdogToNewFrame(") + " 处）",
+            0,
+            occurrences(absentHop, "ClassProgressDnd.alignWatchdogToNewFrame("),
+        )
+
+        val secondClockShape = "        ClassProgressDnd.alignWatchdogToNewFrame(\n" +
+            "            context,\n" +
+            "            classOngoing = window.ongoingAt(),\n" +
+            "            freshDeadlineMillis = ClassProgressDnd.deadlineOfEnd(window.endMillis),\n" +
+            "        )"
+        assertEquals(
+            "探测器必须抓得出「无实参的 ongoingAt()（体内现读第二只钟）」那一形（实到 " +
+                occurrences(secondClockShape, "ongoingAt()") + " 处）",
+            1,
+            occurrences(secondClockShape, "ongoingAt()"),
+        )
+        assertEquals(
+            "同一形里注入的读数确实被丢掉了 ⇒ 第 ⑤ 层那句「逐字节 1 处」的对照物",
+            0,
+            occurrences(secondClockShape, WATCHDOG_ONGOING_ARG),
+        )
+
+        val quotedInKDoc = """
+            /**
+             * 旧形状登记：`classOngoing = window.ongoingAt(),` 这一形今天不该在排铃链上出现。
+             */
+            fun noop() = Unit
+        """.trimIndent()
+        assertEquals(
+            "注释里逐字引用的那一形**不许**进第 ⑤ 层的账：未抹注释时确实在原文里（实到 " +
+                occurrences(quotedInKDoc, "ongoingAt()") + " 处），抹完必须 0 处（实到 " +
+                occurrences(withoutComments(quotedInKDoc), "ongoingAt()") + " 处）",
+            0,
+            occurrences(withoutComments(quotedInKDoc), "ongoingAt()"),
+        )
+    }
+
     // ---------------- 源码核对小工具（与本仓守卫同一套写法）----------------
 
     /**
@@ -430,6 +614,7 @@ class CountdownClockSingleReadGuardTest {
         const val RESYNCER_FILE = "com/buaa/schedule/reminder/LiveClassResyncer.kt"
         const val REMINDER_SCHEDULER_FILE = "com/buaa/schedule/reminder/ReminderScheduler.kt"
         const val NOTIFICATIONS_FILE = "com/buaa/schedule/reminder/ReminderNotifications.kt"
+        const val DND_FILE = "com/buaa/schedule/reminder/ClassProgressDnd.kt"
 
         const val CLOCK_EPOCH_MILLIS = "System.currentTimeMillis("
         const val CLOCK_LOCAL_DATE_TIME = "LocalDateTime.now()"
@@ -438,6 +623,10 @@ class CountdownClockSingleReadGuardTest {
         const val PLAN_TIME_JUDGEMENT = "window.startsAfter(now.toEpochMillis())"
         const val CLASS_START_CALL = "ReminderNotifications.classStartOf(window),"
         const val SEAM_WIRING = "countingDownTo = ReminderNotifications::ownsCountdownTo"
+
+        /** #603 那一跳的两枚实参（逐字节钉）：期限走唯一的宽限尺、状态吃那只已经注入的钟 */
+        const val WATCHDOG_FRESH_ARG = "freshDeadlineMillis = ClassProgressDnd.deadlineOfEnd(window.endMillis),"
+        const val WATCHDOG_ONGOING_ARG = "classOngoing = window.ongoingAt(now.toEpochMillis()),"
 
         const val TWO_ARGUMENT_DECLARATION =
             "fun isCountingDownTo(courseId: Long, classStartMillis: Long): Boolean ="
