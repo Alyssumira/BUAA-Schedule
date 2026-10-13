@@ -20,7 +20,11 @@ import org.junit.Test
  *    册子 `{BuaaScheduleParser.kt=2}`；`data/import/` 那一层也是 2 处。第 ③ 层同一手法数
  *    `fallbackWeekCourses` 的消费者册子与那句文案的全仓枚数。
  * 2. **逐字节** —— 第 ① 层那两枚签名行；第 ③ 层的预览文案、那两枚 `if` 的条件、以及
- *    「计数进预览」的最后一跳 `viewModel.previewBuaaCourses(semester, parsed.courses, parseWarnings)`。
+ *    「计数进预览」的**落点名册**（`PREVIEW_HOP_ROSTER` 四跳 + `PREVIEW_CONTRACT` 契约一枚，每枚都判
+ *    「全 app/src/main 的册子恰好 `{该文件=期望枚数}`」）。这本网页在 T216 是一枚裸针
+ *    `viewModel.previewBuaaCourses(semester, parsed.courses, parseWarnings)`；T336 把抓取本体搬进
+ *    `data/import/BuaaImportJob.kt` 之后那一行不再成行（作业体的接收者换成 `BuaaImportJob.Host`，
+ *    问 viewModel 的那一跳挪进 Host 覆写），性质没变、手数从一枚变四枚 ⇒ 逐枚点名而不是改个裸针。
  * 3. **读形状** —— 第 ② 层按**圆括号配平**取实参表、数顶层逗号（"省着不传"当场红）；第 ③ 层按
  *    **花括号配平**取那枚 `if` 的分支体（文案必须真在这一支体内）；第 ④ 层取 `refreshSchedule` 的
  *    函数体数 `add(`（那条链今天只有一档警告）。
@@ -181,12 +185,39 @@ class BuaaScheduleParserTotalWeeksGuardTest {
             1,
             occurrences(branch, "parsed.fallbackWeekCourses"),
         )
+        // T336「教务抓取换载体」把这一跳拆成了四跳：作业体（`BuaaLoginScreen` 里那枚 `BuaaImportJob.Host`
+        // 扩展函数，接收者不再是 `viewModel`）→ 进程内 holder 朝当前活着的 Host 转发 →（页面已离开时
+        // 三枚一起攒进 pendingPreview，attach 时逐枚交回）→ 页面那枚 Host 覆写 → viewModel。
+        // 旧的那枚「最后一跳」针 `viewModel.previewBuaaCourses(semester, parsed.courses, parseWarnings)`
+        // 在盘上不再成行 —— 所以这里钉的是**一整本落点名册**：把警告递下去的每一枚手都得逐字节在册，
+        // 少一枚红、多一枚没被点名的同样红。为什么必须一枚都不许省：
+        // `ScheduleViewModel.previewBuaaCourses` 的第三枚形参带 `= emptyList()` 默认值，
+        // **任何一跳省着不传都是编译得过的**，省下来的那一跳正好把 #238 病灶 B 放回静默。
+        for ((file, role, needle) in PREVIEW_HOP_ROSTER) {
+            assertEquals(
+                "**钉法 = 逐字节 + 数出现次数（落点名册）**：`$needle` 的册子必须是 `{$file=1}`（实到 " +
+                    ledger(byFile, needle) + "）：它是「兜底计数进预览」这条链上的 $role。" +
+                    "摘掉这一跳的第三枚实参（或把它换成 `emptyList()` / `parseWarnings.size` 一类）" +
+                    "都从这一格露出来，而上一格那些「文案在不在分支体内」的尺全都盖不住它",
+                "{$file=1}",
+                ledger(byFile, needle),
+            )
+        }
         assertEquals(
-            "**钉法 = 逐字节**：警告列表递进预览那一行必须逐字在此（实到 " + occurrences(screen, PREVIEW_CALL) +
-                " 处）：`parseWarnings` 只 build 不交的话，上面几格全绿而用户仍然一个字看不见 —— " +
-                "这一枚是「念出来」链路的最后一跳",
+            "**钉法 = 逐字节 + 数出现次数（契约）**：`$PREVIEW_CONTRACT` 的册子必须是 `{$JOB_NAME=2}`" +
+                "（实到 " + ledger(byFile, PREVIEW_CONTRACT) + "）：`BuaaImportJob.Host` 的接口声明与 holder " +
+                "的覆写各一枚 —— 第三枚形参 `warnings: List<String>` **在契约里没有默认值**，这就是" +
+                "「谁想把警告这一维从链路上摘掉就得连签名一起改、改就要被点名」的那道门",
+            "{$JOB_NAME=2}",
+            ledger(byFile, PREVIEW_CONTRACT),
+        )
+        assertEquals(
+            "**钉法 = 读形状**：页面那枚 Host 覆写的参数表里必须还写着第三枚 `warnings: List<String>,`" +
+                "（在 `$LOGIN_NAME` 恰好 1 处，实到 " + occurrences(screen, "warnings: List<String>,") +
+                " 处）：覆写把形参删掉、体内再自己 `emptyList()` 交下去，上面四跳全绿而用户一个字看不见 —— " +
+                "这一格堵的就是这条路",
             1,
-            occurrences(screen, PREVIEW_CALL),
+            occurrences(screen, "warnings: List<String>,"),
         )
         assertEquals(
             "**钉法 = 逐字节**：第二枚 if 的互斥条件必须逐字在此（实到 " + occurrences(screen, SECOND_BRANCH) +
@@ -557,6 +588,9 @@ class BuaaScheduleParserTotalWeeksGuardTest {
         const val WEB_NAME = "BuaaWebSession.kt"
         const val LOGIN_SCREEN = "com/buaa/schedule/ui/importing/BuaaLoginScreen.kt"
         const val LOGIN_NAME = "BuaaLoginScreen.kt"
+
+        /** T336 之后的抓取载体（进程内 holder）—— 第 ③ 层那本落点名册里有两跳长在它身上 */
+        const val JOB_NAME = "BuaaImportJob.kt"
         const val VIEW_MODEL = "com/buaa/schedule/ui/ScheduleViewModel.kt"
 
         /** 第 ① 层：签名默认值那枚针 + 逐字节那一行 */
@@ -567,12 +601,51 @@ class BuaaScheduleParserTotalWeeksGuardTest {
         const val CALL_LIST = ".parseArrangedList("
         const val CALL_OUTCOME = ".parseArrangedListOutcome("
 
-        /** 第 ③ 层：预览文案、它那一支的条件、第二枚 if、以及「计数进预览」的最后一跳 */
+        /** 第 ③ 层：预览文案、它那一支的条件、第二枚 if、以及「计数进预览」的落点名册 */
         const val FALLBACK_COPY = " 条课程缺少教师/周次信息，已按整学期展示，请核对"
         const val FALLBACK_BRANCH = "if (parsed.fallbackWeekCourses > 0) {"
         const val SECOND_BRANCH =
             "if (parsed.unknownTeacherCourses > 0 && parsed.fallbackWeekCourses == 0) {"
-        const val PREVIEW_CALL = "viewModel.previewBuaaCourses(semester, parsed.courses, parseWarnings)"
+
+        /**
+         * 「警告表真的被递进预览」在合并态（gate/21，T336 换载体之后）的四跳落点名册。
+         * 身份 = 文件名 × 逐字节针，判据 = 每枚册子恰好 `{该文件=1}`。
+         *
+         * 改前这一格钉的是 `viewModel.previewBuaaCourses(semester, parsed.courses, parseWarnings)`
+         * 一枚裸针（T216 时代的形状：页面直接问 viewModel）。T336 把抓取本体搬进
+         * `data/import/BuaaImportJob.kt` 之后，那一行在盘上不再成行：作业体的接收者换成了
+         * `BuaaImportJob.Host`（`BuaaLoginScreen` 里那枚 `private suspend fun
+         * BuaaImportJob.Host.fetchBuaaScheduleInPage(...)`），真正问 viewModel 的那一跳挪到了
+         * Host 覆写里。性质没变（`parseWarnings` 仍然一路进预览），变的是它有四枚手而不是一枚，
+         * 所以逐枚点名而不是把裸针改个名。
+         */
+        val PREVIEW_HOP_ROSTER = listOf(
+            Triple(
+                LOGIN_NAME,
+                "第一跳：作业体把 `buildList` 出来的警告表交给 Host（页面里那枚 `BuaaImportJob.Host` 扩展函数体内）",
+                "previewBuaaCourses(semester, parsed.courses, parseWarnings)",
+            ),
+            Triple(
+                JOB_NAME,
+                "第二跳：进程内 holder 朝**当前活着**的那枚 Host 转发",
+                "live.previewBuaaCourses(semester, courses, warnings)",
+            ),
+            Triple(
+                JOB_NAME,
+                "第二跳的兜底：抓取跑完时页面已离开 ⇒ 三枚一起攒进 pendingPreview，attach 时逐枚交回" +
+                    "（`pending.third` 就是警告表；丢了它 = 转屏/离开之后再回来的人一个字念不着）",
+                "live.previewBuaaCourses(pending.first, pending.second, pending.third)",
+            ),
+            Triple(
+                LOGIN_NAME,
+                "最后一跳：页面的 Host 覆写把三枚实参原样递给 viewModel",
+                "viewModel.previewBuaaCourses(semester, courses, warnings)",
+            ),
+        )
+
+        /** 契约那一枚：Host 的接口声明 + holder 的覆写各一枚，第三枚形参不许有默认值 */
+        const val PREVIEW_CONTRACT =
+            "suspend fun previewBuaaCourses(semester: Semester, courses: List<Course>, warnings: List<String>)"
 
         /** 抹注释找锚点那格的针与两侧实测枚数（BuaaLoginScreen，量于 `ai/T216`） */
         const val BARE_CALL = "parseArrangedList"

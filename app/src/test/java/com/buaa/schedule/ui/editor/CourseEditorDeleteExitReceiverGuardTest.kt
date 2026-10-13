@@ -31,8 +31,11 @@ import org.junit.Test
  * 「删完课要退栈」那一手搬到**编辑器目的地层**：`MainActivity` 里 `editor/{courseId}` 那一枚
  * `composable { backStackEntry -> … }` 的 lambda 体内，协程长在 NavHost 的那一条 back stack entry 上，
  * **不在被摘的那棵子树里**，所以闸门摘页时它照样点火。两档分开认领：
- * - 「这门课从来没读到」→ 原来那枚 `LaunchedEffect(courseId, uiState.loading)` 一字未动
+ * - 「这门课从来没读到」→ 原来那枚 `LaunchedEffect(courseId, uiState.loading)`：**键表**至今一字未动
  *   （键里**没有** `courseMissing`，为的就是"数据还没到"那一帧不误弹 —— R5 F-41 那一半的原意）；
+ *   体在 T335（台账 #388）换了写法 —— 从裸 `if (!uiState.loading && courseMissing) { popBackStack() }`
+ *   换成「问 `domain/editor/EditorMissingCourseExit.verdictOf` 四档、按档念/退」，弹栈条件与基点逐格等价、
+ *   多出来的只有「念不念那句话」那一维；
  * - 「这门课刚被这一页删掉」→ 新那枚 `LaunchedEffect(deleteRequestedByThisEntry, courseMissing,
  *   uiState.loading)`，凭据是 `onDelete` lambda 在 **await 之前**立起的那枚旗标。
  * 删失败那一档 `courseMissing` 不成立 ⇒ 页面留着、由编辑器念 `saveError = "删除失败，请重试"`，
@@ -47,9 +50,11 @@ import org.junit.Test
  *    ⇒ **朝宽扭**（把 `onBack()` 从 scope 里摘掉、或搬到"看着不随组合取消"的接收者上 —— 写进
  *    `onDelete` lambda、搬进 VM、或把新协程挪进闸门块里）**红**：那三种都不是这一族要的接收者。
  * 2. [那道渲染闸门与从来读不到那一档逐字未动]：`courseMissing` 的定义、闸门的判据、
- *    那枚旧协程的**键表**与它的体内条件全部逐字钉住。⇒ 谁用"courseMissing 就立刻 pop"把两档
- *    并成一档（那会把"点了没反应"换成"数据还没到就误弹"），或把闸门放宽成照旧渲染
- *    （那会把 R5 F-41 的 `id=0L` 重复课程放回来），**红**。
+ *    那枚旧协程的**键表**、它递给判据内核的 `dataLoaded = !uiState.loading` 那枚实参、四档表里
+ *    能弹栈的那两支，全部逐字钉住；块内退栈枚数按四个被点名的桶逐桶给数并判「盘上枚数 == 桶和」。
+ *    ⇒ 谁用"courseMissing 就立刻 pop"把两档并成一档（那会把"点了没反应"换成"数据还没到就误弹"），
+ *    或把闸门放宽成照旧渲染（那会把 R5 F-41 的 `id=0L` 重复课程放回来），或把互斥的两支并成一支
+ *    / 给「本页自己删的」那一档添上念话，**红**。
  * 3. [页面组合期scope上await完一次写库再自己退栈的落点册子]：全仓 main 扫每一枚由
  *    `rememberCoroutineScope()` 供给的变量名下的 `launch { … }` 体，体内**同时**出现
  *    写库那一手与自我退栈那一手的落点按 文件 × 处数 登记，判据是**双向等集**：
@@ -227,8 +232,15 @@ class CourseEditorDeleteExitReceiverGuardTest {
      *
      * 所以这一层不去数"有几枚 popBackStack"（MainActivity 里八个目的地各有一枚，文件级计数既判不到
      * 这一处又替别人背债 —— `WriteChainReceiverWiringGuardTest` 档 ⑬ 撞过这一洞），而是**按那一枚
-     * composable 块取形状**：从 `route = "editor/{courseId}"` 起花括号配平切出整块目的地，在**块内**判
-     * 旧协程的键表与条件逐字、闸门判据逐字、`initialCourse = course` 逐字。
+     * composable 块取形状**：从 `) { backStackEntry ->` 起花括号配平切出整块目的地，在**块内**判
+     * 旧协程的键表逐字、它递给判据内核的那枚 `dataLoaded` 实参逐字、闸门判据逐字、`initialCourse = course`
+     * 逐字；块内的退栈枚数按**四个被点名的桶**（从来读不到 / 本页删掉 / 保存链收尾 / 递给编辑器的
+     * `onBack`）逐桶给数并判「盘上枚数 == 桶和」，而不是钉一枚裸数。
+     *
+     * T335（台账 #388）把「从来读不到」那一枚协程的体从裸 `if (!uiState.loading && courseMissing) { pop }`
+     * 换成了「问 `EditorMissingCourseExit.verdictOf` 四档、按档念/退」：键表一行一字未动，条件里那个
+     * `!uiState.loading` 搬到了 `dataLoaded = !uiState.loading` 这枚具名实参上，退栈那一手变成互斥的
+     * 两支各一枚 ⇒ 块内 pop 的**文本枚数**从 4 涨到 5，而**能弹栈的路数**仍是四桶。本格钉的是后者。
      */
     @Test
     fun `那道渲染闸门与从来读不到那一档逐字未动 两档不许并成一档`() {
@@ -263,15 +275,30 @@ class CourseEditorDeleteExitReceiverGuardTest {
         )
         val neverReadBody = braceBodyFrom(activity, activity.indexOf('{', neverReadAt + NEVER_READ_EFFECT.length)).body
         assertEquals(
-            "那枚旧协程体内的判据 `$NEVER_READ_CONDITION` 逐字仍在恰好一处（实到 " +
-                occurrences(neverReadBody, NEVER_READ_CONDITION) + " 处）：`!uiState.loading` 排在前面是" +
-                "「数据还没到就不判」那一半，摘掉它就是在首帧弹栈",
+            "那枚旧协程递给判据内核的「数据到位没有」那一枚事实逐字仍在恰好一处（实到 " +
+                occurrences(neverReadBody, NEVER_READ_DATA_ARG) + " 处）：T335 把体从裸 `if` 换成了" +
+                "「问内核四档」，基点那句 `if (!uiState.loading && courseMissing)` 的左半现在写在这枚" +
+                "具名实参上 —— 把它换成 `dataLoaded = true` 或整枚摘掉，就是「数据还没到就弹栈」" +
+                "（判据本体第一档 `!dataLoaded -> DataNotReadyYet` 的顺序归 domain/editor/" +
+                "EditorMissingCourseExitTest 逐格钉，本层钉调用点递进去的那一枚）",
             1,
-            occurrences(neverReadBody, NEVER_READ_CONDITION),
+            occurrences(neverReadBody, NEVER_READ_DATA_ARG),
+        )
+        val neverReadPopBranches = neverReadBody.lines().map { it.trim() }
+            .filter { it.startsWith("MissingCourseExitVerdict.Pop") }
+        assertEquals(
+            "那两枚退栈手必须分属互斥的两支（`PopWithMessage` 先念后退 / `PopWithoutMessage` 只退不念；" +
+                "实到：\n    " + neverReadPopBranches.joinToString("\n    ") +
+                "）：并成一档 = 把「本页自己删的」那一档也念成「可能被刷新移除」，" +
+                "就是对着用户亲手删掉的课谎报死因",
+            NEVER_READ_POP_BRANCHES,
+            neverReadPopBranches,
         )
         assertEquals(
-            "那枚旧协程体内 `$POP_BACK_STACK` 恰好一处（实到 " + occurrences(neverReadBody, POP_BACK_STACK) + " 处）",
-            1,
+            "那枚旧协程体内 `$POP_BACK_STACK` 恰好 " + NEVER_READ_POP_SITES + " 处（实到 " +
+                occurrences(neverReadBody, POP_BACK_STACK) + " 处）：与上面那两支同枚 —— 一次点火仍只弹一格。" +
+                "**三枚**就是这一档多开一路退栈，**一枚**就是两支被并掉了",
+            NEVER_READ_POP_SITES,
             occurrences(neverReadBody, POP_BACK_STACK),
         )
         assertEquals(
@@ -289,17 +316,41 @@ class CourseEditorDeleteExitReceiverGuardTest {
             1,
             occurrences(destination, INITIAL_COURSE_ARG),
         )
-        // 这一枚目的地里的退栈主人共四处：从来读不到那一档 + 本页删掉那一档 + 保存链收尾那一档
-        // （T260 补的认领）+ 页面上那些「返回」。
-        // 数在一枚尺里是故意的：**并档**（把两档合成一枚 courseMissing 就弹）或**多开一路**
-        // （例如往 onDelete lambda 里塞一枚 pop，第 ① 层那格也会一起红）都会让这个数变。
+        // 目的地块里的退栈**分桶名册**：四桶逐桶点名给枚数，再判「盘上枚数 == 桶和」。
+        // T335 把「从来读不到」那一档的一枚退栈手换成 `when` 里互斥的两枚 —— **能弹栈的路数一处没多**，
+        // 所以这里的正解不是把裸枚数 4 改成 5，而是让每一枚退栈手都归属于一个被点名的桶：
+        // 第五路没被点名的 pop 会让桶和那一边先追不上盘上枚数。
+        val deleteExitBody =
+            braceBodyFrom(activity, activity.indexOf('{', activity.indexOf(EXIT_EFFECT) + EXIT_EFFECT.length)).body
+        val saveTailHits = indexOfAll(activity, SAVE_TAIL_EFFECT)
         assertEquals(
-            "这一枚目的地块内 `$POP_BACK_STACK` 恰好四处（从来读不到那一档 / 本页删掉那一档 / " +
-                "保存链收尾没人认领那一档（T260）/ 递给编辑器的 `onBack` lambda，实到 " +
-                occurrences(destination, POP_BACK_STACK) + " 处）：多一处 = 又多一条路径能弹这一格栈，" +
-                "删失败 / 保存成功那些档就得分不清谁弹的；少一处 = 有一档失去认领" +
-                "（整屏空白那一族回来）",
-            4,
+            "`$SAVE_TAIL_EFFECT` 恰好一处（T260 那枚「保存在途时页面那一支被取消 ⇒ 收尾归目的地层」的认领协程）：" +
+                "实到 " + saveTailHits.size + " 处",
+            1,
+            saveTailHits.size,
+        )
+        val saveTailBody =
+            braceBodyFrom(activity, activity.indexOf('{', saveTailHits.first() + SAVE_TAIL_EFFECT.length)).body
+        val neverReadPops = occurrences(neverReadBody, POP_BACK_STACK)
+        val deletePops = occurrences(deleteExitBody, POP_BACK_STACK)
+        val saveTailPops = occurrences(saveTailBody, POP_BACK_STACK)
+        val onBackPops = occurrences(destination, ON_BACK_LAMBDA)
+        val bucketCounts = listOf(neverReadPops, deletePops, saveTailPops, onBackPops)
+        assertEquals(
+            "四个名册桶各自的退栈枚数必须是 2 / 1 / 1 / 1（从来读不到那一档 = T335 之后互斥的两支 / " +
+                "本页删掉那一档 / 保存链收尾没人认领那一档（T260）/ 递给编辑器的 `onBack` lambda）；" +
+                "实到 " + bucketCounts.joinToString(" / ") + " —— 哪一桶自己涨了跌了先在这里露出来",
+            listOf(NEVER_READ_POP_SITES, 1, 1, 1),
+            bucketCounts,
+        )
+        assertEquals(
+            "这一枚目的地块内 `$POP_BACK_STACK` 的**盘上枚数必须等于上面四个名册桶之和**（盘上 " +
+                occurrences(destination, POP_BACK_STACK) + " 处 vs 桶和 " + bucketCounts.sum() +
+                " 处）：多一处 = 第五路能弹这一格栈的手没被点名，删失败 / 保存成功那些档就得分不清谁弹的；" +
+                "少一处 = 有一档失去认领（整屏空白那一族回来）。数在一枚尺里是故意的：**并档**" +
+                "（把两档合成一枚 courseMissing 就弹）或**多开一路**（往 onDelete lambda 里塞一枚 pop，" +
+                "第 ① 层那格也会一起红）都会让这个等式断掉",
+            bucketCounts.sum(),
             occurrences(destination, POP_BACK_STACK),
         )
         assertEquals(
@@ -630,7 +681,19 @@ class CourseEditorDeleteExitReceiverGuardTest {
         const val EDITOR_DESTINATION_ANCHOR = ") { backStackEntry ->"
         const val COURSE_MISSING_DECL = "val courseMissing = courseId >= 0 && course == null"
         const val NEVER_READ_EFFECT = "LaunchedEffect(courseId, uiState.loading)"
-        const val NEVER_READ_CONDITION = "if (!uiState.loading && courseMissing) {"
+        const val SAVE_TAIL_EFFECT = "LaunchedEffect(editorSaveFinish) {"
+
+        // T335 之后这一枚协程的体换了写法：裸 `if (!uiState.loading && courseMissing)` 换成
+        // 「问 EditorMissingCourseExit.verdictOf 四档」。下面三枚参照物钉的是新形状，语义与基点同源：
+        // NEVER_READ_DATA_ARG = 基点那句条件的左半（「数据还没到就不判」），
+        // NEVER_READ_POP_BRANCHES = 基点那一枚退栈手换成的互斥两支，
+        // NEVER_READ_POP_SITES = 体内 pop 的文本枚数（两支各一枚；**能弹栈的路数仍是一档**）。
+        const val NEVER_READ_DATA_ARG = "dataLoaded = !uiState.loading,"
+        val NEVER_READ_POP_BRANCHES = listOf(
+            "MissingCourseExitVerdict.PopWithMessage -> {",
+            "MissingCourseExitVerdict.PopWithoutMessage -> navController.popBackStack()",
+        )
+        const val NEVER_READ_POP_SITES = 2
         const val INITIAL_COURSE_ARG = "initialCourse = course,"
 
         // ── ③ 棘轮的册子与两把尺 ──

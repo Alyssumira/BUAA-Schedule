@@ -59,11 +59,16 @@ import org.junit.Test
  * 1. [这面旗不再由只活到配置变化那一秒的容器供给]：旧逐字形 0 处 + `deleteRequestedByThisEntry by remember`
  *    那一族 0 处（**朝宽**：把它改回裸 `remember` 就在这一格红）+ 三行声明逐字（必须过
  *    `backStackEntry.savedStateHandle` → `getStateFlow(…, false)` → `collectAsState()`，
- *    **朝窄**：整枚声明摘掉、或换成不产生 recomposition 的裸 `get<Boolean>()` 都在这一格红）。
+ *    **朝窄**：整枚声明摘掉、或换成不产生 recomposition 的裸 `get<Boolean>()` 都在这一格红）
+ *    + **落点名册**（一枚声明 + 三枚读者逐枚点名，再判「盘上枚数 == 名册数到枚数」；新增一枚没在册的
+ *    读者当场红 —— 裸枚数判不出「多出来的是谁」，而本仓那条成文教训要的正是先裁再钉）。
  * 2. [立旗那一手仍排在 await 之前]：`onDelete` lambda 体内两枚逐字各恰好一处 + **次序断言**
  *    （本仓「顺序决定生死」那一族的老规矩：只断言"两处都在"不够）+ 全文件立旗恰好一处。
- * 3. [「从来没读到」那一枚协程的键集合与体逐字未动]：五枚**原文切片**整段逐字比，不用行号。
- *    往它的键表里加 `courseMissing`、把 `!uiState.loading` 挪到别处、多写一枚 pop，全在这一格红。
+ * 3. [「从来没读到」那一枚协程的键集合与体逐字未动]：六枚**原文切片**整段逐字比，不用行号 ——
+ *    键表一行（T335 之后仍是 `(courseId, uiState.loading)` 两枚）+ `when (EditorMissingCourseExit.verdictOf(`
+ *    + 三枚具名实参。往键表里加 `courseMissing`、把 `dataLoaded = !uiState.loading` 换成 `true`、
+ *    在调用点重算 `courseMissing` 这几条路都在这一格红；另两格钉四档表的两头（能弹的恰好两档、
+ *    不弹的两档不许折进 `else`），体内退栈枚数与「能弹的档」同源（2），所以「多写一枚 pop」也红。
  * 4. [点火即消费排在退栈那一手之前]：退栈协程体内条件逐字一处、`if (` 恰好一处（三条条件一条不多
  *    一条不少）、消费一处、pop 一处，且**消费 index 落在 pop index 之前**；再钉「不许换成 remove」。
  * 5. [旗只属于这一条 entry]：目的地块内 `backStackEntry.savedStateHandle` 恰好三处（读 + 写 + 消费）、
@@ -123,10 +128,26 @@ class DeleteFlagConfigSurvivalGuardTest {
             DECL_SLICE,
             declared,
         )
+        // 这一族的落点：**逐枚点名 + 盘上枚数与名册同源**（不是一枚裸枚数）
+        for ((role, landing) in FLAG_LANDING_ROSTER) {
+            assertEquals(
+                "**名册逐枚点名**：$role 那一枚落点逐字必须恰好一处（针 `$landing` 实到 " +
+                    occurrences(code, landing) + " 处）：摘掉它或换了它的写法 = 名册里那一枚读者从盘上消失，" +
+                    "而本守卫不替它改判 —— 要么连名册一起显式销账（并说清那一枚凭什么不再需要），" +
+                    "要么它就不该被摘",
+                1,
+                occurrences(code, landing),
+            )
+        }
+        val rosterHits = FLAG_LANDING_ROSTER.sumOf { occurrences(code, it.second) }
         assertEquals(
-            "`$FLAG_NAME` 这一族在**代码**里（注释已抹）只许出现在声明 + 协程键 + 协程条件三处：实到 " +
-                occurrences(code, FLAG_NAME) + " 处，逐处是 " + hint(source(MAIN_ACTIVITY), FLAG_NAME),
-            3,
+            "`$FLAG_NAME` 这一族在**代码**里（注释已抹）的每一枚落点都必须被上面那本名册点名：" +
+                "盘上实到 " + occurrences(code, FLAG_NAME) + " 处、名册只数到 " + rosterHits + " 处，逐处是 " +
+                hint(source(MAIN_ACTIVITY), FLAG_NAME) +
+                "：**多出来的那一枚 = 有新人没经点名就来读这面旗** —— 本仓成文教训（台账 #523）是" +
+                "「配对守卫拦下的第二枚读者是卡面缺陷，不许朝上重钉裸枚数」，正解是先裁它合不合法、" +
+                "合法才加进名册；名册里有而盘上没有 = 某一枚落点被搬走或改了名（上面那一圈已先红）",
+            rosterHits,
             occurrences(code, FLAG_NAME),
         )
     }
@@ -178,8 +199,17 @@ class DeleteFlagConfigSurvivalGuardTest {
     /**
      * R5 F-41 那一半的原意：这一枚协程**只管**「这门课从来没读到」，键表里没有 `courseMissing`，
      * 为的就是不在「首帧课程列表为空 / 刚切学期数据还没到」那种帧里弹栈。卡面红线是「那一枚协程
-     * 与它的键，一个字节都不许多动」，所以这一层不用行号（本仓行号锚点会漂），拿**五枚原文切片**
-     * 整段逐字比。
+     * 与它的键，一个字节都不许多动」，所以这一层不用行号（本仓行号锚点会漂），拿**原文切片**整段逐字比。
+     *
+     * T335（台账 #388）之后「体」换了写法：裸 `if (!uiState.loading && courseMissing) { popBackStack() }`
+     * 改成「问 `EditorMissingCourseExit.verdictOf` 四档、按档念/退」。键表那一行**一字未动**，
+     * 而原来那三格各自换成新的参照物：
+     * - 「`!uiState.loading` 排在前面 = 数据还没到就不判」→ 现在是递给内核的 `dataLoaded = !uiState.loading`
+     *   这枚具名实参（判据本体第一档 `!dataLoaded -> DataNotReadyYet` 的顺序由
+     *   `domain/editor/EditorMissingCourseExitTest` 逐格钉，本层钉的是调用点递进去的那一枚）；
+     * - 「退栈那一手只有一枚」→ 现在是四档里**互斥的两档**各一枚（`PopWithMessage` / `PopWithoutMessage`），
+     *   一次点火仍只弹一格；两档「不弹」的必须点名写着，不许折进 `else`；
+     * - 「多写一枚 pop」→ 枚数与那两支同源：并档（两支合成一支）或添第三枚退栈手都会红。
      */
     @Test
     fun `从来没读到那一枚协程的键集合与体逐字未动`() {
@@ -196,24 +226,41 @@ class DeleteFlagConfigSurvivalGuardTest {
         )
         val slice = lineSlice(code, hits.first(), NEVER_READ_SLICE.size)
         assertEquals(
-            "那枚协程**连同它的体**五枚原文逐字节未动（键表一行 + 条件一行 + 退栈一行 + 两枚收括号）。" +
-                "条件里 `!uiState.loading` 排在前面是「数据还没到就不判」那一半，退栈那一手只有一枚：" +
+            "那枚协程**连同它递给内核的三枚事实**逐字节未动（键表一行 + `when (` + 内核一行 + 三枚具名实参）。" +
+                "`dataLoaded = !uiState.loading` 是「数据还没到就不判」那一半（把它换成 `dataLoaded = true` " +
+                "或整枚摘掉 = 在首帧弹栈，R5 F-41 原案）；`courseMissing = courseMissing` 递的是目的地层" +
+                "那枚唯一尺，不许在这一行重算成第二把尺；键表那一行多一枚键就是两档并一档：" +
                 "\n  期望：\n    " + NEVER_READ_SLICE.joinToString("\n    ") +
                 "\n  实到：\n    " + slice.joinToString("\n    "),
             NEVER_READ_SLICE,
             slice,
         )
         val body = braceBodyFrom(code, hits.first() + NEVER_READ_ANCHOR.length - 1)
+        val popBranches = body.lines().map { it.trim() }.filter { it.startsWith("MissingCourseExitVerdict.Pop") }
         assertEquals(
-            "那枚协程体内 `$NEVER_READ_CONDITION` 恰好一处（实到 " +
-                occurrences(body, NEVER_READ_CONDITION) + " 处）",
-            1,
-            occurrences(body, NEVER_READ_CONDITION),
+            "体内**能弹栈的档**必须恰好这两枚、逐字各一行（实到：\n    " + popBranches.joinToString("\n    ") +
+                "）：`PopWithoutMessage` 那一支是「本页自己删的」⇒ 只退不念，给它添上念话就是对着" +
+                "用户亲手删掉的课谎报死因；把两支并成 `PopWithMessage, PopWithoutMessage ->` 又折回同一句" +
+                "两档，而本仓红线是那两档必须分开认领",
+            NEVER_READ_POP_BRANCHES,
+            popBranches,
+        )
+        val silentBranches = body.lines().map { it.trim() }.filter {
+            it.startsWith("MissingCourseExitVerdict.CourseIsOnScreen") ||
+                it.startsWith("MissingCourseExitVerdict.DataNotReadyYet") || it == "-> Unit"
+        }
+        assertEquals(
+            "两档「什么都不做」必须还点名写出来、没收进 `else`（实到：\n    " +
+                silentBranches.joinToString("\n    ") + "）：`DataNotReadyYet` 那一档就是「数据还没到」" +
+                "那一半的落点，把它折进 else 的话内核将来多一档会被静默咽掉（台账 #370/#251-04 那一族）",
+            NEVER_READ_SILENT_BRANCHES,
+            silentBranches,
         )
         assertEquals(
-            "那枚协程体内 `$POP_BACK_STACK` 恰好一处（实到 " + occurrences(body, POP_BACK_STACK) +
-                " 处）：这一档的退栈不许多开一路",
-            1,
+            "那枚协程体内 `$POP_BACK_STACK` 恰好 " + NEVER_READ_POP_COUNT + " 枚（实到 " +
+                occurrences(body, POP_BACK_STACK) + " 处）：与上面那两支同枚 —— 一支一枚，一次点火只弹一格。" +
+                "**三枚**就是这一档多开一路退栈，**一枚**就是把两档并成了一档（上面那一格会一起红）",
+            NEVER_READ_POP_COUNT,
             occurrences(body, POP_BACK_STACK),
         )
     }
@@ -495,22 +542,60 @@ class DeleteFlagConfigSurvivalGuardTest {
             ".getStateFlow(DELETE_REQUESTED_BY_THIS_ENTRY, false)",
             ".collectAsState()",
         )
+        /**
+         * `$FLAG_NAME` 在**代码**里（注释已抹）的落点名册：一枚声明 + 三枚读者，逐枚点名。
+         *
+         * 为什么不是一枚裸枚数：裸数只会说「几处」，不会说「是哪几处」—— 配对守卫拦下第二枚读者时
+         * 把数往上调（本仓成文教训，台账 #523 / T271 那一洞）等于让守卫替没被审过的读者背书。
+         * 名册的做法：每一枚都得先自报身份（角色 + 逐字落点），新增一枚没在册的读者当场红。
+         *
+         * 第四枚（内核实参）是本批 T335 合法改写带进来的那一枚，裁决见 ③ 层与 ⓪ 号 commit：
+         * 它只决定**念不念那句话**，不决定**退不退栈** —— 退栈那一维在
+         * `domain/editor/EditorMissingCourseExitTest > 退栈那一维与基点逐格等价` 里对 2³ 输入逐格钉成
+         * 「数据到位 && 目标不在屏上」，与旗无关；而这一档的键表仍然只有两枚（不许加旗，加了就是
+         * 两条协程各弹一次）。所以它不是「第二条 pop 路径」，是名册里新的一枚。
+         */
+        val FLAG_LANDING_ROSTER = listOf(
+            "① 声明（T177 的载体：本条 entry 的 savedStateHandle → getStateFlow → collectAsState）" to
+                "val deleteRequestedByThisEntry by backStackEntry.savedStateHandle",
+            "② 退栈协程的键（点火用）" to
+                "LaunchedEffect(deleteRequestedByThisEntry, courseMissing, uiState.loading) {",
+            "③ 退栈协程的条件（消费前那一读）" to
+                "if (deleteRequestedByThisEntry && courseMissing && !uiState.loading) {",
+            "④ 出场判据内核的具名实参（T335 新增：只决定念不念那句话）" to
+                "deletionRequestedByThisEntry = deleteRequestedByThisEntry,",
+        )
 
         // ── ② 立旗那一手的次序 ──
         const val ON_DELETE_ANCHOR = "onDelete = { target ->"
         const val FLAG_SET = "backStackEntry.savedStateHandle[$FLAG_KEY] = true"
         const val AWAIT_DELETE = "viewModel.deleteCourseAndAwait(target)"
 
-        // ── ③ 「从来没读到」那一档：键与体整段逐字 ──
+        // ── ③ 「从来没读到」那一档：键表 + 递给内核的三枚事实 + 四档表两头（整段逐字，不用行号）──
+        // T335 把体从「裸 if 判完直接 pop」换成「问内核四档、按档念/退」，键表那一行一字未动 ——
+        // 它才是「两档不许并成一档」那一半；「数据还没到就不判」那一半搬到了 `dataLoaded` 那枚实参上。
         const val NEVER_READ_ANCHOR = "androidx.compose.runtime.LaunchedEffect(courseId, uiState.loading) {"
-        const val NEVER_READ_CONDITION = "if (!uiState.loading && courseMissing) {"
         val NEVER_READ_SLICE = listOf(
             NEVER_READ_ANCHOR,
-            "if (!uiState.loading && courseMissing) {",
-            "navController.popBackStack()",
-            "}",
-            "}",
+            "when (",
+            "EditorMissingCourseExit.verdictOf(",
+            "dataLoaded = !uiState.loading,",
+            "courseMissing = courseMissing,",
+            "deletionRequestedByThisEntry = deleteRequestedByThisEntry,",
         )
+        /** 四档表里**能弹栈**的两档（互斥分支 ⇒ 一次点火只弹一格） */
+        val NEVER_READ_POP_BRANCHES = listOf(
+            "MissingCourseExitVerdict.PopWithMessage -> {",
+            "MissingCourseExitVerdict.PopWithoutMessage -> navController.popBackStack()",
+        )
+        /** 四档表里**什么都不做**的两档：点名写出来，不许折进 `else` */
+        val NEVER_READ_SILENT_BRANCHES = listOf(
+            "MissingCourseExitVerdict.CourseIsOnScreen,",
+            "MissingCourseExitVerdict.DataNotReadyYet,",
+            "-> Unit",
+        )
+        /** 这一档体内的退栈枚数：与「能弹栈的档」同枚（2），不是与「档数」同枚（4） */
+        const val NEVER_READ_POP_COUNT = 2
 
         // ── ④ 点火即消费 ──
         const val EXIT_EFFECT = "LaunchedEffect(deleteRequestedByThisEntry, courseMissing, uiState.loading)"
