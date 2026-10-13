@@ -25,6 +25,8 @@ import org.junit.Test
  *    `viewModel.previewBuaaCourses(semester, parsed.courses, parseWarnings)`；T336 把抓取本体搬进
  *    `data/import/BuaaImportJob.kt` 之后那一行不再成行（作业体的接收者换成 `BuaaImportJob.Host`，
  *    问 viewModel 的那一跳挪进 Host 覆写），性质没变、手数从一枚变四枚 ⇒ 逐枚点名而不是改个裸针。
+ *    名册两头都有耳朵：每一枚在册的都必须在盘上恰好一处（少一枚红），而盘上每一枚
+ *    `previewBuaaCourses(` 的落点都必须被名册或契约点名（多一枚没在册的红）—— 不是钉一枚跨三文件的裸总数。
  * 3. **读形状** —— 第 ② 层按**圆括号配平**取实参表、数顶层逗号（"省着不传"当场红）；第 ③ 层按
  *    **花括号配平**取那枚 `if` 的分支体（文案必须真在这一支体内）；第 ④ 层取 `refreshSchedule` 的
  *    函数体数 `add(`（那条链今天只有一档警告）。
@@ -218,6 +220,31 @@ class BuaaScheduleParserTotalWeeksGuardTest {
                 "这一格堵的就是这条路",
             1,
             occurrences(screen, "warnings: List<String>,"),
+        )
+        // 名册的**另一头**：只判「每一枚在册的都还在」等于只朝一个方向有耳朵 —— 谁新加一跳不递 warnings
+        // （或把某一跳改了名）就从这一格露出来。判据不是写死的跨文件总数，而是「每一枚落点都被点名」。
+        val unnamedHops = byFile.toList().sortedBy { (name, _) -> name }.flatMap { (name, text) ->
+            text.lines()
+                .filter { line ->
+                    line.contains("previewBuaaCourses(") &&
+                        PREVIEW_HOP_ROSTER.none { hop -> line.contains(hop.third) }
+                }
+                .filterNot { line ->
+                    // 两类合法的非落点行：契约（接口声明 + holder 覆写声明）与 VM 那一头的定义
+                    line.contains(PREVIEW_CONTRACT) ||
+                        line.contains("override suspend fun previewBuaaCourses(") ||
+                        line.contains("suspend fun previewBuaaCourses(")
+                }
+                .map { line -> "$name: " + line.trim() }
+        }
+        assertEquals(
+            "盘上每一枚 `previewBuaaCourses(` 的落点都必须被上面那本名册或契约点名（实到未点名的：\n  " +
+                unnamedHops.joinToString("\n  ").ifEmpty { "（无）" } +
+                "\n  名册：" + PREVIEW_HOP_ROSTER.joinToString(" / ") { it.second } +
+                "）：多一枚没在册的落点 = 有人新开了一路预览而没人判它递不递 warnings；" +
+                "名册里某一枚从盘上消失 = 那一跳被搬走或改了名，同样从这一格露出来（摘名册不摘盘那一洞）",
+            emptyList<String>(),
+            unnamedHops,
         )
         assertEquals(
             "**钉法 = 逐字节**：第二枚 if 的互斥条件必须逐字在此（实到 " + occurrences(screen, SECOND_BRANCH) +
