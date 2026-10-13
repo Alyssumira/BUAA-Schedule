@@ -35,6 +35,14 @@ import org.junit.Test
  * [probeRecognisesTheUnjoinedShapes]（**抹注释找锚点**：改前那几形喂进同一把尺各数到该数的值，
  * 写在 KDoc 里的形状抹完必须 0 处，防"锚点拼错的假绿"）。
  *
+ * ## 第 ⑥ 层是 T356 续的（#602 与 #397 的交点）
+ *
+ * [theWakeUpMaxWeekHasTwoSourcesOnlyAndNeverAFabricatedConstant] 钉的不是"并没并尺"，而是第 ② 层那句
+ * 「WakeUp 递进去的上界就是同一份 JSON 写出去的 maxWeek」里那枚数的**出处册子**：只有两等
+ * （学期行自己给的上界／这份文件实际覆盖到的最晚一周），第三等（`?: CourseConstraints.MAX_TOTAL_WEEKS`
+ * 那种常数兜底、把脏学期行的 0 与负数原样写出去）一概不许在场，而两本账必须是同一个局部量。
+ * 编号续在末尾而物理位置排在 ④ 与 ⑤ 之间 —— 在册五层的号一格没挪（盘面有注释按号点名守卫的层号）。
+ *
  * 报错消息一律点名**哪一侧没并尺**：红了就知道要回去改哪一条链。
  */
 class TermWeekGateSingleRulerWiringGuardTest {
@@ -349,6 +357,135 @@ class TermWeekGateSingleRulerWiringGuardTest {
         }
     }
 
+    // ─────────────── ⑥ T356（#602 × #397）：WakeUp 那枚 maxWeek 只有两等出处 ───────────────
+    // （编号按在册那五层之后**续**一枚，物理位置排在 ④ 与 ⑤ 之间。在册五层的号一格没挪：
+    //   盘面有注释按号点名「守卫第 ① 层／第 ⑤ 层」（TermWeekGate 自己的 KDoc 里两处），
+    //   本卡改号就等于把那些引用指向别的东西 —— 那是"注释与守卫各说各话"那一族的形状。）
+
+    /**
+     * 第 ② 层那句"WakeUp 递进去的上界就是同一份 JSON 写出去的 maxWeek"钉的是**锚点在场**；
+     * 这一层钉的是这枚数的**出处册子**：只有两等（学期行自己给的上界 / 这份文件实际覆盖到的最晚一周），
+     * 第三等（拿常数顶、把脏值原样写出去）一概不许有，而两本账必须是**同一个局部量**。
+     *
+     * 四手各是哪一种钉法（卡面点名的那四种）：
+     * - **逐字节**：那三枚赋值行各恰一枚在 `toWakeUpJson` 体内（换掉第二等的出处当场红）；
+     * - **抹注释找锚点**：病灶那一形「?: CourseConstraints.MAX_TOTAL_WEEKS」在代码里 **0** 处、
+     *   在含注释的原文里恰好 **1** 处（取证逐字写在导出器自己的注释里 ⇒ 那个 0 不是"注释删干净"换来的）；
+     * - **数出现次数**：`MAX_TOTAL_WEEKS` 在导出器代码里 0 处（一枚都不许再当兜底上界使），
+     *   `totalWeeks` 那枚名字在代码里恰 5 处、在 `toWakeUpJson` 体内恰 4 处（涨出一枚就是有人
+     *   另立了第三本上界账），`"maxWeek":$totalWeeks` 代码 1 处 / 原文 2 处；
+     * - **读形状**：索引顺序 取上界 → 覆盖度 → 合并 → 才递进裁剪 → 才拼 maxWeek，
+     *   另加**同源那一手**：裁剪调用的第三实参名与 `maxWeek` 后面插值的那个名字必须逐字相同。
+     *
+     * 反套套逻辑（探测器自检）：把改前那一形与"两本账分家"那一形喂进同一把尺，各数到该数的值。
+     */
+    @Test
+    fun theWakeUpMaxWeekHasTwoSourcesOnlyAndNeverAFabricatedConstant() {
+        val raw = readMainSource(WAKE_UP_FILE)
+        val code = withoutComments(raw)
+        val body = balancedBlock(code, "fun toWakeUpJson(")
+
+        for (line in listOf(CEILING_FROM_ROW, COVERAGE_FROM_ROW, MERGED_BOUND_ROW)) {
+            assertEquals(
+                "**钉法 = 逐字节**：`toWakeUpJson` 体内这一行必须恰好一枚（实到 " +
+                    occurrences(body, line) + " 枚）：「$line」。\n" +
+                    "摘掉或改写它 = 上界的两等出处少了一等 —— 那一等就会被顶成常数（#602）" +
+                    "或把脏学期行原样写出去（#397 与 #602 的交点）",
+                1,
+                occurrences(body, line),
+            )
+        }
+
+        // 抹注释找锚点：病灶那一形代码 0 处，而取证必须还在注释里（读到 0 处原文 = 上面那个 0 是删证据换来的）
+        assertEquals(
+            "**钉法 = 抹注释找锚点**：病灶那一形「$LEGACY_CEILING_FALLBACK」在代码里必须 **0** 处" +
+                "（它是 #602 的本尊：拿学期上限常数冒充这学期的周数）。实到 " + occurrences(code, LEGACY_CEILING_FALLBACK) + " 处",
+            0,
+            occurrences(code, LEGACY_CEILING_FALLBACK),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数（含注释原文）**：同一形在原文里必须恰好 **1** 处 —— 那是导出器注释里逐字" +
+                "留着的改前取证。读到 0 = 取证被搬走（上面那个 0 就成了假绿）；读到 2 = 病灶回潮或被引用第二遍。" +
+                "实到 " + occurrences(raw, LEGACY_CEILING_FALLBACK) + " 处",
+            1,
+            occurrences(raw, LEGACY_CEILING_FALLBACK),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数（抹注释）**：`MAX_TOTAL_WEEKS` 这枚常量在导出器代码里必须 **0** 处 —— " +
+                "它管的是写侧的限幅，不该出现在导出链上（出现在兜底位就是 #602）。实到 " +
+                occurrences(code, "MAX_TOTAL_WEEKS") + " 处",
+            0,
+            occurrences(code, "MAX_TOTAL_WEEKS"),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数**：那枚上界的局部量名字在导出器代码里恰 " + TOTAL_WEEKS_NAME_TOTAL + " 处、" +
+                "在 `toWakeUpJson` 体内恰 " + TOTAL_WEEKS_NAME_IN_BODY + " 处（取上界那一行、合并那一行、" +
+                "递进裁剪那一处、拼进 maxWeek 那一处）。实到 全文件 " + occurrences(code, "totalWeeks") +
+                " 枚 ／ 体内 " + occurrences(body, "totalWeeks") + " 枚 —— 涨出一枚就是有人另立了第三本上界账" +
+                "（那是本卡第 ② 层防的「两把尺」形状）",
+            Pair(TOTAL_WEEKS_NAME_TOTAL, TOTAL_WEEKS_NAME_IN_BODY),
+            Pair(occurrences(code, "totalWeeks"), occurrences(body, "totalWeeks")),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数（两栏）**：写 maxWeek 的那一行「$MAX_WEEK_FIELD_LINE」在代码里恰 1 枚（它就是输出）、" +
+                "在原文里恰 2 枚（另一枚是下面那段注释逐字引用着它）。实到 代码 " +
+                occurrences(code, MAX_WEEK_FIELD_LINE) + " ／ 原文 " + occurrences(raw, MAX_WEEK_FIELD_LINE),
+            Pair(1, 2),
+            Pair(occurrences(code, MAX_WEEK_FIELD_LINE), occurrences(raw, MAX_WEEK_FIELD_LINE)),
+        )
+
+        // 读形状：先后顺序 —— 上界的两等先算完，才递进裁剪，最后才拼进 JSON
+        val atCeiling = body.indexOf(CEILING_FROM_ROW)
+        val atCoverage = body.indexOf(COVERAGE_FROM_ROW)
+        val atMerged = body.indexOf(MERGED_BOUND_ROW)
+        val atClip = body.indexOf(WAKE_UP_GATE)
+        val atField = code.indexOf(MAX_WEEK_FIELD_LINE)
+        assertTrue(
+            "**钉法 = 读形状（索引顺序）**：两等出处（取上界 $atCeiling、覆盖度 $atCoverage）必须先于合并那一行 " +
+                "$atMerged，合并必须先于递进裁剪 $atClip，裁剪必须先于拼 `maxWeek` $atField。" +
+                "顺序一歪就是「先裁完再决定声明什么」= 声明与实际裁的两本账",
+            atCeiling in 1 until atCoverage && atCoverage < atMerged && atMerged < atClip && atClip < atField,
+        )
+
+        // 同源那一手：裁剪的第三实参名 == maxWeek 后面插值的名字
+        val clipBound = body.substringAfter("TermWeekGate.weeksInsideTerm(").substringBefore(")")
+            .substringAfterLast(',').trim()
+        val declaredBound = code.substringAfter(MAX_WEEK_FIELD_HEAD).substringBefore(',').trim()
+        assertEquals(
+            "**钉法 = 读形状（同源）**：递进 [TermWeekGate.weeksInsideTerm] 的上界是「$clipBound」，" +
+                "而写进 `maxWeek` 的插值是「$declaredBound」—— 两枚必须逐字同名（同一枚局部量）。" +
+                "分家就是这一枚 bug 的根：对方 App 收到的那份 JSON 里 endWeek 与 maxWeek 各说各话",
+            clipBound,
+            declaredBound,
+        )
+        assertEquals(
+            "**钉法 = 读形状（同源的正面写法）**：同名还不够，名字必须是合并那一枚（$MERGED_BOUND_ROW 的左边）",
+            "totalWeeks",
+            clipBound,
+        )
+
+        // 探测器自检：改前那一形与"两本账分家"那一形都必须在同一把尺下数到该数的值
+        val legacy = "val totalWeeks = semester?.totalWeeks $LEGACY_CEILING_FALLBACK"
+        assertEquals(
+            "**探测器自检（朝宽的反证）**：改前那一形喂进来必须数到 1 枚「$LEGACY_CEILING_FALLBACK」" +
+                "（实到 " + occurrences(legacy, LEGACY_CEILING_FALLBACK) + " 枚）—— 数不到上面那个「0 处」就是空锚点",
+            1,
+            occurrences(legacy, LEGACY_CEILING_FALLBACK),
+        )
+        val twoRulers = "val weeks = TermWeekGate.weeksInsideTerm(sortedWeeks, startMonday, coveredMaxWeek)" +
+            ".ifEmpty { sortedWeeks }\n\"\"\"\"maxWeek\":\$termCeiling,\"nodesPerDay\"\"\""
+        val twoRulerClip = twoRulers.substringAfter("TermWeekGate.weeksInsideTerm(").substringBefore(")")
+            .substringAfterLast(',').trim()
+        val twoRulerDeclared = twoRulers.substringAfter(MAX_WEEK_FIELD_HEAD).substringBefore(',').trim()
+        assertEquals(
+            "**探测器自检（朝窄／分家的反证）**：「裁剪用 coveredMaxWeek 而 maxWeek 写 termCeiling」那一形" +
+                "必须被同源那一手读出两枚**不同**的名字（实到 " + twoRulerClip + " ／ " + twoRulerDeclared +
+                "），否则第 ② 层那句「判的就是同一份 JSON 写出去的那枚 maxWeek」只是空话",
+            false,
+            twoRulerClip == twoRulerDeclared,
+        )
+    }
+
     // ─────────────── ⑤ 探测器自检：认得"没并尺"那一形 ───────────────
 
     /**
@@ -588,6 +725,18 @@ class TermWeekGateSingleRulerWiringGuardTest {
         const val GATE_STATEMENT = "if (!TermWeekGate.isInTermWeek(week, semesterStart, totalWeeks)) continue"
         const val OCCURRENCES_CALL = "ScheduleOccurrences.build("
         const val WAKE_UP_CALL = "toWakeUpJson("
+
+        // ⑥（T356，#602 × #397）：WakeUp 那枚 maxWeek 的两等出处与"不许拿常数顶"那一形
+        const val CEILING_FROM_ROW = "val termCeiling = semester?.totalWeeks?.takeIf { it > 0 }"
+        const val COVERAGE_FROM_ROW = "val coveredMaxWeek = courses.filter { WakeUpDropTally.wakeUpDrop(it) == null }"
+        const val MERGED_BOUND_ROW = "val totalWeeks = termCeiling ?: coveredMaxWeek"
+        const val LEGACY_CEILING_FALLBACK = "?: CourseConstraints.MAX_TOTAL_WEEKS"
+        const val MAX_WEEK_FIELD_LINE = "\"maxWeek\":${'$'}totalWeeks"
+        const val MAX_WEEK_FIELD_HEAD = "\"maxWeek\":${'$'}"
+
+        /** 那枚上界局部量的名字在导出器里今天出现的枚数（全文件／`toWakeUpJson` 体内） */
+        const val TOTAL_WEEKS_NAME_TOTAL = 5
+        const val TOTAL_WEEKS_NAME_IN_BODY = 4
 
         // ③ 内核本体那一行 + 别名
         const val DELEGATION_LINE = "WeekCalculator.currentWeekOrNull(start, bound, weekMonday) == week"

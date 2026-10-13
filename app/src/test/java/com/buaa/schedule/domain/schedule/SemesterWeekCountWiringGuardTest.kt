@@ -55,9 +55,14 @@ import org.junit.Test
  * ## 如实写（覆盖面边界与已知不等）
  * - 只扫 `app/src/main/java` 下的 `.kt`，读的是**工作树**（已在 `app/build.gradle.kts` 的
  *   `guardReadWorkingTreeFiles` 输入面里，T92①）；零 android import、零 Robolectric、零时钟、零设备。
- * - 夹取那把尺只认「coerceIn 下界 1、上界 MAX_TOTAL_WEEKS」这一形。`ScheduleExporters.kt:77` 那枚
- *   `semester?.totalWeeks ?: CourseConstraints.MAX_TOTAL_WEEKS` 是**兜底**不是夹取，不在本册子里
- *   —— 它在台账 #395 那一档、本卡白名单外（导出链行为不许顺手改）⇒ 登记为欠账，见回执。
+ * - 夹取那把尺只认「coerceIn 下界 1、上界 MAX_TOTAL_WEEKS」这一形。导出器那一侧从前在 ScheduleExporters
+ *   的 `:77` 兜的是学期上限常数（`semester?.totalWeeks ?: CourseConstraints.MAX_TOTAL_WEEKS`）——
+ *   那是**兜底**不是夹取，从来不在本册子里。T356（#602 × #397 的交点）把那一等换成"两等出处"
+ *   （学期行自己给的上界／这份文件实际覆盖到的最晚一周），今天导出器代码里 `MAX_TOTAL_WEEKS` 一枚都不剩，
+ *   由同目录 `TermWeekGateSingleRulerWiringGuardTest` 新增的那一层按逐字节＋抹注释＋枚数＋读形状钉着。
+ * - ⚠️ 本守卫第 ⑤ 层那句「并尺五侧里问具名读数必须 0 处」今天**照旧是绿的、也照旧不许松**：
+ *   导出器**没有**接 [SemesterWeekCount.readable] —— 接了就把上界夹到 30，会改掉上面差异册子第 ② 列
+ *   「学期行 = 999 ⇒ 判据尺不夹上界」那一格（#395 / #404 既有口径）⇒ 那一半仍是欠账（T356 回执的跨卡那一格）。
  * - `SemesterStats.kt:238` 末尾那一枚夹取在册（它防的是退路那把课程周号尺越界，不是学期行），
  *   行为面由 `SemesterWeekCountTest.displayRulerStillClampsTheCourseWeekFallback` 四格钉着。
  * - 内核 KDoc 第 41-44 行那句转述「展示侧那三处历史包袱（widget/WidgetCommon.kt 两处、
