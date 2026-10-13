@@ -99,6 +99,16 @@ import org.junit.Test
  * 下一枚并行卡再带一枚助手，这几枚又各 +1；照 ⓪ 步跑仪器读合并对象，别照上一枚卡的卡面读。
  * 代价照旧在册：④ 的差值那格（两栏各差 1 枚）不受这类新增影响，它只认那一枚在册散文文件。
  *
+ * ## 再一次重钉（T346①）：新增一枚合法助手，四枚写死值各 +1
+ * `ui/stats/StatsDrillStateSurvivalGuardTest`（T346①，钉「统计页钻取那三枚的存活尺只许一把」，同屏另一头是
+ * showConflictWizard 那枚 saveable、在册例外是 statsBandHeightPx 那枚量出来的占位高度）自带了一枚同族助手 ——
+ * 写法逐字抄 `ui/stats/StatsT82WiringGuardTest` 那一枚（同一次门禁里就在隔壁），没有造新形状，所以动的只有枚数。
+ * 本卡复算后的两栏（逐枚文件对账仍零枚不平；新守卫自己的 KDoc 一个字都没逐字引用那两枚针 ⇒ 不进散文栏）：
+ * - 声明：136 → **137**（守卫侧与裸原文两栏同数这条定理不动）
+ * - 物化：守卫侧（抹注释后）136 → **137**；裸原文 137 → **138**；两栏差仍恰 1 枚，来源仍是 ⓪ 步在册那枚散文文件
+ * - 两棵树族内总枚数（② 那格的覆盖面尺）：137 → **138** = test 137 + main 1（EXPECTED_MAIN_DECLS 一字未动）
+ * 代价照旧在册：再新增一枚合法助手 ⇒ 这几枚各 +1、④ 的差值那格不动。
+ *
  * ## 重测这两把尺（两栏都要念，别只念一栏）
  * 写在这里的命令一律把括号写成方括号类，所以它们一个字都不匹配本文件自己的针 —— 这条理由从 T323 起
  * 才真正要紧：④ 那格数的是抹注释**之前**的原文，「反正注释会被抹掉」不再替这些命令免检。
@@ -592,10 +602,10 @@ private const val MAIN_ROOT = "app/src/main"
  * 为什么钉守卫侧那一栏而不是裸的那一栏：写死值必须是仪器自己观测得到的数，否则是一把永远读不到
  * 自己的死尺；而绝对值要听的那件事（扫描器失明 ⇒ 实到 0）在这一栏照样当场响。见类 KDoc 的重钉记录。
  */
-private const val EXPECTED_TEST_DECLS = 136
-private const val EXPECTED_TEST_MATERIALIZATIONS = 136
+private const val EXPECTED_TEST_DECLS = 137
+private const val EXPECTED_TEST_MATERIALIZATIONS = 137
 private const val EXPECTED_MAIN_DECLS = 1
-private const val EXPECTED_ALL_HELPER_DECLS = 137
+private const val EXPECTED_ALL_HELPER_DECLS = 138
 
 /**
  * ④ 的在册散文点名：全仓唯一一枚「KDoc 里同时逐字引用了正形与病形」的文件（ai/T321 留下的证据，
@@ -610,8 +620,8 @@ private const val PROSE_FILE_STRIPPED_MATERIALIZATIONS = 1
 private const val PROSE_FILE_RAW_FORBIDDEN = 1
 private const val PROSE_FILE_STRIPPED_FORBIDDEN = 0
 
-/** ④ 的在册量：`app/src/test` 裸原文栏比抹注释栏高 1 枚（137 对 136）；两栏合流＝证据没了 */
-private const val EXPECTED_TEST_RAW_MATERIALIZATIONS = 137
+/** ④ 的在册量：`app/src/test` 裸原文栏比抹注释栏高 1 枚（138 对 137）；两栏合流＝证据没了 */
+private const val EXPECTED_TEST_RAW_MATERIALIZATIONS = 138
 
 /** 被禁写法在 `app/src/test` + `app/src/main` 的现量下限（34 + 5）：读空了才红，长了不红 */
 private const val EXPECTED_TO_STRING_SITE_FLOOR = 39

@@ -575,14 +575,12 @@ private const val MAX_MEETINGS_IN_WEEK_VIEW = 3
  * 1. 这一块**收起时只占两行**（卡头 + 一句提示），展开才把周次胶囊与明细铺出来；
  * 2. 全页最长的那一块「课程学分」（实测 3183px）移到列尾，让上面这几块能进首屏。
  *
- * ## 选中态为什么不许惊动整页
- *
- * 三枚状态（expanded / selectedWeek / selectedDay）全部**活在这个 composable 里面**：
- * 点一下胶囊只重组这一块，[StatsScreen] 那几枚重算（summary / ganttBoard / freeGrid /
- * loadTrend）的 memoize 键里根本没有选中值，一次都不重跑。
- * 明细本身走 [WeekDaySchedule.scheduleOf]，包在 `remember(courses, semester, timeSlots, week)`
- * 里 —— 换一周只重算那一周那一条列表，全学期那张表不重来（T75 复用 VM 的收益不该被
- * "进页面重算全学期"吃回去）。
+ * ## 选中态为什么不许惊动整页、又为什么要跨得转屏
+ * 三枚状态（expanded / selectedWeek / selectedDay）全部**活在这个 composable 里面**：点一下胶囊只重组这一块，
+ * [StatsScreen] 那几枚重算（summary / ganttBoard / freeGrid / loadTrend）的 memoize 键里根本没有选中值，一次
+ * 都不重跑；明细走 [WeekDaySchedule.scheduleOf]，包在按选中周次 memoize 的 remember 里，换一周只重算那一周，
+ * 全学期那张表不重来（T75 复用 VM 的收益不该被"进页面重算全学期"吃回去）。三枚都是**用户点出来的钻取态** ⇒
+ * 同屏只许一把存活尺：载体一律 rememberSaveable；页头那枚 statsBandHeightPx 留裸 remember（占位高度，每帧重量）。
  */
 @Composable
 private fun WeekDrillCard(
@@ -593,12 +591,14 @@ private fun WeekDrillCard(
     currentWeek: Int?,
     weeksUnknownCount: Int,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    var selectedWeek by remember { mutableStateOf<Int?>(null) }
-    // null = 整周；1..7 = 只看那一天（ISO 星期序号，与内核算的是同一个数）
-    var selectedDay by remember { mutableStateOf<Int?>(null) }
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    // 周与天存的是**非空 Int**：-1 = 还没选过（就是「整周」那一枚胶囊），1..7 = 只看那一天（ISO 序号，与内核算同一个数）。
+    // 不写 mutableStateOf<Int?>(null)：可空包装进不了 rememberSaveable 的槽位，转屏后静默回到 null —— 写法照首页 browseWeek。
+    var selectedWeek by rememberSaveable { mutableStateOf(-1) }
+    var selectedDay by rememberSaveable { mutableStateOf(-1) }
+    val (chosenWeek, chosenDay) = selectedWeek.takeIf { it >= 0 } to selectedDay.takeIf { it >= 0 }
     val schedule = remember(courses, semester, timeSlots, selectedWeek) {
-        selectedWeek?.let { WeekDaySchedule.scheduleOf(courses, semester, timeSlots, it) }
+        chosenWeek?.let { WeekDaySchedule.scheduleOf(courses, semester, timeSlots, it) }
     }
     GlassSurface(
         variant = GlassVariant.PANEL,
@@ -617,7 +617,7 @@ private fun WeekDrillCard(
                             expanded = true
                             // 第一次展开落在当前周上；没有原点（假期 / 学期没锚定）就落第 1 周。
                             // 这是"用户点开想看的那一周"，不是内核去猜的今天
-                            if (selectedWeek == null) {
+                            if (chosenWeek == null) {
                                 selectedWeek = (currentWeek ?: 1).coerceIn(1, totalWeeks.coerceAtLeast(1))
                             }
                         }
@@ -657,12 +657,12 @@ private fun WeekDrillCard(
                     (1..totalWeeks).forEach { week ->
                         DrillChip(
                             label = "第 $week 周",
-                            selected = selectedWeek == week,
+                            selected = chosenWeek == week,
                             onClick = { selectedWeek = week },
                         )
                     }
                 }
-                if (selectedWeek != null) {
+                if (chosenWeek != null) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -671,13 +671,13 @@ private fun WeekDrillCard(
                     ) {
                         DrillChip(
                             label = "整周",
-                            selected = selectedDay == null,
-                            onClick = { selectedDay = null },
+                            selected = chosenDay == null,
+                            onClick = { selectedDay = -1 },
                         )
                         (1..SemesterStats.TOTAL_DAYS).forEach { day ->
                             DrillChip(
                                 label = "周${weekdayChar(day)}",
-                                selected = selectedDay == day,
+                                selected = chosenDay == day,
                                 onClick = { selectedDay = day },
                             )
                         }
@@ -697,7 +697,7 @@ private fun WeekDrillCard(
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
-                        val days = selectedDay?.let { day -> listOfNotNull(week.days.getOrNull(day - 1)) }
+                        val days = chosenDay?.let { day -> listOfNotNull(week.days.getOrNull(day - 1)) }
                             ?: week.days.filter { it.meetings.isNotEmpty() }
                         days.forEach { day ->
                             if (day.meetings.isEmpty()) {
@@ -718,7 +718,7 @@ private fun WeekDrillCard(
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.Medium,
                                 )
-                                val shown = if (selectedDay == null) {
+                                val shown = if (chosenDay == null) {
                                     day.meetings.take(MAX_MEETINGS_IN_WEEK_VIEW)
                                 } else {
                                     day.meetings
