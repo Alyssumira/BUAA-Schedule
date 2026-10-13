@@ -23,10 +23,10 @@ import java.time.LocalDate
  *    （[SemesterWeekDates.mondayOf]，也是展示侧翻周那一份）喂回 [WeekCalculator.currentWeekOrNull]，
  *    要求它映射回来的教学周**就是这一周**。比较式全仓只有 [WeekCalculator] 那一处，
  *    本文件一处都没有 —— 这正是卡面要防的「同一判据两份写法各错各的」。
- * 2. **零时钟**：`currentWeekOrNull` 的 `today` 形参带着一枚 `LocalDate.now()` 默认值，
+ * 2. **零时钟**：`currentWeekOrNull` 的 `today` 形参**没有**默认值（T358 摘掉了那一枚时钟默认值），
  *    这里**必须**显式递那一周的周一（守卫 `reminder/TermWeekGateSingleSourceGuardTest` 第 ① 层
- *    按逐字节钉这三格实参）。读默认值那一手 = 判据在函数体内读钟，与纯函数承诺自相矛盾
- *    （台账 #265 那一族）。
+ *    按逐字节钉这三格实参）。判据要是自己读钟（哪怕走一枚带默认值的形参）= 与同文件那句纯函数承诺
+ *    自相矛盾（台账 #265 那一族）。
  * 3. **判不出就不放行**：[semesterStart] 为 null（没有学期行 / 学期日期解析不出来）或
  *    [totalWeeks] 为 null（没有学期行）时 [isInTermWeek] 一律答"不在学期内"。
  *

@@ -75,7 +75,7 @@ class TermWeekGateSingleSourceGuardTest {
                 occurrences(kernel, needle),
             )
         }
-        // 零时钟：currentWeekOrNull 的 today 形参带着一枚 LocalDate.now() 默认值，判据必须显式递日期
+        // 零时钟：currentWeekOrNull 的 today 形参没有默认值（T358 摘掉了），判据必须显式递日期
         for (clock in listOf("LocalDate.now(", "System.currentTimeMillis(", "Instant.", "Clock.", "Date(")) {
             assertEquals(
                 "**钉法 = 读形状**：判据里自己读钟（$clock）就与同文件 KDoc 承诺的纯 JVM 内核自相矛盾" +

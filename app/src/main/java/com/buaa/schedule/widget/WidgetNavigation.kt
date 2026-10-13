@@ -60,8 +60,9 @@ internal fun effectiveWeekOffset(binding: WidgetBinding, baseWeek: Int?): Int =
 /**
  * 可浏览的基准周。
  *
- * 假期中 [WeekCalculator.currentWeek] 会给出 0（开学前）或 totalWeeks+1（结束后），
- * 这里退到最近的学期内周 —— 否则寒假里想提前看第 1 周安排，热区会整个点不动。
+ * 假期里 [WeekCalculator.currentWeek] 只按自然周往上数（开学前给 0，学期结束后继续涨），
+ * 这里用 `coerceIn(1, totalWeeksOf(semester))` 把它夹回最近的学期内周 —— 否则寒假里想提前看
+ * 第 1 周安排，热区会整个点不动。
  */
 internal fun browseBaseWeek(semester: Semester?, today: LocalDate): Int? {
     val start = semester?.startLocalDate ?: return null

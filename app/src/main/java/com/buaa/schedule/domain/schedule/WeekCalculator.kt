@@ -26,7 +26,8 @@ object WeekCalculator {
      *
      * @param semesterStart 开学日期（应为周一；非周一的历史值在这里被归一）
      * @param today 当天日期
-     * @return 1..totalWeeks；开学前返回 0；超过总周数返回 totalWeeks + 1 或 null 由调用方处理。
+     * @return 开学前返回 0；学期内从 1 起按自然周递增；学期外**继续往上数**（这一层没有上界夹取，
+     *         签名里也拿不到总周数），界内与否由 [currentWeekOrNull] 判 null、或由调用方自己夹取。
      */
     fun currentWeek(semesterStart: LocalDate, today: LocalDate): Int {
         val start = mondayOf(semesterStart)

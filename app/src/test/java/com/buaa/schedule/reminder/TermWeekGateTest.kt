@@ -103,7 +103,8 @@ class TermWeekGateTest {
      * 零时钟：判据不许读"今天"。
      *
      * 做法是把同一枚周次放到**一整年前后的两学期**上各判一次，四次答复必须两两相同；
-     * 只要内部读了 `LocalDate.now()`（例如走了 currentWeekOrNull 那枚带默认值的形参），
+     * 只要内部读了 `LocalDate.now()`（`currentWeekOrNull` 的 `today` 形参在 T358 之前带一枚默认值，
+     * 现在是必填参数，那一支已经走不进去了），
      * "过去学期"与"未来学期"的同一年纪就会给出不同的数。
      */
     @Test
