@@ -24,7 +24,8 @@ import org.junit.Test
  * - ③ 说明：KDoc 里那几句（差异是有意、不是就绪闸门、代价、可以改回的条件、守卫点名）一句不许少，
  *   且被换掉的那行假注释（「必须已就绪」）不许长回来。
  * - ④⑤⑥ 三格钉的是**说明所押的前提**：上游还是 Room 失效驱动的整表流（否则「重放 0 档」要重算）、
- *   编辑器侧仍未就绪闸门（否则「它不是担保」那句与那笔残账都要改口径）、
+ *   编辑器挂载闸门必须念上提醒那一半（T373 那一版钉的是「今天还没有」，T381① 落地之后按它自己 KDoc
+ *   写好的方向翻成「必须在场」，翻面记录与判据见 ⑤ 的 KDoc）、
  *   StateFlow 级读者仍只一枚且在根组合（否则「净增量≈0」与「换档省不下东西」的结论都要重算）。
  *   这三格是「朝窄」那一档：它们现在绿，等真正的变化发生时必须红 —— 红了就去改散文，不许去改判据。
  */
@@ -172,18 +173,23 @@ class RemindersEagerlySharingGuardTest {
         )
     }
 
-    // ---- ⑤ 前提二：编辑器侧仍未就绪闸门（那笔在册残账的现行状态） ----
+    // ---- ⑤ 前提二（T381① 翻面）：编辑器挂载闸门必须念上提醒那一半 ----
 
     /**
-     * 这一格钉的是**还没做**那一手：挂载闸门只念 `uiState.loading` 与 `courseMissing`、
-     * 两格提醒字段仍按首帧读到的值固化、`isEditingExisting` 那道门内仍是无条件写回。
+     * 这一格现在钉的是**已经在场**那一手（T381①，收在册 #660 的主体）：挂载闸门除 `uiState.loading` 与
+     * `courseMissing` 之外还念着提醒那一半的判据，而那一半只能由一枚**显式的未就绪位**递过来 ——
+     * VM 那枚位以 `false` 起步、全仓只有一处把它翻真、且那一处写在上游链上（不是拿列表长度当就绪）。
      *
-     * 将来谁在编辑器侧补上「列表未就绪不许写回」，这一格必须红 —— 红了要做的不是把这格改松，
-     * 而是把 `ScheduleViewModel` 里那段 KDoc 的「本卡未做」改成「已有闸门」，
-     * 并按新前提重判 Eagerly 还买不买得到东西（KDoc 里「可以改回」那一档的第 1 条就此成立）。
+     * 判据方向是照 T373 那一版这段 KDoc 写好的路翻的（原文：「将来谁在编辑器侧补上『列表未就绪不许写回』,
+     * 这一格必须红 —— 红了要做的不是把这格改松，而是把 `ScheduleViewModel` 里那段 KDoc 的『本卡未做』
+     * 改成『已有闸门』，并按新前提重判 Eagerly 还买不买得到东西」）：散文与那枚档位同批改口，
+     * 本格则从「不含 reminder 那个 token」翻成「必须含」。**现在摘掉闸门里那一半 ⇒ 这一格红。**
+     *
+     * 编辑器那两格提醒字段仍然按首帧固化（上面那几条 `ENABLED_INIT_LINE` / `ADVANCE_*` 仍在钉它们），
+     * 这不是遗漏而是这一格的前提：正因为字段不回灌，闸门才只能排在挂载之前。
      */
     @Test
-    fun editorSideReadinessGateIsStillMissing() {
+    fun editorSideReadinessGateIsOnTheMountGate() {
         val editor = codeOnly(source(COURSE_EDITOR_SCREEN))
         val gateAt = editor.indexOf(EDITING_EXISTING_GATE)
         check(gateAt >= 0) { "CourseEditorScreen 里已经没有「$EDITING_EXISTING_GATE」：写回那一手的形状变了，本守卫要重核" }
@@ -203,7 +209,7 @@ class RemindersEagerlySharingGuardTest {
         )
         assertTrue(
             "reminderEnabled 的初值取法变了：本守卫钉的是「首帧读到什么就固化成什么」那一档" +
-                "（rememberSaveable 的键里没有 reminders 本身）",
+                "（rememberSaveable 的键里没有 reminders 本身）—— 那一档还在，所以闸门必须在挂载之前就拦住",
             editor.contains(ENABLED_INIT_LINE),
         )
         assertTrue(
@@ -214,11 +220,47 @@ class RemindersEagerlySharingGuardTest {
         val mountAt = activity.indexOf(EDITOR_MOUNT_GATE)
         check(mountAt >= 0) { "MainActivity 里已经没有编辑器挂载闸门「$EDITOR_MOUNT_GATE」：目的地写法变了，本守卫要重核" }
         val mountLine = activity.substring(mountAt, activity.indexOf('\n', mountAt))
-        assertFalse(
-            "挂载闸门里已经念上 reminder 了 —— 说明编辑器侧那道就绪闸门落地：本格的判据要翻面，" +
-                "同时把 ScheduleViewModel 的 KDoc 从「本卡未做」改成「已有闸门」。现读那一行：「" +
-                mountLine.trim() + "」",
+        assertTrue(
+            "挂载闸门不再念 reminder 那一半了 —— 就绪位被摘掉，在册 #660 的主体就回来了：首帧的 " +
+                "emptyList() 会被两格 rememberSaveable 固化成用户设置，再由保存那一趟无条件写回。" +
+                "现读那一行：「" + mountLine.trim() + "」",
             mountLine.contains(REMINDER_TOKEN, ignoreCase = true),
+        )
+        assertEquals(
+            "挂载闸门那一行只许一处（在册的 T381① 那一形）—— 多一处就是有人另起了一扇不判就绪位的门：" +
+                occurrences(activity, EDITOR_MOUNT_GATE) + " 处",
+            1, occurrences(activity, EDITOR_MOUNT_GATE),
+        )
+        assertTrue(
+            "闸门那一半不再问内核（`$MOUNT_GATE_LOCAL` 读不到）：判据本体挪走了或就地重算了一遍 ⇒ " +
+                "三档表就成了没人念的第二本账",
+            activity.contains(MOUNT_GATE_LOCAL),
+        )
+        assertEquals(
+            "闸门那一半的算式只许一处（实到 " + occurrences(activity, MOUNT_GATE_LOCAL) + " 处）：",
+            1, occurrences(activity, MOUNT_GATE_LOCAL),
+        )
+        assertEquals(
+            "根组合里那枚就绪位的订阅只许一处（实到 " + occurrences(activity, REMINDER_ROWS_READER) +
+                " 处）：订阅的是那枚布尔而不是整表，多一枚读者就要重数 ⑥ 那本的册子",
+            1, occurrences(activity, REMINDER_ROWS_READER),
+        )
+        val vm = codeOnly(source(SCHEDULE_VIEW_MODEL))
+        assertEquals(
+            "就绪位的声明只许一处，而且必须以「未就绪」起步（实到 " + occurrences(vm, LISTED_DECL) + " 处）：" +
+                "「列表是空的」与「列表还没发过第一行」在盘面上是两档，起点写成 true 就是把它折成一档",
+            1, occurrences(vm, LISTED_DECL),
+        )
+        assertEquals(
+            "把它翻真的写点全文件只许一处，且必须写在 reminders 那条上游链上（实到 " +
+                occurrences(vm, LISTED_FLIP) + " 处）：除上游那一次发射之外谁都不许宣布「已就绪」——" +
+                "VM 构造时翻真、或拿 `isNotEmpty()` 当就绪，都是把 #660 那一档又折回去",
+            1, occurrences(vm, LISTED_FLIP),
+        )
+        assertEquals(
+            "那枚可变载体在文件里的引用只许三处（声明 / 对外 asStateFlow / 上面那一处翻真，实到 " +
+                occurrences(vm, LISTED_HOST) + " 处）：第四处就是第二个写点",
+            3, occurrences(vm, LISTED_HOST),
         )
         assertEquals(
             "编辑器取 initialReminder 那一行只许一处（往下递的列表读者多一枚就要重数读者册子）：",
@@ -309,7 +351,7 @@ class RemindersEagerlySharingGuardTest {
 
         const val REMINDERS = "reminders"
         const val UI_STATE = "uiState"
-        const val REMINDERS_ANCHOR = "val reminders = repository.reminders.stateIn("
+        const val REMINDERS_ANCHOR = "val reminders = repository.reminders"
         const val STARTED_PREFIX = "started = SharingStarted."
         const val EAGERLY = "Eagerly"
         const val EAGERLY_LINE = "started = SharingStarted.Eagerly,"
@@ -342,8 +384,20 @@ class RemindersEagerlySharingGuardTest {
         const val ADVANCE_INIT_BODY =
             "mutableStateOf(initialReminder?.advanceMinutes?.toString() ?: " +
                 "ReminderSetting.DEFAULT_ADVANCE_MINUTES.toString())"
-        const val EDITOR_MOUNT_GATE = "if (!uiState.loading && !courseMissing) {"
+        const val EDITOR_MOUNT_GATE = "if (!uiState.loading && !courseMissing && reminderGateOpen) {"
         const val REMINDER_TOKEN = "reminder"
+
+        /**
+         * T381① 在 `reminders` 那条链上插了一枚 `onEach`（就绪位只由上游那次发射翻真），
+         * 锚点因此从「…stateIn(」退到那一行开头；②③ 两格的切窗与三枚枚数针一字未动。
+         */
+        const val MOUNT_GATE_LOCAL =
+            "val reminderGateOpen = EditorReminderMountGate.allowsMount(course != null, reminderRowsListed)"
+        const val REMINDER_ROWS_READER =
+            "val reminderRowsListed by viewModel.reminderRowsListed.collectAsState()"
+        const val LISTED_DECL = "private val _reminderRowsListed = MutableStateFlow(false)"
+        const val LISTED_FLIP = ".onEach { _reminderRowsListed.value = true }"
+        const val LISTED_HOST = "_reminderRowsListed"
         const val INITIAL_REMINDER_LINE =
             "initialReminder = course?.let { c -> reminders.firstOrNull { it.courseId == c.id } },"
 

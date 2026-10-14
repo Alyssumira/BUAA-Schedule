@@ -82,6 +82,10 @@ import org.junit.Test
  * - 朝窄怎么红：从册子里摘一行 → ②（带键枚数 17 ≠ 册子 16）红；把键的实参换成常量
  *   （`rememberSaveable(0L)`）→ ①念不到原文、④从 18 掉到 17；新增一枚没进册子的带键字段 → ②红（多于在册）；
  *   新增一枚裸 rememberSaveable → ②红（unkeyed ≠ 0）；往闸门那一行里塞条件 → ③红（逐字那把先断）。
+ *   ⚠️ 这一条在 T381① 兑现过一次：挂载闸门那一行添了第三半 `&& reminderGateOpen`（提醒就绪位，在册 #660），
+ *   ③ 与同仓另外四枚按同一行钉的守卫（`CourseEditorDeleteExitReceiverGuardTest`、
+ *   `EditorSaveChainTailReceiverGuardTest`、`ExternalCourseGoneWiringGuardTest` 的正则针、
+ *   `RemindersEagerlySharingGuardTest` 的第五格）同批改钉那一行 —— 「塞条件」不是豁免，是**改钉要留痕**。
  * - 覆盖面边界（如实写）：这五格全是**源码形状**，一行组合期行为都没验到 —— 换课那一下草稿到底丢不丢、
  *   :290 那枚 shared element 重挂之后跳不跳卡、IME／滚动位置、脉冲是否照旧，都要装机；本卡零设备零 adb。
  *
@@ -311,8 +315,10 @@ class MainActivityNavigateSingleTopGuardTest {
      * `key(courseId) { CourseEditorScreen(…` 是 rememberSaveable 存盘键跟着换课走的唯一合法通道
      * （compose 1.11.3：自定义 `key` 参数已 deprecated，位置分格是官方指的那一手），而它一旦落到闸门外面，
      * 换课时重挂的就是整枚目的地（连同那两条退栈协程）—— 那是比串草稿更贵的一次事故。
-     * 本格同时钉「渲染闸门那一行逐字未动」：`if (!uiState.loading && !courseMissing) {` 仍是 1 枚，
-     * 在册的 `EditorSaveChainTailReceiverGuardTest`／`CourseEditorDeleteExitReceiverGuardTest` 才不会被本卡拧红。
+     * 本格同时钉「渲染闸门那一行逐字未动」：`if (!uiState.loading && !courseMissing && reminderGateOpen) {`
+     * 仍是 1 枚。那一行的第三半是 T381① 添的（提醒列表就绪位，在册 #660 的主体），本格随之改钉那一行 ——
+     * 在册的 `EditorSaveChainTailReceiverGuardTest`／`CourseEditorDeleteExitReceiverGuardTest` 同批跟着改，
+     * 谁再往这一行里塞第四条件、或把第三半摘掉，③ 这一把逐字针先断。
      */
     @Test
     fun theCourseIdKeyWrapsTheEditorSubtreeInsideTheRenderGate() {
@@ -327,7 +333,8 @@ class MainActivityNavigateSingleTopGuardTest {
             wrapperInsideGate = wrapperAt > gateAt && wrapperAt < gateBodyEnd
         }
         assertTrue(
-            "钉法 = 读形状（花括号配平取闸门块）：\"" + RENDER_GATE + "\" 必须逐字 1 枚（本卡没往这一行里塞东西），" +
+            "钉法 = 读形状（花括号配平取闸门块）：\"" + RENDER_GATE + "\" 必须逐字 1 枚（T381① 之后那一行的" +
+                "第三半就是在册的 reminderGateOpen，塞第四条件或摘掉它都要先拧红这一把），" +
                 "=\"" + KEY_WRAPPER_OPEN + "\" 也必须 1 枚，且后者必须落在前者的块**体内** —— 落在外面就是拿整枚目的地" +
                 "去重挂，那两条退栈协程跟着一起重建。实到：闸门 " + gateHits + " 枚 ／ wrapper " + wrapperHits +
                 " 枚 ／ 落在块内 = " + wrapperInsideGate,
@@ -696,7 +703,7 @@ private const val EXPECTED_REQUESTED_ID_MENTIONS = 18
 private const val COURSE_EDITOR = "com/buaa/schedule/ui/editor/CourseEditorScreen.kt"
 
 /** ③：渲染闸门那一行逐字（本卡不许往这一行里塞东西 —— 两枚在册守卫都钉它） */
-private const val RENDER_GATE = "if (!uiState.loading && !courseMissing) {"
+private const val RENDER_GATE = "if (!uiState.loading && !courseMissing && reminderGateOpen) {"
 
 /** ③：甲侧 wrapper 逐字（不换 import ⇒ 全限定名，行号因此一枚都不漂） */
 private const val KEY_WRAPPER_OPEN =

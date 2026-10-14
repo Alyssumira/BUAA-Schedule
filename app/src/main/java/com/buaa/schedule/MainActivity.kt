@@ -89,6 +89,7 @@ import com.buaa.schedule.core.designsystem.rememberReduceMotion
 import com.buaa.schedule.core.designsystem.BUAAScheduleTheme
 import com.buaa.schedule.domain.editor.EditorDraftIdentity
 import com.buaa.schedule.domain.editor.EditorMissingCourseExit
+import com.buaa.schedule.domain.editor.EditorReminderMountGate
 import com.buaa.schedule.domain.editor.EditorSaveFinishing
 import com.buaa.schedule.domain.editor.EditorSaveSentinel
 import com.buaa.schedule.domain.editor.MissingCourseExitVerdict
@@ -589,6 +590,9 @@ private fun BUAAScheduleApp(
         navController.navigateTopLevel("home")
     }
     val reminders by viewModel.reminders.collectAsState()
+    // 提醒列表「发过第一行没有」那一枚就绪位（T381①，在册 #660 的主体）：编辑器挂载闸门读它。
+    // 订阅的是那枚布尔而不是整表 ⇒ 不给 reminders 那条流添第二枚读者。
+    val reminderRowsListed by viewModel.reminderRowsListed.collectAsState()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
     val topLevelRoutes = remember { navItems.map { it.route }.toSet() }
@@ -680,6 +684,7 @@ private fun BUAAScheduleApp(
                                 viewModel = viewModel,
                                 uiState = uiState,
                                 reminders = reminders,
+                                reminderRowsListed = reminderRowsListed,
                                 onDarkThemeChange = onDarkThemeChange,
                                 rootStartRoute = navStartRoute,
                                 onExitApp = onExitApp,
@@ -701,6 +706,7 @@ private fun BUAAScheduleApp(
                             viewModel = viewModel,
                             uiState = uiState,
                             reminders = reminders,
+                            reminderRowsListed = reminderRowsListed,
                             onDarkThemeChange = onDarkThemeChange,
                             rootStartRoute = navStartRoute,
                             onExitApp = onExitApp,
@@ -808,6 +814,7 @@ private fun AppNavHost(
     viewModel: ScheduleViewModel,
     uiState: com.buaa.schedule.ui.ScheduleUiState,
     reminders: List<com.buaa.schedule.domain.model.ReminderSetting>,
+    reminderRowsListed: Boolean,
     onDarkThemeChange: (DarkModePreference) -> Unit,
     /**
      * 引导结束时选定的落点页；null = home。
@@ -1065,8 +1072,18 @@ private fun AppNavHost(
                     navController.popBackStack()
                 }
             }
+            // 挂载闸门的第三半（T381①，收在册 #660 的主体）：开的是已有课而提醒列表还没发过第一行 ⇒ 不挂载。
+            // 判据本体在 `domain/editor/EditorReminderMountGate.kt`（三档表驱动单测
+            // EditorReminderMountGateTest 逐格钉着），这一层只把已经算好的事实递进去：
+            // `course != null` 与编辑器 `saveCourseDraft(isEditingExisting = initialCourse != null)` 同源于
+            // 那枚 `initialCourse`，而 `reminderRowsListed` 读的是 VM 上那枚**显式的未就绪位** ——
+            // 「列表是空的」与「列表还没发过第一行」在盘面上是两档，不许折成一档（#660 卡面明禁的那一手）。
+            // 为什么只能拦在挂载之前而不是让编辑器自己判：递给 CourseEditorScreen 的那枚 `initialReminder`
+            // 是现读的列表，而两格提醒字段的键是 `rememberSaveable(requestedCourseId)`（键里没有列表本身），
+            // 首帧读到什么就固化成什么、列表后到不回灌。
+            val reminderGateOpen = EditorReminderMountGate.allowsMount(course != null, reminderRowsListed)
             CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
-                if (!uiState.loading && !courseMissing) {
+                if (!uiState.loading && !courseMissing && reminderGateOpen) {
                     androidx.compose.runtime.key(courseId) { CourseEditorScreen( // T348：换课即重挂，rememberSaveable 的位置存盘键跟着这一层 key 走（自定义 key 参数在 1.11.3 已 deprecated）
                         initialCourse = course, requestedCourseId = courseId,
                         initialReminder = course?.let { c -> reminders.firstOrNull { it.courseId == c.id } },

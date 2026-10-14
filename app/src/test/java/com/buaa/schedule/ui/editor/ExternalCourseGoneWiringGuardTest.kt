@@ -240,10 +240,11 @@ class ExternalCourseGoneWiringGuardTest {
             Regex("val courseMissing = courseId >= 0 && course == null").findAll(text).count(),
         )
         assertEquals(
-            "编辑器子树那道闸门（白帧那一格的结构出处）必须还是 `!uiState.loading && !courseMissing` 一处：" +
-                "本卡不收白帧，也就不许顺手换它的尺",
+            "编辑器子树那道闸门（白帧那一格的结构出处）必须还是 `!uiState.loading && !courseMissing` 加" +
+                " T381① 那半 `reminderGateOpen` 一处：本卡不收白帧，也就不许顺手换它的尺；" +
+                "第三半被摘或那一行被拆成两扇各自判一遍，这一把都断",
             1,
-            Regex("if \\(!uiState\\.loading && !courseMissing\\) \\{").findAll(text).count(),
+            Regex("if \\(!uiState\\.loading && !courseMissing && reminderGateOpen\\) \\{").findAll(text).count(),
         )
     }
 

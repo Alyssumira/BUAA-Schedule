@@ -18,7 +18,8 @@ import org.junit.Test
  * 1. `deleteCourseAndAwait`（VM `:632`）里 `job.join()` 跑在**调用者**（这枚页 scope）上；
  * 2. 事务 commit 之后 VM 还要跑 `afterDataChangedInternal()`（重排课堂铃 / 组件 / 明日预告），
  *    这期间新的 `uiState` 落地；
- * 3. 下一帧 `MainActivity` 编辑器目的地那道 `if (!uiState.loading && !courseMissing)` 闸门
+ * 3. 下一帧 `MainActivity` 编辑器目的地那道 `if (!uiState.loading && !courseMissing && reminderGateOpen)`
+ *    闸门（第三半 T381① 添的提醒就绪位，本档三枚判据半都照旧在册）
  *    把 `CourseEditorScreen` **整棵摘出组合** ⇒ 那枚 scope 一起被取消 ⇒
  *    挂在它后面的 `onBack()` 一行都没执行；
  * 4. 于是栈顶还站着一页渲染成空的编辑器：内容区 0 墨像素、底栏也没有（底栏是 NavHost 的兄弟节点，
@@ -303,8 +304,8 @@ class CourseEditorDeleteExitReceiverGuardTest {
         )
         assertEquals(
             "渲染闸门 `$RENDER_GATE` 在这一枚目的地块内恰好一处（实到 " +
-                occurrences(destination, RENDER_GATE) + " 处）：判据两半（`!uiState.loading` 与 " +
-                "`!courseMissing`）一枚都不许摘 —— 摘掉 `!courseMissing` 就是让编辑器以 " +
+                occurrences(destination, RENDER_GATE) + " 处）：判据三半（`!uiState.loading`、`!courseMissing` 与 T381① 添的那半 " +
+                "`reminderGateOpen`）一枚都不许摘 —— 摘掉 `!courseMissing` 就是让编辑器以 " +
                 "initialCourse=null 组合、恢复草稿、保存时以 id=0L 插出重复课程（R5 F-41 原案）",
             1,
             occurrences(destination, RENDER_GATE),
@@ -661,7 +662,7 @@ class CourseEditorDeleteExitReceiverGuardTest {
             "backStackEntry.savedStateHandle[DELETE_REQUESTED_BY_THIS_ENTRY] = true"
         const val EXIT_EFFECT = "LaunchedEffect(deleteRequestedByThisEntry, courseMissing, uiState.loading)"
         const val EXIT_CONDITION = "if (deleteRequestedByThisEntry && courseMissing && !uiState.loading) {"
-        const val RENDER_GATE = "if (!uiState.loading && !courseMissing) {"
+        const val RENDER_GATE = "if (!uiState.loading && !courseMissing && reminderGateOpen) {"
         const val ON_DELETE_ANCHOR = "onDelete = { target ->"
         const val AWAIT_DELETE = "viewModel.deleteCourseAndAwait(target)"
         const val POP_BACK_STACK = "navController.popBackStack()"

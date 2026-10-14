@@ -32,7 +32,8 @@ import org.junit.Test
  *    次序是 `saveCourseDraft(` → 报到 → `onBack()`；删除链体内 0 处。⇒ 摘掉报到（目的地层
  *    连活着的那一支也一起接管 ⇒ 连 pop 两格）或把它排在写库之前（还什么都不知道就报到了）都红。
  * 3. [目的地层那枚认领协程与渲染闸门平级]：`LaunchedEffect(editorSaveFinish)` 恰好一处、
- *    **不在** `if (!uiState.loading && !courseMissing) {` 那块体内、体内判据一枚、
+ *    **不在** `if (!uiState.loading && !courseMissing && reminderGateOpen) {` 那块体内（那一行的第三半是
+ *    T381① 添的提醒就绪位，本档改钉这一整行；认领协程仍在块外——把它挪进块内就是本卡病灶），体内判据一枚、
  *    消费一枚、pop 一枚，且**消费排在退栈之前**（两句之间无挂起点 ⇒ 点火即消费）。
  * 4. [立旗与领号排在 await 之前]：`onSave` lambda 体内 `nextEditorSaveRequestId()` 与
  *    `editorSaveRequested(` 各一枚且都排在 `viewModel.saveCourseAndAwait(` 之前 ——
@@ -510,7 +511,7 @@ class EditorSaveChainTailReceiverGuardTest {
         const val CLAIMED_BY_DESTINATION = "EditorSaveFinishing.claimedByDestination(editorSaveFinish)"
         const val CONSUME = "viewModel.editorSaveConsumed(editorSaveRequestId)"
         const val POP_BACK_STACK = "navController.popBackStack()"
-        const val RENDER_GATE = "if (!uiState.loading && !courseMissing) {"
+        const val RENDER_GATE = "if (!uiState.loading && !courseMissing && reminderGateOpen) {"
         const val REQUEST_ID_DECL = "var editorSaveRequestId by rememberSaveable { mutableLongStateOf(EditorSaveSentinel.NO_REQUEST) }"
         const val COMPOSITION_BACKED_REQUEST_ID = """editorSaveRequestId\s+by\s+remember(?!Saveable)"""
 

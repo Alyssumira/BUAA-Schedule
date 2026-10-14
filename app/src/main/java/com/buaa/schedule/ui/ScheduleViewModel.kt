@@ -81,6 +81,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -329,6 +330,22 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
+     * 提醒列表「发过第一行没有」那一枚就绪位（T381①，收在册 #660 的主体）。
+     *
+     * 为什么必须有它、又为什么只能由上游翻真：下面那枚 `reminders` 的 `initialValue` 是
+     * `emptyList()`，而「库里一行提醒都没有」在这条链上是**合法常态**（教务导入链对 reminders 表只删不建，
+     * 见 `ui/editor/CourseEditorScreen.kt` 的 `editorReminderSectionSummary` 段首）。于是空列表同时是两种事实的读数，
+     * 拿长度当就绪就是把尺读反 —— 这一位只能由上游那一次发射翻真，起点必须是「未就绪」。
+     *
+     * 它的读者是编辑器挂载闸门（判据本体在 `domain/editor/EditorReminderMountGate.kt`），
+     * 用途只有一个：编辑已有课而列表还没发过第一行时**不挂载**，免得首帧的空读数被
+     * `rememberSaveable(requestedCourseId)` 固化成用户设置、再由保存那一趟无条件写回。
+     * 这一位不参与任何写库判据，也不许被挪去当「这门课有没有提醒」的答案 —— 那是另一问。
+     */
+    private val _reminderRowsListed = MutableStateFlow(false)
+    val reminderRowsListed: StateFlow<Boolean> = _reminderRowsListed.asStateFlow()
+
+    /**
      * 课前提醒设置列表。
      *
      * ⚠️ 本文件四枚 `stateIn` 里**唯一一枚 Eagerly** 的就是这一枚：另外三枚
@@ -344,25 +361,33 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
      *
      * 它买到什么、买不到什么（这句不许删，删了这段就又变成一行假话）：
      * Eagerly 只能让那趟读表**早到**，不能让它**同步** —— `initialValue = emptyList()` 在 Room
-     * 第一次返回之前就是当前值。所以这一枚**不是就绪闸门**，只是把空值窗口从"整条流没人订阅"
-     * 缩到"首帧之前"。真闸门只能在编辑器侧（列表没发过第一行时不许写回提醒），那一步本卡未做，
-     * 是登记在册的残账；守卫的第五格钉的正是"今天还没有那道闸门"这个前提，
-     * 将来补上时那一格会红，届时把本段改成"已有闸门"并按那时的盘面重裁这一枚档位。
+     * 第一次返回之前就是当前值。所以这一枚**不是就绪闸门**，它只把空值窗口从"整条流没人订阅"
+     * 缩到"首帧之前"。真闸门在挂载那一手：上面那枚 `reminderRowsListed` 与
+     * `domain/editor/EditorReminderMountGate.kt` 的三档判据，由 `MainActivity` 编辑器目的地的挂载闸门吃
+     * —— T381① 已落地，守卫的第五格（`editorSideReadinessGateIsOnTheMountGate`）按 T373 那段 KDoc 写好的
+     * 方向翻了面：从「钉今天还没有那道闸门」改成「钉那道闸门必须在场」，摘掉就绪位当场红。
      *
      * 代价（按现量口径，不是"感觉更重"）：
      * - 整表读：一次 `SELECT * FROM reminders`（`data/local/ReminderDao.kt` 的 `observeAll`），
      *   与 `WhileSubscribed` 相比只是时刻提前、枚数不变；
      * - 反复重放：0 档 —— 这是 Room 失效驱动的 Flow，只在 reminders 表被写之后重查，空转期间不读第二遍；
-     * - collector：一枚，从 VM 构造挂到 VM 清除；净增量≈0，因为唯一读者是根组合那一枚
-     *   `collectAsState()`，它在 Activity 作用域里从不离场，于是 `WhileSubscribed` 的 5 秒停挂
-     *   在可达路径上凑不出来（同族判语见台账 #117）。
+     * - collector：读表那一趟仍只一枚，从 VM 构造挂到 VM 清除。链上 T381① 新添的那一手是
+     *   `onEach { _reminderRowsListed.value = true }`，它跑在**同一条**共享协程里 ⇒ 不新增读表、
+     *   不新增订阅数（MutableStateFlow 对同值不再发射）。根组合那头的读者多了一枚，但它订阅的是
+     *   那枚布尔而不是整表 ⇒ 净增量仍是≈0；`WhileSubscribed` 的 5 秒停挂在可达路径上凑不出来
+     *   （同族判语见台账 #117）。
      *
      * 什么条件下可以改回 `WhileSubscribed(5_000)` 与其余三枚归一：
-     * 1. 编辑器侧那道"未就绪不许写回"的闸门落地 —— 那时 Eagerly 连概率意义也不剩；
+     * 1. ~~编辑器侧那道"未就绪不许写回"的闸门落地~~ —— T381① 已成立，**所以这一枚现在不再买到正确性**：
+     *    正确性由那枚就绪位担保，Eagerly 现在买到的只剩「比首帧早起表」这一截空等时间；
      * 2. 或读者形状变了：根组合那枚订阅被挪进只在编辑器目的地存在的子组合 —— 那时它才是真多付。
-     * 任一条成立都要重跑守卫、按实测重写本段，不许只把字面的 `Eagerly` 换掉就走。
+     * 本卡按 1 的新前提重判之后**留着 Eagerly**（读者仍是不离场的根组合那一枚，换档省不下读表，
+     * 而它换来的是编辑器少空一帧）；真要归一，回来把这一段与代价账一起重写并按那时的盘面重跑守卫，
+     * 不许只把字面的 `Eagerly` 换掉就走。
      */
-    val reminders = repository.reminders.stateIn(
+    val reminders = repository.reminders
+        .onEach { _reminderRowsListed.value = true }
+        .stateIn(
         scope = viewModelScope,
         started = SharingStarted.Eagerly,
         initialValue = emptyList(),
