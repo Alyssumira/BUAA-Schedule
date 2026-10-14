@@ -210,14 +210,70 @@ class ColdStartWidgetStepsTest {
      * "组件数刚刚变了"的地方：它们要的是**变化之后**的结论。谁要是把这两条也接到某个
      * 先前的探测结果上（缓存、或者从别处传进来的布尔），新组件就会既没有零点闹钟也没有
      * 兜底轮询、一直停在放置当天（上一轮 F-26 是同一族事故）。
+     *
+     * ## 形状跟着 T368① 走过一次，本格跟着重钉（意图一字没缩）
+     *
+     * `WidgetCommon.kt` 裸 :153 的 `bootstrapBackgroundSync` 现在是「先领一次补注册配额、再按分档
+     * 放行」，原先长在它体内的两手续排被挪进同文件裸 :192 的 `registerBackgroundSyncSteps`；
+     * 而本文件的 `declarationBlock` 按**同级声明**切块（`isSiblingDeclaration` 见 4 格缩进的
+     * `private fun` 就收），旧判据那两枚字面串于是落到了切块之外。
+     * 行为并没有退化（两手都还在，也还是这一族自己现问 Launcher），漂的是守卫跟着的那道刀口。
+     * 所以本格按今天的形状钉三件，缺一件就不是这一格要钉的东西：
+     * ① 放行的那几档确实把活交给了 `registerBackgroundSyncSteps(context)`（被去重那一档只留痕）；
+     * ② 那两手在被交接的那一枚声明体内**各恰好一枚**（少一枚就是整条兜底没了，多一枚就是又开了
+     *    第二处注册点）；
+     * ③ 两枚声明的签名**逐字节只吃 `context: Context`** —— 这一件才是原话「不接受别处传进来的结论」
+     *    钉的东西：多一枚 Boolean／结论形参，onEnabled 念的就是别处的旧读数而不是现问 Launcher。
+     *
+     * 件①② 与 `MonotonicWindowGateWiringGuardTest` 裸 :299-318 那一格有意重叠（一枚钉分档形状、
+     * 一枚钉"探测口径"这一族），件③ 全仓只有这里钉。切片只切到函数名的左括号为止：换签名时
+     * 仍切得出块（`declarationBlock` 里那句 `check(at >= 0)` 只对**改名/挪家**抛），于是 W1 那种
+     * 「加一枚 Boolean 形参」落在下面的断言上而不是落在异常里。
      */
     @Test
     fun `组件被增删的两条路径仍然自己当场探测`() {
         val common = readMainSource(WIDGET_COMMON_FILE)
-        val bootstrap = normalize(declarationBlock(common, "internal fun bootstrapBackgroundSync(context: Context)"))
+        val bootstrapBlock = declarationBlock(common, BOOTSTRAP_SIGNATURE)
+        val registrationBlock = declarationBlock(common, REGISTER_SIGNATURE)
+        val bootstrap = normalize(bootstrapBlock)
+        val registration = normalize(registrationBlock)
+
+        // 件③：签名里不许有结论形参（这一格的原话就钉这一件）
+        assertEquals(
+            "onEnabled 的补注册要自己现问 Launcher，不接受别处传进来的结论：补注册那枚入口的签名" +
+                "只许吃 context: Context 一枚形参，多一枚 Boolean／结论就是把别处的旧读数递给" +
+                "onEnabled（台账 F-26 那一族的反向）。实到签名：\n${signatureOf(bootstrapBlock)}",
+            "internal fun bootstrapBackgroundSync(context: Context)",
+            signatureOf(bootstrapBlock),
+        )
+        assertEquals(
+            "被交接的那一手同样只许吃 context: Context —— 它体内的两次探测必须由它自己现做。" +
+                "实到签名：\n${signatureOf(registrationBlock)}",
+            "private fun registerBackgroundSyncSteps(context: Context)",
+            signatureOf(registrationBlock),
+        )
+
+        // 件①：放行的那几档确实把活交给了被抽出来的那一枚声明
         assertTrue(
-            "onEnabled 的补注册要自己现问 Launcher，不接受别处传进来的结论：\n$bootstrap",
-            bootstrap.contains("scheduleWidgetMidnight(context)") && bootstrap.contains("ensure(context)"),
+            "bootstrapBackgroundSync 的体内没有把补注册交出去（实到 " +
+                "${occurrences(bootstrap, REGISTER_ACTION)} 枚「$REGISTER_ACTION」，放行三档各一枚、" +
+                "被去重那一档 0 枚）：\n$bootstrap",
+            bootstrap.contains(REGISTER_ACTION),
+        )
+
+        // 件②：那两手在被交接的声明体内各恰好一枚
+        assertEquals(
+            "零点闹钟那一手在 $REGISTER_SIGNATURE 的体内必须恰好一枚（少一枚就是跨天只剩系统那三条" +
+                "时间类广播，而这一族 ROM 恰恰会吞它们；多一枚就是又开了第二处注册点）。实到 " +
+                "${occurrences(registration, REGISTER_MIDNIGHT)} 枚：\n$registration",
+            1,
+            occurrences(registration, REGISTER_MIDNIGHT),
+        )
+        assertEquals(
+            "兜底轮询那一手在被交接的体内必须恰好一枚（少一枚就是 HyperOS 那批机型整条兜底没了）。" +
+                "实到 ${occurrences(registration, REGISTER_FALLBACK)} 枚：\n$registration",
+            1,
+            occurrences(registration, REGISTER_FALLBACK),
         )
 
         val background = readMainSource(BACKGROUND_SYNC_FILE)
@@ -254,6 +310,14 @@ class ColdStartWidgetStepsTest {
         }
         return block.toString()
     }
+
+    /**
+     * 声明的签名那一截：从块首（函数名起）到身体开头的花括号为止，折行与缩进不算内容。
+     *
+     * 「参数表里多没多一枚结论形参」这件事只有在这一截上才说得出话 —— 整块的 normalize
+     * 里 body 也在一起，逐字节等式就没法写了。
+     */
+    private fun signatureOf(block: String): String = normalize(block.substringBefore("{"))
 
     /** `local fun`、缩进更深的续行与调用参数的闭包都还在函数体里，不算同级声明 */
     private fun isSiblingDeclaration(line: String): Boolean {
@@ -328,6 +392,20 @@ class ColdStartWidgetStepsTest {
         const val BACKGROUND_SYNC_FILE = "com/buaa/schedule/widget/BackgroundSync.kt"
         const val FALLBACK_WORKER_FILE = "com/buaa/schedule/widget/WidgetFallbackWorker.kt"
         const val WIDGET_COMMON_FILE = "com/buaa/schedule/widget/WidgetCommon.kt"
+
+        /**
+         * 补注册那两枚声明的切片锚点（`WidgetCommon.kt` 裸 :153 与裸 :192）。
+         *
+         * 一律只切到函数名的左括号为止：签名换了参数表也切得出块，
+         * 于是「多一枚结论形参」红在下面那两枚签名等式上，而不是红在 `check` 抛的异常里。
+         */
+        const val BOOTSTRAP_SIGNATURE = "internal fun bootstrapBackgroundSync("
+        const val REGISTER_SIGNATURE = "private fun registerBackgroundSyncSteps("
+
+        /** 入口交给被抽出来的那一手（裸 :158 那一句），以及被交接的那两手（裸 :193 与裸 :195） */
+        const val REGISTER_ACTION = "registerBackgroundSyncSteps(context)"
+        const val REGISTER_MIDNIGHT = "BackgroundSync.scheduleWidgetMidnight(context)"
+        const val REGISTER_FALLBACK = "WidgetFallbackWorker.ensure(context)"
 
         /** object 的成员缩进就是 4 格，比它深的一定还在某个函数体里 */
         const val SIBLING_INDENT = 4
