@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import com.buaa.schedule.domain.widget.RefreshChainCarrierGate
+import com.buaa.schedule.domain.widget.RefreshChainCarrierPlan
 import com.buaa.schedule.domain.widget.WidgetRolloverActionKind
 import com.buaa.schedule.domain.widget.WidgetRolloverClaim
 import com.buaa.schedule.domain.widget.WidgetRolloverGate
@@ -47,6 +49,24 @@ class WidgetRefreshReceiver : BroadcastReceiver() {
                     // 6 个组件重绘），默认 5 秒不够，会被系统提前收回
                     timeoutMs = 10_000L,
                 ) {
+                    // 一枚链只读一遍（#218 ＋在册 #536 F2 同族的第二处落点，T366①）：下面这几步原先
+                    // 各自回库查同一批表（改时间那一趟满档读学期行 4 遍、节次表 4 遍、展示口径的课程
+                    // 3+K 遍、提醒册子 4 遍），而这些步骤之间没有任何写那几张表的动作 —— 本文件里
+                    // 唯一那手写入是跨天配额的 CAS，写的是一枚进程内 AtomicLong，不打断载体。
+                    // 取不取由判据分档（本体在 domain/widget/RefreshChainCarrierGate，这里只按档位分派）：
+                    // 纯零点那一趟唯一的消费者只要那三格、自己一趟就读得完，载体反而多读一趟 ⇒ 不取。
+                    // 取不到载体就当没有 —— 各步照旧自己读，宁可多读一趟也不许少读。这一手必须在锁内：
+                    // 它本身就是一趟查库，而 goAsync 只保证进程存活、不保证 CPU 醒着（同上那段唤醒锁）。
+                    val carrierPlan = RefreshChainCarrierGate.decide(
+                        hasReminderChainStep = timeChanged || exactAlarmPermissionChanged,
+                        hasPreviewStep = timeChanged,
+                        hasWidgetRefreshStep = action == ACTION_MIDNIGHT_REFRESH || timeChanged,
+                    )
+                    val chainSnapshot = when (carrierPlan) {
+                        RefreshChainCarrierPlan.Build -> readChainSnapshotOrNull(context)
+                        RefreshChainCarrierPlan.SkipOnlyWidgetConsumer -> null
+                        RefreshChainCarrierPlan.SkipNoCarrierConsumer -> null
+                    }
                     if (action == ACTION_MIDNIGHT_REFRESH || timeChanged) {
                         // 零点会醒两次：系统 00:00 的 ACTION_DATE_CHANGED 与我们自排的
                         // ACTION_MIDNIGHT_REFRESH 都落到这里，各跑一遍"全学期快照 sync +
@@ -64,14 +84,14 @@ class WidgetRefreshReceiver : BroadcastReceiver() {
                         when (val claim = claimRolloverRefresh(rolloverActionKind(action))) {
                             is WidgetRolloverClaim.GrantedFirstClaim,
                             is WidgetRolloverClaim.GrantedAfterWindow -> {
-                                BackgroundSync.refreshWidgets(context)
+                                BackgroundSync.refreshWidgets(context, snapshot = chainSnapshot)
                                 Log.i(TAG, "跨天全量刷新放行: ${rolloverClaimTrace(claim)}")
                             }
 
                             is WidgetRolloverClaim.SentinelContradiction -> {
                                 // 旗与哨兵互相打脸 = 领取这一族的形状病了，不是今天真的没课要画。
                                 // 宁可多刷一遍，也不许把真跨天咽掉，所以这一档照刷且必须告警。
-                                BackgroundSync.refreshWidgets(context)
+                                BackgroundSync.refreshWidgets(context, snapshot = chainSnapshot)
                                 Log.w(TAG, "跨天刷新哨兵自相矛盾 仍按放行处理: ${rolloverClaimTrace(claim)}")
                             }
 
@@ -97,17 +117,22 @@ class WidgetRefreshReceiver : BroadcastReceiver() {
                                 Log.w(TAG, "非跨天动作走到了配额领取处: ${rolloverClaimTrace(claim)}")
                             }
                         }
+                        // 续排零点闹钟这一手**没有载体形参**：签名只有 context 与 hasAnyWidget
+                        // （BackgroundSync 裸 :434 那一枚），它体内一趟表都不读（读的是 LocalDate.now +
+                        // 跨 binder 探测 + AlarmManager）⇒ 这里保持裸调不是漏接，没什么可递的。
                         BackgroundSync.scheduleWidgetMidnight(context)
                     }
                     if (timeChanged || exactAlarmPermissionChanged) {
                         // 时间/时区变化会让已注册的触发时间失准，权限变化可升级为精确闹钟；
                         // 这里的 Boolean 同样不能丢——改完时间课堂铃窗口也要重排
-                        BackgroundSync.rescheduleRemindersAndBells(context)
+                        // 载体递进去：这一手体内是「重排提醒」＋（提醒那条链没接手课堂铃时）
+                        // 「课堂铃兜底续排」，那两步读的正是头顶这一份装着的同一批表（#218）
+                        BackgroundSync.rescheduleRemindersAndBells(context, snapshot = chainSnapshot)
                     }
                     if (timeChanged) {
                         // 明日预告按 22:00 定时，时间/时区变化后要重新对齐；
                         // 通知渠道也需要确保存在（原先由 BootReceiver 顺带做）
-                        BackgroundSync.scheduleTomorrowPreview(context)
+                        BackgroundSync.scheduleTomorrowPreview(context, snapshot = chainSnapshot)
                         com.buaa.schedule.reminder.ReminderNotifications.ensureChannels(context)
                     }
                 }

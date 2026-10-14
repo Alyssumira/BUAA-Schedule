@@ -73,7 +73,9 @@ class WidgetRolloverClaimWiringGuardTest {
         const val DUPLICATE_BRANCH = "is WidgetRolloverClaim.SuppressedAsDuplicate -> {"
         const val INVERTED_BRANCH = "is WidgetRolloverClaim.SuppressedClockInverted -> {"
         const val NOT_ROLLOVER_BRANCH = "is WidgetRolloverClaim.NotRolloverAction -> {"
-        const val FULL_REFRESH = "BackgroundSync.refreshWidgets(context)"
+        // T366① 同批重钉：那一手从裸调换成具名实参递进链的读载体（台账 #218 那笔账），
+        // 针跟着换成新那一形 —— 数的是"跨天那一支里有几处真的去刷"，与它吃不吃载体无关。
+        const val FULL_REFRESH = "BackgroundSync.refreshWidgets(context, snapshot = chainSnapshot)"
         const val RESCHEDULE = "BackgroundSync.scheduleWidgetMidnight(context)"
 
         // ── 动作归类：四条跨天动作各一枚映射，兜底一枚 ──
