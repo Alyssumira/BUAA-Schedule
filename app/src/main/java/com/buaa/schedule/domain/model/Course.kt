@@ -80,9 +80,31 @@ data class Course(
     /** 见 [firstPeriodOrNull]：[endPeriod] 的可空版。 */
     val lastPeriodOrNull: Int? get() = periods.maxOrNull()
 
-    /** 显示名：别名优先，空别名回退教务原名 */
+    /** 显示名：别名优先，空别名回退教务原名；「别名这一档要不要作数」读 [displayNameOrNull]，两处同源 */
     val displayName: String
-        get() = alias?.trim()?.takeIf { it.isNotEmpty() } ?: name
+        get() = displayNameOrNull ?: name
+
+    /**
+     * 「别名非空才作数」这一档的全仓唯一落点：[alias] trim 之后为空（null / 空串 / 全空白）就是 null。
+     *
+     * 这一枚只回答"别名要不要作数"，**不回答"不作数时念什么"** —— 回退目标留在调用点，因为全仓今天
+     * 有两手读它，而两手的回退天生不同：
+     * - [displayName] 回退**这一行自己**的教务原名 [name]；
+     * - 课程管理页那扇门面（`CourseManagementScreen.kt` 的 `groupDisplayNameOf`）回退的是**整组挑中的
+     *   那一枚碎片**的 [displayName]，并且它扫的是整组的别名而不是这一行的 —— 编辑器逐片段保存，
+     *   别名确实可以只挂在非 primary 的那一片上。
+     * 把回退一起抽走就只能共用同一个回退，那等于替管理页改掉"念哪一枚名字"这件事，
+     * 而那一档是行为、不是重复。所以同源的只有这一档，回退各留各的。
+     *
+     * 值 = f(同表参数 [alias])，按本仓派生字段口径只有类体属性这一条合法落点（与
+     * [firstPeriodOrNull] / [isManualCourse] 同样是薄壳），两侧各自读它。
+     *
+     * 两处同源由 `domain/model/CourseDisplayNameSingleSourceGuardTest` 钉住：这一枚的属性体改写、
+     * [displayName] 不再回退到它、管理页那一手重新自己 trim 判空，三件事各自都会红。
+     * "别名只挂在非 primary 片段上"那一档两手**必须**给不同答案，由
+     * `ui/course/CourseDisplayNameRelationTableTest` 钉住（那一档不许被"顺手统一"掉）。
+     */
+    val displayNameOrNull: String? get() = alias?.trim()?.takeIf { it.isNotEmpty() }
 
     /**
      * 「手动课程」的全仓唯一口径：**这一行不挂在任何学期下**（[semesterCode] 为 null）。
