@@ -328,7 +328,40 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    // Eagerly：编辑器打开时提醒列表必须已就绪，避免用初始空值固化提醒设置
+    /**
+     * 课前提醒设置列表。
+     *
+     * ⚠️ 本文件四枚 `stateIn` 里**唯一一枚 Eagerly** 的就是这一枚：另外三枚
+     * （`importHistory`、`allSemesters`、`uiState`）都是 `WhileSubscribed(5_000)`。
+     * 这个 3∶1 是**有意为之**，不是漏改，也不许被顺手归一成 4∶0 ——
+     * 守卫 `ui/RemindersEagerlySharingGuardTest` 按 3∶1 钉着，改档与"另一枚也 Eagerly"都会当场红。
+     *
+     * 为什么用它：编辑器目的地在挂载那一刻从这份列表里取 `initialReminder`，而编辑器那两格提醒字段
+     * 是 `rememberSaveable(requestedCourseId)`（键里没有列表本身），首帧读到什么就固化成什么，
+     * 之后列表到位也不回灌；保存那一趟对已存在的课**无条件**把这两格写成一行提醒。
+     * Eagerly 让这条 Room 上游在 VM 构造那一刻（早于首帧之后的订阅效应）就起表，
+     * 把"挂载时列表还没发过第一行"的概率压到尽可能小。
+     *
+     * 它买到什么、买不到什么（这句不许删，删了这段就又变成一行假话）：
+     * Eagerly 只能让那趟读表**早到**，不能让它**同步** —— `initialValue = emptyList()` 在 Room
+     * 第一次返回之前就是当前值。所以这一枚**不是就绪闸门**，只是把空值窗口从"整条流没人订阅"
+     * 缩到"首帧之前"。真闸门只能在编辑器侧（列表没发过第一行时不许写回提醒），那一步本卡未做，
+     * 是登记在册的残账；守卫的第五格钉的正是"今天还没有那道闸门"这个前提，
+     * 将来补上时那一格会红，届时把本段改成"已有闸门"并按那时的盘面重裁这一枚档位。
+     *
+     * 代价（按现量口径，不是"感觉更重"）：
+     * - 整表读：一次 `SELECT * FROM reminders`（`data/local/ReminderDao.kt` 的 `observeAll`），
+     *   与 `WhileSubscribed` 相比只是时刻提前、枚数不变；
+     * - 反复重放：0 档 —— 这是 Room 失效驱动的 Flow，只在 reminders 表被写之后重查，空转期间不读第二遍；
+     * - collector：一枚，从 VM 构造挂到 VM 清除；净增量≈0，因为唯一读者是根组合那一枚
+     *   `collectAsState()`，它在 Activity 作用域里从不离场，于是 `WhileSubscribed` 的 5 秒停挂
+     *   在可达路径上凑不出来（同族判语见台账 #117）。
+     *
+     * 什么条件下可以改回 `WhileSubscribed(5_000)` 与其余三枚归一：
+     * 1. 编辑器侧那道"未就绪不许写回"的闸门落地 —— 那时 Eagerly 连概率意义也不剩；
+     * 2. 或读者形状变了：根组合那枚订阅被挪进只在编辑器目的地存在的子组合 —— 那时它才是真多付。
+     * 任一条成立都要重跑守卫、按实测重写本段，不许只把字面的 `Eagerly` 换掉就走。
+     */
     val reminders = repository.reminders.stateIn(
         scope = viewModelScope,
         started = SharingStarted.Eagerly,
