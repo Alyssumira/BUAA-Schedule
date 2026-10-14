@@ -219,6 +219,7 @@ object UpdateCheck {
         //   屏上弹「检查更新失败」（present 看见非 null 的 failureReason 就交回 CheckFailed，
         //   而 readable 的 else 那一档对任何异常都交出非 null），
         //   偏好里落一枚失败档 + 一枚从没发生过的检查时刻 + 一枚失败时间戳（下面那段一次都不该写）。
+        //   改前那一手逐字留此做取证：failureReason = outcome.exceptionOrNull()?.let { readable(it) },
         // 归档与三格结论（落不落盘 / 内存摆哪一档 / 要不要复投）一律由
         // domain/update/UpdateFetchSettlement.kt 定，调用点不自己分第二把尺。
         val outcome = runCatching { fetchReleases() }
