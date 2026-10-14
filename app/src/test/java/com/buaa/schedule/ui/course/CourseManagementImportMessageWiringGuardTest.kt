@@ -143,6 +143,9 @@ class CourseManagementImportMessageWiringGuardTest {
                 "本格重钉到现值、T224 把归并换源到 `SemesterStats.creditsByCourse` 后再重钉一次：" +
                 "文件头 +4 行、import +1 行 ⇒ 十八枚整体 +5，册子之后才长的 `groupCourses` 与" +
                 "`groupColorScopeNote` 那一族注释不参与这一枚偏移。" +
+                "T383② 再重钉一次：管理页那一手换读真源 `Course.displayNameOrNull`，" +
+                "`groupDisplayNameOf` 那格 KDoc +13 行（646 → 659），窗口起在裸 :554、" +
+                "在这十八枚（最大裸 :258）之后 ⇒ 逐枚行号一字未动，只挪这一枚数。" +
                 "谁再插谁删都要先让这一格红、再把第 ①②⑤ 层的落点判据一起重钉）。\n" +
                 "复算：wc -l app/src/main/java/$PAGE",
             PAGE_LINES,
@@ -604,7 +607,11 @@ class CourseManagementImportMessageWiringGuardTest {
         // `git diff -U0 cc44f7b -- app/src/main/java/com/buaa/schedule/ui/course/CourseManagementScreen.kt | grep -oE '^@@'`
         // ⇒ 十三扇；逐枚 awk 'NR==行号' 才是这十八枚的取数法，别拿 +53 去减。
         // 逐字原文只有 GROUP_READ_VERDICT 那一枚被换过实参，其余十七枚一字未动。
-        const val PAGE_LINES = 646
+        // T383②（管理页那手换到真源 Course.displayNameOrNull）净插 **+13**：窗口起在裸 :554 那一格
+        // KDoc（原 7 行长成 20 行，函数体两行一字未动 ⇒ 646 → 659），而本册子这十八枚逐字原文**全部落在
+        // 裸 :258 之前**（复算 `grep -oE '^ +[0-9]+ to ' app/src/test/java/com/buaa/schedule/ui/course/CourseManagementImportMessageWiringGuardTest.kt`
+        // 给出的最大行号是 258）⇒ 窗口在它们之后，逐枚行号一枚没漂，本批只挪这一枚 PAGE_LINES。
+        const val PAGE_LINES = 659
         val ANCHORS = listOf(
             109 to "val state by viewModel.uiState.collectAsState()",
             115 to "val snackbarHostState = remember { SnackbarHostState() }",
