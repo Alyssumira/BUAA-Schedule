@@ -521,7 +521,13 @@ class SemesterGateOrderingGuardTest {
 
         /** 闸门那一支的宿主与里面必须出现的四手 */
         const val UNDETERMINED_BRANCH = "is BuaaSemesterStart.Undetermined ->"
-        const val RETAIN_CALL = "BuaaWebSession.retain(web, context.findActivity())"
+        /**
+         * 闸门那一支里的上缴那一手。T378② 给 `retain` 补了第二实参 `source`（来路，甲档裁定），
+         * 本枚逐字节跟着重钉：钉的仍是「这一支里掉了 retain 这一手」，位置与次序一个字没改。
+         * 少了第三实参 = 调用点退回「谁来都收下」的旧签名（编译也过不去）；
+         * 长成新的一形 = 上缴已被搬走或已被替换 —— 都要回来重钉本枚。
+         */
+        const val RETAIN_CALL = "BuaaWebSession.retain(web, RetainSource.LoginScreen, context.findActivity())"
 
         /** 贵的两枚判据（`SemesterFetchOutcome` 的两枚现成结论） */
         const val FAILED_WEEKS_ARM = "outcome.failedWeeks.isNotEmpty()"

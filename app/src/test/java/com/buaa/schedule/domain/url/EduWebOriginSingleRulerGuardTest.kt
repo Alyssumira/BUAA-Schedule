@@ -107,20 +107,25 @@ class EduWebOriginSingleRulerGuardTest {
         )
     }
 
-    // ─────────────── ② 三枚调用点各问内核，且只问一次 ───────────────
+    // ─────────────── ② 四枚调用点各问内核，且只问一次 ───────────────
 
     /**
      * 钉法 = **数出现次数**（分文件；import 行整行抹空后再数 —— 数的是"问了几次"，不是"引了几次"）。
      *
-     * `eduDocumentVerdict` 的调用在 main 里恰好 3 枚：`hasSession()` ＋ 恢复链的 `onPageFinished` ＋
-     * 登录页就绪闸门。多一枚 = 有人在别处又算了一次"是不是教务"（第二把尺的现在形态）；
-     * 少一枚 = 有调用点不再问内核（本卡修的那件事正在退）。
+     * `eduDocumentVerdict` 的调用在 main 里恰好 **4** 枚：`hasSession()` ＋ 恢复链的 `onPageFinished` ＋
+     * 登录页就绪闸门 ＋ `domain/session/SessionRetainGate`（T378① 那枚纯 JVM 内核，它把"这枚候选配不配
+     * 占会话槽"的出身一问也交给同一把尺，而不是自己再写一把）。多一枚 = 有人在别处又算了一次"是不是教务"
+     * （第二把尺的现在形态）；少一枚 = 有调用点不再问内核（本卡修的那件事正在退）。
+     *
+     * ⚠️ 3 → 4 这一档**逐文件点名**（本格同时钉 `$RETAIN_GATE` 恰好 1 枚）：只把总数朝上抹一格、
+     * 不指名新来路 = 拿重钉掩盖第二把尺，那是本守卫最不该犯的病。
      */
     @Test
-    fun `三枚调用点都只问内核`() {
+    fun `四枚调用点都只问内核`() {
         val session = callCode(WEB_SESSION)
         val login = callCode(LOGIN_SCREEN)
         val kernel = callCode(KERNEL)
+        val gate = callCode(RETAIN_GATE)
         assertEquals(
             "`eduDocumentVerdict` 在 `$WEB_SESSION` 恰好 2 枚调用（hasSession ＋ 恢复链）：",
             2,
@@ -132,14 +137,21 @@ class EduWebOriginSingleRulerGuardTest {
             occurrences(login, "eduDocumentVerdict"),
         )
         assertEquals(
+            "`eduDocumentVerdict` 在 `$RETAIN_GATE` 恰好 1 枚调用（T378① 补的那枚新来路，" +
+                "它问的仍是本守卫那枚唯一真源）：",
+            1,
+            occurrences(gate, "eduDocumentVerdict"),
+        )
+        assertEquals(
             "`sessionDomainVerdict` 在 `$WEB_SESSION` 恰好 1 枚调用（留在会话域还是外站的第二问）：",
             1,
             occurrences(session, "sessionDomainVerdict"),
         )
         assertEquals(
-            "内核里两枚函数头各 1 枚（改名/搬走 = 本守卫与三枚调用点要一起重钉）；内核之外的调用总数同时钉死 3 ＋ 1：" +
-                "实到 " + mainCalls("eduDocumentVerdict") + " 与 " + mainCalls("sessionDomainVerdict") + "：",
-            listOf(1, 1, 3, 1),
+            "内核里两枚函数头各 1 枚（改名/搬走 = 本守卫与四枚调用点要一起重钉）；内核之外的调用总数同时钉死 " +
+                "4 ＋ 1（第 4 枚的来路已在上格逐文件点名）：实到 " + mainCalls("eduDocumentVerdict") +
+                " 与 " + mainCalls("sessionDomainVerdict") + "：",
+            listOf(1, 1, 4, 1),
             listOf(
                 occurrences(kernel, "fun eduDocumentVerdict("),
                 occurrences(kernel, "fun sessionDomainVerdict("),
@@ -221,7 +233,9 @@ class EduWebOriginSingleRulerGuardTest {
             occurrences(session, RESTORE_WHEN_HEAD),
         )
         assertEquals(
-            "恢复链认到的那一档原文 1 处（命中即 `restoreInFlight = false` ＋ `retain(...)`）：",
+            "恢复链认到的那一档原文 1 处（T378② 之后它是**单独一手上缴**：`retain(view, " +
+                "RetainSource.CookieRestore, activity)` —— 命中即收下，而收旗与拆闸归 retain 体内" +
+                "按来路给的那一档，不在这里另写第二把尺）：",
             1,
             occurrences(session, EDU_BRANCH),
         )
@@ -566,6 +580,9 @@ class EduWebOriginSingleRulerGuardTest {
         const val WEB_SESSION = "com/buaa/schedule/data/import/BuaaWebSession.kt"
         const val LOGIN_SCREEN = "com/buaa/schedule/ui/importing/BuaaLoginScreen.kt"
 
+        /** T378① 的纯 JVM 内核：第 4 枚问本内核「是不是教务出身」的来路，② 那格逐文件点名它 */
+        const val RETAIN_GATE = "com/buaa/schedule/domain/session/SessionRetainGate.kt"
+
         const val QUOTED_ORIGIN = "\"https://byxt.buaa.edu.cn\""
         const val QUOTED_ORIGIN_SLASH = "\"https://byxt.buaa.edu.cn/\""
         const val EDU_HOST_LITERAL = "byxt.buaa.edu.cn"
@@ -688,7 +705,20 @@ class EduWebOriginSingleRulerGuardTest {
         const val HAS_SESSION_BODY =
             "fun hasSession(): Boolean = eduDocumentVerdict(lastUrl) == EduDocument.OnEduOrigin"
         const val RESTORE_WHEN_HEAD = "when (eduDocumentVerdict(url)) {"
-        const val EDU_BRANCH = "EduDocument.OnEduOrigin -> {"
+
+        /**
+         * 恢复链认到教务文档那一档的**整档原文**。
+         *
+         * 改前那一形是 `EduDocument.OnEduOrigin -> {` 开块、块内先 `restoreInFlight = false` 再
+         * `retain(...)`。T378②（甲档）把单飞旗与超时闸的归属收进 `retain` 体内 —— 现在这一档只剩
+         * 一手上缴，而**上缴时必须逐字写出来路** `RetainSource.CookieRestore`，内核才认得出该给
+         * 「收旗又拆闸」那一档（`domain/session/SessionRetainGate`，那两枚来路分派逐字节由
+         * `data/import/BuaaWebSessionLifecycleGuardTest` 第⑥格钉）。
+         * 所以本枚把针从「块头」换成「整档」：钉的仍是同一件事 —— 恢复链认到教务出身之后**只有收下
+         * 这一手，且收下的是带着恢复来路的那一枚**；换成 `if`、把来源并掉、或在块里另写第二把尺都红。
+         */
+        const val EDU_BRANCH =
+            "EduDocument.OnEduOrigin -> retain(view, RetainSource.CookieRestore, activity)"
         const val LOGIN_GATE_BODY = "if (eduDocumentVerdict(web.url) != EduDocument.OnEduOrigin) {"
 
         const val ORIGIN_ALIAS =
