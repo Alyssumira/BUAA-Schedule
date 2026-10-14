@@ -317,7 +317,19 @@ class BootDndSelfHealDecisionTest {
         )
 
         val boot = withoutComments(readMainSource(BOOT_RECEIVER_FILE))
-        for (raw in listOf("dnd_saved_interruption_filter", "dnd_restore_deadline", "KEY_SAVED_FILTER", "KEY_DND_DEADLINE", "deadline >")) {
+        for (raw in listOf(
+            "dnd_saved_interruption_filter",
+            "dnd_restore_deadline",
+            "KEY_SAVED_FILTER",
+            "KEY_DND_DEADLINE",
+            "deadline >",
+            // ai/T385③ 只往这张表里**加**词条（收紧不放宽）：补排那一格事实也是 ClassProgressDnd
+            // 自己的书账，开机侧既不许读它、也不许自己写它 —— 那等于绕过 selfCheck 另起一枚入口。
+            "dnd_watchdog_rearm_pending",
+            "KEY_WATCHDOG_REARM_PENDING",
+            "watchdogRearmDue",
+            "armWatchdog",
+        )) {
             assertFalse("BootReceiver 自己又写了一遍判据（$raw）：只许复用 ClassProgressDnd 那侧的入口", boot.contains(raw))
         }
     }
@@ -354,6 +366,72 @@ class BootDndSelfHealDecisionTest {
         assertTrue(
             "勿扰步骤不再排在 rescheduleRemindersAndBells 之前：安全网链条（BootReceiver 注释里那四条路径）失效",
             dndStep in 0 until reschedule,
+        )
+    }
+
+    /**
+     * ai/T385（甲档）那一族的**接线形状**：失败结论只在一处落账、补排只长在 selfCheck 起手那一处。
+     *
+     * 本格存在的理由与 `bootStepRoutesThroughSelfCheckBeforeTheRescheduleChain` 同一条：
+     * 判据（[ClassProgressDnd.watchdogRearmDue] 与 [ClassProgressDnd.armWatchdogAttempt]）已经全被
+     * 表驱动逐格量到了，但"**接线到底注没注对、旗到底落没落**"这件事 JVM 跑不到
+     * （`getSharedPreferences` 是抛 "not mocked" 的桩）⇒ 只能按源码形状核对。五格各拦一种"看着对"：
+     * - 排程入口的**册子**：`armWatchdog(` 全 main 只长在 `ClassProgressDnd.kt` 一枚文件里、四枚
+     *   （定义 + enter + 新帧那一步 + selfCheck 补排）—— 第五枚在别处 = 又起了一条排程链；
+     * - **旗的读写各恰一处**：`putBoolean(KEY_WATCHDOG_REARM_PENDING` 与
+     *   `getBoolean(KEY_WATCHDOG_REARM_PENDING` 各一枚 ⇒ 不会出现"两处写一处读"那种永远读不到的旗；
+     * - selfCheck 的体里补排那一步恰一处，且整趟只读一只钟一枚（补排门控与硬超时门控同一读数）；
+     * - restore 成功那一格把旗与另外两格一起撤（不留化石）；
+     * - cancelWatchdog 清旗**排在取服务之前**：`?: return` 那一手也得把书账清干净，
+     *   否则用户关掉功能后留下一枚永远补排不完的旗。
+     */
+    @Test
+    fun armFailureIsMarkedOnceAndSelfCheckIsTheOnlyRearmDoor() {
+        val source = withoutComments(readMainSource(CLASS_PROGRESS_DND_FILE))
+        val selfCheck = balancedBlock(source, "fun selfCheck(context: Context)")
+        val restore = balancedBlock(source, "fun restore(context: Context)")
+        val cancel = balancedBlock(source, "fun cancelWatchdog(context: Context)")
+
+        val armRoster = mainJavaSources()
+            .associate { (relative, text) -> relative to occurrences(text, "armWatchdog(") }
+            .filterValues { it > 0 }
+        assertEquals(
+            "排看门狗这件事全仓只许长在 ClassProgressDnd.kt 那一枚文件里，且恰四枚" +
+                "（定义 + enter + alignWatchdogToNewFrame + selfCheck 起手补排）：$armRoster",
+            mapOf(CLASS_PROGRESS_DND_FILE to 4),
+            armRoster,
+        )
+        assertEquals(
+            "「上一次没排上」那一格的**写入点**只许一处（recordWatchdogArmOutcome 里 armed 为假那一支）：" +
+                "两处写就是两本账，改一处忘一处会得到\"闹钟排上了却留着旗\"那种每次起手都重排的状态",
+            1,
+            occurrences(source, "putBoolean(KEY_WATCHDOG_REARM_PENDING"),
+        )
+        assertEquals(
+            "那一格的**读取点**只许一处（selfCheck 起手）：别处读它就是在册外的地方另起一条补排链",
+            1,
+            occurrences(source, "getBoolean(KEY_WATCHDOG_REARM_PENDING"),
+        )
+        assertEquals(
+            "selfCheck 的体里补排那一步恰一处（armWatchdog(context, deadline)，吃的是 prefs 里那一格期限）：\n$selfCheck",
+            1,
+            occurrences(selfCheck, "armWatchdog(context, deadline)"),
+        )
+        assertTrue("selfCheck 不再走 watchdogRearmDue 那一枚判据（自己摊三判了？）：\n$selfCheck", selfCheck.contains("watchdogRearmDue("))
+        assertEquals(
+            "selfCheck 整趟只许读一只钟一枚（补排门控与硬超时门控共用同一个读数；跨秒那一瞬两判各读各的" +
+                "就会一次补错排、一次漏恢复）：\n实到 " + occurrences(selfCheck, "System.currentTimeMillis(") + " 处",
+            1,
+            occurrences(selfCheck, "System.currentTimeMillis("),
+        )
+        assertTrue("restore 成功却不撤补排旗（留下一枚化石，下一次起手白补一只闹钟）：\n$restore", restore.contains("remove(KEY_WATCHDOG_REARM_PENDING)"))
+        assertTrue(
+            "cancelWatchdog 不再清补排旗：用户关掉功能/清空课表之后 selfCheck 会补排一只刚刚被撤掉的闹钟\n$cancel",
+            cancel.contains("remove(KEY_WATCHDOG_REARM_PENDING)"),
+        )
+        assertTrue(
+            "清旗那一步必须排在取 AlarmManager **之前**：`?: return` 那一手也要把书账清干净\n$cancel",
+            cancel.indexOf("remove(KEY_WATCHDOG_REARM_PENDING)") in 0 until cancel.indexOf("getSystemService("),
         )
     }
 

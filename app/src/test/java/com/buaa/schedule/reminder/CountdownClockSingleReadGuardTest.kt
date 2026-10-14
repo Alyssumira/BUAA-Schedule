@@ -58,9 +58,22 @@ import org.junit.Test
  *    + **读形状**（`ongoingAt` 必须显式吃注入的读数，写成吃签名默认值的 `ongoingAt()` 就长了第二只钟）
  *    + **数出现次数**（这一跳只驱动一次、`LocalDateTime.now()` 仍是枚一）；
  * 6. [theNewFrameCriterionAndRulerExistInExactlyOnePlace] —— **数出现次数（全 main 册子）**
- *   （判据本体一处、接线一处、`armWatchdog(` 三处、宽限量一处）+ **读形状**（判据体与那把尺都零钟）；
+ *   （判据本体一处、接线一处、`armWatchdog(` **四**处、宽限量一处、档位本体一处）
+ *    + **读形状**（判据体与那把尺都零钟；补排那一步零宽限量、落账口在档位里恰一处）；
  * 7. [watchdogProbeRecognisesTheTwoBadShapes] —— **抹注释找锚点**：根本没有那一手 /
- *    吃签名默认值那一形 / 写在注释里那一形，三形各数到该数的值。
+ *    吃签名默认值那一形 / 写在注释里那一形 / ai/T385 的改前那一形，各数到该数的值。
+ *
+ * ## 第 ⑥⑦ 层的重钉记录（ai/T385③，基点 `f928dea`，同批必须重钉的那两格）
+ *
+ * - `armWatchdog(` 的期望 **3 ⇒ 4**：改前三枚 = 定义 + `enter`（上课铃）+ `alignWatchdogToNewFrame`
+ *   （新帧那一步）；改后第四枚是 `selfCheck` 起手的补排 —— 它**复用同一枚平台侧入口**，
+ *   所以本格钉的仍是同一件事：排程只许长在 `armWatchdog` 那一处、档位只许长在 `armWatchdogAttempt`
+ *   那一处。第五枚（绕过档位自己 `setAlarmClock` 一手）照样红在这里，期望值没有变松。
+ * - 宽限量 `RESTORE_GRACE_MINUTES * 60_000L` 的期望 **1 ⇒ 1**（一字未动）：补排吃的是 prefs 里那一格
+ *   期限，不重算「现在 + 宽限」；为了把这条"没被再摊一遍"钉死，第 ⑥ 层另加一格
+ *   `selfCheck` 的体里 `RESTORE_GRACE_MINUTES` 必须 0 处。
+ * - `ClassProgressDnd.restore(` 的调用点册子（在 `BootDndSelfHealDecisionTest` 那一族里）本卡零改动 ⇒
+ *   它裸 :216–:231 那张期望表原样跑绿，restore 的语义一格都没动。
  *
  * ## 第 ⑧ 层（ai/T360，在册 #614 ＋ #613 的闹钟链那一半）：**时区**也按"一次渲染一枚"记账
  *
@@ -376,8 +389,12 @@ class CountdownClockSingleReadGuardTest {
      *   `alignWatchdogForNewFrame` 的调用点恰一处 = 第②处接线（比如直接在
      *   `WidgetRefreshReceiver` 里另起一步）不许长出来 —— 那一侧拿不到这一节课的下课时刻，
      *   要么白跑一遍全量窗口搜索、要么把旧帧的毫秒当新帧用（在册 #603 的病灶就在那儿）；
-     * - **数出现次数**：`armWatchdog(` 在 `ClassProgressDnd.kt` 里恰三处 = 定义 + `enter`
-     *   （上课铃）+ 新帧那一步，第四处就是有人另写了一遍排程；
+     * - **数出现次数**：`armWatchdog(` 在 `ClassProgressDnd.kt` 里恰 **四**处 = 定义 + `enter`
+     *   （上课铃）+ 新帧那一步 + `selfCheck` 起手那一步（ai/T385 把排程失败那两支的"无补救"改成
+     *   "落账 + 下一次起手补排"，补排复用同一枚平台侧入口，不另起第五处）；
+     *   ⚠️ 这一枚期望值由 3 重钉成 4（ai/T385③），钉的仍是同一件事：**没人在册外的地方另写一遍排程**；
+     *   第五处（例如绕过 [ClassProgressDnd.armWatchdogAttempt] 档位本体自己 set 一手）照样红在这里；
+     * - **数出现次数**：宽限量仍恰一处（补排吃的是 prefs 里那一格期限，不是"现在 + 宽限"）；
      * - **读形状**：判据体内零钟 —— 它的输入只有四枚标量，"现在几点"由调用点折成
      *   `classOngoing` 递进来（本仓成文禁令）。
      */
@@ -386,6 +403,8 @@ class CountdownClockSingleReadGuardTest {
         val dnd = withoutComments(readMainSource(DND_FILE))
         val criterion = balancedBlock(dnd, "internal fun watchdogRearmDecision(")
         val ruler = balancedLineAfter(dnd, "internal fun deadlineOfEnd(endMillis: Long): Long? =")
+        val selfCheck = balancedBlock(dnd, "fun selfCheck(context: Context)")
+        val attempt = balancedBlock(dnd, "internal fun armWatchdogAttempt(")
 
         assertEquals(
             "**钉法 = 数出现次数（全 main）**：六档判据的本体全仓只许一处，实到 " +
@@ -401,10 +420,15 @@ class CountdownClockSingleReadGuardTest {
             mainOccurrences("ClassProgressDnd.alignWatchdogToNewFrame("),
         )
         assertEquals(
-            "**钉法 = 数出现次数**：`ClassProgressDnd.kt` 里 `armWatchdog(` 恰三处 = 定义 + enter" +
-                "（上课铃那一手）+ 新帧那一步；第四处就是又长了一遍排程。实到 " +
-                occurrences(dnd, "armWatchdog(") + " 处",
-            3,
+            "**钉法 = 数出现次数**：`ClassProgressDnd.kt` 里 `armWatchdog(` 恰四处 = 定义 + enter" +
+                "（上课铃那一手）+ 新帧那一步 + selfCheck 起手补排那一步；第五处就是又长了一遍排程。" +
+                "⚠️ ai/T385③ 把这枚期望从 **3 重钉成 4**：改前 3 枚的构成是" +
+                "「定义 + enter + 新帧那一步」，改前那两支排程失败**没有任何补救**（只念一句旧文案，" +
+                "见 watchdogProbeRecognisesTheTwoBadShapes 里喂进来的改前原文），" +
+                "第 4 枚是 selfCheck 起手的补排 —— 它复用同一枚平台侧入口，" +
+                "所以本格钉的仍是同一件事：**排程只许长在 armWatchdog 那一处、档位只许长在 " +
+                "armWatchdogAttempt 那一处**。实到 " + occurrences(dnd, "armWatchdog(") + " 处",
+            4,
             occurrences(dnd, "armWatchdog("),
         )
         assertEquals(
@@ -413,6 +437,63 @@ class CountdownClockSingleReadGuardTest {
                 occurrences(dnd, "RESTORE_GRACE_MINUTES * 60_000L") + " 处",
             1,
             occurrences(dnd, "RESTORE_GRACE_MINUTES * 60_000L"),
+        )
+        // ai/T385③ 新格：补排那一手不许把宽限量再摊一遍（它吃的是 prefs 里那一格期限）
+        assertEquals(
+            "**钉法 = 读形状（取块不数整份文件）**：`selfCheck` 的体里 `RESTORE_GRACE_MINUTES` 必须 0 处 —— " +
+                "补排重算「现在 + 宽限」就是替这一节课把恢复点往后推，等于在册 #603 那一族" +
+                "「替遗留记录推后恢复点」换个人写了一遍。实到 " +
+                occurrences(selfCheck, "RESTORE_GRACE_MINUTES") + " 处",
+            0,
+            occurrences(selfCheck, "RESTORE_GRACE_MINUTES"),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数（全 main）**：排程档位本体全仓只许一处（ai/T385：三手 set 的档位" +
+                "从平台侧那枚 armWatchdog 里分出来，形状照 ClassProgressScheduler.armEndBell）。实到 " +
+                mainOccurrences("internal fun armWatchdogAttempt(") + " 处",
+            1,
+            mainOccurrences("internal fun armWatchdogAttempt("),
+        )
+        assertEquals(
+            "**钉法 = 读形状**：`armWatchdogAttempt` 的体里落账口 `recordArmOutcome(` 必须恰一处 —— " +
+                "三条出口（省电档 / 精确档 / setAlarmClock 一次成功）共用末尾那一手调用，" +
+                "0 处就是有人把落账挪回调用点（那里 JVM 量不到，" +
+                "「排上了不落账」与「落两次账」两种半截修法都会绿着走过去），2 处就是两本账。实到 " +
+                occurrences(attempt, "recordArmOutcome(") + " 处",
+            1,
+            occurrences(attempt, "recordArmOutcome("),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数**：`ClassProgressDnd.kt` 里 `armWatchdogAttempt(`（声明 + 唯一调用点）" +
+                "恰两枚；第三枚就是绕过平台侧 armWatchdog 自己再调一次档位。实到 " +
+                occurrences(dnd, "armWatchdogAttempt(") + " 枚",
+            2,
+            occurrences(dnd, "armWatchdogAttempt("),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数**：版本闸门 `Build.VERSION.SDK_INT` 在本文件恰一处（只长在" +
+                "armWatchdog 那一层，随 canExact 一起递进档位本体）—— 纯 JVM 边界那一族的" +
+                "「返回布尔后调用点各判一次 SDK_INT」也算违反，两处就是两档。实到 " +
+                occurrences(dnd, "Build.VERSION.SDK_INT") + " 处",
+            1,
+            occurrences(dnd, "Build.VERSION.SDK_INT"),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数**：`selfCheck` 的体里驱动补排那一步只许一处" +
+                "（`armWatchdog(context, deadline)`，实到 " +
+                occurrences(selfCheck, "armWatchdog(context, deadline)") + " 处），" +
+                "且判据必须走 watchdogRearmDue 那一枚（实到 " +
+                occurrences(selfCheck, "watchdogRearmDue(") + " 处）—— " +
+                "把三判就地摊开就是长出第二份期限门控（口径见 BootDndSelfHealDecisionTest）",
+            1,
+            occurrences(selfCheck, "armWatchdog(context, deadline)"),
+        )
+        assertEquals(
+            "**钉法 = 数出现次数**：`selfCheck` 整趟只许读一只钟一枚（ai/T385 把原来写在实参位上的" +
+                "那次读数提成 `val nowMillis`，补排门控与硬超时门控共用同一个读数）。实到 " +
+                occurrences(selfCheck, "System.currentTimeMillis(") + " 处",
+            1,
+            occurrences(selfCheck, CLOCK_EPOCH_MILLIS),
         )
         for (sneak in listOf(CLOCK_EPOCH_MILLIS, "LocalDateTime.now(", "ongoingAt(", "Date(", "SystemClock.")) {
             assertFalse(
@@ -427,6 +508,15 @@ class CountdownClockSingleReadGuardTest {
                 "**钉法 = 读形状**：「下课 + 宽限」那把尺读了钟（$sneak）就不是纯算了 —— " +
                     "兜底那两支各读各的，同一节课的期限在两处能差出一次读数的间隔：\n$ruler",
                 ruler.contains(sneak),
+            )
+        }
+        // ai/T385③：档位本体的纯度（本格那三手 set 与落账口/留痕口全是参数 ⇒ 它必须零平台、零钟）
+        for (sneak in listOf(CLOCK_EPOCH_MILLIS, "Build.", "SDK_INT", "AlarmManager", "Context", "getSystemService")) {
+            assertFalse(
+                "**钉法 = 读形状**：排程档位本体里出现「$sneak」= 平台事实又从参数缝里爬回判据，" +
+                    "表驱动那五格（ClassProgressBellArmTest 的看门狗那一族）当场量不到它，" +
+                    "而这一族的授权档位在调用点已经折成 canExact 递进来了：\n实到体：$attempt",
+                attempt.contains(sneak),
             )
         }
     }
@@ -478,6 +568,42 @@ class CountdownClockSingleReadGuardTest {
                 occurrences(withoutComments(quotedInKDoc), "ongoingAt()") + " 处）",
             0,
             occurrences(withoutComments(quotedInKDoc), "ongoingAt()"),
+        )
+
+        // ── ai/T385③：第 ⑥ 层那三枚新针的自检（把改前那一形逐字喂进来）──
+        // 改前原文（逐字取自 f928dea 的 armWatchdog 两支失败）：两支都只念同一句旧文案就走到函数末尾，
+        // 没有结论、没有落账、也没有下一趟补救 —— 那一形今天必须是 0 处。
+        val preFixArmWatchdog = "        if (canExact) {\n" +
+            "            runCatching { alarmManager.setAlarmClock(info, operation) }.recoverCatching {\n" +
+            "                Log.w(TAG, \"勿扰看门狗 setAlarmClock 失败，退回精确档\", it)\n" +
+            "                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, operation)\n" +
+            "            }.onFailure { Log.w(TAG, \"$WATCHDOG_LEGACY_MESSAGE\", it) }\n" +
+            "        } else {\n" +
+            "            runCatching { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, operation) }\n" +
+            "                .onFailure { Log.w(TAG, \"$WATCHDOG_LEGACY_MESSAGE\", it) }\n" +
+            "        }"
+        assertEquals(
+            "探测器必须抓得出「改前那一形 = 排程失败只念一句旧文案、不落账」：那一形里 `recordArmOutcome(`" +
+                " 数到 0 处（实到 " + occurrences(preFixArmWatchdog, "recordArmOutcome(") + " 处）" +
+                "⇒ 第 ⑥ 层那句「档位本体里落账口恰一处」不是恒真：把落账摘掉就会红成这一形",
+            0,
+            occurrences(preFixArmWatchdog, "recordArmOutcome("),
+        )
+        assertEquals(
+            "尺不许是瞎的：病灶句在改前那一形里逐字出现**两枚**（实到 " +
+                occurrences(preFixArmWatchdog, WATCHDOG_LEGACY_MESSAGE) + " 处）——" +
+                "那两枚就是卡面点名的裸 :345 与裸 :350（两支失败各念同一句同样的话）",
+            2,
+            occurrences(preFixArmWatchdog, WATCHDOG_LEGACY_MESSAGE),
+        )
+        val legacyInMain = mainOccurrences(WATCHDOG_LEGACY_MESSAGE)
+        assertEquals(
+            "同一枚病灶句今天在全 app/src/main（抹注释后）必须 0 处（实到 $legacyInMain 处）：" +
+                "它是本卡改掉的那两枚文案，留着就是有人又在别处抄了一遍\"只剩冷启动自愈\"这句不成立的话。" +
+                "复算：grep -rohF '勿扰看门狗排程失败，只剩冷启动自愈' app/src/main | wc -l" +
+                "（基点 f928dea 上这把尺念 2；同一把尺在 main 之外的本测试文件里念 1，那是取证原文，不算病灶）",
+            0,
+            legacyInMain,
         )
     }
 
@@ -803,6 +929,14 @@ class CountdownClockSingleReadGuardTest {
         /** #603 那一跳的两枚实参（逐字节钉）：期限走唯一的宽限尺、状态吃那只已经注入的钟 */
         const val WATCHDOG_FRESH_ARG = "freshDeadlineMillis = ClassProgressDnd.deadlineOfEnd(window.endMillis),"
         const val WATCHDOG_ONGOING_ARG = "classOngoing = window.ongoingAt(now.toEpochMillis(zone)),"
+
+        /**
+         * ai/T385 的病灶句：改前 `ClassProgressDnd.armWatchdog` 那两支失败各念的**同一句**旧文案
+         * （裸 :345 与裸 :350，念的是"只剩冷启动自愈"，而自愈是期限门控的 ⇒ 那句话不成立）。
+         * 今天它在 `app/src/main`（抹注释后）必须 0 处，喂进来的改前那一形里必须 2 处 ——
+         * ⚠️ 本文件那两处（这枚常量 + 探测器自检的报错文案）是取证原文，不进 main 那一栏。
+         */
+        const val WATCHDOG_LEGACY_MESSAGE = "勿扰看门狗排程失败，只剩冷启动自愈"
 
         /** T360 第 ⑧ 层：换算件（墙钟毫秒 ↔ LocalDateTime）自己的纯度与调用点的时区枚数 */
         const val CONVERSION_FILE = "com/buaa/schedule/domain/schedule/PeriodWindows.kt"
