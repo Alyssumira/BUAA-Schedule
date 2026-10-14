@@ -552,11 +552,24 @@ internal fun groupCourses(courses: List<Course>, query: String): List<CourseGrou
 }
 
 /**
- * 一节课的门面名：别名可能只登记在某个片段上（编辑器逐条保存），
- * 所以整组里只要有一个非空别名就以它为准，不能只看 primary。
+ * 一节课的门面名：与 [Course.displayName] 的关系是**一半同源、一半天生不同**。
+ *
+ * 同源的那一半：「别名 trim 之后非空才作数」只有一枚落点，就是 [Course.displayNameOrNull] ——
+ * 这一手过去在管理页里自己写第二遍（拿片段自己的别名 trim 再判空），全仓 main 侧那一档因此有两枚，
+ * 本卡把它落成 1 枚（枚数尺见 `domain/model/CourseDisplayNameSingleSourceGuardTest`）。
+ *
+ * 不同的那一半：**谁的**别名作数。整组里任一片段有非空别名就以它为准，不能只看 primary ——
+ * 编辑器逐片段保存，别名确实可以只挂在非 primary 的那一片上；而 [Course.displayName] 只认这一行自己。
+ * 这一档两手天生要给两个答案，把它"统一"掉就等于把挂在非 primary 片段上的别名念丢，
+ * 逐档的账摆在 `ui/course/CourseDisplayNameRelationTableTest`。
+ *
+ * ⚠️ [fragments] 必须是**归并点那一手**（调用点传的是 `SemesterStats.CourseCredit.fragments`，
+ * 即输入次序），不是卡面上排过序的 [CourseGroup.fragments]（星期 → 节次）：组里两枚以上各带非空别名时，
+ * `firstNotNullOfOrNull` 念的是次序，两处会给出不同答案。所以这枚字段留在构造点、
+ * 不搬进 [CourseGroup] 的类体当属性 —— 搬进去就把那一档改了。
  */
 private fun groupDisplayNameOf(fragments: List<Course>, primary: Course): String =
-    fragments.firstNotNullOfOrNull { it.alias?.trim()?.takeIf { a -> a.isNotEmpty() } }
+    fragments.firstNotNullOfOrNull { it.displayNameOrNull }
         ?: primary.displayName
 
 internal data class CourseGroup(
