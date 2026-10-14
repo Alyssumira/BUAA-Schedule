@@ -229,7 +229,7 @@ class BuaaWebSessionLifecycleGuardTest {
         )
         assertEquals(
             "「上缴的就是会话槽那一枚本身」那一档必须与「手里没有旧的」同手不动（两枚并成一档写 Unit，实到 " +
-                occurrences(code, CANDIDATE_IS_PREVIOUS_ARM) + " 枚）：拆开写就可能被"顺手"补一手 destroy",
+                occurrences(code, CANDIDATE_IS_PREVIOUS_ARM) + " 枚）：拆开写就可能被「顺手」补一手 destroy",
             1,
             occurrences(code, CANDIDATE_IS_PREVIOUS_ARM),
         )
@@ -628,12 +628,12 @@ class BuaaWebSessionLifecycleGuardTest {
         const val FIELD_DECL =
             "@Volatile private var lastRestoreFailureAtElapsedRealtime: Long = NEVER_FAILED_MILLIS"
         const val WINDOW_CONST = "private const val RESTORE_RETRY_INTERVAL_MS = 60_000L"
-        val BACKOFF_ARMS = listOf(
-            "is RestoreBackoffWindow.SuppressedWithinWindow -> {",
-            "is RestoreBackoffWindow.GrantedClockInverted -> Log.w(",
-        )
+        const val SUPPRESSED_ARM = "is RestoreBackoffWindow.SuppressedWithinWindow -> {"
+        const val INVERTED_ARM = "is RestoreBackoffWindow.GrantedClockInverted -> Log.w("
+        val BACKOFF_ARMS = listOf(SUPPRESSED_ARM, INVERTED_ARM)
 
         // ── 登录页侧 ──
+        const val RETAIN_HEAD = "BuaaWebSession.retain("
         const val RETAIN_CALL = "BuaaWebSession.retain(web, RetainSource.LoginScreen, context.findActivity())"
         const val RETAIN_CALL_MULTILINE = "BuaaWebSession.retain(\n                                            web,\n                                            RetainSource.LoginScreen,\n                                            context.findActivity(),"
         const val SOURCE_ARG = "RetainSource.LoginScreen"
