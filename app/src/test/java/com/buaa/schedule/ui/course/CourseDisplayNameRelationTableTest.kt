@@ -39,7 +39,7 @@ class CourseDisplayNameRelationTableTest {
     )
 
     @Test
-    fun `九格逐档 组取法与实体取法各念什么`() {
+    fun `十格逐档 组取法与实体取法各念什么`() {
         for (row in ROWS) {
             val groups = groupCourses(row.fragments, query = "")
             assertEquals("${row.label}：这些片段应当归并成一门课", 1, groups.size)
@@ -288,6 +288,15 @@ class CourseDisplayNameRelationTableTest {
                 fragments = listOf(TIMED_LEAD.copy(alias = "高数甲"), TIMED_SECOND.copy(alias = "高数乙")),
                 expectedGroupDisplayName = "高数甲",
                 expectedPrimaryDisplayName = "高数甲",
+            ),
+            Row(
+                // 回退那一手交回的是**教务原名原样**：实体不许顺手替它 trim（真源只管别名那一档）。
+                // 这一格是变异 D（把回退改成 `?: name.trim()`）钉出来的：没有这一格，那一审只在守卫的
+                // 字面针上响、行为侧一声不响，等于行为判据漏了一档。
+                label = "教务原名自己带空白（回退念原样、不顺手裁它）",
+                fragments = listOf(TIMED_LEAD.copy(name = "  高等数学A  ")),
+                expectedGroupDisplayName = "  高等数学A  ",
+                expectedPrimaryDisplayName = "  高等数学A  ",
             ),
         )
     }
