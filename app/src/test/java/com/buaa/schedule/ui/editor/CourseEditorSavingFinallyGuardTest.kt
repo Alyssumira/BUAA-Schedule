@@ -12,12 +12,12 @@ import org.junit.Test
  * 供给的 scope 上起协程：起手立旗标、收尾收旗标。改前收旗标只有**一条**路走得通 —— 一路跑到行尾。
  * 中途任何一手抛出，收旗标那一步就被跳过，而这棵组合还活着（没转屏、没退栈）：
  * 那颗删除按钮按这枚旗标取反放闸、保存那颗把它折进判据实参，于是两颗同时死、底栏那句进行中文案常驻。
- * T258 当年判这一枚「形状在且零尺」，T367① 补上成对的收尾块，本文件补上那张「支线 × 结局」的形状表。
+ * T258 当年判这一枚「形状在且零尺」，T367① 补上成对的收尾块，本文件补上那把零尺。
  *
  * ## 为什么这里没有「纯判据内核」那一格
  * 「抛出该不该把旗标收回」的答案就是这个控制流本身，不是一道判据：要抽成内核，就得让生产去调一枚
  * 只做「立旗 → 跑体 → 收旗」的助手 —— 那既是把语言语义再测一遍的套套逻辑，又会先把两支行里的字面
- * 收旗换成一次调用，「这一支到底有没有一枚真的收尾块」这件事就没人可量了。
+ * 收旗换成一次调用，下面那把「两支各一枚收尾块」的枚数尺就量不到东西了。
  * 所以 ② 那张「支线 × 结局」的表落在**本文件**，按源码形状逐格钉（红线写明：判据天然非纯时不许硬包装成"纯内核"）。
  *
  * ## 两层八格（[everyBranchOutcomeClearsTheSavingFlagThroughItsFinallyBlock]）
@@ -30,12 +30,19 @@ import org.junit.Test
  * - 被取消：两支体内零 catch、零裸兜底（把取消吞掉就是把它折成正常收尾，同 #536 那一族的裁法），
  *   且收旗标那一手不被任何前件短路（押上「协程还在不在」这类判据，取消那一档恰好走不到它）。
  *
+ * ## 一枚枚数尺（[thisFilesTwoPageScopeLaunchesBothCarryAnUngatedFinally]）
+ * 口径**收窄到这一枚文件的这两支**：`scope.launch {` 恰 2、`try {` 恰 2、收尾块恰 2、catch 恰 0、
+ * 收旗标恰 2，再要求名册把这两支一一认出（删掉任何一枚参照 ⇒ 覆盖面那格当场红，那是 N 臂的落脚点）。
+ * 全仓那把普查尺（`launch {` 116 枚对 `finally` 35 枚）**没有**抄进来：那把量的是全站协程的收尾覆盖率，
+ * 涨跌由几十枚别的文件决定，任何一枚卡都能把它按绿或按红；本卡要钉的只有这一枚文件的这一对页 scope 协程，
+ * 两侧都不外扩。
+ *
  * ## 覆盖面边界（如实写，别当它没有）
  * - 只读 `CourseEditorScreen.kt` 一枚文件，判的是**源码形状**：运行期的取消时序、写在已摘组合上的可见性
  *   都不在本格射程（那两件事在 T367⓪ 的取证段按文档与结构判，本卡零设备、零运行期探针）。
  * - 转屏归零那一半**不在**本守卫射程（在册 #498 = T258-04，T367 红线 (a)）：本格钉「抛出或取消时收尾块跑得到」，
  *   不钉「旗标跨配置存活」；哪天有人给它加跨存活的载体，本卡既挡不住也不为它作证。
- * - 本格只做源码核对（JVM，无 Robolectric、无设备、函数体不读系统时钟与时区）。
+ * - 两枚都只做源码核对（JVM，无 Robolectric、无设备、函数体不读系统时钟与时区）。
  */
 class CourseEditorSavingFinallyGuardTest {
 
@@ -60,6 +67,74 @@ class CourseEditorSavingFinallyGuardTest {
                 "而这棵组合还活着 —— 没转屏、没退栈，用户只看见那句进行中文案挂着、红条一句都念不出来" +
                 "（在册 #381，改前这一族零尺）。逐格：" + problems.joinToString(" ／ "),
             problems.isEmpty(),
+        )
+    }
+
+    /** ③ 枚数尺：收窄到本文件这两支的 launch／try／收尾块／catch 枚数，外加名册覆盖闭环。 */
+    @Test
+    fun thisFilesTwoPageScopeLaunchesBothCarryAnUngatedFinally() {
+        val code = withoutCommentsKeepingLiterals(readEditorSource())
+        val branches = recognisedBranches(code)
+        val launches = occurrences(code, LAUNCH)
+        val trys = occurrences(code, TRY)
+        val finallys = occurrences(code, FINALLY)
+        val catches = occurrences(code, CATCH)
+        val clears = occurrences(code, FLAG_CLEARED)
+        val cut = branches.count { branch -> branch.shapeCut }
+        val covered = branches.count { branch -> branch.shapeCut && branch.launchMatchesIdentity }
+        val flagged = branches.count { branch -> branch.shapeCut && branch.finallyHasClear }
+        val handoffs = SAVE_HANDOFFS.size + DELETE_HANDOFFS.size
+        val drift = mutableListOf<String>()
+        if (BRANCH_ROSTER.size != BRANCHES) {
+            drift.add("支线名册实到 " + BRANCH_ROSTER.size + " 条 expected:<" + BRANCHES +
+                ">（保存支与删除支各一条；从册子里摘掉一条，本守卫就朝着窄那一边整支失明 —— " +
+                "那张八格表只会少测一支而不会红，红必须由这一格来）")
+        }
+        if (handoffs != HANDOFF_SITES) {
+            drift.add("外注调用名册实到 " + handoffs + " 枚 expected:<" + HANDOFF_SITES +
+                ">（三支写库相关 + 一支退栈；少一枚就是「抛出」那一格少一处覆盖，表会绿而形状没人钉）")
+        }
+        if (launches != LAUNCH_SITES) {
+            drift.add("本文件的 scope.launch { 实到 " + launches + " 处 expected:<" + LAUNCH_SITES +
+                ">（名册只认这两支。多出来那一支是新添的页 scope 协程 —— 它必须带同一条形状进册，" +
+                "不能带着「行尾那一手是唯一收旗点」那个形状进来；少一处是这两支换了载体）")
+        }
+        if (cut != BRANCHES) {
+            drift.add("名册认出的支线实到 " + cut + " 支 expected:<" + BRANCHES +
+                ">（某一支的身份参照被删了或换了写法 ⇒ 本守卫会朝着窄那一边漏掉整支，N 臂要当场响的就是这一格）")
+        }
+        if (covered != launches) {
+            drift.add("被名册罩住的 launch 实到 " + covered + " 枚 ／ 盘上 " + launches + " 枚" +
+                "（有一支协程没人认领它的形状）")
+        }
+        if (trys != LAUNCH_SITES) {
+            drift.add("try { 实到 " + trys + " 处 expected:<" + LAUNCH_SITES +
+                ">（两支各一枚；多于两支 = 有人把别的一手也套进 try，那一支得单独判它该不该收这枚旗标）")
+        }
+        if (finallys != LAUNCH_SITES) {
+            drift.add("收尾块实到 " + finallys + " 处 expected:<" + LAUNCH_SITES +
+                ">（在册 #381 修的就是这个缺口：少于两支就回到「行尾那一手是唯一收旗点」那个形状）")
+        }
+        if (catches != CATCH_SITES) {
+            drift.add("catch 实到 " + catches + " 处 expected:<" + CATCH_SITES +
+                ">（甲档的口径是**不吞**：在这一层接住异常就是把抛出折成正常收尾，" +
+                "取消那一档还会被一起吞掉 —— 同 #536 那一族刚裁过的形状）")
+        }
+        if (clears != LAUNCH_SITES) {
+            drift.add("收旗标那一手实到 " + clears + " 处 expected:<" + LAUNCH_SITES +
+                ">（两支各一枚且都在收尾块里；多出来那一枚说明 try 里还留着第二处收旗点，" +
+                "抛出与取消两档收不到它）")
+        }
+        if (flagged != BRANCHES) {
+            drift.add("带收旗标的收尾块实到 " + flagged + " 支 expected:<" + BRANCHES + ">")
+        }
+        assertTrue(
+            "口径 = 收窄到这一枚文件的那两枚页 scope 协程，**不是**全仓普查" +
+                "（全仓那把 `launch {` 对 `finally` 的尺覆盖面是几十枚别的文件，本卡不复制它的绝对值）。" +
+                "实到：launch " + launches + " ／ try " + trys + " ／ 收尾块 " + finallys + " ／ catch " + catches +
+                " ／ 收旗标 " + clears + " ／ 名册认出 " + cut + " 支 ／ 其中带收旗标收尾块 " + flagged + " 支" +
+                " ｜ 漂移：" + drift.joinToString(" ／ "),
+            drift.isEmpty(),
         )
     }
 
@@ -90,7 +165,7 @@ class CourseEditorSavingFinallyGuardTest {
         val SAVE_HANDOFFS = listOf("saveCourseDraft(", "onSaveTailReached()", "onBack()")
         val DELETE_HANDOFFS = listOf("onDelete(target)")
 
-        /** 支线名册：身份参照 → 那一支的标签。两支各一条，摘掉一条就少测一整支。 */
+        /** 支线名册：身份参照 → 那一支的标签。N 臂摘掉任何一条都当场被枚数尺抓住。 */
         val BRANCH_ROSTER = listOf(SAVE_IDENTITY to "保存支", DELETE_IDENTITY to "删除支")
         const val HANDOFF_SITES = 4
 
