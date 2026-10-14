@@ -10,6 +10,20 @@ import android.util.Log
 import androidx.core.content.edit
 
 /**
+ * 看门狗那三手 `set` 的留痕口：**级别只许 `Log.w` 以上** ——
+ * 这台机器上的 HyperOS 把 logcat 截在 Info，`Log.d` 写下去等于没写，而这两档失败的后果是
+ * **整机停在「完全静默」且没有闹钟来解除**（本文件类注释那一族的账）。
+ *
+ * 形状与默认值都照 `ClassProgressScheduler.kt` 里 `armEndBell` 侧那枚同族留痕口：
+ * 收成参数而不是写死在函数体里，因为 `android.util.Log` 在本模块 JVM 单测里是抛 "not mocked"
+ * 的桩，写死就先崩在报告口之前，那条"失败必须被看见"的表驱动断言会红得看不出原因。
+ * 失败原因（哪一档、哪一手）由调用点给，tag 与级别只此一份。
+ */
+private val LOG_DND_ARM_FAILURE: (reason: String, error: Throwable) -> Unit = { reason, error ->
+    Log.w("ClassProgressDnd", reason, error)
+}
+
+/**
  * 「上课自动勿扰」的进入与恢复。
  *
  * 关键点：**进入前先记住用户当时的 `interruptionFilter`，退出时恢复它**。
@@ -25,6 +39,15 @@ import androidx.core.content.edit
  * 「恢复期限」并排一只看门狗闹钟（[ClassProgressReceiver.ACTION_DND_WATCHDOG]），到期后由
  * [selfCheck] 强制恢复；冷启动路径同样调 [selfCheck]，覆盖"期限之前整个进程都被杀掉"
  * 导致看门狗闹钟也被清掉的更坏情况。
+ *
+ * **排程当场失败也要留得下痕迹与一格事实**：那三手 `set` 全抛（未授予精确闹钟权限那一档最容易走到）
+ * 时，闹钟根本不存在，而 [selfCheck] 的自愈是**期限门控**的（见 [restoreIfStale]）——
+ * 于是"只剩冷启动自愈"那句话当时是不成立的，静默没有任何上界。改法：[armWatchdog] 把结论落进
+ * [KEY_WATCHDOG_REARM_PENDING]，[selfCheck] 起手读到它且期限还没到时**补排一次**
+ * （补的是 prefs 里那一格期限，不重算宽限、不推后恢复点）。
+ * 覆盖面照实写：这一格盖得住"排程当场失败"，盖不住"排成功之后被 ROM 吞掉"——
+ * 那一刻 `set` 确实返回了，应用侧唯一的探测手段 `FLAG_NO_CREATE` 问的是 PendingIntent 记录在不在，
+ * 而那只记录在 set 之前就已经被造出来了（见 [armWatchdog]），事后探不出闹钟。
  */
 object ClassProgressDnd {
 
@@ -35,6 +58,24 @@ object ClassProgressDnd {
 
     /** 最迟必须在何时恢复勿扰（= 下课时刻 + [RESTORE_GRACE_MINUTES]），毫秒时间戳 */
     private const val KEY_DND_DEADLINE = "dnd_restore_deadline"
+
+    /**
+     * 「上一次排看门狗没排上」这一格事实（写了就是 true = 待补排；排上了就整格撤掉）。
+     *
+     * 为什么必须有一格 prefs、不能改成"起手探一眼闹钟还在不在"：[armWatchdog] 在两次 `set`
+     * **之前**就先经 [watchdogPendingIntent] 用 `FLAG_UPDATE_CURRENT` 把那只 PendingIntent 造出来了，
+     * 于是 `FLAG_NO_CREATE` 那一探（[cancelWatchdog] 里那一枚）问的是"PI 记录在不在"，
+     * 不是"闹钟挂没挂"—— `set` 抛了 PI 照样在。全仓也没有任何一处周期性去探它。
+     * ⇒ 这条链上唯一知道自己失败的地方就是失败当场那一步，它必须把结论落成事实，
+     *   否则 [selfCheck] 面对的是一个"看起来一切正常"的状态。
+     *
+     * 与「恢复期限」那一格是**两本账**：期限答"最迟什么时候必须恢复"，这一格答"到那个点的闹钟在不在"。
+     * 把它折进期限（失败就清期限）是不行的 —— 排程失败恰恰发生在课还在上的时候，
+     * 期限清成 0 会让 [restoreIfStale] 在下一次起手当场动手 = 把正在生效的勿扰放开、
+     * 约 5 秒后再被续排链重新 enter（那正是 `BootDndSelfHealDecisionTest`
+     * 的 freshRecordWithinDeadlineIsNotRestoredAtBoot 用实测 logcat 钉住不许复发的抖动）。
+     */
+    private const val KEY_WATCHDOG_REARM_PENDING = "dnd_watchdog_rearm_pending"
 
     /** 下课后允许广播迟到的余量：正常情况下课铃先到，看门狗只在它被吞掉时才响 */
     private const val RESTORE_GRACE_MINUTES = 30L
@@ -109,6 +150,8 @@ object ClassProgressDnd {
             prefs.edit {
                 remove(KEY_SAVED_FILTER)
                 remove(KEY_DND_DEADLINE)
+                // 这一轮的书账到此为止：待补排那一格一起撤（闹钟已经不需要再排了）
+                remove(KEY_WATCHDOG_REARM_PENDING)
             }
             cancelWatchdog(context)
         }
@@ -122,21 +165,69 @@ object ClassProgressDnd {
      * 只在「有残留记录」且「恢复期限已过」时动手，因此正在上课的那节课不会被误恢复。
      * 期限缺失（0）说明这条记录是加看门狗之前的旧版本留下的 —— 那种记录本来就没人会
      * 来恢复，按"已过期限"处理，正好让覆盖安装的第一次冷启动自愈掉。
+     *
+     * 起手先补那一格「上一次没排上」的闹钟（判据见 [watchdogRearmDue]）：排程失败时闹钟根本
+     * 不存在，光靠期限门控就只剩"下一次起手且期限已过"那一档，补排把它换成"每一次起手都试一次"。
+     * 整趟只读**一只钟**一次（`nowMillis` 在下面三处判据之间共用）：补排的期限门控与硬超时门控
+     * 必须是同一个读数，跨秒那一瞬两判各说各的就会同时补错排、又漏掉恢复。
      */
     fun selfCheck(context: Context) {
         runCatching {
             val prefs = prefs(context)
             val deadline = prefs.getLong(KEY_DND_DEADLINE, 0L)
+            val hasSavedFilter = prefs.contains(KEY_SAVED_FILTER)
+            val nowMillis = System.currentTimeMillis()
+            if (watchdogRearmDue(
+                    hasSavedFilter = hasSavedFilter,
+                    rearmPending = prefs.getBoolean(KEY_WATCHDOG_REARM_PENDING, false),
+                    deadline = deadline,
+                    nowMillis = nowMillis,
+                )
+            ) {
+                // 取证行：念得出补的是哪一格期限，装机上"闹钟图标什么时候出现"只能靠它
+                Log.w(TAG, "勿扰看门狗上一次没排上，按期限 $deadline 补排一次")
+                // 补排吃的是 prefs 里那一格期限，不重算「现在 + 宽限」：
+                // 重算就是替这一节课把恢复点往后推，而且宽限量会在第二处被再摊一遍。
+                // 排上没有由 armWatchdog 自己再落一次旗 ⇒ 下一次起手接着试。
+                armWatchdog(context, deadline)
+            }
             restoreIfStale(
-                hasSavedFilter = prefs.contains(KEY_SAVED_FILTER),
+                hasSavedFilter = hasSavedFilter,
                 deadline = deadline,
-                nowMillis = System.currentTimeMillis(),
+                nowMillis = nowMillis,
             ) {
                 Log.w(TAG, "勿扰已过恢复期限仍未收到下课铃（$deadline），按硬超时恢复")
                 restore(context)
             }
         }.onFailure { Log.w(TAG, "勿扰自愈失败", it) }
     }
+
+    /**
+     * 「这一趟自愈该不该补排那只看门狗」判据的唯一出处：**零 Context、零 android、零读钟**，
+     * 三枚输入全是注入的标量。形状照 [restoreIfStale] —— 本模块单测没有 Robolectric，
+     * `getSharedPreferences` 是抛 "not mocked" 的桩，[armWatchdog] 要 Context，
+     * JVM 侧钉得住的只有"该不该补排"这一格结论（排程事件本身另有 [armWatchdogAttempt] 那枚纯档位）。
+     *
+     * 三判缺一不可，各自拦一种"看着对"：
+     * - `hasSavedFilter`：没进过勿扰就没有要补的闹钟，一次 binder 都不许多付
+     *   （同 [restore] 那条"没进过勿扰就不要动"的不变量）；
+     * - `rearmPending`：旗不在就说明上一次确实排上了。正常上课不该每次起手都重排一遍 ——
+     *   `setAlarmClock` 是同 requestCode 顶替重写，白多一次状态栏图标闪动，也多给 ROM 一次吞的机会；
+     * - 期限未到：已过期限那一档归下面的 [restoreIfStale]（硬超时恢复），这里再补一只
+     *   立刻就该撤销的闹钟是纯多付一次唤醒。
+     *
+     * 期限门控**复用** [restoreIfStale] 那一把尺（传一枚空动作、只取结论），不在这里再摊一份
+     * 「deadline 与 nowMillis 谁大」：那格比较式全文件只许长在 seam 里一处，
+     * 口径见 `BootDndSelfHealDecisionTest` 的 deadlinePredicateLivesInExactlyOnePlace。
+     * [restoreIfStale] 不读钟、不摸 prefs，除 onStale 那一手之外没有副作用 ⇒ 空动作下它就是纯谓词。
+     */
+    internal fun watchdogRearmDue(
+        hasSavedFilter: Boolean,
+        rearmPending: Boolean,
+        deadline: Long,
+        nowMillis: Long,
+    ): Boolean = hasSavedFilter && rearmPending &&
+        !restoreIfStale(hasSavedFilter = hasSavedFilter, deadline = deadline, nowMillis = nowMillis, onStale = {})
 
     /**
      * 「这一轮到底该不该按硬超时动手」判据的唯一出处 + 编排：
@@ -321,34 +412,103 @@ object ClassProgressDnd {
         deadlineOfEnd(endMillis) ?: System.currentTimeMillis() + FALLBACK_LIMIT_MINUTES * 60_000L
 
     /**
-     * 排看门狗闹钟（Android 12+ 无精确闹钟权限时逐档降级）。
+     * 排看门狗闹钟（Android 12+ 无精确闹钟权限时逐档降级），并把**排上没有**这件事落进 prefs。
      *
      * 用 `setAlarmClock`（「用户闹钟」档）：它正是为"到点必须响"准备的档位，
      * 省电白名单对它的豁免最彻底 —— 而这一步的全部意义就是对抗省电策略。
      * 代价是状态栏会多一个闹钟图标，最迟 [RESTORE_GRACE_MINUTES] 分钟后就消失，
      * 比"手机静音一整天"轻得多。
+     *
+     * 改前这里两支失败都只念一句"勿扰看门狗排程失败，只剩冷启动自愈"就走到函数末尾：
+     * 那句"冷启动自愈"本身是**期限门控**的（见 [restoreIfStale]），闹钟不存在时它就只剩
+     * "下一次起手恰好已过期限"那一档；而下一节上课铃还会把 prefs 里那一格期限往后覆写，
+     * 于是净效果是**越等越久**，静默的静态上界根本出不来。
+     * 现在结论必须落账（[KEY_WATCHDOG_REARM_PENDING]）：三手 `set` 全抛 ⇒ 落旗，
+     * 排上 ⇒ 撤旗，[selfCheck] 起手读的就是这一格。
+     * 拿不到 AlarmManager 那一手同样落旗（三手都没试 = 没排上；口径同
+     * `ClassProgressScheduler.schedule` 那句"拿不到 AlarmManager 也是 false，答 true 就是假成功"），
+     * 改前它是静默 `?: return`，一句留痕都没有。
      */
     private fun armWatchdog(context: Context, atMillis: Long) {
-        val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
+        val alarmManager = context.getSystemService(AlarmManager::class.java)
+        if (alarmManager == null) {
+            Log.w(TAG, "勿扰看门狗没拿到 AlarmManager，三手 set 都没试：已落补排旗，等下一次起手")
+            recordWatchdogArmOutcome(context, armed = false)
+            return
+        }
         val operation = watchdogPendingIntent(context)
         val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
             runCatching { alarmManager.canScheduleExactAlarms() }.getOrDefault(false)
-        if (canExact) {
-            runCatching {
+        val armed = armWatchdogAttempt(
+            canExact = canExact,
+            setAlarmClock = {
                 alarmManager.setAlarmClock(
                     AlarmManager.AlarmClockInfo(atMillis, ClassProgressScheduler.alarmShowIntent(context)),
                     operation,
                 )
-            }.recoverCatching {
-                Log.w(TAG, "勿扰看门狗 setAlarmClock 失败，退回精确档", it)
-                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, operation)
-            }.onFailure { Log.w(TAG, "勿扰看门狗排程失败，只剩冷启动自愈", it) }
-        } else {
-            // 未授予 SCHEDULE_EXACT_ALARM：精确档会抛 SecurityException，退非精确档
-            runCatching {
-                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, operation)
-            }.onFailure { Log.w(TAG, "勿扰看门狗排程失败，只剩冷启动自愈", it) }
+            },
+            setExact = { alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, operation) },
+            setPowerSave = { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, operation) },
+        )
+        recordWatchdogArmOutcome(context, armed)
+    }
+
+    /**
+     * [armWatchdog] 的档位本体：**零 android、零时钟**，三手 `set` 与留痕口全是参数 ——
+     * 形状逐字照 `ClassProgressScheduler.armEndBell`（同一族在册先例，表驱动见
+     * `ClassProgressBellArmTest`）。
+     *
+     * 收成这一形买到的是：**"排程抛了"这一档在 JVM 里就是可注入的事件**（递一枚会抛的 lambda 就是），
+     * 不需要真机也不需要 Robolectric ⇒ 结论／留痕／落账三样都能被表驱动逐档量。
+     * 量不到的仍然只有一件，也照实写在这里：真 `AlarmManager` 在澎湃／MIUI 上到底抛不抛、
+     * 抛在哪一手，以及"排成功之后被系统吞掉"那一档（那一刻 `set` 返回了，档位本体答"排上了"，
+     * 旗不落 —— 那一档只有装机读得出）。
+     *
+     * 三档：授权了就试 `setAlarmClock`，它抛就留痕并退回精确档；精确档也抛就判"没排上"。
+     * 未授权那一支（`canScheduleExactAlarms` 为假 —— 最容易走到的那一支）直接省电档，
+     * 它抛同样判"没排上"。两手都失败的场合**两句留痕都要在**：改前
+     * `recoverCatching` 的返回值被丢掉，退回那一手再失败时读起来就像"一次都没失败过"。
+     */
+    internal fun armWatchdogAttempt(
+        canExact: Boolean,
+        setAlarmClock: () -> Unit,
+        setExact: () -> Unit,
+        setPowerSave: () -> Unit,
+        logFailure: (reason: String, error: Throwable) -> Unit = LOG_DND_ARM_FAILURE,
+    ): Boolean {
+        if (!canExact) {
+            return armWatchdogTry("勿扰看门狗省电档没排上：已落补排旗，只剩下一次起手补排", setPowerSave, logFailure)
         }
+        val clock = runCatching(setAlarmClock).onFailure {
+            logFailure("勿扰看门狗 setAlarmClock 失败，退回精确档", it)
+        }
+        if (clock.isSuccess) return true
+        return armWatchdogTry("勿扰看门狗退回精确档那一手也没排上：已落补排旗，只剩下一次起手补排", setExact, logFailure)
+    }
+
+    /**
+     * 一次排程尝试的**唯一**形状：`runCatching` 之后必须接 `onFailure`，结论由 `isSuccess` 带出去。
+     * 裸着一枚 `runCatching` 再让函数走到末尾，就是把失败读成成功 —— 本卡那两支病灶都是这个形状
+     * （口径逐字同 `ClassProgressScheduler.armBellAttempt`，那张卡把这句话说给课堂铃，这里补齐看门狗）。
+     */
+    private fun armWatchdogTry(
+        reason: String,
+        attempt: () -> Unit,
+        logFailure: (reason: String, error: Throwable) -> Unit,
+    ): Boolean = runCatching(attempt).onFailure { logFailure(reason, it) }.isSuccess
+
+    /**
+     * 排程结论落账：排上了撤旗、没排上落旗（[selfCheck] 起手读的就是这一格）。
+     *
+     * 全文件只许这一处写它 —— 两处各写一遍就是两本账，改一处忘一处就得到"闹钟排上了却留着旗"
+     * 那种每次起手都重排一遍的状态。落账失败也要留痕：它一抛，补排链就整条失去记忆。
+     */
+    private fun recordWatchdogArmOutcome(context: Context, armed: Boolean) {
+        runCatching {
+            prefs(context).edit {
+                if (armed) remove(KEY_WATCHDOG_REARM_PENDING) else putBoolean(KEY_WATCHDOG_REARM_PENDING, true)
+            }
+        }.onFailure { Log.w(TAG, "勿扰看门狗补排旗落账失败（armed=$armed）", it) }
     }
 
     /**
@@ -357,6 +517,10 @@ object ClassProgressDnd {
      */
     fun cancelWatchdog(context: Context) {
         runCatching {
+            // 主动撤销 = "这只看门狗不要了"，待补排那一格当场一起撤：
+            // 留着旗会让 selfCheck 起手补排一只刚刚被用户撤掉的闹钟（关掉功能、清空课表那一族）。
+            // 写在取服务之前：`?: return` 那一手也得把书账清干净，不然清不掉的那一枚就是残留。
+            prefs(context).edit { remove(KEY_WATCHDOG_REARM_PENDING) }
             val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
             val operation = PendingIntent.getBroadcast(
                 context,
