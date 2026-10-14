@@ -485,6 +485,11 @@ class BuaaWebSessionLifecycleGuardTest {
                 sessionWebView = webView
                 lastUrl = webView.url
                 moveToHiddenHost(webView, activity)
+                // 这一手是「判据在场但搬回状态写入之后」那一形：改前压根没有这枚调用（第三枚断言钉那一形
+                // 回 null），把判据补回来却排在换引用与写 lastUrl 之后，逐字节每一行都对得上而病灶整块回来
+                val verdict = SessionRetainGate.decide(
+                    webView.url, RetainSource.LoginScreen, old != null, old === webView, restoreInFlight,
+                )
                 if (old != null && old !== webView) {
                     runCatching { old.destroy() }
                 }
@@ -492,7 +497,8 @@ class BuaaWebSessionLifecycleGuardTest {
             }
         """.trimIndent()
         assertEquals(
-            "探测器必须把**改前那一形**判成「状态写在判据之前」（实到 " + decisionPrecedesStateWrite(oldShape) +
+            "探测器必须把**改前那一形**（判据在场、却排在换引用与写 lastUrl 之后）判成「状态写在判据之前」" +
+                "（实到 " + decisionPrecedesStateWrite(oldShape) +
                 "）：判成 true 说明它空转，第 ③ 格就是假的绿",
             false,
             decisionPrecedesStateWrite(oldShape),
@@ -655,7 +661,9 @@ class BuaaWebSessionLifecycleGuardTest {
             "SDK_INT",
             "checkSelfPermission",
             "Context",
-            "WebView",
+            // 针必须是**限定名**那一形：裸 `WebView` 会把内核自己的枚举名 `PreviousWebView` 逐枚念成
+            // 「读了设备」（实到 14 枚），恒红的一枚针等于没有针。import 面由上面那问 android./androidx. 兜。
+            "android.webkit.WebView",
             "Activity",
             "Room",
         )
