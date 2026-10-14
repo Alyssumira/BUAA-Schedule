@@ -61,8 +61,10 @@ import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.data.import.BuaaInPageFetcher
 import com.buaa.schedule.data.import.BuaaImportJob
 import com.buaa.schedule.data.import.BuaaSemesterStart
+import com.buaa.schedule.data.import.BuaaWebSession
 import com.buaa.schedule.data.import.redactUrl
 import com.buaa.schedule.data.import.resolveBuaaSemesterStart
+import com.buaa.schedule.domain.session.RetainSource
 import com.buaa.schedule.domain.url.EduDocument
 import com.buaa.schedule.domain.url.eduDocumentVerdict
 import com.buaa.schedule.ui.ScheduleViewModel
@@ -205,11 +207,16 @@ fun BuaaLoginScreen(
      * 返回前先保住登录会话：抓取中直接返回会让 AndroidView.onRelease 销毁 WebView，
      * 用户已经登录的 byxt 会话随之丢失（R4 P2-3）。
      * 已取消 / 未开始抓取时 retain 是幂等 no-op，统一走这里最安全。
+     *
+     * T378②之后这一手还要多认一句：上缴**不等于收下** —— `retain` 现在自判出身
+     * （判据本体在 `domain/session/SessionRetainGate`），页面此刻不在教务 origin 就是拒收档，
+     * 手里的活会话与 `lastUrl` 都不动，只把 Cookie 落盘。改前五枚没有 origin 判据的上缴调用点
+     * 各自都能把手里那枚真登录着的实例顶掉，这是那一格的病根。
      */
     fun safeBack() {
         if (fetchStarted && !fetchCancelled) {
             webViewRef?.let { web ->
-                com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
+                BuaaWebSession.retain(web, RetainSource.LoginScreen, context.findActivity())
             }
         }
         onBack()
@@ -367,11 +374,15 @@ fun BuaaLoginScreen(
                                     // 让组合里那枚 effect 的键变化来取消 —— 同一只手在转屏时也这么杀了作业）
                                     BuaaImportJob.cancel()
                                     webViewRef?.let { web ->
-                                        com.buaa.schedule.data.import.BuaaWebSession.retain(
+                                        BuaaWebSession.retain(
                                             web,
+                                            RetainSource.LoginScreen,
                                             context.findActivity(),
                                         )
                                     }
+                                    // 这句说的是**登录态**（Cookie 已落盘、手里那枚活会话没被顶掉），
+                                    // 不是「这一枚 WebView 一定被收下」：页面还停在 SSO 时上缴会被
+                                    // domain/session/SessionRetainGate 判成拒收档（T378②）。
                                     viewModel.showMessage("已取消导入，登录会话已保留")
                                 },
                                 modifier = cardAction,
@@ -434,7 +445,11 @@ private suspend fun BuaaImportJob.Host.fetchBuaaScheduleInPage(
         if (eduDocumentVerdict(web.url) != EduDocument.OnEduOrigin) {
             fetchState = null
             showMessage("教务系统页面尚未就绪，请稍后重试", isError = true)
-            com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
+            // T378②：这一枚候选**注定是拒收档**（上面那一问就是它的出身），所以它不会再顶掉手里
+            // 那枚真登录着的会话、也不会再把 `lastUrl` 写脏。留这一手的理由只剩「凭证」那一半：
+            // retain 的拒收档照样把会话 Cookie 加密落盘并打上 PREF_RETAINED，否则用户刚刚拿到的
+            // SSO 票据会随着这枚 WebView 一起被 onRelease 销毁 —— 那是改前顺带保住的东西，不许修没。
+            BuaaWebSession.retain(web, RetainSource.LoginScreen, context.findActivity())
             onBack()
             return
         }
@@ -446,7 +461,7 @@ private suspend fun BuaaImportJob.Host.fetchBuaaScheduleInPage(
         if (terms.isEmpty()) {
             fetchState = null
             showMessage("获取学期列表失败，请稍后重试", isError = true)
-            com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
+            BuaaWebSession.retain(web, RetainSource.LoginScreen, context.findActivity())
             onBack()
         } else {
             val selectedTerm = terms.firstOrNull { it.selected }?.code
@@ -489,7 +504,7 @@ private suspend fun BuaaImportJob.Host.fetchBuaaScheduleInPage(
                     // 学期列表为空）一致：retain → 清状态 → 报错 → onBack。
                     // **不**把 retain 提前到 fetchSemesterInfo 之前：那会在页面内请求还在跑的时候
                     // 把 WebView 转挂隐藏宿主，改的是抓取链的宿主而不是这一格的次序。
-                    com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
+                    BuaaWebSession.retain(web, RetainSource.LoginScreen, context.findActivity())
                     fetchState = null
                     // 文案按两维分档（T196④）：**有没有拿到一枚串**（start.raw）与
                     // **页面到底答没答、答成什么样**（info.missingReason，五档早返回一一对应）。
@@ -515,7 +530,7 @@ private suspend fun BuaaImportJob.Host.fetchBuaaScheduleInPage(
                         },
                     )
                     // 保留登录 WebView（byxt 页面上下文，供刷新课表复用）
-                    com.buaa.schedule.data.import.BuaaWebSession.retain(web, context.findActivity())
+                    BuaaWebSession.retain(web, RetainSource.LoginScreen, context.findActivity())
                     fetchState = null
                     when {
                         // 有周次没抓到：宁可让用户重试，也不能用不完整的结果覆盖既有课表

@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -13,6 +14,14 @@ import androidx.core.content.edit
 import com.buaa.schedule.data.local.BuaaCookieStore
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
+import com.buaa.schedule.domain.session.PreviousWebView
+import com.buaa.schedule.domain.session.RetainSource
+import com.buaa.schedule.domain.session.RestoreBackoffSentinel
+import com.buaa.schedule.domain.session.RestoreBackoffWindow
+import com.buaa.schedule.domain.session.RestoreBackoffWindowGate
+import com.buaa.schedule.domain.session.RestoreSingleFlight
+import com.buaa.schedule.domain.session.SessionRetainGate
+import com.buaa.schedule.domain.session.SessionRetainVerdict
 import com.buaa.schedule.domain.url.EduDocument
 import com.buaa.schedule.domain.url.SessionDomain
 import com.buaa.schedule.domain.url.eduDocumentVerdict
@@ -30,8 +39,10 @@ import java.lang.ref.WeakReference
  * 复用同一实例即可静默重新拉取，无需再次登录。
  *
  * ⚠️ 不能只是把 WebView 从视图树 detach：脱离窗口的 WebView 其 JS 不再被调度，
- * `evaluateJavascript` 永不回调 —— 实测表现为复用会话刷新课表恒定 25s 超时
- * （"刷新失败：无法获取学期列表"），且失败路径会误清掉仍然有效的登录会话。
+ * `evaluateJavascript` 永不回调 —— 实测表现为复用会话刷新课表一路等到页面内 fetch 的超时上限
+ * （现值：`data/import/BuaaInPageFetcher` 裸 `:55` 的 `TIMEOUT_MS = 12_000L`，十二秒一枚；台账里那句
+ * 「恒定 25s 超时」是 25s 那一档**旧真机读数**，T378② 按盘面改成现值，逐周轮询下的总等待另算），
+ * 且失败路径会误清掉仍然有效的登录会话。
  *
  * Cookie 由 CookieManager 持久化（含 SSO 全局会话 TGT），冷启动后首次进入
  * 导入页时 SSO 自动跳过登录表单直达 byxt。
@@ -44,6 +55,12 @@ object BuaaWebSession {
 
     /** 会话恢复尝试的最小间隔：失败后 60s 内不再重试，避免 onStart 抖动把 WebView 堆爆 */
     private const val RESTORE_RETRY_INTERVAL_MS = 60_000L
+
+    /**
+     * 单调钟刻度上「本进程从没恢复失败过」的哨兵 —— 引用内核那一枚，**不在这里另写一个负数**
+     * （两枚调用点各自的 `-1L` 就是两套「从没失败过」，台账 #496 钉的正是这一形）。
+     */
+    private const val NEVER_FAILED_MILLIS = RestoreBackoffSentinel.NEVER_FAILED_MILLIS
 
     /** 需要持久化的鉴权域：byxt 自身 + 统一身份认证的 SSO 全局会话 */
     private val COOKIE_HOSTS = listOf("byxt.buaa.edu.cn", "sso.buaa.edu.cn")
@@ -108,8 +125,11 @@ object BuaaWebSession {
      * 只发边沿、不发状态：`hasSession()` 仍然是唯一真相，这里不复刻第二份判据
      * （一份状态若与它不同步，就会有人照着错的那半写代码）。谁收到自己去问 `hasSession()`。
      *
-     * 发射点只有 [retain] 一处：登录页五处上缴与冷启动 Cookie 恢复成功后的上缴都汇到那里，
-     * 所以不需要在每个入口各补一行。
+     * 发射点只有 [retain] 一处（且只在它**收下**实例那一档发）：登录页六处上缴调用点与冷启动 Cookie
+     * 恢复成功后的上缴都汇到那里，所以不需要在每个入口各补一行 —— 枚数是 T378② 在基点 `f928dea`
+     * 上重数的（`grep -c "BuaaWebSession.retain(" ` 现值 6；这句原本写「五处」，对不上盘面）。
+     * 上缴**不等于收下**：非教务出身的候选由 `domain/session/SessionRetainGate` 判成拒收档，
+     * 拒收档一声门都不敲（否则订阅者回头问 `hasSession()` 拿到 false，这一轮白跑）。
      */
     private val _sessionRetained = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
@@ -121,11 +141,35 @@ object BuaaWebSession {
      * 而 `sessionWebView` 只在 `onPageFinished` 里才被赋值 ——
      * 加载慢或页面被重定向到 SSO 时，多次 `onStart` 会各建一个 WebView，
      * 每个都挂着 SSR 页面，最终 OOM。
+     *
+     * T378②：**这枚旗的处置全仓只有三个收口，而且每一处都同时处置它那道超时闸** ——
+     * ① [restore] 里那一枚 30 秒超时闸走到 [abandonRestore]（收旗 ＋ 拆闸 ＋ 记下退避读数）；
+     * ② [clear]（退出登录，收旗 ＋ 拆闸）；
+     * ③ [retain] 收下实例那两档（T378② 之前这里是零处 —— 它只 `cancelRestoreGuard()` 拆闸，
+     *   于是闸没了、旗还留着 true，[restore] 此后恒在 `if (restoreInFlight) return` 那一档早退）。
+     * 其余出口（[releaseForMemory]）**不许**碰它：它在 `sessionWebView == null` 时就整段早退，
+     * 而那正是恢复在飞时的状态 —— 它插不进这一族，硬加一手只会与超时闸抢同一枚旗。
      */
     @Volatile private var restoreInFlight: Boolean = false
 
-    /** 上次恢复失败的时间戳，用于 [_maybeRestore] 的退避 */
-    @Volatile private var lastRestoreFailureAt: Long = 0L
+    /**
+     * 上次恢复失败时的**单调钟**读数（`SystemClock.elapsedRealtime` 口径），用于 [restore] 的退避。
+     *
+     * T378②换尺（台账 #495／#496 那一族的第四枚落点）。改前那两行逐字留在这里做取证
+     * （源码形状守卫按「代码里 0 处、含注释恰好 1 处」双向复算）：
+     *
+     * ```
+     * @Volatile private var lastRestoreFailureAt: Long = 0L
+     * if (now - lastRestoreFailureAt < RESTORE_RETRY_INTERVAL_MS) return
+     * ```
+     *
+     * 两头各一枚病：拿的是墙上钟（用户改表／时区校正往回拨 ⇒ 差值是**负数** ⇒ 恒早退，
+     * 而这一档全函数里唯一一句话不说），且初始值与时间戳共用同一格（换成单调钟之后照旧拿 `0L`
+     * 就撞上 `elapsedRealtime()` 开机那刻从 0 起走：开机后一分钟内的第一次恢复被念成「刚刚失败过」）。
+     * 所以「从没失败过」单立具名哨兵 [NEVER_FAILED_MILLIS]（`-1L`，单调钟取不出负数），
+     * 窗口判据与它**不共用刻度**；倒退与出窗各是一档，本体在 `domain/session/RestoreBackoffWindowGate`。
+     */
+    @Volatile private var lastRestoreFailureAtElapsedRealtime: Long = NEVER_FAILED_MILLIS
 
     /**
      * 恢复流程的加载超时：页面既不 finish 也不报错（连接挂起、SSO 静默重定向）时，
@@ -237,34 +281,93 @@ object BuaaWebSession {
      * 之后由 [refreshSchedule] 复用。
      *
      * 必须在主线程调用（会变更视图树）。
+     *
+     * **三问不在这里判**（T378②）：收不收这一枚实例、会话槽里旧的那一枚拆不拆、`restoreInFlight`
+     * 单飞旗与它那道超时闸归谁收 —— 判据本体在 `domain/session/SessionRetainGate`（纯 JVM），
+     * 这里只按它给的档分派。为什么非得收口在一处：登录页六枚上缴调用点里只有一枚长在 origin
+     * 判据分支里（其余五枚含崩溃重建后那枚 URL 还是 `about:blank` 的新实例），改前它们都能
+     * 无条件换引用、无条件写 `lastUrl`、并把手里那枚**真的登录着**的实例拆掉。
      */
-    fun retain(webView: WebView, activity: android.app.Activity? = null) {
+    fun retain(webView: WebView, source: RetainSource, activity: android.app.Activity? = null) {
         liveActivity(activity)?.let { currentActivity = WeakReference(it) }
-        val old = sessionWebView
-        sessionWebView = webView
-        lastUrl = webView.url
-        val attached = moveToHiddenHost(webView, activity)
-        if (!attached) {
-            Log.w(TAG, "未找到可挂载的窗口宿主，会话 JS 可能被冻结（复用刷新会超时）")
+        val previous = sessionWebView
+        when (
+            val verdict = SessionRetainGate.decide(
+                candidateUrl = webView.url,
+                source = source,
+                hasPreviousInstance = previous != null,
+                previousIsCandidate = previous === webView,
+                restoreInFlight = restoreInFlight,
+            )
+        ) {
+            is SessionRetainVerdict.Accepted -> {
+                sessionWebView = webView
+                lastUrl = webView.url
+                val attached = moveToHiddenHost(webView, activity)
+                if (!attached) {
+                    Log.w(TAG, "未找到可挂载的窗口宿主，会话 JS 可能被冻结（复用刷新会超时）")
+                }
+                when (verdict.previousWebView) {
+                    // 与另外三枚出口同一次序：先从视图树摘下来，再 stopLoading ＋ destroy。
+                    // 改前这是全仓唯一一枚挂在树上就直接 destroy 的出口。
+                    PreviousWebView.RemoveFromTreeThenDestroy -> previous?.let { old ->
+                        Log.i(TAG, "替换旧会话 WebView（先摘树再拆）")
+                        runCatching {
+                            (old.parent as? ViewGroup)?.removeView(old)
+                            old.stopLoading()
+                            old.destroy()
+                        }
+                    }
+
+                    // 手里没有旧的、或那枚就是候选本身（再往前一档是「本档拒收」，落不到这里）：
+                    // 后者拆掉的就是刚收下的会话，一手都不许动
+                    PreviousWebView.NoPreviousInstance, PreviousWebView.CandidateIsThePrevious -> Unit
+                    PreviousWebView.KeepPreviousAsSession -> Unit
+                }
+                when (verdict.singleFlight) {
+                    RestoreSingleFlight.CollectFlagAndCancelGuard -> {
+                        restoreInFlight = false
+                        cancelRestoreGuard()
+                    }
+
+                    RestoreSingleFlight.CollectFlagKeepGuardArmed -> {
+                        // 会话槽被别的来路占下了：旗要收（否则 restore 恒早退），闸不许拆
+                        // （还在飞的那一枚 WebView 只剩这道闸会替它拆）
+                        restoreInFlight = false
+                        Log.i(TAG, "单飞旗收掉，超时闸留着替还在飞的那一枚收尾")
+                    }
+
+                    RestoreSingleFlight.NothingInFlight, RestoreSingleFlight.LeaveToRestoreChain -> Unit
+                }
+                Log.i(TAG, "会话已保留（来源=${verdict.source} attached=$attached url=${redactUrl(webView.url)}）")
+                // 若保留时应用已在后台（理论上不会从 UI 路径发生，但兜底）：闸门会同时
+                // 处理进程级定时器与这个 WebView 的 onPause
+                applyTimerGate(webView)
+                // 会话到这里是真的可用了（sessionWebView 已赋值、lastUrl 在 byxt 域）：敲一声门。
+                // 发在函数末尾是有意的 —— 早一步发，订阅者回头去问 hasSession() 可能还是 false，
+                // 它这一轮就白跑了（为什么只发边沿不发状态见 [_sessionRetained]）。
+                _sessionRetained.tryEmit(Unit)
+            }
+
+            is SessionRetainVerdict.Refused -> {
+                // 三样一概不碰：会话槽、lastUrl（= hasSession 的唯一真相）、隐藏宿主；旧实例一枚也不拆。
+                // 五档教务判据逐枚念出来，免得「没收下」又变成一句不说的静默支路。
+                Log.w(
+                    TAG,
+                    "拒收上缴的 WebView：文档不是教务出身（档=${verdict.candidateVerdict} " +
+                        "url=${redactUrl(verdict.candidateUrl)}）" +
+                        "旧实例=${verdict.previousWebView} 旗与闸=${verdict.singleFlight}",
+                )
+            }
         }
-        if (old != null && old !== webView) {
-            Log.i(TAG, "替换旧会话 WebView")
-            runCatching { old.destroy() }
-        }
-        cancelRestoreGuard()
-        Log.i(TAG, "会话已保留（attached=$attached url=${redactUrl(webView.url)}）")
+        // 两档共同的两手 —— 讲的是**凭证**，不是「会话槽归谁」：CookieManager 是进程级的，
+        // 与这一枚实例进不进会话槽是两件事。改前 retain 无论出身都做这两手，本卡不许把登录态
+        // 落盘跟着「拒收实例」一起修没（那才是真正会让用户重走一遍 SSO 的那一刀）。
         appContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             ?.edit { putBoolean(PREF_RETAINED, true) }
         // 立刻把会话 Cookie 加密落盘：CookieManager 不会持久化"会话 Cookie"，
         // 不落盘的话用户划掉应用后登录态就没了。
         persistCookies()
-        // 若保留时应用已在后台（理论上不会从 UI 路径发生，但兜底）：闸门会同时
-        // 处理进程级定时器与这个 WebView 的 onPause
-        applyTimerGate(webView)
-        // 会话到这里是真的可用了（sessionWebView 已赋值、lastUrl 在 byxt 域）：敲一声门。
-        // 发在函数末尾是有意的 —— 早一步发，订阅者回头去问 hasSession() 可能还是 false，
-        // 它这一轮就白跑了（为什么只发边沿不发状态见 [_sessionRetained]）。
-        _sessionRetained.tryEmit(Unit)
     }
 
     /**
@@ -557,7 +660,7 @@ object BuaaWebSession {
         Log.w(TAG, "放弃会话恢复：$reason")
         cancelRestoreGuard()
         restoreInFlight = false
-        lastRestoreFailureAt = System.currentTimeMillis()
+        lastRestoreFailureAtElapsedRealtime = SystemClock.elapsedRealtime()
         // 同 releaseForMemory：destroy 之前用这个实例清掉进程挂起态
         alignTimersWithForeground(web)
         runCatching {
@@ -578,14 +681,38 @@ object BuaaWebSession {
      *
      * 三个必须的守卫（此前都没有，导致回到前台时反复新建 WebView + 失败实例永不回收）：
      * 1. [restoreInFlight] 单飞 —— 一次只允许一个恢复流程在跑；
-     * 2. 失败退避 —— 加载失败后 60s 内不再重试；
+     * 2. 失败退避 —— 加载失败后 60s 内不再重试；判据本体在
+     *    `domain/session/RestoreBackoffWindowGate`（纯 JVM、单调钟、四档），这里只取钟与档位（T378②）；
      * 3. `onReceivedError`/`onReceivedHttpError` 清理 —— 失败实例立刻 destroy。
      */
     fun restore(activity: android.app.Activity) {
         if (hasSession() || sessionWebView != null) return
         if (restoreInFlight) return
-        val now = System.currentTimeMillis()
-        if (now - lastRestoreFailureAt < RESTORE_RETRY_INTERVAL_MS) return
+        // T378②：退避读的是单调钟（elapsedRealtime），墙上钟被往回拨那一档由内核单独成档、偏向放行。
+        // 改前这里是 `val now = System.currentTimeMillis()` ＋ 一枚不夹下限的差值比较 ——
+        // 回拨之后差为负、恒早退，而这一档连一句日志都没有。
+        val window = RestoreBackoffWindowGate.decide(
+            nowElapsedRealtime = SystemClock.elapsedRealtime(),
+            lastFailureAt = lastRestoreFailureAtElapsedRealtime,
+            windowMillis = RESTORE_RETRY_INTERVAL_MS,
+        )
+        when (window) {
+            is RestoreBackoffWindow.SuppressedWithinWindow -> {
+                Log.i(
+                    TAG,
+                    "恢复退避中：距上次失败 ${window.elapsedSinceFailureMillis}ms < ${window.windowMillis}ms",
+                )
+                return
+            }
+
+            is RestoreBackoffWindow.GrantedClockInverted -> Log.w(
+                TAG,
+                "恢复退避读到读数倒退（now=${window.nowElapsedRealtime} last=${window.lastFailureAt}）：" +
+                    "递进来的不是单调钟，偏向放行并留痕",
+            )
+
+            is RestoreBackoffWindow.GrantedNeverFailed, is RestoreBackoffWindow.GrantedAfterWindow -> Unit
+        }
         val appCtx = appContext ?: activity.applicationContext
         if (!appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getBoolean(PREF_RETAINED, false)) return
         restoreInFlight = true
@@ -596,9 +723,12 @@ object BuaaWebSession {
         // 用 applicationContext 创建：这个 WebView 会被单例长期持有，
         // 绑 Activity Context 就等于把整个 Activity 窗口泄漏到进程结束。
         val web = createSessionWebView(appCtx)
-        // 页面既不 finish 也不报错（连接挂起）时，单飞标志会永久卡住：30s 后自行拆掉
+        // 页面既不 finish 也不报错（连接挂起）时，单飞标志会永久卡住：30s 后自行拆掉。
+        // T378②把这一问从「旗还在不在飞」换成「会话槽里是不是它自己」—— 因为 [retain] 现在会在
+        // 别的来路（登录页）收下会话时就把旗收掉：闸还举着正是为了拆掉这一枚没人认领的实例，
+        // 判据若仍吃那枚旗，收旗就等于把闸举废（挂着的 WebView 反而再没人拆了）。
         val guard = Runnable {
-            if (restoreInFlight && sessionWebView == null) abandonRestore(web, "加载超时")
+            if (sessionWebView !== web) abandonRestore(web, "加载超时")
         }
         restoreGuard = guard
         mainHandler.postDelayed(guard, RESTORE_TIMEOUT_MS)
@@ -611,10 +741,7 @@ object BuaaWebSession {
                 // endsWith 后缀）两把尺子并存，前者误伤三枚合法格、后者在一枚裸空格 query 上把真教务文档
                 // 判成外站。现在两问都只问 domain/url 那一枚内核。
                 when (eduDocumentVerdict(url)) {
-                    EduDocument.OnEduOrigin -> {
-                        restoreInFlight = false
-                        retain(view, activity)
-                    }
+                    EduDocument.OnEduOrigin -> retain(view, RetainSource.CookieRestore, activity)
 
                     else -> when (sessionDomainVerdict(url)) {
                         SessionDomain.ForeignDomain, SessionDomain.Unparseable -> {
