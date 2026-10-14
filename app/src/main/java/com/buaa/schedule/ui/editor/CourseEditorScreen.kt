@@ -246,26 +246,40 @@ fun CourseEditorScreen(
         scope.launch {
             saving = true
             saveError = null
-            val saved = saveCourseDraft(
-                course = course,
-                options = options,
-                isEditingExisting = initialCourse != null,
-                reminderEnabled = reminderEnabled,
-                advanceMinutesText = advanceMinutes,
-                onSave = onSave,
-                onSaveReminder = onSaveReminder,
-            )
-            // T260：收尾第一手是**向 VM 报到**（「这一支活着跑到了这里」）。它是目的地层唯一
-            // 能读到「退栈归页面」的证据：这一行执行得到 ⇒ 下面那枚 onBack() 归这一支弹，
-            // 目的地层不跟着弹；被组合取消（转屏 / 摘页）⇒ 这一行连同下面的退栈一行都不执行，
-            // 而写库那一半早在 VM 的 viewModelScope 里跑完了整趟 ⇒ 由目的地层替这一页弹。
-            onSaveTailReached()
-            if (saved) {
-                onBack()
-            } else {
-                saveError = "保存失败，请重试；草稿已保留"
+            try {
+                val saved = saveCourseDraft(
+                    course = course,
+                    options = options,
+                    isEditingExisting = initialCourse != null,
+                    reminderEnabled = reminderEnabled,
+                    advanceMinutesText = advanceMinutes,
+                    onSave = onSave,
+                    onSaveReminder = onSaveReminder,
+                )
+                // T260：收尾第一手是**向 VM 报到**（「这一支活着跑到了这里」）。它是目的地层唯一
+                // 能读到「退栈归页面」的证据：这一行执行得到 ⇒ 下面那枚 onBack() 归这一支弹，
+                // 目的地层不跟着弹；被组合取消（转屏 / 摘页）⇒ 这一行连同下面的退栈一行都不执行，
+                // 而写库那一半早在 VM 的 viewModelScope 里跑完了整趟 ⇒ 由目的地层替这一页弹。
+                onSaveTailReached()
+                if (saved) {
+                    onBack()
+                } else {
+                    saveError = "保存失败，请重试；草稿已保留"
+                }
+            } finally {
+                // T367（在册 #381）：收旗标这一手原先只有「一路走到行尾」这一条路，现在抛出与取消也走得到这里。
+                // 这一支里的外注调用（写库那两枚经由编排函数递进来、报到那一枚、退栈那一枚）本文件一概不接异常：
+                // 今天它们各自的下家都把失败折成返回值（空 id / 假结论），盘面上零已知抛出点 —— 本格钉的是**将来**
+                // 往这几枚 lambda 里直接添一手不接住的调用时的形状（取证与可达性逐条在 T367⓪ 那枚 commit 里）。
+                // 不收的后果是这一棵组合活着（没转屏、没退栈）却两颗按钮同时按不动：那颗删除的闸只认这枚旗标取反，
+                // 保存的闸把同一枚旗标折进判据的实参里，而底栏那句进行中文案会一直挂着、红条一句都念不出来。
+                // 异常照常往上抛：不在这里吞、也不在这里折成一句红条文案。抛出时写库那一半多半已经落库，
+                // 在这里念「失败」正是 #498 那枚「重」的成因；要把「落成没落成」说准得读 VM 的结论旗，那是另一张卡的判据。
+                // ⚠️ 这一手**不修转屏**（在册 #498 = T258-04，本卡红线 (a)）：被组合取消时这里照样跑，
+                // 但收的是那棵已经摘掉的组合上的旗标 —— 不报错，也没有任何读者；新组合那枚旗标是重新起的假。
+                // 裸记忆的寿命那一档归 #498 那张卡，本卡一个字没动它。
+                saving = false
             }
-            saving = false
         }
     }
 
@@ -670,12 +684,22 @@ fun CourseEditorScreen(
                             // 就把这一整棵摘出组合 —— 同一刻这枚 scope 被取消，挂在它后面的 `onBack()`
                             // 一行都不会执行，于是栈顶留着一页渲染成空的编辑器（整屏空白、且因为栈顶不是
                             // topLevel 连底栏都没有）。退栈现在由那条闸门所在的**目的地层**认领。
-                            val deleted = onDelete(target)
-                            if (!deleted) {
-                                // 删不到 ⇒ 课程还在 ⇒ 那道闸门不摘页，这一支活着，红条念得出来
-                                saveError = "删除失败，请重试"
+                            try {
+                                val deleted = onDelete(target)
+                                if (!deleted) {
+                                    // 删不到 ⇒ 课程还在 ⇒ 那道闸门不摘页，这一支活着，红条念得出来
+                                    saveError = "删除失败，请重试"
+                                }
+                            } finally {
+                                // T367（在册 #381）：与保存支那一枚是同一手，理由逐条在那一支上方写着，这里只登记差异。
+                                // 这一支的外注调用只有删库那一手，它的下家把失败折成假结论（不是抛出），盘面上零已知抛出点
+                                // ⇒ 本格同样是**形状卫生**：将来往那枚 lambda 里直接添一手不接住的调用时，
+                                // 旗标不再可能永久停在真 —— 那两颗按钮（这颗按这枚旗标取反、那颗把它折进判据实参）
+                                // 就不会一起死在一次没人接住的抛出上。异常照常往上抛，不吞、不折成红条文案；
+                                // 也不修转屏（在册 #498 = T258-04，红线 (a)）：取消时这里跑得到，收的却是已被摘掉的组合上那枚旗标。
+                                // 上面那九行「删成之后不在这里退栈」的结构一个字没动（红线 (c)），退栈仍归目的地层认领。
+                                saving = false
                             }
-                            saving = false
                         }
                     },
                 ) { Text("删除课程", color = MaterialTheme.colorScheme.error) }
