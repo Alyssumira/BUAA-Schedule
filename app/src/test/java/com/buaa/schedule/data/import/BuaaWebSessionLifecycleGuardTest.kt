@@ -215,13 +215,21 @@ class BuaaWebSessionLifecycleGuardTest {
             0,
             occurrences(tear, "runCatching { old.destroy() }"),
         )
-        // 四枚出口的拆法对齐：全文件「?.removeView(」的册子只能是这样
+        // 拆解出口的拆法对齐：全文件「?.removeView(」的册子只能是这样
+        // T390③ 同批重钉（改前原文／改后原文／为什么仍钉得住同一件事见本格消息）：
+        //   改前 listOf(3, 1) ＋ 括注「（clear／releaseForMemory／abandonRestore）」
+        //   改后 listOf(4, 1) ＋ 括注「（clear／releaseForMemory／abandonRestore／releaseInFlightRestore）」
+        // 抬这一枚不是为了放行：T390 给「还在飞的那一枚实例」新添了一枚灭口，它必须与另外三枚
+        // 走同一次序（先摘树）。册子从三枚变四枚之后，**新添的那一手就在这本账里**——
+        // 以后谁在第五枚灭口上省掉摘树，或者在本卡这一枚上把 removeView 摘走，都当场少一枚而红。
+        // 反过来把它抹平成「≥3」才是放行：那样数不出「哪一枚」。
         assertEquals(
-            "全文件 `(web.parent as? ViewGroup)?.removeView(web)` 恰好三枚（clear／releaseForMemory／abandonRestore）" +
+            "全文件 `(web.parent as? ViewGroup)?.removeView(web)` 恰好四枚（clear／releaseForMemory／" +
+                "abandonRestore／releaseInFlightRestore）" +
                 "＋ retain 那一枚 `(old.parent as? ViewGroup)?.removeView(old)` 恰好一枚，实到 " +
                 occurrences(code, "(web.parent as? ViewGroup)?.removeView(web)") + " 与 " +
                 occurrences(code, "(old.parent as? ViewGroup)?.removeView(old)"),
-            listOf(3, 1),
+            listOf(4, 1),
             listOf(
                 occurrences(code, "(web.parent as? ViewGroup)?.removeView(web)"),
                 occurrences(code, "(old.parent as? ViewGroup)?.removeView(old)"),
@@ -527,8 +535,227 @@ class BuaaWebSessionLifecycleGuardTest {
         return decide < swap && decide < write
     }
 
-    // ---------------- 源码核对小工具（与同族守卫一个刀法：读不到就抛） ----------------
+    // ─────────────── ⑪ T390（乙档）：还在飞的那一枚实例有没有主人 ───────────────
 
+    /**
+     * 本卡新内核的纯度，加上**本批没有顶高在册内核**那一件事。
+     *
+     * 第二问是这张格的一半理由：T390 第 ⓪ 问裁的是乙档 —— 不给 `SessionRetainGate.decide` 加
+     * 「本次上缴属不属于当前世代」那一维。裁错了或者手滑扩了形参，盘面只会多几枚难看的实参，
+     * 谁都不会当场发现；所以把「五枚形参原样」逐字节钉在这里，让「甲档那一条路」在本仓留下痕迹。
+     */
+    @Test
+    fun `在飞归属内核纯而不读设备而 retain 那五枚形参一字未扩`() {
+        val raw = source(INFLIGHT_GATE)
+        val offenders = raw.lineSequence().map { it.trim() }
+            .filter { it.startsWith("import ") }
+            .filter { it.contains("android.") || it.contains("androidx.") }
+            .toList()
+        assertEquals(
+            "$INFLIGHT_GATE 必须零 android / androidx import（在飞那一枚归谁拆这一问要能在 JVM 里打表）。" +
+                "实到：" + offenders,
+            emptyList<String>(),
+            offenders,
+        )
+        val code = blankComments(raw)
+        for (needle in FORBIDDEN_READS) {
+            assertEquals(
+                "$INFLIGHT_GATE 里「$needle」必须 0 处：在不在手、是不是同一枚这两枚事实都由调用点" +
+                    "（`data/import/BuaaWebSession` 的 clear）递进来，内核自己去取就再也不是纯函数。" +
+                    "实到 " + occurrences(code, needle) + " 处",
+                0,
+                occurrences(code, needle),
+            )
+        }
+        assertEquals(
+            "$INFLIGHT_GATE 里不许有判据以 Boolean 收尾（「$BOOLEAN_RETURN」必须 0 处）：" +
+                "「当场拆掉」「留给会话那一手」「空转」是三件不同的事，折成布尔就把后两枚念成同一句",
+            0,
+            occurrences(code, BOOLEAN_RETURN),
+        )
+        assertEquals(
+            "新内核 KDoc 那句纯度承诺必须含注释恰好 1 处（取证搬走 ⇒ 上面那些 0 就是假绿）。实到 " +
+                occurrences(raw, PURITY_PROMISE_INFLIGHT),
+            1,
+            occurrences(raw, PURITY_PROMISE_INFLIGHT),
+        )
+        // —— 本批不许扩在册内核：五枚形参逐字节原样 ——
+        val retainRaw = source(RETAIN_GATE)
+        assertEquals(
+            "`SessionRetainGate.decide` 的形参表必须逐字节还是那五枚（candidateUrl／source／" +
+                "hasPreviousInstance／previousIsCandidate／restoreInFlight）—— 本卡裁的是乙档，" +
+                "第 ⓪ 问否决甲的三条读数之一就是这个形参面。实到 " +
+                occurrences(blankComments(retainRaw), RETAIN_DECIDE_TABLE) + " 枚",
+            1,
+            occurrences(blankComments(retainRaw), RETAIN_DECIDE_TABLE),
+        )
+        assertEquals(
+            "会话文件里问「该不该收下」的那枚调用仍恰好一枚（实到 " +
+                occurrences(blankComments(source(WEB_SESSION)), RETAIN_GATE_CALL) +
+                " 枚）：本卡添的是**另一枚**内核（归谁拆），不是把出身判据拆成两把尺",
+            1,
+            occurrences(blankComments(source(WEB_SESSION)), RETAIN_GATE_CALL),
+        )
+    }
+
+    /** 主人落位：字段声明一枚、建实例那一瞬就落字段、且排在举闸之前 */
+    @Test
+    fun `在飞那枚实例从建出来那一瞬起就有字段主人`() {
+        val code = blankComments(source(WEB_SESSION))
+        assertEquals(
+            "字段声明逐字节恰好一枚「$INFLIGHT_FIELD_DECL」（实到 " +
+                occurrences(code, INFLIGHT_FIELD_DECL) + " 枚）：换成 WeakReference 就等于把" +
+                "「退出登录时还有没有主人」交回 GC 判，而这一手的价值恰在「必须拆得掉」",
+            1,
+            occurrences(code, INFLIGHT_FIELD_DECL),
+        )
+        val restore = balancedBlock(code, "fun restore(activity: android.app.Activity", "restore 的函数体")
+        val createAt = restore.indexOf(INFLIGHT_CREATE)
+        val ownerAt = restore.indexOf(INFLIGHT_FIELD_ARM)
+        val armedAt = restore.indexOf(INFLIGHT_GUARD_ARM)
+        assertTrue(
+            "落主人（index $ownerAt）必须排在建实例（index $createAt）之后、举超时闸" +
+                "（index $armedAt）之前：主人晚于建实例就有空窗，早于举闸才谈得上「拆闸之前先把它" +
+                "交给自己拆」。实到次序 $createAt / $ownerAt / $armedAt",
+            createAt in 0 until ownerAt && ownerAt < armedAt,
+        )
+        assertEquals(
+            "「$INFLIGHT_FIELD_ARM」在全文件恰好一枚（实到 " + occurrences(code, INFLIGHT_FIELD_ARM) +
+                " 枚）：两处落主人就是有两枚实例共用一个主人位",
+            1,
+            occurrences(code, INFLIGHT_FIELD_ARM),
+        )
+        assertEquals(
+            "超时闸的判据仍恰好一枚「$GUARD_IDENTITY」（实到 " + occurrences(code, GUARD_IDENTITY) +
+                " 枚）：本卡只给它补了主人，没把这一问换回「旗还在不在飞」",
+            1,
+            occurrences(code, GUARD_IDENTITY),
+        )
+    }
+
+    /** 主尺（本卡的刀口）：clear() 里拆在飞那一枚必须排在拆闸之前，且不许塞进那个 post */
+    @Test
+    fun `clear 在拆闸之前先把在飞那一枚交给自己拆 三档分派逐枚在场`() {
+        val code = blankComments(source(WEB_SESSION))
+        val body = balancedBlock(code, "fun clear() {", "clear 的函数体")
+        val reapAt = body.indexOf(INFLIGHT_REAP_CALL)
+        val guardAt = body.indexOf("cancelRestoreGuard()")
+        val postAt = body.indexOf(INFLIGHT_POST)
+        assertTrue(
+            "拆在飞那一枚（index $reapAt）必须排在拆超时闸（index $guardAt）**之前**：闸一拆，" +
+                "那枚 Runnable 闭包就从主线程队列里摘走，而它本来是那枚实例唯一的主人 —— " +
+                "次序搬回去逐字节每一行都对得上而孤儿整块回来（实到 $reapAt / $guardAt）",
+            reapAt in 0 until guardAt,
+        )
+        assertTrue(
+            "而它必须排在 `post {`（index $postAt）之前：clear() 自己在主线程，" +
+                "挪进那一段就中间夹一条消息，而那一条正好可能是恢复链的 onPageFinished（同线程、" +
+                "非竞态，是消息顺序）。实到 $reapAt / $postAt",
+            reapAt in 0 until postAt,
+        )
+        assertEquals(
+            "clear 体内问归属内核恰好一枚（实到 " + occurrences(body, INFLIGHT_GATE_CALL) + " 枚）",
+            1,
+            occurrences(body, INFLIGHT_GATE_CALL),
+        )
+        for (arm in INFLIGHT_ARMS) {
+            assertEquals(
+                "三档分派逐枚在场「$arm」（实到 " + occurrences(body, arm) + " 枚）：" +
+                    "少一枚就是那一档在代码里没有自己的处置，并档就是拿「空转」冒充「同一枚只拆一遍」",
+                1,
+                occurrences(body, arm),
+            )
+        }
+        assertEquals(
+            "clear 体内「这枚实例配不配当会话」那一问必须 0 处（`SessionRetainGate.decide(` 实到 " +
+                occurrences(body, RETAIN_GATE_CALL) + " 枚）：那一问归 retain，" +
+                "在这里再问一遍就是两把尺各判各的",
+            0,
+            occurrences(body, RETAIN_GATE_CALL),
+        )
+    }
+
+    /** 拆法：五手次序 ＋ 换委托必须早于摘树；在册病形与编译不通那一形各自零处 */
+    @Test
+    fun `灭在飞那一枚那一手先换空委托再摘树 四手齐且次序对`() {
+        val code = blankComments(source(WEB_SESSION))
+        val tear = balancedBlock(code, "private fun releaseInFlightRestore(web: WebView)", "拆在飞那一枚那一手")
+        val detachAt = tear.indexOf(INFLIGHT_DETACH)
+        val removeAt = tear.indexOf("(web.parent as? ViewGroup)?.removeView(web)")
+        val alignAt = tear.indexOf(INFLIGHT_ALIGN)
+        val stopAt = tear.indexOf(INFLIGHT_STOP)
+        val destroyAt = tear.indexOf(INFLIGHT_DESTROY)
+        assertTrue(
+            "换空委托（index $detachAt）必须排在摘树（index $removeAt）之前：这一枚实例挂的匿名 " +
+                "WebViewClient 的 onPageFinished 是唯一能把它在缴进会话槽的路径，" +
+                "路径要在我们自己的代码里断掉，而不是赌「destroy 之后平台还投不投回调」",
+            detachAt in 0 until removeAt,
+        )
+        assertTrue(
+            "摘树（$removeAt）→ 对齐定时器（$alignAt）→ stopLoading（$stopAt）→ destroy（$destroyAt）" +
+                "四手齐且按这一次序：与本文件另外三枚灭口同尺（先摘树），" +
+                "而 alignTimersWithForeground 排在 destroy 前是裸 :255—:256 那段不变式",
+            removeAt in 0 until alignAt && alignAt < stopAt && stopAt < destroyAt,
+        )
+        assertEquals(
+            "那一手里「runCatching { old.destroy() }」这一形必须 0 处（实到 " +
+                occurrences(tear, "runCatching { old.destroy() }") + " 枚）：它就是把摘树省掉的写法本身",
+            0,
+            occurrences(tear, "runCatching { old.destroy() }"),
+        )
+        // 编译不通那一形（SDK 桩里 setWebViewClient 形参非空）：代码 0 处／含注释恰好 1 处（取证留在 KDoc）
+        val rawText = source(WEB_SESSION)
+        assertEquals(
+            "「$NULL_CLIENT_SHAPE」必须**代码 0 处／含注释恰好 1 处**：代码那一档是走不通的写法" +
+                "（实读 e: Null cannot be a value of a non-null type 'WebViewClient'），注释那一档是取证。" +
+                "实到 " + occurrences(code, NULL_CLIENT_SHAPE) + " 与 " + occurrences(rawText, NULL_CLIENT_SHAPE),
+            listOf(0, 1),
+            listOf(occurrences(code, NULL_CLIENT_SHAPE), occurrences(rawText, NULL_CLIENT_SHAPE)),
+        )
+    }
+
+    /** 名册尺：主人位的每一枚落点各配一枚格（本仓「派生字段只两条落点」那一条的下半截） */
+    @Test
+    fun `主人位八枚落点逐块点名 而内存压力那一族不认领这一族`() {
+        val code = blankComments(source(WEB_SESSION))
+        val total = occurrences(code, INFLIGHT_FIELD_ID)
+        val retain = balancedBlock(code, "fun retain(webView: WebView", "retain 的函数体")
+        val clear = balancedBlock(code, "fun clear() {", "clear 的函数体")
+        val abandon = balancedBlock(code, "private fun abandonRestore(web: WebView", "abandonRestore 的函数体")
+        val restore = balancedBlock(code, "fun restore(activity: android.app.Activity", "restore 的函数体")
+        val release = balancedBlock(code, "fun releaseForMemory()", "releaseForMemory 的函数体")
+        assertEquals(
+            "「$INFLIGHT_FIELD_ID」在代码里恰好八枚：声明 1 ＋ retain 收下档 2 ＋ clear 2 ＋ " +
+                "abandonRestore 2 ＋ restore 落主人 1，实到总数 " + total + " ／ " +
+                occurrences(retain, INFLIGHT_FIELD_ID) + " ／ " + occurrences(clear, INFLIGHT_FIELD_ID) +
+                " ／ " + occurrences(abandon, INFLIGHT_FIELD_ID) + " ／ " + occurrences(restore, INFLIGHT_FIELD_ID),
+            listOf(8, 2, 2, 2, 1),
+            listOf(
+                total,
+                occurrences(retain, INFLIGHT_FIELD_ID),
+                occurrences(clear, INFLIGHT_FIELD_ID),
+                occurrences(abandon, INFLIGHT_FIELD_ID),
+                occurrences(restore, INFLIGHT_FIELD_ID),
+            ),
+        )
+        assertEquals(
+            "内存压力那一族不许认领这一族（`releaseForMemory` 体内「$INFLIGHT_FIELD_ID」必须 0 处，实到 " +
+                occurrences(release, INFLIGHT_FIELD_ID) + " 枚）：它拆的是**会话槽**那一枚，" +
+                "而在飞那一枚的主人还是那道闸 —— 它若也伸手收字段，闸回头就拆不到任何东西了。" +
+                "第⑥格那枚「releaseForMemory 零处 restoreInFlight」是同一条归口的另一把尺（前缀含得住）",
+            0,
+            occurrences(release, INFLIGHT_FIELD_ID),
+        )
+        assertEquals(
+            "收主人恰好三枚「$INFLIGHT_FIELD_RELEASE」（clear／abandonRestore／retain 的收下档，实到 " +
+                occurrences(code, INFLIGHT_FIELD_RELEASE) + " 枚）：少一枚就是有一枚出口拆完实例还把" +
+                "字段留着，下一次 clear() 就对着同一枚拆第二遍",
+            3,
+            occurrences(code, INFLIGHT_FIELD_RELEASE),
+        )
+    }
+
+    // ---------------- 源码核对小工具（与同族守卫一个刀法：读不到就抛） ----------------
     private fun source(relative: String): String =
         normalizeNewlines(File(findMainJavaDir(), relative).readText())
 
@@ -644,6 +871,37 @@ class BuaaWebSessionLifecycleGuardTest {
         const val RETAIN_CALL_MULTILINE = "BuaaWebSession.retain(\n                                            web,\n                                            RetainSource.LoginScreen,\n                                            context.findActivity(),"
         const val SOURCE_ARG = "RetainSource.LoginScreen"
         const val RESTORE_CHAIN_CALL = "retain(view, RetainSource.CookieRestore, activity)"
+
+        // ── T390⑪：还在飞的那一枚实例归谁拆（乙档：不扩 decide 形参，只补实例的主人）──
+        const val INFLIGHT_GATE = "com/buaa/schedule/domain/session/RestoreInFlightReleaseGate.kt"
+        const val INFLIGHT_FIELD_ID = "restoreInFlightWebView"
+        const val INFLIGHT_FIELD_DECL = "@Volatile private var restoreInFlightWebView: WebView? = null"
+        const val INFLIGHT_FIELD_ARM = "restoreInFlightWebView = web"
+        const val INFLIGHT_FIELD_RELEASE = "restoreInFlightWebView = null"
+        const val INFLIGHT_GATE_CALL = "RestoreInFlightReleaseGate.decide("
+        const val INFLIGHT_REAP_CALL = "releaseInFlightRestore(it)"
+        const val INFLIGHT_CREATE = "val web = createSessionWebView(appCtx)"
+        const val INFLIGHT_GUARD_ARM = "mainHandler.postDelayed(guard, RESTORE_TIMEOUT_MS)"
+        const val INFLIGHT_POST = "android.os.Handler(android.os.Looper.getMainLooper()).post {"
+        const val INFLIGHT_DETACH = "web.webViewClient = WebViewClient()"
+        const val INFLIGHT_ALIGN = "alignTimersWithForeground(web)"
+        const val INFLIGHT_STOP = "web.stopLoading()"
+        const val INFLIGHT_DESTROY = "web.destroy()"
+        const val NULL_CLIENT_SHAPE = "setWebViewClient(null)"
+        const val PURITY_PROMISE_INFLIGHT =
+            "零 android / androidx import：不读 `WebView`、不读时钟、不读 `Build.VERSION`、不读权限、不查库"
+
+        /** 逐字节原样的在册形参表：本卡裁乙，这一枚就是「没扩形参」的痕迹 */
+        const val RETAIN_DECIDE_TABLE =
+            "fun decide(\n        candidateUrl: String?,\n        source: RetainSource,\n" +
+                "        hasPreviousInstance: Boolean,\n        previousIsCandidate: Boolean,\n" +
+                "        restoreInFlight: Boolean,\n    ): SessionRetainVerdict {"
+
+        val INFLIGHT_ARMS = listOf(
+            "InFlightRelease.ReapNow -> inFlight?.let",
+            "InFlightRelease.LeaveToSessionTeardown -> Unit",
+            "InFlightRelease.NothingHeld -> Unit",
+        )
 
         // ── 内核纯度 ──
         const val BOOLEAN_RETURN = "): Boolean"

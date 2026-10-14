@@ -652,6 +652,8 @@ object BuaaWebSession {
      * 「销毁之后平台还投不投回调」这一条平台实现细节，JVM 侧证不到（本卡零 adb，已登记给装机）。
      * 注意 SDK 桩里 `setWebViewClient` 的形参是**非空**类型，递 `null` 编译不过
      * （实读：`Null cannot be a value of a non-null type 'WebViewClient'`），所以这里走「换一枚空的」。
+     * 第一版那一手逐字留在这里做取证（守卫按「代码 0 处／含注释恰好 1 处」双向复算）：
+     * `web.setWebViewClient(null)`。
      *
      * `alignTimersWithForeground` 那一手照本文件 [applyTimerGate] 那段的不变式来：实例**灭**之前
      * 借它把进程定时器对齐到当前前后台态，免得拆完就没有任何实例能替我们 `resumeTimers()`。
