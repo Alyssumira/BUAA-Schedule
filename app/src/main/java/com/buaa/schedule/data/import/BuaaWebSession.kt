@@ -287,6 +287,10 @@ object BuaaWebSession {
      * 这里只按它给的档分派。为什么非得收口在一处：登录页六枚上缴调用点里只有一枚长在 origin
      * 判据分支里（其余五枚含崩溃重建后那枚 URL 还是 `about:blank` 的新实例），改前它们都能
      * 无条件换引用、无条件写 `lastUrl`、并把手里那枚**真的登录着**的实例拆掉。
+     *
+     * 改前那一手逐字留在这里做取证（源码形状守卫按「代码里 0 处、含注释恰好 1 处」双向复算）：
+     * `if (old != null && old !== webView) {` ＋ `runCatching { old.destroy() }` —— 挂着树直接拆，
+     * 而下面那一档 `cancelRestoreGuard()` 是全仓唯一还能收 `restoreInFlight` 的闸，拆了闸却不收旗。
      */
     fun retain(webView: WebView, source: RetainSource, activity: android.app.Activity? = null) {
         liveActivity(activity)?.let { currentActivity = WeakReference(it) }
@@ -727,6 +731,8 @@ object BuaaWebSession {
         // T378②把这一问从「旗还在不在飞」换成「会话槽里是不是它自己」—— 因为 [retain] 现在会在
         // 别的来路（登录页）收下会话时就把旗收掉：闸还举着正是为了拆掉这一枚没人认领的实例，
         // 判据若仍吃那枚旗，收旗就等于把闸举废（挂着的 WebView 反而再没人拆了）。
+        // 改前那一问逐字留在这里做取证（形状守卫按「代码 0 处／含注释恰好 1 处」双向复算）：
+        // if (restoreInFlight && sessionWebView == null) abandonRestore(web, "加载超时")
         val guard = Runnable {
             if (sessionWebView !== web) abandonRestore(web, "加载超时")
         }
