@@ -13,7 +13,7 @@ import org.junit.Test
  * `put` 的签名还回不回 `Unit`、两把 `listFiles` 并没并成一把、调用点有没有把每一档折进内核。
  * 这些都不是纯函数，按本仓铁律"非纯函数只有守卫这一条落点"，硬把它包装成"纯判据"就是又造一枚查不出的形状。
  *
- * ## 六格各钉什么（每格的红都不重叠）
+ * ## 七格各钉什么（每格的红都不重叠）
  * ① [directTruncateWriteIsGoneFromCodeAndKeptOnlyAsEvidence]：那一直写串在**代码侧 0 处 / 注释侧恰 1 处**
  *    （本仓双向复算尺的标准形状：改前的原文留在注释里当取证，但不许再长在代码里），
  *    外加临时件写法四枚枚数尺与"不许抄 copy 兜底"那一格。
@@ -27,10 +27,17 @@ import org.junit.Test
  *    （长在折算函数体里），且折算函数**零 else**、四枚内核档名各恰一枚 —— 加 else 就是"新的一档静默折成已落盘"。
  * ⑥ [tierRostersPairAcrossTheSeamAndTheAgeRosterHasNoValidityColumn]：配对尺（内核 4 档 == 缓存 3 档 - 1 + stage 2 档）
  *    ＋ 名册那枚载体逐字节钉住它只有两格（**没有"内容坏"那一档**，这是 ⓪ 段"7 天盲区"成立的结构前提）。
+ * ⑦ [theTempPathAndTheFormalPathAreTwoDifferentFilesInTheSameDir]：**关系尺**，T369B④ 的 W 臂量出来补的一针。
+ *    上面六格数的都是字面串的枚数，而"临时件就是正式件"那一手（`val temp = file(context, month)`）
+ *    一枚串的枚数都不动 ⇒ 六格全绿却把病灶整块放回来（实测读数见 T369B④）。本格钉三条路径关系：
+ *    写入落在由 `tempFile` 取来的那枚文件上、改名方向是 临时件→正式件、临时件的构造带 `TEMP_SUFFIX` 而正式件不带。
  *
  * ## 覆盖面边界（如实写，别当它没有）
  * - 钉的是**源码形状**：改名在真机上到底成不成、磁盘满时 `writeText` 抛什么、`.part` 会不会被 ROM 留下，
  *   都不在本守卫射程（本卡零设备，那几格押给编排者的装机读数，见回执"未验到"）。
+ * - ①～⑥ 是**串尺**：串换了写法（换变量名、换构造式）尺就看不见。⑦ 补的是这一族里最要紧的一层关系，
+ *   但同族形状仍不可能穷尽 —— 已知残余：把整手改名换成 `Files.move(..., ATOMIC_MOVE)` 这种"换了手法而形状仍对"的
+ *   改写会让 ①②⑦ 一起红（枚数漂），换不成假绿；真正的假绿只剩"另起一枚同样正确的写法"那一类，登记在册 #528 同族。
  * - **不替 `clear` 作证**：`clear` 丢掉 `delete()` 返回值那一格本卡未动（它在 main 与测试树里零调用点），
  *   本守卫也刻意不钉它的现状枚数 —— 钉了就等于替一张没读过的文件签字。
  * - `TeachingScheduleParser.parse` 内部接不接得住坏正文，由表驱动那张表的「己」组钉，不在这里。
@@ -305,6 +312,60 @@ class SpecialDayCacheAtomicWriteGuardTest {
         )
     }
 
+    /**
+     * ⑦ 关系尺：写正文那一手落在**临时件**上、改名朝 **临时件 → 正式件**、两枚路径**不同名**。
+     *
+     * 为什么必须有这一格（T369B④ 的 W 臂实测出来的假绿）：①～⑥ 数的都是字面串的枚数。把 `put` 里
+     * `val temp = tempFile(context, month)` 换成 `val temp = file(context, month)` —— "临时件"就是正式件本身、
+     * 改名变成跟自己改名 —— 之后 `temp.writeText(`／`renameTo(`／`temp.delete()`／`.part` 声明**一枚枚数都没动**，
+     * 病灶串 `file(context, month).writeText(` 也没出现在代码里 ⇒ 六格全绿（现量 `tests=6 failures=0`），
+     * 而盘上走的正是本卡要修的那一手，甚至比改前更坏：正式件在自己头上被开流截断（半截正文 ＋ 新 mtime），
+     * 失败路径那句 `temp.delete()` 还会把上一份好内容一并删掉。尺认串不认关系，这就是要登记的假绿风险。
+     */
+    @Test
+    fun theTempPathAndTheFormalPathAreTwoDifferentFilesInTheSameDir() {
+        val cache = readMain(CACHE)
+        val code = withoutCommentsKeepingLiterals(cache)
+        val body = blockBody(code, PUT_SIGNATURE_ANCHOR)
+        val problems = mutableListOf<String>()
+        if (occurrences(code, TEMP_PATH_FROM_ACCESSOR) != 1) {
+            problems.add("「" + TEMP_PATH_FROM_ACCESSOR + "」实到 " + occurrences(code, TEMP_PATH_FROM_ACCESSOR) +
+                " 处 expected:<1>—— 这正是 W 臂那一手：接收者换成正式件之后，①～⑥ 的字面串枚数一字未动，" +
+                "只有这一格认得\"临时件与正式件是不是同一枚文件\"。写正文那唯一一手必须落在 tempFile 取来的那枚路径上")
+        }
+        if (occurrences(code, PROMOTE_DIRECTION) != 1) {
+            problems.add("改名方向「" + PROMOTE_DIRECTION + "」实到 " + occurrences(code, PROMOTE_DIRECTION) +
+                " 处 expected:<1>—— 反过来的那一手（正式件改名顶上临时件）字面上同样带 renameTo，枚数尺看不见，" +
+                "而它会把正式件搬走、留下一枚 .part，缓存当场清零")
+        }
+        if (occurrences(code, TEMP_IN_FORMAL_DIR) != 1) {
+            problems.add("同目录临时件构造「" + TEMP_IN_FORMAL_DIR + "」实到 " + occurrences(code, TEMP_IN_FORMAL_DIR) +
+                " 处 expected:<1>—— 尾巴丢了就是\"临时件与正式件同名\"（本格的 W 臂），把目录换成 cacheDir 那种跨挂载点" +
+                "的写法则是 renameTo 恒假的另一手：两档都在这儿当场红，不靠 renameTo 那一枚枚数")
+        }
+        if (occurrences(code, FORMAL_WITHOUT_SUFFIX) != 1) {
+            problems.add("正式件构造「" + FORMAL_WITHOUT_SUFFIX + "」实到 " + occurrences(code, FORMAL_WITHOUT_SUFFIX) +
+                " 处 expected:<1>—— 它一旦被写成带 TEMP_SUFFIX 的那一枚（或临时件被写成它的样子），" +
+                "两条路径就并成一条，原子改名退化成自我截断")
+        }
+        if (body == null) {
+            problems.add("切不出 put 的函数体（锚点「" + PUT_SIGNATURE_ANCHOR + "」之后的花括号没配平）")
+        } else if (occurrences(body, ANY_TEXT_WRITE) != 1) {
+            problems.add("put 体内的正文写入「" + ANY_TEXT_WRITE + "」实到 " + occurrences(body, ANY_TEXT_WRITE) +
+                " 枚 expected:<1>—— 只许临时件那一手；多于 1 枚就是有人\"临时件写一遍、正式件再直写一遍\"，" +
+                "那正式件照样被开流截断，前面的原子性全白搭")
+        }
+        assertTrue(
+            "钉法 = 关系尺（三条路径构造 + 改名方向 + 体内正文写入的总把数），不是\"串在不在\"。" +
+                "本卡要修的是「正式件被就地截断」，而这件事由**两枚路径是否同名**决定，不由某一枚串的枚数决定。" +
+                "实到：取法 " + occurrences(code, TEMP_PATH_FROM_ACCESSOR) + " ／ 改名方向 " +
+                occurrences(code, PROMOTE_DIRECTION) + " ／ 同目录临时件 " + occurrences(code, TEMP_IN_FORMAL_DIR) +
+                " ／ 正式件构造 " + occurrences(code, FORMAL_WITHOUT_SUFFIX) + " ／ put 体内正文写入 " +
+                (body?.let { occurrences(it, ANY_TEXT_WRITE) } ?: -1) + " ｜ 问题：" + problems.joinToString(" ／ "),
+            problems.isEmpty(),
+        )
+    }
+
     // ---- 读盘、抹注释、切体 ------------------------------------------------------------------------
 
     /**
@@ -447,6 +508,22 @@ class SpecialDayCacheAtomicWriteGuardTest {
         const val TEMP_CLEANUP_SITES = 2
         const val COPY_FALLBACK = "copyTo"
         const val TEMP_SUFFIX_DECL = "const val TEMP_SUFFIX = " + "\".part\""
+
+        // ---- ⑦ 关系尺（①～⑥ 是串尺，看不见"两枚路径是不是同一枚文件"这一层）----
+        /** `put` 体内那唯一一手正文写入的**接收者**必须由 tempFile 那枚取法拿到 */
+        const val TEMP_PATH_FROM_ACCESSOR = "val temp = tempFile(context, month)"
+
+        /** 改名必须是 临时件 → 正式件 那个方向（反向那一手同样带 renameTo，串尺分不出来） */
+        const val PROMOTE_DIRECTION = "temp.renameTo(file(context, month))"
+
+        /** 临时件的构造：同目录 ＋ 带 TEMP_SUFFIX 尾巴（两者缺一手都各红一次） */
+        const val TEMP_IN_FORMAL_DIR = "File(dir(context), fileNameOf(month) + TEMP_SUFFIX)"
+
+        /** 正式件的构造：同目录、**不带** TEMP_SUFFIX —— 与上一枚必须是两条不同路径 */
+        const val FORMAL_WITHOUT_SUFFIX = "File(dir(context), fileNameOf(month))"
+
+        /** `put` 体内正文写入的总把数：只许临时件那一枚，正式件不许在自己头上被截断 */
+        const val ANY_TEXT_WRITE = ".writeText("
 
         // ---- ② put 的出口 ----
         const val PUT_SIGNATURE_ANCHOR = "suspend fun put("
