@@ -17,7 +17,9 @@ import com.buaa.schedule.core.openExternalUrl
 import com.buaa.schedule.domain.update.UpdateCheckGate
 import com.buaa.schedule.domain.update.UpdateCheckTrigger
 import com.buaa.schedule.domain.update.UpdateCheckVerdict
+import com.buaa.schedule.domain.update.UpdateFetchSettlement
 import com.buaa.schedule.domain.update.UpdateLastOutcome
+import com.buaa.schedule.domain.update.UpdateRestingTier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -209,7 +211,30 @@ object UpdateCheck {
         ) return current
 
         _state.value = UpdateUiState.Checking
+        // 包住 fetchReleases() 的这一手必须**只吃非取消的失败**。标准库的 runCatching 兜的是 Throwable，
+        // 连协程取消也一起吞（同文件 download() 里那一手与 ScheduleViewModel 的 suspendCatching 都点破了
+        // 同一形状）：转屏把 UpdateDialogHost 连同它的 LaunchedEffect(Unit) 摘掉、离开设置页把
+        // settingsScope 撤销，都落在那枚 15 秒读超时给的暴露窗口里。吞下来的取消在原盘面上
+        // 同时造出两句假话——
+        //   屏上弹「检查更新失败」（present 看见非 null 的 failureReason 就交回 CheckFailed，
+        //   而 readable 的 else 那一档对任何异常都交出非 null），
+        //   偏好里落一枚失败档 + 一枚从没发生过的检查时刻 + 一枚失败时间戳（下面那段一次都不该写）。
+        // 归档与三格结论（落不落盘 / 内存摆哪一档 / 要不要复投）一律由
+        // domain/update/UpdateFetchSettlement.kt 定，调用点不自己分第二把尺。
         val outcome = runCatching { fetchReleases() }
+        val error = outcome.exceptionOrNull()
+        val settlement = UpdateFetchSettlement.of(error) { readable(it) }
+        if (settlement.restingTier == UpdateRestingTier.RestInIdle) {
+            // 取消那一手先把「正在检查」收回 Idle，不许留在内存里：Checking 挂在那儿，
+            // 之后每一次检查（自动与手动）都会在上面那道「正在检查/正在下载就不覆盖」的同状态闸门上
+            // 原样返回 ⇒ 设置页那颗「检查更新」成了彻底的静默 no-op —— 正是 T261 第 1 处静默换了件衣服。
+            // 收回 Idle 之后设置页那一行念的是偏好里上一手真实的结果档，而这一次它一个字都没写。
+            _state.value = UpdateUiState.Idle
+            // CancellationException 复投那一手：内核说这一档要交回上层，且手上确实是取消
+            //（同文件 download() 里那一手同一形状）。取消是控制流不是错误，调用方的协程
+            // 必须以「被取消」收场，不能以「正常返回一次结果」收场。
+            if (settlement.rethrowsCancellation && error is CancellationException) throw error
+        }
         val newestInfo = outcome.getOrNull()?.let { pickLatestUpdate(it, BuildConfig.VERSION_NAME, null) }
         val verdict = UpdateCheckGate.present(
             trigger = trigger,
@@ -219,7 +244,10 @@ object UpdateCheck {
             // 交回旧号会让用户以为新的已经装上了，宁可说一句"这一版被你忽略了"。
             ignoredVersion = store.getString(KEY_SKIPPED, null),
             newestAboveInstalled = newestInfo?.version,
-            failureReason = outcome.exceptionOrNull()?.let { readable(it) },
+            // 措辞同源、归档也同源：这一枚只可能由真失败那一档交出来，取消早在上面那一手复投出去了。
+            // 换掉它之前先想清楚：readable 对任何异常都交出非 null，所以「failureReason 有没有非 null」
+            // 就是 present 那把尺上唯一认得出失败的一格——它再也不许吞进取消。
+            failureReason = settlement.reason,
         )
         val next = when (verdict) {
             is UpdateCheckVerdict.NewVersionFound -> UpdateUiState.Available(
@@ -247,7 +275,12 @@ object UpdateCheck {
         // "今天查过了"只在**成功**时落下；失败改记时间戳，隔 FAILURE_RETRY_MILLIS 再试。
         // 以前失败也算查过：断网时打开一次应用，当天剩下的每次启动都再也查不到更新。
         // 两档都要落下**结果档**：这是设置页那一行在进程死后唯一还能读出"那一次成没成"的东西。
-        store.edit {
+        // ⚠️ 还有第三档：**取消**一个字都不落（settlement.persistsRun 为假）。这一手既没拿到答复也没
+        //    失败过，落下去的三枚键（检查时刻 / 失败时刻 / 失败档）句句都是假话，还会把上一手真实
+        //    的检查时刻盖掉——盖掉的这一格杀进程也回不来，比弹窗狠。上面那一手已经把取消复投出去，
+        //    所以今天这一道闸对取消还读不到第二次；留着它是因为「落不落盘」这一格归内核管：
+        //    写侧照内核的结论办事，而不是照「我猜这一手走不到这里」办事。
+        if (settlement.persistsRun) store.edit {
             putLong(KEY_LAST_AT, now)
             if (next is UpdateUiState.Failed) {
                 putLong(KEY_FAILURE_AT, now)
