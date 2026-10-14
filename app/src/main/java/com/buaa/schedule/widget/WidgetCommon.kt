@@ -22,6 +22,9 @@ import com.buaa.schedule.domain.model.startLocalDate
 import com.buaa.schedule.domain.model.toStartEndTimes
 import com.buaa.schedule.domain.schedule.SemesterWeekDates
 import com.buaa.schedule.domain.schedule.WeekCalculator
+import com.buaa.schedule.domain.widget.WidgetBootstrapSentinel
+import com.buaa.schedule.domain.widget.WidgetBootstrapWindow
+import com.buaa.schedule.domain.widget.WidgetBootstrapWindowGate
 import com.buaa.schedule.domain.widget.WidgetWeekBrowseRequestCode
 import com.buaa.schedule.reminder.ClassProgressScheduler
 import com.buaa.schedule.reminder.clockOf
@@ -57,6 +60,12 @@ object WidgetCommon {
 
     private const val BOOTSTRAP_INTERVAL_MS = 60_000L
 
+    /**
+     * 与判据同源的「没有上一次」哨兵。这里只是别名 —— 本文件不许另写一枚负数字面量，
+     * 否则刻度与判据两头各有一套「从没补注册过」。
+     */
+    private const val NEVER_BOOTSTRAPPED_MILLIS = WidgetBootstrapSentinel.NEVER_BOOTSTRAPPED_MILLIS
+
     /** 「下一节课」组件常态下顶端那一行；正在上课时会换成状态句，见 [nextWidgetLabel] */
     private const val NEXT_LABEL_IDLE = "下一节课"
 
@@ -64,7 +73,21 @@ object WidgetCommon {
     private const val PREV_WEEK_LABEL = "‹ 上周"
     private const val NEXT_WEEK_LABEL = "下周 ›"
 
-    @Volatile private var lastBootstrapAt: Long = 0L
+    /**
+     * 上一次领到补注册配额的时刻（`elapsedRealtime` 刻度）。
+     *
+     * 初始值是 [NEVER_BOOTSTRAPPED_MILLIS]（`-1L`），**不是刻度起点那一枚零**。
+     * 改前那一手逐字留在 [bootstrapBackgroundSync] 的注释里做取证：它把「从没补注册过」与
+     * 「上一次补注册的时刻」压成同一枚数字，而 `elapsedRealtime()` 是开机以来的毫秒数、
+     * 开机那一刻恰好从 0 起走 ⇒ 本次进程第一枚补注册只要落在开机后一分钟内就被整段跳过。
+     *
+     * 载体换成原子量并配 CAS：`goAsyncUpdate*` 那四枚调用点各自起一条 IO 协程
+     * （下面那段「一次广播会让 5 个 Provider 各进来一次」说的就是这笔账），
+     * 先读后写的 @Volatile 形状能让六枚协程全读到同一个旧值、全领到配额，
+     * 去重语义当场失效。哨兵只有 CAS 这一处写入，「补注册过没有」由它现推 ——
+     * 别让旗标与时间戳分居两枚字段，那样又会各说一套。
+     */
+    private val lastBootstrapAt = java.util.concurrent.atomic.AtomicLong(NEVER_BOOTSTRAPPED_MILLIS)
 
     private const val TAG = "WidgetCommon"
 
@@ -109,19 +132,121 @@ object WidgetCommon {
      * 那次补注册正是唯一会注册零点闹钟的地方。
      *
      * [onEnabled] 也必须走这里而不是自己裸调：首启保护与逐步吞异常只有这一份实现。
+     *
+     * ## 闸门改前那两手（逐字取证，源码形状守卫按「代码里 0 处、含注释 1 处」双向复算）
+     *
+     * ```
+     * @Volatile private var lastBootstrapAt: Long = 0L
+     * if (now - lastBootstrapAt < BOOTSTRAP_INTERVAL_MS) return
+     * ```
+     *
+     * 那一形的病与在册先例那一族同一条：`0L` 同时当「从没补注册过」的初始值与「上一次补注册的时刻」，
+     * 而窗口的基准钟是开机以来的毫秒数 ⇒ 「从没领过」被念成「一分钟前刚领过」。
+     * 咽掉之后少做的正是下面那两手续排：自排的零点闹钟（跨天只剩系统那三条时间类广播，
+     * 而这一族的 ROM 恰恰会吞它们）与那条 12 小时的周期兜底任务。
+     * 改前那一支一条日志都不留（这一支本来就没有 `Log`），事后连「这次是谁注册的」都判不出来。
+     *
+     * 分档判据本体住在 `domain/widget/WidgetBootstrapWindowGate`，这里只按档位分派：
+     * 「确实从没领过 ⇒ 放行」排在窗口判据之前（顺序即语义，先例 KDoc 的原话），
+     * 而「去重要压的那一路」与「从没领过被误判成刚领过」是两种结论，各念各的两句。
      */
     internal fun bootstrapBackgroundSync(context: Context) {
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastBootstrapAt < BOOTSTRAP_INTERVAL_MS) return
-        lastBootstrapAt = now
-        // 每一步都得自己吞异常：Android 14+/HyperOS 默认拒绝「精确闹钟」，
-        // scheduleWidgetMidnight 会抛 SecurityException。它一旦顺着协程抛出去，
-        // 调用方后面的 updateAppWidget 就整轮不执行 —— 用户看到的正是
-        // 「组件编辑保存后不刷新」（组件其实什么都没画错，只是没被重绘）。
+        when (val window = claimBootstrapWindow()) {
+            is WidgetBootstrapWindow.GrantedFirstBootstrap,
+            is WidgetBootstrapWindow.GrantedAfterWindow -> {
+                Log.i(TAG, "组件后台刷新链补注册 放行: ${bootstrapWindowTrace(window)}")
+                registerBackgroundSyncSteps(context)
+            }
+
+            is WidgetBootstrapWindow.SentinelContradiction -> {
+                // 旗与哨兵互相打脸 = 领取这一族的形状病了，不是今天真的不需要那两手续排。
+                // 宁可多注册一遍（两手都是幂等登记），也不许把兜底整条咽掉，所以照做且必须告警。
+                Log.w(TAG, "组件后台刷新链补注册 哨兵自相矛盾 仍按放行处理: ${bootstrapWindowTrace(window)}")
+                registerBackgroundSyncSteps(context)
+            }
+
+            is WidgetBootstrapWindow.GrantedClockInverted -> {
+                // 递进来的读数倒退：拿错尺的形状，不是「刚刚注册过」，不许与去重那一档共用那一句。
+                // 这一档偏向放行：这两手是幂等注册，少注册的代价是整条兜底没了。
+                Log.w(TAG, "组件后台刷新链补注册 单调钟读数倒退 仍按放行处理: ${bootstrapWindowTrace(window)}")
+                registerBackgroundSyncSteps(context)
+            }
+
+            is WidgetBootstrapWindow.SuppressedAsDuplicate -> {
+                // 去重本业：同一次广播里六个 Provider 各进来一次的那一路。压掉补注册，
+                // 但这一手要说得出话（HyperOS 把 logcat 截在 Info 级 ⇒ Log.i）
+                Log.i(
+                    TAG,
+                    "组件后台刷新链补注册 被去重压掉 同窗口内的重复: ${bootstrapWindowTrace(window)}",
+                )
+            }
+        }
+    }
+
+    /**
+     * 补注册那两手：每一步都得自己吞异常 —— Android 14+/HyperOS 默认拒绝「精确闹钟」，
+     * `scheduleWidgetMidnight` 会抛 SecurityException。它一旦顺着协程抛出去，
+     * 调用方后面的 updateAppWidget 就整轮不执行 —— 用户看到的正是
+     * 「组件编辑保存后不刷新」（组件其实什么都没画错，只是没被重绘）。
+     */
+    private fun registerBackgroundSyncSteps(context: Context) {
         runCatching { BackgroundSync.scheduleWidgetMidnight(context) }
             .onFailure { Log.w(TAG, "零点闹钟注册失败，跨天刷新交给兜底任务", it) }
         runCatching { WidgetFallbackWorker.ensure(context) }
             .onFailure { Log.w(TAG, "组件兜底任务注册失败", it) }
+    }
+
+    /**
+     * 领取这一次补注册的配额，交回判据的分档结论（**不许折成 Boolean**）。
+     *
+     * 判据不吃钟：`elapsedRealtime` 读数在这里现取，当参数递进去。
+     * 「补注册过没有」由 [lastBootstrapAt] 那一枚读数与哨兵的比较**现推**，不另起旗标。
+     */
+    private fun claimBootstrapWindow(): WidgetBootstrapWindow {
+        val now = SystemClock.elapsedRealtime()
+        while (true) {
+            val prev = lastBootstrapAt.get()
+            val window = WidgetBootstrapWindowGate.decide(
+                nowElapsedRealtime = now,
+                lastClaimedAt = prev,
+                windowMillis = BOOTSTRAP_INTERVAL_MS,
+                hasEverBootstrapped = prev != NEVER_BOOTSTRAPPED_MILLIS,
+            )
+            val commitAt = bootstrapCommitAtOrNull(window) ?: return window
+            if (lastBootstrapAt.compareAndSet(prev, commitAt)) return window
+        }
+    }
+
+    /**
+     * 这一档要不要把哨兵推到新的读数；`null` = 没占着配额，哨兵一格都不许动。
+     * 四档逐枚点名、不带 `else`：判据新增一档时这里必须跟着表态。
+     */
+    private fun bootstrapCommitAtOrNull(window: WidgetBootstrapWindow): Long? = when (window) {
+        is WidgetBootstrapWindow.GrantedFirstBootstrap -> window.claimedAtElapsedRealtime
+        is WidgetBootstrapWindow.GrantedAfterWindow -> window.claimedAtElapsedRealtime
+        is WidgetBootstrapWindow.SentinelContradiction -> window.nowElapsedRealtime
+        is WidgetBootstrapWindow.GrantedClockInverted -> window.nowElapsedRealtime
+        is WidgetBootstrapWindow.SuppressedAsDuplicate -> null
+    }
+
+    /** 取证行：把档位与它据以判断的读数原样念出来（Info/Warn 两级，release 里不许被削掉） */
+    private fun bootstrapWindowTrace(window: WidgetBootstrapWindow): String = when (window) {
+        is WidgetBootstrapWindow.GrantedFirstBootstrap ->
+            "本进程首次领取 nowElapsed=${window.claimedAtElapsedRealtime}"
+
+        is WidgetBootstrapWindow.GrantedAfterWindow ->
+            "出窗放行 nowElapsed=${window.claimedAtElapsedRealtime} " +
+                "距上次领取=${window.elapsedSinceLastClaimMillis}ms"
+
+        is WidgetBootstrapWindow.SuppressedAsDuplicate ->
+            "距上次领取=${window.elapsedSinceLastClaimMillis}ms 窗口=${window.windowMillis}ms"
+
+        is WidgetBootstrapWindow.GrantedClockInverted ->
+            "nowElapsed=${window.nowElapsedRealtime} lastClaimed=${window.lastClaimedAt}"
+
+        is WidgetBootstrapWindow.SentinelContradiction ->
+            "hasEverBootstrapped=${window.hasEverBootstrapped} lastClaimed=${window.lastClaimedAt} " +
+                "nowElapsed=${window.nowElapsedRealtime}"
     }
 
     /**
