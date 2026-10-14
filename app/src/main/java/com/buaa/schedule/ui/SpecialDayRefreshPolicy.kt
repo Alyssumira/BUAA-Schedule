@@ -18,7 +18,8 @@ package com.buaa.schedule.ui
  * 单例的那一刻，表驱动单测就到位了 —— 而这一条链的每一档都必须能用输入复现，
  * 因为它剩下的全部风险就是"某一档悄悄不干活"。
  *
- * ⚠️ 本文件只管**要不要去抓、抓哪几个月、没抓的话说哪一句**。抓回来的东西怎么用、
+ * ⚠️ 本文件只管**要不要去抓、抓哪几个月、没抓的话说哪一句、抓到之后落没落盘说哪一句**（后半是 T369
+ * 加进来的那一栏账，措辞同样只许出自本文件）。抓回来的东西怎么用、
  * 标注如何参与渲染，都在链的另一头，且产品口径不变：假期标注**只标注不跳过**
  * （见 `SpecialDay` 的 KDoc），本内核不影响周次计算与提醒调度。
  */
@@ -219,19 +220,97 @@ internal fun specialDaySkipLog(reason: SpecialDayFetchSkip, months: List<Special
  * 只说"成功"会让人以为请求里的每一月都到位了，而它完全可能只回来一半 ——
  * 剩下那一半正是"翻到那个月却没有标注"的那个现场。顺延的那几个也要说，
  * 那是本轮名额用完、不是"没触发"。
+ *
+ * ⚠️ 第三栏账（T369，#336）：**接口把正文带回来 ≠ 落上了盘**。改前这一句只有"接口那一头"的三栏，
+ * 而 `put` 交回 `Unit`，于是"半截文件被判成刚抓的 ⇒ 这一月 7 天内不再补抓"那一档在 logcat 里
+ * 长得跟成功一模一样。现在 `[writes]` 把逐月落盘结论递进来，句头按 [specialDayWriteHead] 分三档、
+ * 未落盘的月份逐枚点名并带上"停在哪一步"，读的人才分得清"没抓到 / 抓到没落上 / 落上了但解析不出标注"。
+ * 措辞全部在这一份里定死，调用点只递事实（与 `YearMonth ↔ SpecialDayMonth` 同一道折算缝）。
  */
 internal fun specialDayFetchDoneLog(
     requested: List<SpecialDayMonth>,
     returned: List<SpecialDayMonth>,
     deferred: List<SpecialDayMonth>,
+    writes: List<SpecialDayMonthWrite>,
     totalAnnotations: Int,
     trigger: SpecialDayTrigger,
 ): String = buildString {
-    append("假期标注已更新 触发=").append(trigger.label)
+    append(specialDayWriteHead(writes)).append(" 触发=").append(trigger.label)
     append(" 请求月份=").append(specialDayMonthsLabel(requested))
     append(" 返回月份=").append(specialDayMonthsLabel(returned))
     val missing = requested.filter { it !in returned }
     append(" 未返回月份=").append(specialDayMonthsLabel(missing))
     append(" 顺延月份=").append(specialDayMonthsLabel(deferred))
+    append(" 落盘月份=").append(specialDayMonthsLabel(writes.filter { it.isWritten }.map { it.month }))
+    append(" 未落盘月份=").append(specialDayWriteFailureLabel(specialDayWriteFailures(writes)))
     append(" 标注累计=").append(totalAnnotations).append(" 条")
 }
+
+/**
+ * 一个月份本轮**落盘**落在哪一档（T369）。这是设备侧事实的枚举形式，不是判据：
+ * 谁去写盘、写失败怎么办都在 `SpecialDayCache`，这里只负责"这一档该念哪一句"。
+ *
+ * 四档而不是 Boolean，因为三档失败给用户下一步完全不同（腾空间重试 / ROM 语义换不掉、只能靠
+ * 下一轮补抓 / 目录压根立不起来）。⚠️ 枚数与 `SpecialDayWriteOutcome` 那一族由守卫双向对账
+ * （名册摘掉一档 = 有一档失败被折成"照念已更新"，那正是 #336 的形状）。
+ */
+internal enum class SpecialDayWriteState(val label: String) {
+    /** 临时件写完整 + 改名顶上正式件都成了 */
+    WRITTEN("已落盘"),
+
+    /** 临时件没写完整（磁盘满、配额、IO 错误、权限） */
+    TEMP_WRITE_FAILED("临时件没写完整"),
+
+    /** 临时件写完整了，但把临时件改名顶上正式件这一步没成 */
+    PROMOTION_FAILED("改名没被接受"),
+
+    /** 缓存目录这一趟立不起来：压根没地方写 */
+    CACHE_DIR_UNREACHABLE("缓存目录立不起来"),
+}
+
+/** 一枚月份 + 它本轮的落盘档 + 可选的异常类名（设备侧事实，调用点递进来，函数体不读盘不读钟）。 */
+internal data class SpecialDayMonthWrite(
+    val month: SpecialDayMonth,
+    val state: SpecialDayWriteState,
+    val cause: String? = null,
+)
+
+/** 落没落上只认档名，不许调用点自己判 Boolean（那就是把 #336 的裸吞搬到 UI 层重演一遍）。 */
+internal val SpecialDayMonthWrite.isWritten: Boolean
+    get() = state == SpecialDayWriteState.WRITTEN
+
+/** 本轮没落上的那些月份（顺序与递进来的名次册一致，句子里点名的就是它们） */
+internal fun specialDayWriteFailures(writes: List<SpecialDayMonthWrite>): List<SpecialDayMonthWrite> =
+    writes.filter { it.state != SpecialDayWriteState.WRITTEN }
+
+/**
+ * 句头三档：全落上 / 部分没落上 / 一枚都没落上。
+ *
+ * `writes` 为空那一档**刻意念窄的那一句**：本轮一枚结论都没交回来，说"已更新"就是假话 ——
+ * 生产路径上这条压根走不到（接口空手回在 [SpecialDayFetchSkip.FetchReturnedNull] 就停了），
+ * 它是替"有人新加一条调用而忘了把落盘结论递进来"那一档兜的门。
+ */
+internal fun specialDayWriteHead(writes: List<SpecialDayMonthWrite>): String {
+    val failed = specialDayWriteFailures(writes)
+    return when {
+        writes.isEmpty() -> "假期标注未落盘"
+        failed.isEmpty() -> "假期标注已更新"
+        failed.size == writes.size -> "假期标注未落盘"
+        else -> "假期标注部分未落盘"
+    }
+}
+
+/**
+ * 未落盘月份那一栏：`2026-10(临时件没写完整：IOException)/2026-11(改名没被接受)`；没有就念「无」。
+ * 月份写法沿用 [specialDayMonthsLabel]（padStart、不引日历库），异常只到类名为止 ——
+ * 消息原文是 OS 的、可能夹路径，不进这句取证行。
+ */
+internal fun specialDayWriteFailureLabel(failures: List<SpecialDayMonthWrite>): String =
+    if (failures.isEmpty()) {
+        "无"
+    } else {
+        failures.joinToString("/") { write ->
+            specialDayMonthsLabel(listOf(write.month)) + "(" + write.state.label +
+                (write.cause?.let { "：" + it } ?: "") + ")"
+        }
+    }

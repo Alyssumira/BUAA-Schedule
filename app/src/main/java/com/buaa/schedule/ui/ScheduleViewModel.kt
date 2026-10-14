@@ -21,6 +21,8 @@ import com.buaa.schedule.data.undo.UndoManager
 import android.webkit.CookieManager
 import com.buaa.schedule.data.import.IcsParser
 import com.buaa.schedule.data.import.TextScheduleParser
+import com.buaa.schedule.data.local.SpecialDayWriteOutcome
+import com.buaa.schedule.data.local.SpecialDayWriteStage
 import com.buaa.schedule.data.share.ScheduleShareCodec
 import com.buaa.schedule.data.share.ShareCodeOutcome
 import com.buaa.schedule.domain.calendar.CalendarReclaimPlanner
@@ -449,8 +451,17 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     )
                     return
                 }
-                fetched.forEach { (month, raw) ->
-                    com.buaa.schedule.data.local.SpecialDayCache.put(app, month, raw)
+                // 逐月落盘，且**逐月收结论**（T369，在册 #336）。改前那三行长这样（取证原文，守卫按它在注释侧恰 1 处钉）：
+                //     fetched.forEach { (month, raw) ->
+                //         ...SpecialDayCache.put(app, month, raw)
+                //     }
+                // 而 `put` 的返回类型是 Unit —— 接口把正文带回来就被下面那句念成「已更新」，
+                // 落没落盘、为什么没落，调用点一条路都拿不到。
+                val writes = fetched.map { (month, raw) ->
+                    specialDayMonthWriteOf(
+                        SpecialDayMonth(month.year, month.monthValue),
+                        com.buaa.schedule.data.local.SpecialDayCache.put(app, month, raw),
+                    )
                 }
                 val days = com.buaa.schedule.data.local.SpecialDayCache.loadAll(app)
                 _specialDays.value = days
@@ -461,12 +472,41 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                         // 「回来的月份」单独算：逐月请求可以只成一半，说成"请求的那几月都好了"就是假话
                         returned = fetched.keys.map { SpecialDayMonth(it.year, it.monthValue) },
                         deferred = decision.deferredMonths,
+                        // 落盘结论逐枚递进来。失败那一档的留痕就在这一行里加一栏，**不另起一行 Log.i**：
+                        // 这一层的留痕枚数被在册守卫 SpecialDayRefreshWiringGuardTest 钉成恰 3 枚，
+                        // 多写一行的代价是去改别人那张尺（措辞本来也只许出自内核那份）。
+                        writes = writes,
                         totalAnnotations = days.size,
                         trigger = trigger,
                     ),
                 )
             }
         }
+    }
+
+    /**
+     * `SpecialDayCache.put` 的落盘结论 → 内核那一侧的字汇（T369）。
+     *
+     * 这是**折算缝**，不是第二道判据：与同文件里 `YearMonth ↔ SpecialDayMonth` 那几处同形 ——
+     * 设备侧事实由调用点折成内核的枚举，"这一档该念哪一句"全在 `SpecialDayRefreshPolicy` 里定死。
+     * ⚠️ 那两枚 `when` 都不许加 else：缓存层哪天多出一档失败，这里要编译不过，
+     * 而不是把新的一档静默折成「已落盘」—— 那正是 #336 的形状换了个落点。
+     */
+    private fun specialDayMonthWriteOf(
+        month: SpecialDayMonth,
+        outcome: SpecialDayWriteOutcome,
+    ): SpecialDayMonthWrite = when (outcome) {
+        SpecialDayWriteOutcome.Written -> SpecialDayMonthWrite(month, SpecialDayWriteState.WRITTEN)
+        is SpecialDayWriteOutcome.WriteFailed -> SpecialDayMonthWrite(
+            month = month,
+            state = when (outcome.stage) {
+                SpecialDayWriteStage.TEMP_WRITE -> SpecialDayWriteState.TEMP_WRITE_FAILED
+                SpecialDayWriteStage.PROMOTE_RENAME -> SpecialDayWriteState.PROMOTION_FAILED
+            },
+            cause = outcome.cause,
+        )
+        SpecialDayWriteOutcome.CacheDirUnreachable ->
+            SpecialDayMonthWrite(month, SpecialDayWriteState.CACHE_DIR_UNREACHABLE)
     }
 
     /**

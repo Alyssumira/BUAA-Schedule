@@ -147,7 +147,14 @@ class SpecialDayRefreshPolicyTest {
         assertEquals("该抓 7 个、只排上 " + MaxSpecialDayMonthsPerFetch + " 个，剩下的必须是「顺延」而不是消失：",
             7 - MaxSpecialDayMonthsPerFetch, decision.deferredMonths.size)
         assertEquals("顺延的月份必须与请求的那几月不重不漏：", 7, (decision.months + decision.deferredMonths).toSet().size)
-        val line = specialDayFetchDoneLog(decision.months, decision.months, decision.deferredMonths, 0, SpecialDayTrigger.BrowseMonth)
+        val line = specialDayFetchDoneLog(
+            decision.months,
+            decision.months,
+            decision.deferredMonths,
+            decision.months.map { SpecialDayMonthWrite(it, SpecialDayWriteState.WRITTEN) },
+            0,
+            SpecialDayTrigger.BrowseMonth,
+        )
         assertTrue("成功那一行没把顺延的月份点名（读起来就像全都补上了）：$line",
             line.contains("顺延月份=2027-01/2027-02/2027-03"))
     }
@@ -223,6 +230,8 @@ class SpecialDayRefreshPolicyTest {
             requested = listOf(now, nextMonth),
             returned = listOf(now),
             deferred = emptyList(),
+            // 只回了一个月，那一个月是落上了盘的（本格钉的是「未返回」那一栏，落盘那一栏走全 WRITTEN）
+            writes = listOf(SpecialDayMonthWrite(now, SpecialDayWriteState.WRITTEN)),
             totalAnnotations = 21,
             trigger = SpecialDayTrigger.PageResume,
         )
