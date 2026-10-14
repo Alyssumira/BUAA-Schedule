@@ -14,11 +14,13 @@ import androidx.core.content.edit
 import com.buaa.schedule.data.local.BuaaCookieStore
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
+import com.buaa.schedule.domain.session.InFlightRelease
 import com.buaa.schedule.domain.session.PreviousWebView
 import com.buaa.schedule.domain.session.RetainSource
 import com.buaa.schedule.domain.session.RestoreBackoffSentinel
 import com.buaa.schedule.domain.session.RestoreBackoffWindow
 import com.buaa.schedule.domain.session.RestoreBackoffWindowGate
+import com.buaa.schedule.domain.session.RestoreInFlightReleaseGate
 import com.buaa.schedule.domain.session.RestoreSingleFlight
 import com.buaa.schedule.domain.session.SessionRetainGate
 import com.buaa.schedule.domain.session.SessionRetainVerdict
@@ -182,6 +184,28 @@ object BuaaWebSession {
     @Volatile private var restoreGuard: Runnable? = null
 
     /**
+     * 恢复链**此刻还在飞**的那一枚 WebView：从 [restore] 里 `createSessionWebView(appCtx)` 出来那一瞬起，
+     * 到它被拆掉、或者经 `retain` 转成会话槽为止，主人就是这一枚字段。
+     *
+     * 为什么非得有一枚字段（T390①，第 ⓪ 问裁的乙档）：改前这枚实例**只被超时闸那枚闭包握着**
+     * （`val guard = Runnable { if (sessionWebView !== web) abandonRestore(web, "加载超时") }`），
+     * 而 `clear()` 收旗之后紧跟着就 `cancelRestoreGuard()` 把闭包从主线程队列里摘走 —— 那一刻全仓
+     * 再没有任何东西认得这枚实例：它已经挂进隐藏宿主、`loadUrl` 已经发出去，既没人摘树也没人 destroy，
+     * 而它的 `onPageFinished` 几秒后照样能经 `retain` 上缴成「新会话」（用户刚点完退出登录，
+     * 这一枚一出生带的就是退出之前那份 Cookie）。闸与旗的处置见
+     * `domain/session/SessionRetainGate` 的 [RestoreSingleFlight]；本字段管的是**实例归谁拆**。
+     *
+     * 强引用是有意的：换成 `WeakReference` 就等于把「退出登录时还有没有主人」交回 GC 决定，
+     * 而这一手的价值恰恰只在「必须拆得掉」。寿命与那道 30 秒的超时闸同量级 ——
+     * 每一个出口（[abandonRestore]、被 [retain] 收成会话、[clear]）都当场收字段，见
+     * `data/import/BuaaWebSessionLifecycleGuardTest` 第⑪格那本归属册子。
+     *
+     * 只在主线程读写（`restore`／`retain`／`clear`／`abandonRestore` 全在主线程）；
+     * `@Volatile` 与本文件其余旗子同一口径。
+     */
+    @Volatile private var restoreInFlightWebView: WebView? = null
+
+    /**
      * 当前前台 Activity 的**弱引用**，由 `MainActivity.onStart` 刷新。
      *
      * [restore] 的 WebViewClient 捕获的是"发起恢复的那个 Activity"，页面加载慢或被
@@ -332,11 +356,18 @@ object BuaaWebSession {
                     RestoreSingleFlight.CollectFlagAndCancelGuard -> {
                         restoreInFlight = false
                         cancelRestoreGuard()
+                        // T390①：这一档收下的就是恢复链自己那一枚（来路 = CookieRestore），
+                        // 它此刻从「在飞」转成「会话槽」，主人换成 sessionWebView —— 字段不收，
+                        // 下一次 clear() 就会拿同一枚实例拆两遍
+                        if (restoreInFlightWebView === webView) {
+                            restoreInFlightWebView = null
+                        }
                     }
 
                     RestoreSingleFlight.CollectFlagKeepGuardArmed -> {
                         // 会话槽被别的来路占下了：旗要收（否则 restore 恒早退），闸不许拆
                         // （还在飞的那一枚 WebView 只剩这道闸会替它拆）
+                        // 同理 restoreInFlightWebView 也不许在这里清 —— 那一枚归超时闸那一族管
                         restoreInFlight = false
                         Log.i(TAG, "单飞旗收掉，超时闸留着替还在飞的那一枚收尾")
                     }
@@ -542,16 +573,49 @@ object BuaaWebSession {
         )
     }
 
-    /** 丢弃当前会话（会话失效 / 用户退出登录） */
+    /**
+     * 丢弃当前会话（会话失效 / 用户退出登录）。
+     *
+     * 必须在主线程调用：本函数会摘树、会 `destroy`（`WebView.destroy()` 与 `setWebViewClient()` 都
+     * `checkThread`）。唯一调用点是 `ui/importing/ImportScreen` 里退出登录那颗按钮的点击回调，
+     * 本来就在主线程 —— 而「拆掉还在飞的那一枚」这一手**不许**推迟到下面那个 `post` 里：
+     * 从 `clear()` 返回到那一段跑完之间还夹着一条主线程消息，而恢复链那一次 `onPageFinished`
+     * 正好可能排在中间（同线程、非竞态，是消息顺序）。
+     */
     fun clear() {
         // 退出登录可能正好赶上一次恢复在跑：单飞标志不清零的话本进程再也不尝试恢复
         restoreInFlight = false
-        cancelRestoreGuard()
+        val inFlight = restoreInFlightWebView
+        restoreInFlightWebView = null
         val web = sessionWebView
         sessionWebView = null
         lastUrl = null
         val host = hiddenHost
         hiddenHost = null
+        // ⚠️ 顺序要紧：拆闸之前先把还在飞的那一枚交给自己拆。`cancelRestoreGuard()` 一执行，
+        // 那枚超时闸的闭包就从主线程队列里摘走，而它本来是那枚实例唯一的主人 ——
+        // 光收旗拆闸的结果是「既没人摘树、也没人 destroy」，而它脚下那次 loadUrl 还在飞，
+        // 几秒后照样能经 `retain` 上缴成新会话（带的正是退出之前那一份 Cookie：
+        // 下面 `removeAllCookies` 是异步的，而 `restore` 起手 `injectPersistedCookies` 注回去的就是旧的）。
+        // 三问三档的本体在 `domain/session/RestoreInFlightReleaseGate`（纯 JVM），这里只按档分派。
+        when (
+            RestoreInFlightReleaseGate.decide(
+                inFlightHeld = inFlight != null,
+                inFlightIsSession = inFlight === web,
+            )
+        ) {
+            // 除了本次退出登录，再没有谁会把这一枚摘树＋拆掉。`?.let` 只是类型层面：
+            // 内核在 `inFlightHeld == false` 时不可能给到这一档（表驱动单测里
+            // 「没在飞却报同一枚」那一格钉的就是这个先后）
+            InFlightRelease.ReapNow -> inFlight?.let { releaseInFlightRestore(it) }
+
+            // 那一枚就是会话槽本身：下面那一段会话那一手会拆它，这里再拆一遍就是同一枚拆两遍
+            InFlightRelease.LeaveToSessionTeardown -> Unit
+
+            // 手里没有在飞的那一枚（恢复没在跑，或早已收场）：空转，一手都不许做
+            InFlightRelease.NothingHeld -> Unit
+        }
+        cancelRestoreGuard()
         android.os.Handler(android.os.Looper.getMainLooper()).post {
             if (web != null) {
                 (web.parent as? ViewGroup)?.removeView(web)
@@ -572,6 +636,37 @@ object BuaaWebSession {
         // 必须同时清掉落盘的 Cookie，否则下次冷启动又会注回去，用户会觉得"退不掉"
         appContext?.let { BuaaCookieStore.clear(it) }
         Log.i(TAG, "会话已清除")
+    }
+
+    /**
+     * 拆掉「还在飞的那一枚恢复实例」（退出登录专用，见 [clear]）。
+     *
+     * 次序与本文件其余拆解出口对齐：**先摘树**，再 `stopLoading`，再 `destroy`
+     * （挂着树直接 `destroy` 是 T378 之前那枚在册病，见 [retain] 里 `PreviousWebView` 那一档）。
+     *
+     * 多出来的一手是**换掉委托**（`web.webViewClient = WebViewClient()`），而且它必须排在最前面：
+     * 这一枚实例挂的是 [restore] 里那个匿名 `WebViewClient`，它的 `onPageFinished` 会经
+     * `retain(view, RetainSource.CookieRestore, activity)` 那一手把实例缴进会话槽。
+     * 换成基类空委托（它的 `onPageFinished` 一句话都不说，`WebViewClient` 的默认实现），
+     * 那条上缴路径就在**我们自己的代码里**断了 —— 光靠 `destroy()` 去挡，赌的是
+     * 「销毁之后平台还投不投回调」这一条平台实现细节，JVM 侧证不到（本卡零 adb，已登记给装机）。
+     * 注意 SDK 桩里 `setWebViewClient` 的形参是**非空**类型，递 `null` 编译不过
+     * （实读：`Null cannot be a value of a non-null type 'WebViewClient'`），所以这里走「换一枚空的」。
+     *
+     * `alignTimersWithForeground` 那一手照本文件 [applyTimerGate] 那段的不变式来：实例**灭**之前
+     * 借它把进程定时器对齐到当前前后台态，免得拆完就没有任何实例能替我们 `resumeTimers()`。
+     *
+     * 必须在主线程调用（`destroy` 与 `setWebViewClient` 都 `checkThread`）。
+     */
+    private fun releaseInFlightRestore(web: WebView) {
+        Log.i(TAG, "退出登录：拆掉还在飞的那一枚恢复实例")
+        runCatching {
+            web.webViewClient = WebViewClient()
+            (web.parent as? ViewGroup)?.removeView(web)
+            alignTimersWithForeground(web)
+            web.stopLoading()
+            web.destroy()
+        }.onFailure { Log.w(TAG, "拆掉在飞的恢复实例失败", it) }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -677,6 +772,11 @@ object BuaaWebSession {
             sessionWebView = null
             lastUrl = null
         }
+        // T390①：这一枚刚刚被本函数拆掉了，字段再留着就是拿一枚已 destroy 的实例去认领第二次
+        // （身份比较，不是「清掉最后一枚」—— abandonRestore 也会被非在飞的实例叫到）
+        if (restoreInFlightWebView === web) {
+            restoreInFlightWebView = null
+        }
     }
 
     /**
@@ -727,6 +827,11 @@ object BuaaWebSession {
         // 用 applicationContext 创建：这个 WebView 会被单例长期持有，
         // 绑 Activity Context 就等于把整个 Activity 窗口泄漏到进程结束。
         val web = createSessionWebView(appCtx)
+        // T390①：这枚实例从建出来那一瞬起就得有主人。改前它只被下面那枚超时闸的闭包握着，
+        // 于是「退出登录把闸拆掉」这一手会把它变成一枚既没人摘树也没人 destroy、
+        // 却还在加载教务页面并且随时能经 retain 上缴成会话的孤儿（字段口径见 [restoreInFlightWebView]，
+        // 三档归属判据在 `domain/session/RestoreInFlightReleaseGate`）。
+        restoreInFlightWebView = web
         // 页面既不 finish 也不报错（连接挂起）时，单飞标志会永久卡住：30s 后自行拆掉。
         // T378②把这一问从「旗还在不在飞」换成「会话槽里是不是它自己」—— 因为 [retain] 现在会在
         // 别的来路（登录页）收下会话时就把旗收掉：闸还举着正是为了拆掉这一枚没人认领的实例，
