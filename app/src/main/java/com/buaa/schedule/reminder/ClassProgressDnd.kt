@@ -226,8 +226,13 @@ object ClassProgressDnd {
         rearmPending: Boolean,
         deadline: Long,
         nowMillis: Long,
-    ): Boolean = hasSavedFilter && rearmPending &&
-        !restoreIfStale(hasSavedFilter = hasSavedFilter, deadline = deadline, nowMillis = nowMillis, onStale = {})
+    ): Boolean {
+        if (!hasSavedFilter) return false
+        if (!rearmPending) return false
+        // 期限已过那一档归下面那一次 restoreIfStale（硬超时恢复）：这里再补一只立刻就该撤销的
+        // 闹钟是纯多付一次唤醒。门控复用那一把尺（空动作、只取结论），不在这里摊第二份比较式。
+        return !restoreIfStale(hasSavedFilter = hasSavedFilter, deadline = deadline, nowMillis = nowMillis, onStale = {})
+    }
 
     /**
      * 「这一轮到底该不该按硬超时动手」判据的唯一出处 + 编排：
@@ -439,7 +444,7 @@ object ClassProgressDnd {
         val operation = watchdogPendingIntent(context)
         val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
             runCatching { alarmManager.canScheduleExactAlarms() }.getOrDefault(false)
-        val armed = armWatchdogAttempt(
+        armWatchdogAttempt(
             canExact = canExact,
             setAlarmClock = {
                 alarmManager.setAlarmClock(
@@ -449,17 +454,18 @@ object ClassProgressDnd {
             },
             setExact = { alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, operation) },
             setPowerSave = { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, operation) },
+            recordArmOutcome = { armed -> recordWatchdogArmOutcome(context, armed) },
         )
-        recordWatchdogArmOutcome(context, armed)
     }
 
     /**
-     * [armWatchdog] 的档位本体：**零 android、零时钟**，三手 `set` 与留痕口全是参数 ——
+     * [armWatchdog] 的档位本体：**零 android、零时钟**，三手 `set`、落账口与留痕口全是参数 ——
      * 形状逐字照 `ClassProgressScheduler.armEndBell`（同一族在册先例，表驱动见
      * `ClassProgressBellArmTest`）。
      *
-     * 收成这一形买到的是：**"排程抛了"这一档在 JVM 里就是可注入的事件**（递一枚会抛的 lambda 就是），
-     * 不需要真机也不需要 Robolectric ⇒ 结论／留痕／落账三样都能被表驱动逐档量。
+     * 收成这一形买到的是：**"set 抛了"与"结论落没落账"这两档在 JVM 里都是可注入的事件**
+     * （递一枚会抛的 lambda 就是、落账口收进一枚记下实参的 lambda 就是），不需要真机也不需要
+     * Robolectric ⇒ 结论／留痕／落账三样都能被表驱动逐档量，连"排上了却不落账"这种半截修法都跑得红。
      * 量不到的仍然只有一件，也照实写在这里：真 `AlarmManager` 在澎湃／MIUI 上到底抛不抛、
      * 抛在哪一手，以及"排成功之后被系统吞掉"那一档（那一刻 `set` 返回了，档位本体答"排上了"，
      * 旗不落 —— 那一档只有装机读得出）。
@@ -468,22 +474,32 @@ object ClassProgressDnd {
      * 未授权那一支（`canScheduleExactAlarms` 为假 —— 最容易走到的那一支）直接省电档，
      * 它抛同样判"没排上"。两手都失败的场合**两句留痕都要在**：改前
      * `recoverCatching` 的返回值被丢掉，退回那一手再失败时读起来就像"一次都没失败过"。
+     *
+     * 落账口 [recordArmOutcome] **必填**（不给默认值）：给了默认空 lambda，"忘传"与"传错"在编译期
+     * 与运行期都不出声，那条"失败必须落到下一趟起手"的链就整条断在参数上。
+     * 三条出口（省电档、精确档、`setAlarmClock` 一次成功）**共用末尾那一手调用** ⇒ 每次排程恰好
+     * 落账一次，既不许多落（两次就是两本账）也不许漏落。
      */
     internal fun armWatchdogAttempt(
         canExact: Boolean,
         setAlarmClock: () -> Unit,
         setExact: () -> Unit,
         setPowerSave: () -> Unit,
+        recordArmOutcome: (armed: Boolean) -> Unit,
         logFailure: (reason: String, error: Throwable) -> Unit = LOG_DND_ARM_FAILURE,
     ): Boolean {
-        if (!canExact) {
-            return armWatchdogTry("勿扰看门狗省电档没排上：已落补排旗，只剩下一次起手补排", setPowerSave, logFailure)
+        val armed = if (!canExact) {
+            // 未授予 SCHEDULE_EXACT_ALARM：精确档会抛 SecurityException，退非精确档
+            armWatchdogTry("勿扰看门狗省电档没排上：已落补排旗，只剩下一次起手补排", setPowerSave, logFailure)
+        } else {
+            val clock = runCatching(setAlarmClock).onFailure {
+                logFailure("勿扰看门狗 setAlarmClock 失败，退回精确档", it)
+            }
+            if (clock.isSuccess) true
+            else armWatchdogTry("勿扰看门狗退回精确档那一手也没排上：已落补排旗，只剩下一次起手补排", setExact, logFailure)
         }
-        val clock = runCatching(setAlarmClock).onFailure {
-            logFailure("勿扰看门狗 setAlarmClock 失败，退回精确档", it)
-        }
-        if (clock.isSuccess) return true
-        return armWatchdogTry("勿扰看门狗退回精确档那一手也没排上：已落补排旗，只剩下一次起手补排", setExact, logFailure)
+        recordArmOutcome(armed)
+        return armed
     }
 
     /**

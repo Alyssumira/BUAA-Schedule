@@ -38,6 +38,20 @@ import org.junit.Test
  * 按源码形状核对；写法照抄 [ClassProgressCleanupDecisionTest] 的
  * `balancedBlock` / `withoutComments` / `findMainJavaDir` —— 找不到文件就抛，
  * 不用 assumeTrue 跳过（跳过的守卫等于没守卫）。
+ *
+ * ## 第二本账（ai/T385，甲档）：排程失败之后"下一次起手该不该补排那只看门狗"
+ *
+ * 上面那一族把开机那一步收成"只在期限已过时动手"是对的（实测抖动就在未过期那一档），
+ * 但它同时暴露出一格没有补救的洞：`armWatchdog` 三手 `set` 全抛时**闹钟根本不存在**，
+ * 而 `selfCheck` 只有"期限已过"才会动手 ⇒ 静默没有上界（下一节上课铃还会把期限往后覆写，
+ * 净效果反向变长）。改法是把"上一次没排上"落成一格 prefs 事实、由 `selfCheck` 起手补排一次。
+ *
+ * 于是本文件多一族格子：[rearmGateReadsNoClockAndNoPrefsOfItsOwn] 与那六格表驱动量的是
+ * [ClassProgressDnd.watchdogRearmDue]（零 Context、零 android、四枚输入全注入），
+ * 形状与本文件那族 `restoreIfStale` 逐字同规格；两判的**互补关系**由
+ * [theTwoVerdictsAreNeverBothAtOnce] 穷举 12 格钉住 ——
+ * 甲档不许把上面那族"期限未到不许恢复"的不变量削弱一分：
+ * 补排只在期限**未到**时发生，期限一到动手的仍然是那一次 `restore`。
  */
 class BootDndSelfHealDecisionTest {
 
@@ -129,6 +143,153 @@ class BootDndSelfHealDecisionTest {
 
         for (sneak in listOf("System.currentTimeMillis(", "LocalDateTime.now(", "Instant.", "Date(", "Clock.", "prefs(", "getSharedPreferences(")) {
             assertFalse("判据自己读钟或自己摸状态（$sneak）：三个输入必须全是注入进来的：\n$body", body.contains(sneak))
+        }
+    }
+
+    // ---- 补排门控（ai/T385 甲档）：排程失败之后"该不该再排一次" -------------------
+
+    /** 一趟自愈的两个结论：该不该补排那只闹钟、硬超时那把尺动手了几次 */
+    private class SelfCheckRun(
+        val rearmDue: Boolean,
+        val restoreCalls: Int,
+    )
+
+    /**
+     * 把两判放在同一次跑里量：[ClassProgressDnd.watchdogRearmDue] 的期限门控**复用**
+     * [ClassProgressDnd.restoreIfStale] 那一把尺（空动作取结论），所以"补排"与"硬超时恢复"
+     * 天生互补 —— 这一手写法本身就要被钉：两判同时动手（补一只立刻该撤销的闹钟）与
+     * 两判同时不动手（闹钟没了、恢复也没做）都是这一族的失效形状。
+     */
+    private fun selfCheckRun(
+        hasSavedFilter: Boolean,
+        rearmPending: Boolean,
+        deadline: Long,
+        nowMillis: Long,
+    ): SelfCheckRun {
+        var calls = 0
+        val rearm = ClassProgressDnd.watchdogRearmDue(
+            hasSavedFilter = hasSavedFilter,
+            rearmPending = rearmPending,
+            deadline = deadline,
+            nowMillis = nowMillis,
+        )
+        val stale = ClassProgressDnd.restoreIfStale(
+            hasSavedFilter = hasSavedFilter,
+            deadline = deadline,
+            nowMillis = nowMillis,
+            onStale = { calls++ },
+        )
+        assertEquals("restoreIfStale 的返回值与 onStale 的调用次数不一致", calls > 0, stale)
+        return SelfCheckRun(rearm, calls)
+    }
+
+    /** 旗在 + 有记录 + 期限未到：这一格就是甲买到的那一格 —— 排程失败后下一次起手补排一次 */
+    @Test
+    fun pendingFlagWithFreshDeadlineIsRearmed() {
+        val now = 1_789_000_000_000L
+
+        val run = selfCheckRun(hasSavedFilter = true, rearmPending = true, deadline = now + minute, nowMillis = now)
+        assertTrue("排程失败旗在而期限未到，这一趟就该补排那只闹钟", run.rearmDue)
+        assertEquals("期限未到就绝不该按硬超时动手（动手 = 把正在生效的勿扰放开）", 0, run.restoreCalls)
+    }
+
+    /** 没记录（本次压根没进过勿扰）时，旗在不在、期限什么形态都不许补排，也不许恢复 */
+    @Test
+    fun noRecordNeverRearmsEvenWithPendingFlag() {
+        val now = 1_789_000_000_000L
+
+        for (deadline in listOf(now - minute, 0L, now + minute)) {
+            val run = selfCheckRun(hasSavedFilter = false, rearmPending = true, deadline = deadline, nowMillis = now)
+            assertFalse("没进过勿扰就不要动用户设置，也不要多付一次排程 binder：$deadline", run.rearmDue)
+            assertEquals("没进过勿扰就不该有硬超时恢复：$deadline", 0, run.restoreCalls)
+        }
+    }
+
+    /**
+     * 旗不在（上一次确实排上了）：不许每次起手都顶替重写那只闹钟 ——
+     * `setAlarmClock` 是同 requestCode 重排，白闪一次状态栏图标、也多给 ROM 一次吞的机会。
+     */
+    @Test
+    fun absentFlagLeavesTheScheduledAlarmAlone() {
+        val now = 1_789_000_000_000L
+
+        val run = selfCheckRun(hasSavedFilter = true, rearmPending = false, deadline = now + minute, nowMillis = now)
+        assertFalse("没有失败旗就没有要补的东西", run.rearmDue)
+        assertEquals("期限未到就不该动手恢复", 0, run.restoreCalls)
+    }
+
+    /**
+     * 期限已过（含缺失 0 那一档）：动手的是硬超时恢复，不是补排 ——
+     * 补一只立刻就该撤销的闹钟 = 多一次唤醒、恢复还晚了一整节课。
+     */
+    @Test
+    fun passedDeadlineGoesToTheStaleRestoreNotToRearm() {
+        val now = 1_789_000_000_000L
+
+        for (deadline in listOf(now - minute, now, 0L)) {
+            val run = selfCheckRun(hasSavedFilter = true, rearmPending = true, deadline = deadline, nowMillis = now)
+            assertFalse("期限（$deadline）已过/缺失时该恢复而不是补排", run.rearmDue)
+            assertEquals("期限（$deadline）已过/缺失时硬超时必须动手", 1, run.restoreCalls)
+        }
+    }
+
+    /** 结论只认传进去的时钟：同一条"记录 + 旗"绕着期限翻面，补排判据自己不读钟 */
+    @Test
+    fun rearmConclusionFollowsTheInjectedClock() {
+        val deadline = 1_789_000_000_000L
+
+        assertTrue(
+            "期限未到却判不补排",
+            selfCheckRun(hasSavedFilter = true, rearmPending = true, deadline = deadline, nowMillis = deadline - minute).rearmDue,
+        )
+        assertFalse(
+            "期限恰好到点还去补排（那一档归硬超时恢复）",
+            selfCheckRun(hasSavedFilter = true, rearmPending = true, deadline = deadline, nowMillis = deadline).rearmDue,
+        )
+        assertFalse(
+            "期限已过还去补排",
+            selfCheckRun(hasSavedFilter = true, rearmPending = true, deadline = deadline, nowMillis = deadline + minute).rearmDue,
+        )
+    }
+
+    /**
+     * 全组合穷举（2 枚记录态 × 2 枚旗态 × 3 种期限形态 = 12 格）：两判**永不同时**动手，
+     * 而"补排"那一档在整张表里恰好只出现一次 —— 折松一格（旗不参与、或期限不参与）这一格立刻红。
+     */
+    @Test
+    fun theTwoVerdictsAreNeverBothAtOnce() {
+        val now = 1_789_000_000_000L
+        val deadlines = listOf(now - minute, now, now + minute)
+        var rearmCells = 0
+
+        val offenders = buildList {
+            for (hasSaved in listOf(true, false)) {
+                for (flag in listOf(true, false)) {
+                    for (deadline in deadlines) {
+                        val run = selfCheckRun(hasSaved, flag, deadline, now)
+                        if (run.rearmDue && run.restoreCalls > 0) {
+                            add("记录=$hasSaved 旗=$flag 期限=$deadline：补排与硬超时恢复同时动手")
+                        }
+                        if (run.rearmDue) rearmCells++
+                    }
+                }
+            }
+        }
+        assertEquals("两判同一次动手（闹钟补上了又立刻被恢复拆掉）：$offenders", emptyList<String>(), offenders)
+        assertEquals(
+            "「有记录 + 旗在 + 期限未到」这一档在全组合里恰一枚（0 枚＝补排链断了，>1 枚＝期限门控或旗被摘）",
+            1,
+            rearmCells,
+        )
+    }
+
+    /** 补排判据同样不读钟、不摸 prefs、不碰平台：四枚输入全是注入的标量 */
+    @Test
+    fun rearmGateReadsNoClockAndNoPrefsOfItsOwn() {
+        val body = balancedBlock(withoutComments(readMainSource(CLASS_PROGRESS_DND_FILE)), "internal fun watchdogRearmDue(")
+
+        for (sneak in listOf("System.currentTimeMillis(", "LocalDateTime.now(", "Instant.", "Date(", "Clock.", "prefs(", "getSharedPreferences(")) {
+            assertFalse("补排判据自己读钟或自己摸状态（$sneak）：四枚输入必须全是注入进来的：\n$body", body.contains(sneak))
         }
     }
 
