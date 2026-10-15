@@ -38,6 +38,7 @@ import com.buaa.schedule.core.designsystem.GlassTopBar
 import com.buaa.schedule.core.designsystem.GlassVariant
 import com.buaa.schedule.core.designsystem.LocalSemanticPlate
 import com.buaa.schedule.data.import.IClassSession
+import com.buaa.schedule.domain.signin.LoginFailureClassifier
 import kotlinx.coroutines.launch
 
 /**
@@ -56,6 +57,16 @@ import kotlinx.coroutines.launch
  * 念的是 [com.buaa.schedule.data.import.IClassApi] 按档位各写好的那一句，每一句只说我们看得见的事：
  * 被转走那一档不猜转去哪（我们根本不读 `Location`），没读回来那一档连「服务端」三个字都不出现
  * （那一趟往返断在我们这侧，服务端那侧答了什么，盘上一个证据都没有）。
+ *
+ * ⚠️ T392① 补上从前缺的那半张表：**连外壳都没有**的那几档（传输层直接抛出来的超时、连不上、
+ * 加密通道没建起来、地址没认出来、往返半路断了）在盘上从前是**裸着**走到下面那一行的 ——
+ * `runCatching` 把 JVM 异常本身交回来，而这一页念的是 `error.message`，于是用户看到过英文的
+ * `timeout`，同一句「每一句都只念我们看得见的事」在那条支路上是假话。现在折档住在
+ * [com.buaa.schedule.domain.signin.LoginFailureClassifier]（纯 JVM 表，每档一格打在
+ * `LoginFailureRungTableTest`）：本仓与服务端已经写好那句话的那几枚（含"手机号与口令都要填"这一拒）
+ * 仍然**逐字念**，只有抛出来的那一族被换成按档写好的中文。日志那一行走
+ * [com.buaa.schedule.domain.signin.LoginFailureClassifier.forensicsLine]：只交回档位与异常类名，
+ * 不交回异常原文 —— 传输层那几枚的 message 里就带着服务器地址与端口。
  *
  * ⚠️ 落盘只有一枚 `result.id`，**口令一个字都不存**：老客户端把 phone + password 明文
  * 写进 SharedPreferences、每次进页面重登一遍 —— 那对口令能过学校统一身份认证，
@@ -102,7 +113,10 @@ fun IClassLoginScreen(
                     onLoggedIn()
                 }
                 .onFailure { error ->
-                    Log.w(TAG, "iClass 登录失败：${error.message ?: error.javaClass.simpleName}")
+                    // 日志那一行只交回档位与异常类名（异常原文可能带服务器地址与端口，那一栏明写"未记录"）；
+                    // 屏上那句仍然逐字念 error.message —— 折档发生在 IClassApi.login() 里，到这里它
+                    // 要么是服务端/本仓的原话，要么是本机那一档写好的中文，两样都不是 JVM 的英文
+                    Log.w(TAG, LoginFailureClassifier.forensicsLine(error))
                     serverMessage = error.message ?: "iClass 没有给出原因"
                     submitting = false
                 }
@@ -130,8 +144,9 @@ fun IClassLoginScreen(
     val statusText = when (phase) {
         LoginPhase.Saved -> "已登录北航 iClass，正在进入扫码页…"
         LoginPhase.Submitting -> "正在登录…"
-        // 原因那一栏一个字都不加工（服务端给的便是 ERRMSG 原文，判不出外壳时是 IClassApi 按档位写好的那句），
-        // 所以这句话在拼接处才碰 serverMessage
+        // 原因那一栏一个字都不加工：服务端给的便是 ERRMSG 原文；判不出外壳时是 IClassApi 按档位写好的那句；
+        // 连外壳都没有的那几档（传输层抛出来的）是 domain/signin/LoginFailure 按档写好的那句。
+        // 三样都在 login() 那一侧就定好了档，所以这一句仍然只在拼接处才碰 serverMessage
         LoginPhase.Failed -> "登录失败：$serverMessage"
         LoginPhase.Idle -> null
     }
@@ -151,16 +166,29 @@ fun IClassLoginScreen(
                 statusBarInset = true,
                 onBack = onBack,
             )
+            // #689：这一页从前只说口令的去向，没有一句说这对账号口令是**谁的**——
+            // 于是拿着"我平时签到都用统一认证"的用户以为本应用要求他另注册一个账号。
+            // 纪律：只点名这是 iClass 自己的凭据 + 本应用既不注册也不保管；
+            // 我们从未取证到"统一认证那套口令登得进 iClass"（零 adb、一次成功登录都没见过），
+            // 所以这里既不写"这就是你的统一认证账号"，也不写"那不是"。
             Text(
-                text = "登录一次即可：之后签到只用到服务端回传的那枚 id，" +
-                    "口令不写进任何存储，也不参与之后的请求。",
+                text = "这一对账号口令是北航 iClass（课堂平台）自己的登录凭据：本应用不替你注册它，也不替你保管它。" +
+                    "它归谁开、能不能拿别处的凭据登进来，我们查不到，也不替你猜 —— 以 iClass 那边给你的那一套为准。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "口令只在提交那一趟里发出去一次：之后签到只用到服务端回传的那枚 id，" +
+                    "口令不写进任何存储，也不参与之后的请求。" +
+                    "登不进去时下面那一行念的是 iClass 回的原话，或是我们确实看得见的那半件事" +
+                    "（没连上、等超时、加密通道没建起来、响应没读回来）—— 我们从不替 iClass 编原因。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             OutlinedTextField(
                 value = phone,
                 onValueChange = { phone = it },
-                label = { Text("手机号 / 账号") },
+                label = { Text("iClass 的手机号 / 账号") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !submitting,
@@ -172,7 +200,7 @@ fun IClassLoginScreen(
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
-                label = { Text("口令") },
+                label = { Text("iClass 的口令") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !submitting,
@@ -231,8 +259,9 @@ fun IClassLoginScreen(
  * [IClassLoginScreen] 的阶段（判据在函数体里那一支 `phase` 梯子，这里只负责"这一档按钮上怎么说"）。
  *
  * 分工与扫码页 `ScanUiStatus.kt` 同口径：档位判一次、措辞按档位取，页面不扣住任何一份字面量。
- * 状态句不放进这里，因为失败那一档要说服务端给的那句话（逐字来自 ERRMSG，或判不出外壳时由
- * IClassApi 按档位写好），得在拼接处才成形。
+ * 状态句不放进这里，因为失败那一档要说**别人给的那句话**——服务端的 ERRMSG 原文（逐字）、
+ * 本仓按外壳档位写好的那六句，或本机这一趟的失败档（`domain/signin/LoginFailure` 那张表），
+ * 三样都得在拼接处才成形。
  */
 private enum class LoginPhase(val buttonLabel: String) {
     /** 什么都没发生：表单可填、按钮可点 */
@@ -241,7 +270,13 @@ private enum class LoginPhase(val buttonLabel: String) {
     /** 登录请求在飞 */
     Submitting("正在登录…"),
 
-    /** 服务器给了原因：这句话的正文由调用点拼，按钮回到「登录」让用户改口令再来一趟 */
+    /**
+     * 这一趟没拿到 id：那句话的正文由调用点拼，按钮回到「登录」让用户改口令再来一趟。
+     *
+     * ⚠️ 从前这一档的注释写的是"服务器给了原因"——那半句在盘上一直不成立：传输层抛出来的那一族
+     * 服务器一个字都没给（T392① 把它折成 `domain/signin/LoginFailure` 的档位句）。
+     * 现在这一档收三路话：服务端逐字原话、本仓按外壳档位写好的那句、本机这一趟的失败档。
+     */
     Failed("登录"),
 
     /**

@@ -1,5 +1,8 @@
 package com.buaa.schedule.data.import
 
+import com.buaa.schedule.domain.signin.LocallySpokenFailure
+import com.buaa.schedule.domain.signin.LoginFailureClassifier
+import com.buaa.schedule.domain.signin.LoginFailureRung
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -19,8 +22,14 @@ import java.nio.charset.Charset
  * [message] 是 ERRMSG 的**逐字原文**：这一族的 ERRMSG 全是厂商自己的中文文案，
  * 我们一条都没有（也没有取证到"已签过""码过期"这样的分类），所以整条链上
  * 一个字都不许加工 —— 包一层"签到失败"就把唯一那条真信息吃掉了。
+ *
+ * T392① 起它同时实现 [LocallySpokenFailure]：这一枚自带的句子（厂商原文）在任何一次折档里
+ * 都只许被逐字念出来，不许被通用句覆盖。
  */
-class IClassRejectedException(message: String) : IOException(message)
+class IClassRejectedException(message: String) : IOException(message), LocallySpokenFailure {
+
+    override val spokenLine: String get() = message.orEmpty()
+}
 
 /**
  * 响应读不出结论：空体、非 JSON、没有 STATUS、HTTP 非 2xx、被服务端转走、响应体没读回来 —— 一律按失败处理。
@@ -28,10 +37,22 @@ class IClassRejectedException(message: String) : IOException(message)
  * 「按失败处理」说的是**我们这侧怎么处理**，不是服务端答了什么：这一族只有落到
  * [Envelope.Rejected] 那一档时那句才是厂商的原文（ERRMSG 逐字），其余各档只许念我们看得见的那半件事。
  */
-class IClassUnexpectedResponseException(message: String) : IOException(message)
+class IClassUnexpectedResponseException(message: String) : IOException(message), LocallySpokenFailure {
 
-/** 登录被拒（口令错、账号不存在、验证码网关不放行……服务端给什么就说什么） */
-class IClassLoginFailedException(message: String) : IOException(message)
+    override val spokenLine: String get() = message.orEmpty()
+}
+
+/**
+ * 登录被拒（口令错、账号不存在、验证码网关不放行……服务端给什么就说什么）。
+ *
+ * T392① 之后这一枚还装**本机那一趟的失败档**：传输层抛出来的东西在 `login()` 里被折成
+ * [com.buaa.schedule.domain.signin.LoginFailureRung] 的中文句再交回，屏上因此不会念 JVM 的英文。
+ * 「服务端给什么就说什么」那一半没变 —— 逐字念的还是 [LocallySpokenFailure.spokenLine]。
+ */
+class IClassLoginFailedException(message: String) : IOException(message), LocallySpokenFailure {
+
+    override val spokenLine: String get() = message.orEmpty()
+}
 
 /**
  * 一次 HTTP 往返的**原始**结果：状态码 + `Content-Type` 头 + 响应体（三态，见 [body]）。
@@ -173,24 +194,56 @@ class IClassApi(
      *
      * 口令只在**这一次请求**里存在：成功之后本类与 [IClassSession] 都只留 `result.id`，
      * 绝不落盘（老客户端把 phone+password 明文写进 SharedPreferences 再重登，那是不该照抄的做法）。
+     *
+     * **失败按档说话**（T392①，第⓪问裁的甲档）：
+     * - 本仓自己写好那句话的（空凭据那一拒、[classifyLogin] 那六档、裹着厂商 ERRMSG 原文的那一枚）
+     *   带着 [LocallySpokenFailure] 走人 —— 折档认的就是这一枚契约，**逐字不动**；
+     * - 传输层（[IClassTransport.execute]）抛出来的那一族读不到外壳，从前会连着 JVM 的英文
+     *   （用户当场看到过 `timeout`）一路走到登录页那句「登录失败：…」；现在它们在**这里**就被折成
+     *   [com.buaa.schedule.domain.signin.LoginFailureRung]，每一档只念本机这一趟看得见的事。
+     * 折档只发生在这一路：[signIn] 那一路一个字没动（在册判据见 IClassApiTest 那枚
+     * 「传输层抛出来的是失败而不是异常」，它钉的正是签到那一路交回原文）。
      */
     suspend fun login(phone: String, password: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            val trimmed = phone.trim()
-            if (trimmed.isEmpty() || password.isEmpty()) {
-                throw IClassLoginFailedException("手机号与口令都要填")
+            try {
+                loginAttempt(phone, password)
+            } catch (cause: Throwable) {
+                throw spokenLoginFailureOrSelf(cause)
             }
-            val form = listOf(
-                "phone" to trimmed,
-                "password" to password,
-                "verificationType" to VERIFICATION_TYPE,
-                "verificationUrl" to VERIFICATION_URL,
-                "userLevel" to USER_LEVEL_STUDENT,
-            ).joinToString("&") { (key, value) ->
-                URLEncoder.encode(key, "UTF-8") + "=" + URLEncoder.encode(value, "UTF-8")
-            }
-            classifyLogin(transport.execute(LOGIN_URL, "POST", form)).getOrThrow()
         }
+    }
+
+    /** 原本那一趟：先拦空凭据（那句是我们自己写的中文），再发那五件套 form，判定整个交给 [classifyLogin] */
+    private fun loginAttempt(phone: String, password: String): String {
+        val trimmed = phone.trim()
+        if (trimmed.isEmpty() || password.isEmpty()) {
+            throw IClassLoginFailedException("手机号与口令都要填")
+        }
+        val form = listOf(
+            "phone" to trimmed,
+            "password" to password,
+            "verificationType" to VERIFICATION_TYPE,
+            "verificationUrl" to VERIFICATION_URL,
+            "userLevel" to USER_LEVEL_STUDENT,
+        ).joinToString("&") { (key, value) ->
+            URLEncoder.encode(key, "UTF-8") + "=" + URLEncoder.encode(value, "UTF-8")
+        }
+        return classifyLogin(transport.execute(LOGIN_URL, "POST", form)).getOrThrow()
+    }
+
+    /**
+     * 该换的才换：档是 [LoginFailureRung.SpokenVerbatim] 就原样交回那一枚，其余各档换成一句中文的
+     * [IClassLoginFailedException]（登录页据它决定给不给重登表单，落点与 [classifyLogin] 那六档同一个）。
+     *
+     * 换掉的那一枚挂在 `cause` 上：类名由 [LoginFailureClassifier.forensicsLine] 交进取证行，
+     * 而它的 message（可能带着服务器地址与端口）既不上屏也不进日志。
+     * ⚠️ 形参叫 `raw` 而不是 `cause`：`apply` 那一段里 `cause` 会先解到 Throwable 自己的 `cause` 属性
+     * （新造的那一枚是 null），initCause(null) 就等于把本机那一枚丢掉。
+     */
+    private fun spokenLoginFailureOrSelf(raw: Throwable): Throwable {
+        if (LoginFailureClassifier.rungOf(raw) == LoginFailureRung.SpokenVerbatim) return raw
+        return IClassLoginFailedException(LoginFailureClassifier.screenLine(raw)).apply { initCause(raw) }
     }
 
     /**
