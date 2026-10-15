@@ -17,7 +17,8 @@ import javax.net.ssl.SSLException
  *
  * ## 病在哪
  *
- * `data/import/IClassApi.kt` 的 `login()` 是一支 `runCatching`，而六档中文全产自 `classifyLogin`，
+ * `data/import/IClassApi.kt` 的 `login()` 曾是一支 `runCatching`（T397① 把它换成 try/catch，取消那一型
+ * 在那一手就原样复投了，见 [LoginFailureRung.WithdrawnLocally] 那一档的说明），而六档中文全产自 `classifyLogin`，
  * `classifyLogin` 只吃 `IClassRawResponse`：传输层（`transport.execute`）一抛就读不到响应外壳，
  * `runCatching` 把 **JVM 异常本身**交回调用点，登录页那句「登录失败：…」念的就是那枚异常的 `message`。
  * 于是同一条链上并着两种话：服务端给的（厂商中文 ERRMSG 逐字）、本仓按档写好的（中文）、
@@ -26,7 +27,7 @@ import javax.net.ssl.SSLException
  *
  * ## 为什么表里必须有「逐字念」那一档
  *
- * `login()` 那支 `runCatching` 里抛出来的东西**不止**传输层那一族：本仓自己按档写好的那几枚
+ * `login()` 那一手宽 catch 接住的东西**不止**传输层那一族：本仓自己按档写好的那几枚
  * （空凭据那一拒、`classifyLogin` 的六档，以及裹着厂商 ERRMSG 原文的那一枚）也走同一支 `catch`。
  * 把它们一起折成通用句，等于把「手机号与口令都要填」念成「这一趟没走成」——那是**我们自己的假话**，
  * 与原先那句英文的错不一样但一样贵。所以 [LoginFailureRung.SpokenVerbatim] 是这张表的第一问，
@@ -89,7 +90,14 @@ enum class LoginFailureRung {
     /** 本仓按档写好的那一句（含厂商 ERRMSG 的逐字原文）：**逐字念，不许再包一层** */
     SpokenVerbatim,
 
-    /** 这一趟在本机被收回（那一页离场、或这次请求被取消）：根本没有结论，也与 iClass 答了什么无关 */
+    /**
+     * 这一趟在本机被收回（那一页离场、或这次请求被取消）：根本没有结论，也与 iClass 答了什么无关。
+     *
+     * T397① 起这一档**不再由登录那一路产生**：`data/import/IClassApi.kt` 的 `login()` 在折档之前
+     * 就把取消那一型原样复投了（分工仍是"内核分类、调用点复投"，与在册卡 T365 那一族同形）。
+     * 判据与句子都留档不动 —— 它由 [LoginFailureClassifier.rungOf] 那张表与它的表驱动单测背书，
+     * 屏上那句「这一趟登录在本机被收回了…没有拿到 id」从此不再由取消念出来，那正是本卡要的。
+     */
     WithdrawnLocally,
 
     /** 撞在本机一个硬故障上（`Error` 那一族）：它不是登录本身的事，也不该被说成 iClass 的话 */

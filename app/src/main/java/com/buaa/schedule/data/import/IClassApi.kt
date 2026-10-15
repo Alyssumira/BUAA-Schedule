@@ -15,6 +15,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.Charset
+import java.util.concurrent.CancellationException
 
 /**
  * 服务端业务性拒绝（外壳 `STATUS=1`）。
@@ -203,14 +204,30 @@ class IClassApi(
      *   [com.buaa.schedule.domain.signin.LoginFailureRung]，每一档只念本机这一趟看得见的事。
      * 折档只发生在这一路：[signIn] 那一路一个字没动（在册判据见 IClassApiTest 那枚
      * 「传输层抛出来的是失败而不是异常」，它钉的正是签到那一路交回原文）。
+     *
+     * **取消不在这里折档**（T397①，第⓪问裁的丙档形状）：这一手从前整个裹在一层 `runCatching` 里，
+     * 而那一层吃的是 `Throwable` —— 协程取消走到调用点时已经被换成一句普通的失败**返回**，
+     * 屏上念的就是 [com.buaa.schedule.domain.signin.LoginFailureRung.WithdrawnLocally] 那句话，
+     * 而"这一趟没了"这件事本身协程框架与调用点都收不到。所以换成下面那一形：
+     * 取消那一型**原样复投**，其余各档才折档。分工仍是 T365 那一族的两半 ——
+     * **判档住在 [com.buaa.schedule.domain.signin.LoginFailureClassifier]（本卡一字未动），
+     * 复投只住在这一个调用点**；口径见 `ui/ScheduleViewModel.kt` 里那句
+     * 「取消是控制流，不是错误」，形状抄本仓已有的两枚（`widget/BackgroundSync.kt` 的
+     * `readChainSnapshotOrNull`、`ui/ScheduleViewModel.kt` 的 `suspendCatching`：
+     * 取消那一 catch 排在宽 catch **之前**）。
+     * ⚠️ 只在原来那一支 catch 里补一句复投是不够的：那一手在 `runCatching` 的块**之内**，
+     * 复投出去的取消会被同一层再吃一遍 —— 换掉那一层才是修法，这一条是第⓪问的裁定本身。
+     * ⚠️ `Error` 那一族**仍**被折成一次失败返回（档 `LocalHardFault`）：从前那层 `runCatching`
+     * 本来就吃 `Throwable`，那是改前既有的口径、不是这一手引入的；本卡单独裁过「不跟着复投」，
+     * 与 [signIn] 那一路同列为已知缺口（见该函数那段口径）。
      */
     suspend fun login(phone: String, password: String): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
-            try {
-                loginAttempt(phone, password)
-            } catch (cause: Throwable) {
-                throw spokenLoginFailureOrSelf(cause)
-            }
+        try {
+            Result.success(loginAttempt(phone, password))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (cause: Throwable) {
+            Result.failure(spokenLoginFailureOrSelf(cause))
         }
     }
 
