@@ -29,7 +29,9 @@ package com.buaa.schedule.ui.signin
  *
  * 零 android import，也不读墙钟/时区/权限/`Build.VERSION`（本仓明文规矩：设备事实留在调用点
  * 当参数传进来，同 [shouldSubmitScan] 与 `WidgetDataSynchronizer.planSnapshotWrites`）：
- * 在飞与否来自 `flight.value`、是否同一枚 payload 来自状态机自己那枚 `dispatchingPayload`、
+ * 在飞与否来自调用点那一次**原子领取**的结果（T395①：递交入口不止两条、也不都在主线程，
+ * 一次 `flight.value` 的读在两颗线程之间会过期，所以这里递进来的不是读而是
+ * `flight.compareAndSet(false → true)` 的反面）、是否同一枚 payload 来自状态机自己那枚 `dispatchingPayload`、
  * 冷却剩余来自闸门那颗刚写下的账、这一手是不是重试来自入口是相机帧还是相册。
  * 输出**不折成一枚 Boolean**：五档，其中"丢"那一族三档各配一句自己的话，档位与句子的对应
  * 由 [droppedArrivalCardText] / [droppedArrivalTraceText] 一处给出，调用点一个字都不拼。
@@ -50,10 +52,13 @@ internal const val NoLedgerCooldownRemainingMillis = 0L
 internal sealed interface ScanFlightAdmission {
 
     /**
-     * 投：状态机此刻空着，这一手可以往下走（解析、置在飞、发那一发请求）。
+     * 投：这一手**领到了**闸门（状态机此刻空着，`compareAndSet(false → true)` 赢在这一手上），
+     * 可以往下走（解析、发那一发请求）。
      *
      * 这一档成立时其余四枚输入一律不看 —— 不是遗漏，是本颗的优先级本身（没有东西在飞，
      * 就没有什么可丢的），表驱动单测把这一格钉成"朝宽扭不动"。
+     * ⚠️ T395① 之后"置在飞"这一手不在这里了：闸门在问判据**之前**就已经被领走，
+     * 所以拿到这一档的调用点不许再去写那颗旗（写了就是第二次领，正是本卡收的那一枚）。
      */
     data object Dispatch : ScanFlightAdmission
 
@@ -116,7 +121,12 @@ internal sealed interface ScanFlightAdmission {
  * 4. 在飞 + 同一枚 payload ⇒ [ScanFlightAdmission.DropSameCodeWhileDispatching]；
  * 5. 其余 ⇒ [ScanFlightAdmission.DropNewCodeWhileDispatching]，把冷却剩余带进句子里。
  *
- * @param dispatching 状态机此刻有没有一发在飞（调用点读 `flight.value`）
+ * @param dispatching 这一手**没有**领到闸门（T395①）：调用点递进来的是
+ *        `flight.compareAndSet(false → true)` 的反面，不是一次 `flight.value` 的读 ——
+ *        相机兜底那一手在 CameraX 的分析线程上、ML Kit 与相册那两路在主线程，
+ *        一份读在两颗线程之间会过期，而它正是"两发真请求一起飞"那个后果的入口。
+ *        线程本身不在参数表里：它是调用点属性，不是判据事实
+ *        （同一处境下两颗线程的正确档位一模一样，递线程进去只能让调用点拿到结论之后再判一次）
  * @param isRetryHand 这一手是不是用户主动递进来的再一次动作（相册那张图 = true；相机按帧 = false）
  * @param samePayloadAsDispatching 这一手与正在飞的那一枚是不是同一份原文；
  *        不投的那几档它才有意义，所以调用点没在飞时传什么都行
