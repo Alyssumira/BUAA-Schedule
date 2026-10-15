@@ -18,9 +18,21 @@ import org.junit.Test
  * - **反套套逻辑那一对（0 与 1 同时算）**：改前那一手 `failureReason = outcome.exceptionOrNull()...`
  *   在**代码里 0 枚**、在**含注释的原文里恰好 1 枚**（KDoc 逐字留着做取证，同 T261 那一族）。
  *   只查 0 那一半就成了「把取证删干净也算绿」，两半必须同批复算。
- * - **名册逐枚点名（覆盖面尺）**：main 里「取消复投那一族」按三枚针数出的文件与枚数逐枚点名，
- *   总数与文件数都钉成写死值。这一格拦的是"册子与盘面各说各话"——新写一枚复投不进来、
+ * - **名册逐枚点名（覆盖面尺）**：main 里「取消那一族的落点」按三枚针数出的文件与枚数逐枚点名，
+ *   总数与文件数都钉成写死值。这一格拦的是"册子与盘面各说各话"——新写一枚复投或分类不进来、
  *   或把在册某一枚悄悄摘掉，都在这里红，且消息念实到枚数与实到文件数。
+ *   ⚠️ 这把尺钉的**不是**「只准有复投」：只分类不复投的落点从 T365 起就合法在册
+ *   （`UpdateFetchSettlement.fateOf` 那一格就是），所以名册里每一枚都点名写清它靠哪一行、
+ *   那一行是分类还是复投 —— 光把两个写死值改大是不算登记完的（T397② 就是这么补注释的）。
+ *
+ * ## T397② 重钉这一族（追加，不改上面任何一格判据）
+ *
+ * 卡 T392 把 iClass 登录失败折成九档中文之后，`domain/signin/LoginFailure.kt` 的九档梯子那一格
+ * （`cause is CancellationException -> LoginFailureRung.WithdrawnLocally`）被这三枚针数到，
+ * 盘面于是 10 枚文件／11 枚手而名册 9／10 ⇒ 本守卫的 ③ 红了一格、gate/37 不合并。
+ * 那枚登记是**正当**的（分类行本来就上册），而 T397① 又给 `data/import/IClassApi.kt` 的 `login()`
+ * 补了真正的复投那一手（把裹在外面的 `runCatching` 换成 try／catch 取消那一型复投／catch 其余才折档），
+ * 于是名册同批重钉成 **11 枚文件／12 枚手**。上面 ① ② ④ 三格与三枚针一字未动。
  *
  * ## 为什么四格都不许改成 >=
  *
@@ -33,8 +45,9 @@ import org.junit.Test
  * 本守卫只读 `src/main/java` 的工作树文本（JVM，无 Robolectric、无设备、不读钟），
  * 那棵树已由 `app/build.gradle.kts` 里 `guardReadWorkingTreeFiles` 整体声明成 `testDebugUnitTest` 的输入。
  * ⚠️ 未装机：取消那一手的屏上读数（不再弹「检查更新失败」）只由判据单测与本守卫的锚点核对背书，零 adb 读数。
- * 代价：谁在 main 里新增或摘掉一枚取消复投，都得回来把 `EXPECTED_RETHROW_HANDS`／`EXPECTED_RETHROW_FILES`
- * 与名册同批重钉（报错消息会念「实到 N 枚 expected:<M>」）；
+ * 代价：谁在 main 里新增或摘掉一枚取消那一族的落点（复投**或**分类），都得回来把
+ * `EXPECTED_RETHROW_HANDS`／`EXPECTED_RETHROW_FILES` 与名册同批重钉，并把那一枚的来路
+ * （哪一行、分类还是复投）写进 `ROSTER` 的注释里（报错消息会念「实到 N 枚 expected:<M>」）；
  * 在册那把助手形状尺（`CommentStrippingHelperShapeGuardTest` 的四枚写死值）本文件一个字都不碰——
  * 本卡的抹注释助手走 `buildString` 逐段拼，刻意不写成「铺成字符数组、收尾再把数组包成字符串」那一族形状。
  */
@@ -65,25 +78,49 @@ class UpdateCheckCancellationRethrowGuardTest {
         const val OUTCOME_FAIL_WRITE = "putString(KEY_LAST_OUTCOME, OUTCOME_FAILED)"
         const val EDIT_OPEN = "store.edit {"
 
-        // ── ③ 名册：main 里「取消复投那一族」的三枚针（互相不是子串，可分别数）──
+        // ── ③ 名册：main 里「取消那一族的落点」的三枚针（互相不是子串，可分别数）──
+        // ⚠️ 三枚针本身一字未动（改针就是改尺，本卡的题眼恰是"尺不许被顺手朝上重钉"）。
         val RETHROW_NEEDLES = listOf(
             "is CancellationException",
             "catch (e: CancellationException)",
             "catch (e: kotlinx.coroutines.CancellationException)",
         )
+        /**
+         * 名册：每枚点名**来路**（靠哪一行、那一行是分类还是复投），逐枚如下 ——
+         * T397② 把这把尺的口径写明白：它数的是「main 里碰过取消那一族的落点」，
+         * 不是「只准有复投」。只分类不复投的落点本来就合法在册（`UpdateFetchSettlement` 从 T365 起就是），
+         * 所以"册子涨枚数"与"某一格复投被摘掉"在这把尺上是两件事，都得靠来路那一栏分辨。
+         */
         val ROSTER = listOf(
-            "com/buaa/schedule/domain/update/UpdateFetchSettlement.kt" to 1,
-            "com/buaa/schedule/reminder/BootReceiver.kt" to 1,
-            "com/buaa/schedule/reminder/TomorrowPreviewReceiver.kt" to 1,
-            "com/buaa/schedule/ui/ScheduleViewModel.kt" to 1,
-            "com/buaa/schedule/ui/signin/SpocScanScreen.kt" to 1,
+            // 复投 ×2：`if (settlement.rethrowsCancellation && error is CancellationException) throw error`
+            //        ＋ 撤销忽略那一手里同型的 `if (error is CancellationException) throw error`
             "com/buaa/schedule/update/UpdateCheck.kt" to 2,
+            // 分类：`error is CancellationException -> UpdateFetchFate.Cancelled`（fateOf 那一格，内核半）
+            "com/buaa/schedule/domain/update/UpdateFetchSettlement.kt" to 1,
+            // 分类（T392① 落盘、T397② 上册）：`cause is CancellationException -> LoginFailureRung.WithdrawnLocally`
+            //  —— 这是九档梯子那一格的**判档**，句子与档都未动；复投住在调用点，不在这里
+            "com/buaa/schedule/domain/signin/LoginFailure.kt" to 1,
+            // 复投（T397① 新落点）：`catch (e: CancellationException) { throw e }`，
+            //  排在 `catch (cause: Throwable) { Result.failure(spokenLoginFailureOrSelf(cause)) }` 之前
+            "com/buaa/schedule/data/import/IClassApi.kt" to 1,
+            // 复投：`catch (e: kotlinx.coroutines.CancellationException)`（BootReceiver 自己那句口径）
+            "com/buaa/schedule/reminder/BootReceiver.kt" to 1,
+            // 复投：同一型的 catch（明日预告那一支广播）
+            "com/buaa/schedule/reminder/TomorrowPreviewReceiver.kt" to 1,
+            // 复投：`suspendCatching` 里那一手（KDoc「取消是控制流，不是错误」的落点）
+            "com/buaa/schedule/ui/ScheduleViewModel.kt" to 1,
+            // 复投：`if (error is CancellationException) throw error`（扫码页递交那一手）
+            "com/buaa/schedule/ui/signin/SpocScanScreen.kt" to 1,
+            // 复投：`readChainSnapshotOrNull` 那一形的 `catch (e: kotlinx.coroutines.CancellationException)`；
+            //  ⚠️ 同文件 :49 的散文里还有第二形，被 withoutComments 抹掉 ⇒ 1 枚而不是 2 枚
             "com/buaa/schedule/widget/BackgroundSync.kt" to 1,
+            // 复投：`catch (e: CancellationException)`
             "com/buaa/schedule/widget/WidgetCommon.kt" to 1,
+            // 复投：`catch (e: kotlinx.coroutines.CancellationException)`
             "com/buaa/schedule/widget/WidgetRefreshReceiver.kt" to 1,
         )
-        const val EXPECTED_RETHROW_HANDS = 10
-        const val EXPECTED_RETHROW_FILES = 9
+        const val EXPECTED_RETHROW_HANDS = 12
+        const val EXPECTED_RETHROW_FILES = 11
 
         // ── ④ 判据文件那三格反着的形状 ＋ 纯度口径 ──
         const val KERNEL_NO_PERSIST = "persistsRun = false,"
@@ -244,7 +281,7 @@ class UpdateCheckCancellationRethrowGuardTest {
         )
     }
 
-    // ─────────── ③ 取消复投那一族的名册（覆盖面尺，逐枚点名）───────────
+    // ─────────── ③ 取消那一族的落点名册（覆盖面尺，逐枚点名：分类与复投两类都登记）───────────
 
     @Test
     fun `main 里取消复投那一族的名册与盘面对得上`() {
@@ -272,7 +309,8 @@ class UpdateCheckCancellationRethrowGuardTest {
         val rosterKeys = ROSTER.map { it.first }.sorted()
         val diskKeys = counted.keys.sorted()
         assertEquals(
-            "名册外的文件数出取消复投（或名册里的文件已经没这一手了）：\n  盘面 " + diskKeys.size + " 枚 ｜ 实到 " +
+            "名册外的文件数出取消那一族的落点（分类或复投；或名册里的文件已经没这一手了）：\n  盘面 " +
+                diskKeys.size + " 枚 ｜ 实到 " +
                 diskKeys.joinToString(" ／ ") + "\n  名册 " + rosterKeys.size + " 枚 ｜ 在册 " +
                 rosterKeys.joinToString(" ／ "),
             rosterKeys,
@@ -285,12 +323,14 @@ class UpdateCheckCancellationRethrowGuardTest {
             }
             .filterNotNull()
         assertTrue(
-            "逐枚点名对不上（枚数写的是 T365③ 落盘那天抹注释后的现量）：" + mismatches.joinToString(" ／ "),
+            "逐枚点名对不上（枚数写的是 T365③ 落盘那天抹注释后的现量；" +
+                "T397② 同批重钉为 11 枚文件／12 枚手，逐枚来路——哪一行、分类还是复投——写在 ROSTER 注释里）：" +
+                mismatches.joinToString(" ／ "),
             mismatches.isEmpty(),
         )
         assertEquals(
-            "main 里取消复投那一族总数 = " + EXPECTED_RETHROW_HANDS + " 枚（实到 " + total + " 枚）。" +
-                "少一枚 = 有一处吞了取消（本卡病灶在别处复发）；多一枚 = 新写了一处复投却没进本名册，" +
+            "main 里取消那一族的落点总数 = " + EXPECTED_RETHROW_HANDS + " 枚（实到 " + total + " 枚）。" +
+                "少一枚 = 有一处吞了取消（本卡病灶在别处复发）；多一枚 = 新写了一处复投或分类却没进本名册，" +
                 "而下一枚卡照本册子判" +
                 "「这一族收干净了」就会判错",
             EXPECTED_RETHROW_HANDS,

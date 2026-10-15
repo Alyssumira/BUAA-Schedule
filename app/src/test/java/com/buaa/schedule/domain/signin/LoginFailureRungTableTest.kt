@@ -21,6 +21,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -44,10 +45,14 @@ import org.junit.Test
  *
  * ## 钉不住的行为（明说，不许用「覆盖了」这个词）
  *
- * 本文件钉的是**档位表 + 折档那一手**。它不证明真机上究竟抛出过哪几档（表里那些 JVM 类名的出现频率
+ * 本文件钉的是**档位表 + 折档那一手 + 复投那一手**（最后一枚是 T397② 追加的接线守卫格）。
+ * 它不证明真机上究竟抛出过哪几档（表里那些 JVM 类名的出现频率
  * 一条都没取证到）、不证明 `HttpURLConnectionIClassTransport` 在哪一档会抛哪一枚、不证明屏上那一句
  * 被画出来之后的样子（那是组合期的事，本模块没有 compose 测试规则），也不证明签到那一路（`signIn`）
  * 的话 —— 那一路本卡一字未动，同族缺口登记给编排者与另一枚只读审计卡。
+ * ⚠️ T397② 那一格额外不证明的一件事也得写在这里：**取消到底能不能进到登录那一手**（零装机、
+ * 在册样本 0 枚，`loginAttempt` 又是非挂起函数）—— 那一格钉的是"假如进到了就必须原样复投"这一形状，
+ * 不是"这条路真走过"。
  */
 class LoginFailureRungTableTest {
 
@@ -399,6 +404,125 @@ class LoginFailureRungTableTest {
         assertEquals("signIn 段里内核的枚数：", 0, occurrences(signInBlock, "LoginFailureClassifier"))
         assertEquals("逐字那一档的判据必须是契约而不是文本形状：", 1, occurrences(code, "== LoginFailureRung.SpokenVerbatim"))
         assertEquals("本机那一枚只许挂一次 cause：", 1, occurrences(code, "initCause(raw)"))
+    }
+
+    /**
+     * T397②：登录这一手的**复投**接线守卫（第⓪问裁的丙档形状 = 在册卡 T365 那一族两半里的调用点那一半）。
+     *
+     * 这一格问的是「取消在这一手到底被折成一次登录结果，还是原样往上传」。改前它是被折的，而折它的
+     * 不是 `spokenLoginFailureOrSelf` 那枚助手、是**裹在它外面那一层** `runCatching`（它吃 `Throwable`）：
+     * 取消走到调用点时已经换成一枚 [IClassLoginFailedException]，屏上念的是
+     * 「这一趟登录在本机被收回了…也没有拿到 id」——
+     * 那句话本身就把"取消"念成了一次登录结果，而这正是本卡要拆掉的。
+     *
+     * ⚠️ 钉法里最要紧的一枚是 `runCatching` 那 **0**：只在原来那一支 catch 里补一句复投是一枚 no-op
+     * （复投发生在它的块之内，同一层 runCatching 会把它再吃一遍），第⓪问的裁定整个落在这枚数字上。
+     * 两半也不许合成一半：判档仍住在 domain 那张表（第三枚断言量的就是这件事），复投只住在这一个调用点。
+     *
+     * 朝宽判红（W 臂，摘掉复投那一手）：行为那一格先红（`assertThrows` 拿不到取消，login() 交回的
+     * 是一枚失败的 Result），随后形状那五枚（1／1／0／1／1）与顺序那一枚、在册名册那一格一起红。
+     * 朝窄判红（N 臂，摘掉 rungOf 里取消那一格）：这一格第三枚断言红，而
+     * ① 那格（九档缺一档）与 ⑥ 那格一起红。
+     *
+     * 覆盖面（诚实写明，别当它没有）：这一格只钉登录那一路。`signIn` 那一路仍整段裹在 runCatching 里、
+     * 一枚复投都没有，而 `Error` 那一族也仍被折成一次失败返回 —— 两样都是卡面划下的**已知缺口**
+     * （改前既有），不是这一格放过去的绿灯。取消到底能不能进到这只手，本卡零装机、没有证到，见提交。
+     */
+    @Test
+    fun `取消在登录这一手原样复投而不折成一次登录结果`() {
+        val cancellation = CancellationException("Job was cancelled")
+        var calls = 0
+        val api = IClassApi(
+            IClassTransport { _, _, _ ->
+                calls++
+                throw cancellation
+            },
+        )
+        val thrown = assertThrows(CancellationException::class.java) {
+            runBlocking { api.login("13800000000", "se cret") }
+        }
+        assertEquals(
+            buildString {
+                append("取消那一手发了 ")
+                append(calls)
+                append(" 趟（本该恰好一趟，且不许在发出去之前就被折成一句登录结果）")
+            },
+            1,
+            calls,
+        )
+        // ⚠️ 写死之前先在同一枚对象上现量（本仓口径），而这一格的现量纠正了我原本的打算：
+        // 交回调用点的类型确实是取消那一型（class = java.util.concurrent.CancellationException、
+        // message 逐字还是 "Job was cancelled"），但**对象身份不保证是原来那一枚** ——
+        // 协程 builder 对一枚不是 JobCancellationException 的普通 CancellationException 会造一枚
+        // 同 message 的新 CE，把原来那一枚归到 cause 或 suppressed 上。所以这里钉的是
+        // 「类型仍是取消那一型 ＋ 原来那一枚还在场」，不钉「同一枚对象」（后者是过严的假针）。
+        val carried = thrown === cancellation ||
+            thrown.cause === cancellation ||
+            thrown.suppressed.any { it === cancellation }
+        assertTrue(
+            buildString {
+                append("交回调用点的这一枚里找不到原来那一枚取消（实到类型 ")
+                append(thrown.javaClass.name)
+                append("、message ")
+                append(thrown.message)
+                append("、cause ")
+                append(thrown.cause?.javaClass?.name ?: "(空)")
+                append("、suppressed ")
+                append(thrown.suppressed.map { it.javaClass.name }.joinToString().ifEmpty { "(空)" })
+                append("）：换了本体又丢了原来那一枚，就是又折了一层 —— ")
+                append("调用点既拿不到「这一手是被谁收回的」，取证行也念不出形状")
+            },
+            carried,
+        )
+        assertEquals(
+            buildString {
+                append("两半不许合成一半：判档仍住在内核（实到 ")
+                append(LoginFailureClassifier.rungOf(cancellation))
+                append("）—— 调用点复投的是取消本体，「这一手是取消」这件事仍由那张表回答")
+            },
+            LoginFailureRung.WithdrawnLocally,
+            LoginFailureClassifier.rungOf(cancellation),
+        )
+
+        val code = codeOnly(sourceFile(API))
+        val loginBlock = balancedBlock(code, "suspend fun login(")
+        for ((label, anchor, expected) in listOf(
+            Triple("取消那一型的 catch", "catch (e: CancellationException)", 1),
+            Triple("复投那一手", "throw e", 1),
+            Triple("吃掉取消的那一层（它留着上面那一手就在块之内）", "runCatching", 0),
+            Triple("折档那一手（复投不许把折档一起摘掉）", "spokenLoginFailureOrSelf(cause)", 1),
+            Triple("宽 catch（其余各档仍在这里折）", "catch (cause: Throwable)", 1),
+        )) {
+            assertEquals(
+                buildString {
+                    append(API)
+                    append(" 的 login 段里")
+                    append(label)
+                    append("「")
+                    append(anchor)
+                    append("」实到 ")
+                    append(occurrences(loginBlock, anchor))
+                    append(" 枚，写死 ")
+                    append(expected)
+                    append(" 枚")
+                },
+                expected,
+                occurrences(loginBlock, anchor),
+            )
+        }
+        val rethrowAt = loginBlock.indexOf("catch (e: CancellationException)")
+        val foldAt = loginBlock.indexOf("spokenLoginFailureOrSelf(cause)")
+        assertTrue(
+            buildString {
+                append("顺序钉（本卡题眼）：复投那一型（实到索引 ")
+                append(rethrowAt)
+                append("）必须排在折档那一手（实到索引 ")
+                append(foldAt)
+                append("）之前。排到之后就是先折了一句登录结果、再想起来它是取消 —— ")
+                append("那句话已经写进 Result 了，协程框架什么也没收到")
+            },
+            rethrowAt in 0 until foldAt,
+        )
     }
 
     // ---------------- ⑥ 措辞纪律：每一档自己说话，一个字的凭证都不外流 ----------------
