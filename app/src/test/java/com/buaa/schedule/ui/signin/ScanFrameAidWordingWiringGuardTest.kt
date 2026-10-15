@@ -206,10 +206,14 @@ class ScanFrameAidWordingWiringGuardTest {
             // T257③ 被授权改过 SignInViewModel.kt 的**漏斗**（第四处 `if (flight.value) return`
             // 换成 ScanFlightAdmission 分档 + 一句卡面 + 一行 Log.w），同理前移到那一枚；
             // 两头都有靶子当场复算字节差异，前移不是白给的。
+            // T395① 把状态机这一枚再前移一次：被授权的只有**闸门那一次原子换**（领取与落回各一枚
+            // compareAndSet）。为什么非改不可：递交入口不止两条、也不都在主线程（相机兜底那一手就在
+            // CameraX 的分析线程上就地调状态机），"读→判→写"在两颗线程之间不是原子的一步，两发真请求
+            // 可以一起飞出去。差集大小由下面那枚 T395 靶子当场复算，反向钉照旧不删、不放宽。
             // 反向钉一枚没删、没放宽：闸门与状态机从今往后照样"不许顺手改"。
             val rev = when (relative) {
                 GATE_FILE -> T245_GATE_BASELINE
-                VIEW_MODEL_FILE -> T257_VIEW_MODEL_BASELINE
+                VIEW_MODEL_FILE -> T395_VIEW_MODEL_BASELINE
                 else -> T90_BASELINE
             }
             val baseline = gitShow(rev, path)
@@ -247,6 +251,38 @@ class ScanFrameAidWordingWiringGuardTest {
             "新基线的状态机不再问 ScanFlightAdmission（前移的后面不是本卡改的那一手）：",
             newViewModel.contains("scanFlightAdmission("),
         )
+        // ---- 靶子（T395①）：状态机这一枚第二次前移押的就是「闸门那一次原子换」，别的一字没动 ----
+        // 中间那一枚（00b0b51）里闸门两次裸写 + 一次会过期的读必须还在；本卡那一枚里它们必须归零，
+        // CAS 恰好两枚（领取 + 落回）。差集不许更大：闸门之外那七处在新基线里枚数一字不动。
+        val gateShape = gitShow(T257_VIEW_MODEL_BASELINE, viewModelPath)
+        val gateClaimed = gitShow(T395_VIEW_MODEL_BASELINE, viewModelPath)
+        check(gateShape != null && gateClaimed != null) {
+            "状态机闸门的两份基线取不到（$viewModelPath），T395① 的靶子无从复算"
+        }
+        assertTrue(
+            "SignInViewModel.kt 在 00b0b51 与 T395① 基点上逐字节相同 ⇒ 这一枚基点前移是白给的，反向钉已经空转",
+            normalizeNewlines(gateShape) != normalizeNewlines(gateClaimed),
+        )
+        val gateShapeCode = withoutComments(gateShape)
+        val gateClaimedCode = withoutComments(gateClaimed)
+        assertEquals("00b0b51 那份闸门还是两次裸写（「读→判→写」里的那两回写）：", 2, occurrences(gateShapeCode, "flight.value = "))
+        assertEquals("00b0b51 那份递给判据的是一次会过期的读（本卡收的就是这一格）：", 1, occurrences(gateShapeCode, "dispatching = flight.value"))
+        assertEquals("00b0b51 那份一枚原子换都没有（靶子取错了就量不出本卡那一手）：", 0, occurrences(gateShapeCode, "flight.compareAndSet"))
+        assertEquals("T395① 那份的闸门写点应当恰好两枚原子换（领取 + 落回）：", 2, occurrences(gateClaimedCode, "flight.compareAndSet"))
+        assertEquals("T395① 那份又长回裸写（读→判→写那一形状从这一格复活）：", 0, occurrences(gateClaimedCode, "flight.value = "))
+        assertEquals("T395① 那份递给判据的不是领取的结果：", 1, occurrences(gateClaimedCode, "dispatching = !claimed"))
+        for ((needle, expected) in listOf(
+            "if (flight.value) return" to 3,
+            "MutableStateFlow(false)" to 1,
+            "val inFlight: StateFlow<Boolean>" to 1,
+            "scanFlightAdmission(" to 1,
+            "tellDroppedArrival(" to 2,
+            "dispatchingPayload" to 4,
+            "Log.w(TAG, droppedArrivalTraceText(" to 1,
+        )) {
+            assertEquals("T395① 没被授权动「$needle」，新基线里的枚数与 00b0b51 那份对不上：", expected, occurrences(gateClaimedCode, needle))
+            assertEquals("00b0b51 那份「$needle」的枚数不是 $expected（靶子取错了，这么比量不出东西）：", expected, occurrences(gateShapeCode, needle))
+        }
         // 帧观测那颗内核的头部：挖掉 T92 的「空转速率」一段之外逐字节（同一把尺子，另一枚文件）
         val flowPath = "$MAIN_PREFIX/$FRAME_FLOW_FILE"
         val flowBaseline = gitShow(T90_BASELINE, flowPath)
@@ -611,6 +647,13 @@ class ScanFrameAidWordingWiringGuardTest {
          * 基点前移到这一枚；靶子在本条守卫里当场复算新旧两份的字节差异。
          */
         const val T257_VIEW_MODEL_BASELINE = "00b0b51"
+
+        /**
+         * T395①：[VIEW_MODEL_FILE] 的逐字节基点第二次前移。被授权的只有闸门那一次原子换
+         * （领取 + 落回各一枚 `compareAndSet`），差集形状由本条守卫里那枚 T395 靶子当场复算。
+         * [T257_VIEW_MODEL_BASELINE] 留在原地不删 —— 它是靶子的"前一头"。
+         */
+        const val T395_VIEW_MODEL_BASELINE = "869fc13"
 
         /**
          * T92（#133）被授权改动的那一段（[FRAME_FLOW_FILE] 头部"空转有多少帧"的读数）的两个锚点，

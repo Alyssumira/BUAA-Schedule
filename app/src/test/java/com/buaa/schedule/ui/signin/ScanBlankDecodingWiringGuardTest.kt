@@ -202,6 +202,14 @@ class ScanBlankDecodingWiringGuardTest {
             // 前移的实物由下面那枚靶子当场复算（新旧两份状态机逐字节不同才允许不同源）。
             // 状态机从今往后照样"不许顺手改"：改它就得连带重钉这一枚与本文件的反向钉。
             //
+            // T395① 把状态机那一枚的基点从 00b0b51（T257③ 那一枚）再前移一次：被授权改的只有
+            // **闸门那一次原子换**（`dispatching` 的出处从 `flight.value` 那次读换成
+            // `flight.compareAndSet(false → true)` 的结果，落回从裸写换成 CAS）。
+            // 为什么这一枚非改不可：递交入口不止两条、也不都在主线程（相机兜底那一手就在 CameraX 的
+            // 分析线程上就地调状态机），于是"读→判→写"在两颗线程之间不是原子的一步，两发真请求可以
+            // 一起飞出去。差集的大小由下面那枚 T395 靶子当场复算（闸门之外那七处枚数一字不动），
+            // 反向钉照 T245②／T257③／T309① 那一套：不删、不放宽，只把基点押到被授权的那一手上。
+            //
             // T309① 前移第三枚：REJECT_FILE（ScanReject.kt）的基点从 6a27324 前移到 T302① 那枚提交。
             // 被授权改的是**四刀委托**：`urlSchemeOf(text)` / `urlPathOf(text)` / `urlAuthority(text)` /
             // `splitAuthority(it)` 这四处原本同包的裸调用改成跨层写全限定名 `com.buaa.schedule.domain.url.*`，
@@ -216,7 +224,7 @@ class ScanBlankDecodingWiringGuardTest {
             // 谁再动它的判据或措辞，逐字节那一头当场红。
             val rev = when (relative) {
                 GATE_FILE -> T245_GATE_BASELINE
-                VIEW_MODEL_FILE -> T257_VIEW_MODEL_BASELINE
+                VIEW_MODEL_FILE -> T395_VIEW_MODEL_BASELINE
                 REJECT_FILE -> T302_REJECT_BASELINE
                 else -> T87_BASELINE
             }
@@ -255,6 +263,41 @@ class ScanBlankDecodingWiringGuardTest {
             "新基线的状态机不再问 ScanFlightAdmission（前移的后面不是本卡改的那一手）：",
             newViewModel.contains("scanFlightAdmission("),
         )
+        // ---- 靶子（T395①，照 T257③／T309① 那一套写法）：状态机这一枚第二次前移押的是「闸门那一次原子换」 ----
+        // 两头都有实物：中间那一枚（00b0b51）里闸门的两次裸写与那一次会过期的读必须还在，
+        // 本卡那一枚（基点）里它们必须一枚都不剩，而 CAS 恰好两枚（领取 + 落回）。
+        // 差集不许比这更大：闸门之外那七处（三处按按钮的守卫、唯一那颗闸门字段与它的 StateFlow、
+        // 漏斗、说话那颗、取证行、原文字段的落点数）在新基线里枚数与中间那一枚一字不动。
+        val gateShape = gitShow(T257_VIEW_MODEL_BASELINE, viewModelPath)
+        val gateClaimed = gitShow(T395_VIEW_MODEL_BASELINE, viewModelPath)
+        check(gateShape != null && gateClaimed != null) {
+            "状态机闸门的两份基线取不到（$viewModelPath），T395① 的靶子无从复算"
+        }
+        assertTrue(
+            "SignInViewModel.kt 在 00b0b51 与 T395① 基点上逐字节相同 ⇒ 这一枚基点前移是白给的，反向钉已经空转",
+            normalizeNewlines(gateShape) != normalizeNewlines(gateClaimed),
+        )
+        val gateShapeCode = withoutComments(gateShape)
+        val gateClaimedCode = withoutComments(gateClaimed)
+        // 被授权的那一手（写点从两枚裸写换成两枚 CAS，判据吃的从读换成领取的结果）
+        assertEquals("00b0b51 那份闸门还是两次裸写（「读→判→写」里的那两回写）：", 2, occurrences(gateShapeCode, "flight.value = "))
+        assertEquals("00b0b51 那份递给判据的是一次会过期的读（本卡收的就是这一格）：", 1, occurrences(gateShapeCode, "dispatching = flight.value"))
+        assertEquals("00b0b51 那份一枚原子换都没有（靶子取错了就量不出本卡那一手）：", 0, occurrences(gateShapeCode, "flight.compareAndSet"))
+        assertEquals("T395① 那份的闸门写点应当恰好两枚原子换（领取 + 落回）：", 2, occurrences(gateClaimedCode, "flight.compareAndSet"))
+        assertEquals("T395① 那份又长回裸写（读→判→写那一形状从这一格复活）：", 0, occurrences(gateClaimedCode, "flight.value = "))
+        assertEquals("T395① 那份递给判据的不是领取的结果：", 1, occurrences(gateClaimedCode, "dispatching = !claimed"))
+        for ((needle, expected) in listOf(
+            "if (flight.value) return" to 3,
+            "MutableStateFlow(false)" to 1,
+            "val inFlight: StateFlow<Boolean>" to 1,
+            "scanFlightAdmission(" to 1,
+            "tellDroppedArrival(" to 2,
+            "dispatchingPayload" to 4,
+            "Log.w(TAG, droppedArrivalTraceText(" to 1,
+        )) {
+            assertEquals("T395① 没被授权动「$needle」，新基线里的枚数与 00b0b51 那份对不上：", expected, occurrences(gateClaimedCode, needle))
+            assertEquals("00b0b51 那份「$needle」的枚数不是 $expected（靶子取错了，这么比量不出东西）：", expected, occurrences(gateShapeCode, needle))
+        }
         // ---- 靶子（T309①，照上面 T257③ 那条先例的写法）：ScanReject.kt 这次前移的差集**恰好**是那四刀＋那段注释 ----
         // ⚠️ 不许只写成"新旧两份逐字节不同就通过"：那只能证明前移不是白给的，证不了差集里只有被授权的那一手。
         // 下面四枚格子的期望值全部手写（326 行 / 330 行 / 四刀 / 三行注释），最后一枚才是真防线：
@@ -555,6 +598,15 @@ class ScanBlankDecodingWiringGuardTest {
          * 所以 [VIEW_MODEL_FILE] 的逐字节基点前移到这一枚 —— 靶子在本条守卫里当场复算。
          */
         const val T257_VIEW_MODEL_BASELINE = "00b0b51"
+
+        /**
+         * T395①：状态机那一枚的基点第二次前移。被授权的只有**闸门那一次原子换**（领取与落回各一枚
+         * `compareAndSet`，判据吃的从 `flight.value` 那次读换成领取的结果），差集的大小由 ⑤b 那枚
+         * T395 靶子当场复算：闸门之外那七处枚数一字不动。
+         *
+         * [T257_VIEW_MODEL_BASELINE] 留在原地不删：它是靶子的"前一头"，没有它这份差集就无从复算。
+         */
+        const val T395_VIEW_MODEL_BASELINE = "869fc13"
 
         /**
          * T302①（由编排者 10-12 裁「并尺合法」授权）把 [REJECT_FILE] 里那四刀同包裸调用改成跨层委托

@@ -40,6 +40,12 @@ class ScanFlightArrivalWiringGuardTest {
      * 本卡的病灶就是 `if (flight.value) return` 那一句 —— 它把一次扫码吃掉而屏上一个字都不说。
      * 钉的不是"这一句没了"，而是"这一手的出路全部出自判据"：Dispatch → 真发，
      * Dropped → 说话，DropAlreadyNoticed → 显式写出来的不念（不是 when 缺支）。
+     *
+     * ⚠️ T395① 把"在飞与否"这一枚输入的**出处**从一次读换成了一次原子换（`claimed`）：
+     * 两枚线程各自 `flight.value` 读到 false、各自拿到 Dispatch 把两发真请求打出去，是这一颗闸门
+     * 当时的形状。所以这一格从"递给判据的是 `flight.value`"重钉成
+     * "递给判据的是领取的结果，而那次领取必须排在问判据之前"——方向是**收紧**：
+     * 现在递一份会过期的读会红，多一处裸写 `flight.value = ` 也会红。
      */
     @Test
     fun theFunnelHandsEveryArrivalToTheKernelInsteadOfReturningSilently() {
@@ -49,7 +55,12 @@ class ScanFlightArrivalWiringGuardTest {
             "$VIEW_MODEL_FILE 的 signIn 不再问 scanFlightAdmission：投不投又回到调用点自己判了（两份真相）\n$signIn"
         }
         assertEquals("signIn 里还留着静默的 return：$signIn", 0, occurrences(signIn, "return"))
-        assertTrue("在飞这一位没递给判据（判据就会自己去读状态机）：$signIn", signIn.contains("dispatching = flight.value"))
+        // T395①：领取（一次原子换）排在问判据之前，判据吃的是它的结果而不是又读一次
+        val claim = signIn.indexOf("flight.compareAndSet(expect = false, update = true)")
+        check(claim >= 0) { "signIn 里不再有那次原子换的领取（读→判→写那一形状回来了）：\n$signIn" }
+        assertTrue("领取排到了问判据之后（那又是拿一份过期的读去判）：", claim < signIn.indexOf("scanFlightAdmission("))
+        assertTrue("在飞这一位递的不是领取的结果（判据就会自己去读一份会过期的状态）：$signIn", signIn.contains("dispatching = !claimed"))
+        assertEquals("在飞这一位又回到一次裸读：", 0, occurrences(signIn, "dispatching = flight.value"))
         assertTrue("「是不是同一枚」没递给判据：$signIn", signIn.contains("samePayloadAsDispatching ="))
         assertTrue("「这一次在飞念过没有」没递给判据：$signIn", signIn.contains("alreadyNoticedForThisDispatch = dropNoticed"))
         assertTrue("Dispatch 那一支接的不是真发那一发：$signIn", signIn.contains("ScanFlightAdmission.Dispatch -> dispatchNow(raw)"))
@@ -83,32 +94,47 @@ class ScanFlightArrivalWiringGuardTest {
     }
 
     /**
-     * ③ 三枚对子成对：置位排在派发之前，清场排在同一颗 finally 里。
+     * ③ 三枚对子成对：闸门在问判据之前领到手，另两枚在派发之前写好，三样在同一颗 finally 里落回。
      *
      * 这正是本仓被"成对字段漏清"这一族打过很多次的那个形状：
-     * - 漏 `flight.value = false` 就是按钮永久按灭；
+     * - 漏闸门的落回就是按钮永久按灭（`inFlight` 停在 true）；
      * - 漏 `dispatchingPayload = null` 就是把上一发的原文当成这一发的比较基准，
      *   于是下一张码被误判成"同一枚"，界面对用户说谎；
      * - 漏 `dropNoticed = false` 就是把下一次在飞的那一句永久按住不念（回到静默那一档）。
+     *
+     * ⚠️ T395① 换的是**闸门那一对的写法**，不是把它拆散：领取从 `dispatchNow` 里那颗
+     * `flight.value = true` 上移到漏斗的一次 `compareAndSet(false → true)`，落回从
+     * `flight.value = false` 换成 [releaseFlight] 里那颗 `compareAndSet(true → false)`。
+     * 于是这一格多钉两件从前不成立的事：**闸门字段不许有裸写**（那就是读→判→写复活），
+     * 以及落回必须以 CAS 落在同一颗 finally 里（旁观者落不动，见 [ScanFlightClaimTest] ⑤⑤b）。
      */
     @Test
     fun theThreeCompanionsAreClaimedBeforeLaunchAndReleasedTogetherInOneFinally() {
         val vm = withoutComments(readMainSource(VIEW_MODEL_FILE))
+        val funnel = balancedBlock(vm, "fun signIn(raw: String, cooldownRemainingMillis: Long, isRetryHand: Boolean)")
+        val claim = funnel.indexOf("flight.compareAndSet(expect = false, update = true)")
+        check(claim >= 0) { "漏斗里没有那次领取，成对账的第一环无从核对：\n$funnel" }
+        assertTrue("领取排到了 Dispatch 那一支之后（判据吃的还是别人的读数）：", claim < funnel.indexOf("dispatchNow(raw)"))
+
         val dispatch = balancedBlock(vm, "private fun dispatchNow(raw: String)")
-        val claim = dispatch.indexOf("flight.value = true")
         val payload = dispatch.indexOf("dispatchingPayload = raw")
         val notice = dispatch.indexOf("dropNoticed = false")
         val launch = dispatch.indexOf("viewModelScope.launch")
-        check(claim >= 0 && payload >= 0 && notice >= 0 && launch >= 0) {
-            "dispatchNow 的置位那三句换了写法，成对账无从核对：\n$dispatch"
+        check(payload >= 0 && notice >= 0 && launch >= 0) {
+            "dispatchNow 的置位那两句换了写法，成对账无从核对：\n$dispatch"
         }
-        assertTrue("置位排到了 launch 之后（协程可能先跑起来，比较基准就是空的）：", maxOf(claim, payload, notice) < launch)
+        assertTrue("置位排到了 launch 之后（协程可能先跑起来，比较基准就是空的）：", maxOf(payload, notice) < launch)
         val finallyAt = dispatch.indexOf("finally {")
         check(finallyAt > launch) { "dispatchNow 没有 finally：任何一条抛出去的路径都会把在飞旗留在 true\n$dispatch" }
         val released = dispatch.substring(finallyAt)
-        for (companion in listOf("flight.value = false", "dispatchingPayload = null", "dropNoticed = false")) {
+        assertEquals("releaseFlight() 没在同一颗 finally 里落回（或落了两处）：$released", 1, occurrences(released, "releaseFlight()"))
+        for (companion in listOf("dispatchingPayload = null", "dropNoticed = false")) {
             assertEquals("$companion 没在同一颗 finally 里清（或清了两处）：$released", 1, occurrences(released, companion))
         }
+        // 闸门字段的写点：领取 + 落回各一枚 CAS，裸写一枚都不许有
+        assertEquals("闸门的写点应当恰好两枚原子换（领取 + 落回）：", 2, occurrences(vm, "flight.compareAndSet"))
+        assertEquals("闸门又长回裸写（读→判→写那一形状就是从这一格复活的）：", 0, occurrences(vm, "flight.value = "))
+        assertEquals("落回那颗函数只许定义一处（第二处就是又一份落回口径）：", 1, occurrences(vm, "private fun releaseFlight()"))
     }
 
     /**
