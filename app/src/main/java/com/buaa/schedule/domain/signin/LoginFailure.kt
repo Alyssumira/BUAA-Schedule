@@ -150,17 +150,36 @@ object LoginFailureClassifier {
     fun screenLine(cause: Throwable): String = sentenceOf(rungOf(cause), cause)
 
     /**
-     * 日志那一行：档位 + 这一档念的是不是原话 + 本机那一枚异常的形状。
+     * 日志那一行：本机这一趟断在哪一档（看最深那一枚）＋ 屏上现在念的是不是本仓/服务端的原话（看顶层那一枚）
+     * ＋ 异常形状（类名）。
+     *
+     * 两层分开是有原因的：折过档之后顶层那一枚已经是本仓写好的中文句（`逐字=是`），
+     * 而"断在哪一档"这件事只活在它下面那一枚上 —— 只报顶层就等于把刚折出来的档位名又丢了一次。
      *
      * `异常原文=未记录` 是**明写的规则**而不是疏漏：传输层那几枚的 message 里带着服务器地址、端口
-     * 与解析出来的 IP，而那一行日志在用户的设备上（release 也剥不掉 Warn 级）。类名不是凭证，留它。
+     * 与解析出来的 IP，而这一行日志在用户的设备上（release 也剥不掉 Warn 级）。类名不是凭证，留它。
      */
     fun forensicsLine(cause: Throwable): String = buildString {
-        val rung = rungOf(cause)
-        append("登录失败分档 档=").append(rung)
-        append(" 逐字念=").append(if (rung == LoginFailureRung.SpokenVerbatim) "是" else "否")
-        append(" JVM=").append(deepestClassName(cause))
+        val spoken = cause is LocallySpokenFailure
+        val raw = deepestOf(cause)
+        append("登录失败分档 档=").append(rungOf(raw))
+        append(" 逐字=").append(if (spoken) "是" else "否")
+        append(" 屏上=").append(if (spoken) "本仓或服务端的那一句" else "本机档位句")
+        append(" JVM=").append(raw.javaClass.simpleName)
         append(" 异常原文=未记录（那一栏可能带着服务器地址与端口）")
+    }
+
+    /** 沿 cause 走到最深的那一枚（有界、认得出自引用）：折过档之后"断在哪一档"只写在这里 */
+    private fun deepestOf(cause: Throwable): Throwable {
+        var node: Throwable = cause
+        var hops = 0
+        while (hops < MaxCauseHops) {
+            val next = node.cause ?: break
+            if (next === node) break
+            node = next
+            hops++
+        }
+        return node
     }
 
     /** 一档一句人话：只有 SpokenVerbatim 那一档不在这里说话，它的话由那一枚异常自己带着 */
@@ -189,19 +208,6 @@ object LoginFailureClassifier {
     private fun verbatimLine(cause: Throwable): String = when (cause) {
         is LocallySpokenFailure -> cause.spokenLine.ifBlank { ownSentenceMissingLine }
         else -> ownSentenceMissingLine
-    }
-
-    /** 沿 cause 走到最深的那一枚（有界、认得出自引用），只交回它的类名：形状可以上日志，原文不行 */
-    private fun deepestClassName(cause: Throwable): String {
-        var node: Throwable = cause
-        var hops = 0
-        while (hops < MaxCauseHops) {
-            val next = node.cause ?: break
-            if (next === node) break
-            node = next
-            hops++
-        }
-        return node.javaClass.simpleName
     }
 
     private const val ownSentenceMissingLine =
