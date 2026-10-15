@@ -93,6 +93,19 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
      * 这一颗再把它丢掉，用户扫到了、系统记下了、屏幕上一个字都没有。按用户决定，丙档：
      * **丢仍然丢**（不发第二发，也绝不自动补投），但这一手必须有名字 —— 见 [signIn] 走的
      * [scanFlightAdmission]。排队那一条被 T59③ 钉死过（重复提交比这次没吃进去更糟），这里不翻案。
+     *
+     * ③″（T395）这一枚的**写者来自两颗线程**，而"读一下 → 判一次 → 再写"在两颗线程之间不是原子的一步：
+     * ML Kit 的解码回调与相册那一路在主线程，兜底第二引擎那一路在相机分析线程上就地调 [signIn]
+     * （那条链是 `SpocScanScreen.kt` 的 `analyze` → `trySecondEngine` → `submitDecodedText` → `onCode` →
+     * 本页那颗 `viewModel.signIn(...)`，中间没有 post）。于是两枚线程可以各自读到 false、各自拿到
+     * [ScanFlightAdmission.Dispatch]，把**两发真把学生标记成已签到的请求**打出去；而 `dispatchingPayload`
+     * 只留后写那一枚，先回来的那一发把这一枚落回 false 时另一发还在飞，界面上那三处
+     * `if (flight.value) return` 与三颗 `enabled` 一起谎报"没在飞"，第三枚码可以再投。
+     * 现在领取与落回各是**一次原子换**（`compareAndSet`）：领到手的那一手是唯一能往下发的那一手，
+     * 判据吃的是**领取的结果**（`dispatching = !claimed`），不再是一次会过期的读。
+     * 口径同 `ScheduleViewModel` 的 specialDayFetchInFlight（T60：领取用 CAS、归还在 finally、
+     * 只归还自己领到的那一份），差别只在**落回也做成 CAS** —— 这里多了一颗分析线程，
+     * "谁握着它"不能只靠调用点自己记得，落回不中的那一次必须自己报得出没中。
      */
     private val flight = MutableStateFlow(false)
 
@@ -106,6 +119,8 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
      * 少了这一位，一次慢请求就把同一句话按 1.5 秒一遍地写进 logcat。
      * ⚠️ 与 [flight] 同生同灭 —— 置位在发那一发之前，清场在那颗 `finally` 里，
      * 两边都要动，漏一边的话"上一次在飞念过"会永久按住下一次在飞的这句话。
+     * T395：写它的两路**不在同一颗线程上**（握住闸门的那一手清、被丢掉的那一手置），
+     * 最坏的交错是同一句话多说一次，不是多发一发请求 —— 这一位的账欠在措辞上，不欠在安全上。
      */
     private var dropNoticed = false
 
@@ -115,8 +130,17 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
      * 一个字都不许进日志、进卡面、进 [SignInState]：iClass 那张码带时间戳，是滚动码，
      * 把完整原文留在任何读得到的地方等于把"还能再签一次"的凭证交出去
      *（口径同 `ScanRejectClassifier` 那一条"只有形状，没有原文"）。
-     * 与 [flight] 同生同灭，写它的两条入口（相机回调 / 相册回调）都在这颗 VM 的主线程上，
-     * `@Volatile` 只是把"分析线程哪天也来读一次"这一档的账先付掉。
+     *
+     * ⚠️ T395 订正：从前这里断言"写它的两条入口都在主线程、`@Volatile` 只是替分析线程**哪天**来读
+     * 预付账" —— 那一句是假的，而它正是"不需要一次原子换"那个推理的前提。实情是**分析线程今天就在写**：
+     * 兜底第二引擎命中那一手在 CameraX 的分析线程上就地走到 [signIn]（`SpocScanScreen.kt` 的
+     * `trySecondEngine` → `submitDecodedText` → `onCode`，中间没有 post），ML Kit 的回调与相册那一路才在主线程。
+     * 所以"只有一个写者"这件事不能靠推理，只能靠闸门：这颗字段**只由领到 [flight] 的那一手写**
+     * （领到之后才写，落回时一起清），而领取是一次 `compareAndSet`。
+     * `@Volatile` 留下，但它的职责要说准：它负责把握住闸门那一手的写**发布**给另一颗线程上的读者，
+     * 它从来不管"两个人同时领"那一档 —— 那一档只有原子换管得了。
+     * 残账（现读得到，不藏）：领到手与写下原文之间有一小段窗口，另一手此刻读到的还是 null，
+     * 于是它可能落进"换了一枚"那一档而实情是"同一枚" —— 错的是**措辞**，不会多发一发请求。
      */
     @Volatile private var dispatchingPayload: String? = null
 
@@ -126,6 +150,11 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
      * 这一手投不投、投不成时念哪一句，全在 [scanFlightAdmission] 那一颗纯判据里（表驱动单测
      * `ScanFlightAdmissionTest` 逐格钉着），这里一个字都不解释、也不拼第二份真相。
      *
+     * T395：判据吃的"在飞与否"是**这一次原子换的结果**，不再是一次 `flight.value` 的读 ——
+     * 领取排在问判据之前，落回在那颗 `finally` 里（见 [releaseFlight]），两头都是 `compareAndSet`。
+     * 线程不在判据的参数表里：这一手投不投只取决于闸门此刻归谁，与问话的是哪颗线程无关，
+     * 递进来的四枚事实（领取结果、按次还是按帧、同一枚与否、念过没有）里没有一枚是身份证。
+     *
      * @param raw 扫码得到的原文
      * @param cooldownRemainingMillis 这一枚在提交闸门冷却账上的剩余毫秒。取数是闸门那侧的事：
      *   相机那条刚把这一枚记进账，剩余就是整个 [RescanCooldownMillis]；相册那条根本没有账，
@@ -133,8 +162,11 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
      * @param isRetryHand 这一手是不是用户主动递进来的再一次动作（相册那张图 = true；相机按帧 = false）
      */
     fun signIn(raw: String, cooldownRemainingMillis: Long, isRetryHand: Boolean) {
+        // 一次原子换：领到手 ⇒ 全世界只有这一手能往下发；没领到 ⇒ 此刻闸门在别人手里，
+        // 交给判据按档说话（丢掉也要有名有姓，T257③ 那一条不翻案），这里不许有裸 return。
+        val claimed = flight.compareAndSet(expect = false, update = true)
         when (val admission = scanFlightAdmission(
-            dispatching = flight.value,
+            dispatching = !claimed,
             isRetryHand = isRetryHand,
             samePayloadAsDispatching = raw == dispatchingPayload,
             alreadyNoticedForThisDispatch = dropNoticed,
@@ -145,18 +177,29 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
             // 不念也不写日志：屏幕上那一句说的就是这件事（口径同 noteReadableCodeSeenOnce ——
             // 这一档既没失败也没新东西，而它唯一的听众是界面）。它不是静默支路：
             // 走到这里的前提正是"那一句还挂着"，由 [dropNoticed] 与 [flight] 同生同灭保证。
+            // ⚠️ 走到这一支与丢掉那两支的手都**没有**领到闸门，所以它们一处也不许落回 ——
+            // 没握着闸门的人去清它，等于把正在飞的那一发的门踹开（T395② 钉着这一条）。
             ScanFlightAdmission.DropAlreadyNoticed -> Unit
         }
     }
 
-    /** 真的发那一发：解析 → 置在飞 → 一次 GET。解析落空那一档走 [rejectScan]，一句人话加一行取证。 */
+    /**
+     * 真的发那一发：解析 → 一次 GET。**闸门已经握在这一手上**（[signIn] 那一次原子换领到的），
+     * 所以这里只有两种落回：解析落空就当场交回去（[rejectScan] 之前，否则那三处
+     * `if (flight.value) return` 与三颗 enabled 会一直谎报"在飞"），发出去了就在那颗 `finally` 里交。
+     *
+     * ⚠️ 领取排在解析**之前**是本卡的既定形状，代价写清楚：递进来一段不是码的原文时，
+     * 这一手会短暂握着闸门（同步 parse，纳秒级），这期间另一手会落到"丢掉"那一族念一句人话。
+     * 反过来（先解析、领到手再判）就得让判据被问第二次 —— 那就是本仓明文禁止的"两份真相"，
+     * 也是 `ScanSilentBranchGuardTest` ⑤ 把"漏斗问判据只许一处"钉成 1 枚的理由。
+     */
     private fun dispatchNow(raw: String) {
         val target = ScanTargetParser.parse(raw)
         if (target == null) {
+            releaseFlight()
             rejectScan(raw)
             return
         }
-        flight.value = true
         dispatchingPayload = raw
         dropNoticed = false
         viewModelScope.launch {
@@ -170,11 +213,25 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
                 // 三样一起清：在飞旗、原文、"念过没有"。漏任何一样都是从这一头复活旧病 ——
                 // 漏旗标就是永久 in-flight（按钮再也不亮），漏原文就是把上一发的 payload
                 // 当成这一发的比较基准，漏旗标位就是把下一次在飞的那一句话永久按住不念。
-                flight.value = false
+                releaseFlight()
                 dispatchingPayload = null
                 dropNoticed = false
             }
         }
+    }
+
+    /**
+     * 把闸门落回：**只有握着它的那一手落得动**。这里是一次 `compareAndSet(true → false)`，
+     * 不是裸写 `false` —— 落回不中（闸门此刻本就不在手里，或已经被人先落过一次）时它报 false
+     * 并且一个字都不再写，而那一句"谁落回的"在这一颗里是可读的：两个调用点都在 [dispatchNow] 体内，
+     * 而那颗函数只有领到闸门的那一手进得来。
+     *
+     * ⚠️ 唯一落不回的路：`viewModelScope` 已经取消时那一颗 `finally` 一体不跑，闸门留在 true ——
+     * 那一刻 VM 正在清场，这颗闸门随它一起没了，不会有下一手被它挡住（同 T60 在
+     * `ScheduleViewModel.refreshSpecialDays` 上写明的同一档残账）。
+     */
+    private fun releaseFlight() {
+        flight.compareAndSet(expect = true, update = false)
     }
 
     /**
