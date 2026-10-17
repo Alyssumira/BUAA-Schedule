@@ -79,7 +79,7 @@ class TeachingScheduleParserPoisonNodeTableTest {
         )
         val problems = problemsOf(rows)
         assertTrue(
-            "形状怪的那一手抛给调用点的代价不是"这一月没标注"，而是整条 loadAll 抛出去 ⇒ " +
+            "形状怪的那一手抛给调用点的代价不是「这一月没标注」，而是整条 loadAll 抛出去 ⇒ " +
                 "`init` 里那枚裸 launch 把它送进线程未捕获异常 ⇒ 冷启动即崩（在册 " + rows.size + " 枚，逐枚）：" +
                 problems.joinToString(" ／ "),
             problems.isEmpty(),
@@ -121,7 +121,7 @@ class TeachingScheduleParserPoisonNodeTableTest {
         )
         val problems = problemsOf(rows)
         assertTrue(
-            "正常路径被吞了（在册 " + rows.size + " 枚）。这一组钉的是落点选择本身：把兜底扩成"整棵树一起接住" " +
+            "正常路径被吞了（在册 " + rows.size + " 枚）。这一组钉的是落点选择本身：把兜底扩成「整棵树一起接住」 " +
                 "（在 parse 或 loadAll 那一头套一手 runCatching）行为上一枚坏节点就能抹掉整月的标注，" +
                 "而那种吞法在这张表里当场红：" + problems.joinToString(" ／ "),
             problems.isEmpty(),
@@ -141,7 +141,7 @@ class TeachingScheduleParserPoisonNodeTableTest {
         )
         val problems = problemsOf(rows)
         assertTrue(
-            "语法不合法那一档改道了（在册 " + rows.size + " 枚）。这一档原本是"正文语法不合法 ⇒ 跳过这一枚文件"，" +
+            "语法不合法那一档改道了（在册 " + rows.size + " 枚）。这一档原本是「正文语法不合法 ⇒ 跳过这一枚文件」，" +
                 "而它是 `SpecialDayCache` 那两档结论里的第一档；修形状怪那一档不许把它一起动掉：" +
                 problems.joinToString(" ／ "),
             problems.isEmpty(),
@@ -150,7 +150,7 @@ class TeachingScheduleParserPoisonNodeTableTest {
 
     // ---- 夹具与小工具 ------------------------------------------------------------------------------
 
-    /** 与在册 `TeachingScheduleParserTest`／`SpecialDayCacheWriteOutcomeTableTest` 同一形态的两条 JJR。 */
+    /** 逐枚跑一遍：不合格的行念成一句问题串，合格交回空名册。 */
     private fun problemsOf(rows: List<Row>): List<String> = rows.mapNotNull { row ->
         val actual = verdictOf(row.raw)
         if (actual == row.expected) {
