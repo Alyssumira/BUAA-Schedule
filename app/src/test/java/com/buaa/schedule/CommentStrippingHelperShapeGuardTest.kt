@@ -115,6 +115,18 @@ import org.junit.Test
  * 三枚的 KDoc 都没逐字引用那两枚针 ⇒ 散文栏不进、④ 的差值那格不动。
  * 代价照旧在册：再新增一枚合法助手 ⇒ 这几枚各 +1、④ 的差值那格不动。
  *
+ * ## 再一次重钉（T401③ 一枚新守卫，单支现量各 +1）
+ * 新守卫 `data/import/BuaaWeekShellImportGateGuardTest`（钉「教务导入的覆盖导入闸门必须吃
+ * `domain/importing/BuaaWeekShellPolicy` 这道判据、旧判据那两枚「或」支不许回潮、`isNotEmpty` 那一档
+ * 硬边界不许过」）自带一枚同族合法助手，写法逐字抄在册那一枚（`BuaaFirstWeekPolicyGuardTest` 那一族的
+ * `blankCommentsKeepingLiterals`），没造新形状：
+ * - 声明：139 → **140**（两栏同数那条定理不动 —— 它的 KDoc 里没有整行尾巴上带数组化调用的那枚针）
+ * - 物化：守卫侧（抹注释后）139 → **140**；裸原文 140 → **141**；两栏差仍恰 1 枚，来源仍是 ⓪ 步在册那枚散文文件
+ *   （`CourseEditorRedFieldGateWiringGuardTest` 的 :282 那一行逐字引用正形，④ 那格继续按 2 对 1 钉）
+ * - 两棵树族内总枚数（② 那格的覆盖面尺）：140 → **141** = test 140 + main 1（EXPECTED_MAIN_DECLS 一字未动，
+ *   main 那一枚仍在 `domain/schedule/ScheduleOccurrences.kt` 的 CharArray 构造式上）
+ * 该守卫的 KDoc 没有逐字引用那两枚针 ⇒ 散文栏不进、④ 的差值那格不动。
+ *
  * ## 重测这两把尺（两栏都要念，别只念一栏）
  * 写在这里的命令一律把括号写成方括号类，所以它们一个字都不匹配本文件自己的针 —— 这条理由从 T323 起
  * 才真正要紧：④ 那格数的是抹注释**之前**的原文，「反正注释会被抹掉」不再替这些命令免检。
@@ -610,10 +622,10 @@ private const val MAIN_ROOT = "app/src/main"
  * 为什么钉守卫侧那一栏而不是裸的那一栏：写死值必须是仪器自己观测得到的数，否则是一把永远读不到
  * 自己的死尺；而绝对值要听的那件事（扫描器失明 ⇒ 实到 0）在这一栏照样当场响。见类 KDoc 的重钉记录。
  */
-private const val EXPECTED_TEST_DECLS = 139
-private const val EXPECTED_TEST_MATERIALIZATIONS = 139
+private const val EXPECTED_TEST_DECLS = 140
+private const val EXPECTED_TEST_MATERIALIZATIONS = 140
 private const val EXPECTED_MAIN_DECLS = 1
-private const val EXPECTED_ALL_HELPER_DECLS = 140
+private const val EXPECTED_ALL_HELPER_DECLS = 141
 
 /**
  * ④ 的在册散文点名：全仓唯一一枚「KDoc 里同时逐字引用了正形与病形」的文件（ai/T321 留下的证据，
@@ -628,8 +640,8 @@ private const val PROSE_FILE_STRIPPED_MATERIALIZATIONS = 1
 private const val PROSE_FILE_RAW_FORBIDDEN = 1
 private const val PROSE_FILE_STRIPPED_FORBIDDEN = 0
 
-/** ④ 的在册量：`app/src/test` 裸原文栏比抹注释栏高 1 枚（138 对 137）；两栏合流＝证据没了 */
-private const val EXPECTED_TEST_RAW_MATERIALIZATIONS = 140
+/** ④ 的在册量：`app/src/test` 裸原文栏比抹注释栏高 1 枚（141 对 140）；两栏合流＝证据没了 */
+private const val EXPECTED_TEST_RAW_MATERIALIZATIONS = 141
 
 /** 被禁写法在 `app/src/test` + `app/src/main` 的现量下限（34 + 5）：读空了才红，长了不红 */
 private const val EXPECTED_TO_STRING_SITE_FLOOR = 39
