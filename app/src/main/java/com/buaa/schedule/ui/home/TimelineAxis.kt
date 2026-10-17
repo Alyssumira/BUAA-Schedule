@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.buaa.schedule.core.designsystem.MotionTokens
 import com.buaa.schedule.core.designsystem.motionSpec
+import com.buaa.schedule.domain.model.hourTickLabel
 import java.time.LocalTime
 import kotlin.math.roundToInt
 
@@ -63,7 +64,8 @@ internal fun HourLabels(
                 contentAlignment = anchor.cellAlignment,
             ) {
                 Text(
-                    text = "%02d:00".format(hour),
+                    // 文案走 domain 的内核：这里不留第二把补零尺，也不写 locale 敏感的格式化形
+                    text = hourTickLabel(hour),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
