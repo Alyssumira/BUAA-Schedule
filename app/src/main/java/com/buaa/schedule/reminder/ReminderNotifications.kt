@@ -230,33 +230,36 @@ object ReminderNotifications {
     private const val REQUEST_SCAN_SIGN = 330_000
 
     /**
-     * 课前倒计时正在数的那节课（0 = 没有）。进程内状态，与 [CourseFluidService.isRunning]
-     * 同一套路：进程被杀即归零，语义仍然正确 —— 课中实况由状态驱动校准补起，
-     * 课前那一段则等下一次课前提醒重新下发。
+     * 课前倒计时正在数的那节课的**归属快照**（null = 没有）。进程内状态，与
+     * [CourseFluidService.isRunning] 同一套路：进程被杀即归零（置 null），语义仍然正确 ——
+     * 课中实况由状态驱动校准补起，课前那一段则等下一次课前提醒重新下发。
+     *
+     * ⚠️ 卡 #748：这一格**必须**是一枚不可变快照，不许摊回「id 一枚、classStart 一枚」的
+     * 两枚 `@Volatile` 字段。`@Volatile` 只给可见性、不给 read-modify-write 的原子性；两枚
+     * 字段分写分读时，`recordCountdownOwnership` 写到一半就能被另一线程读成「新 id ＋旧
+     * classStart」的交叉结构（或「旧 id ＋新 classStart」），于是 [ownsCountdownTo] /
+     * [releaseCountdownOwnership] 判不中 —— 后果正是 #338 那句症状的两个方向：刚上岛的课前
+     * 倒计时被当遗留拆掉，或常驻通知挂着勿扰不撤。折成一枚 [CountdownOwnership] 后**一次
+     * 赋值同时带上两格**，交叉在结构上不可达（本仓派生字段铁律：成对派生量无法做成纯函数
+     * 就落甲/乙两条，本处走甲）。三枚写点（[recordCountdownOwnership] 两臂 +
+     * [clearCountdownOwnership]）各只有一句对 `countdownOwnership` 的赋值，由
+     * `CountdownOwnershipSingleSnapshotShapeGuardTest` 钉「归属只剩一枚可赋值快照」。
      */
     @Volatile
-    internal var countdownCourseId = 0L
+    internal var countdownOwnership: CountdownOwnership? = null
 
     /**
-     * [countdownCourseId] 那节课的**上课绝对时刻**（epoch 毫秒）。
+     * 归属快照：一节课的「哪门课」(`courseId`) 与「上课绝对时刻 (epoch 毫秒)」
+     * (`classStartMillis`) 两格**成对携带、不可变**，一次赋值同点可见（见
+     * [countdownOwnership] 那句 #748 警告）。
      *
-     * ⚠️ 值名与它真正装的东西对得上，但**赋值那一句取的字段名对不上**：写侧拿到的是
-     * 「课前那一段实况窗口」，那种窗口的 `endMillis` 装的才是上课时刻。凭据两格：
-     * `ReminderScheduler.createPendingIntent` 造课前闹钟的 extras 时把 `startMillis`
-     * 与 `endMillis` **都**写成上课时刻（它自己的注释写着"收铃时刻就是上课时刻"），
-     * 而 `ReminderReceiver` 收铃时只 `copy(startMillis = 此刻)`，`endMillis` 一个字没动。
-     * 读侧拿的是另一形状的窗口（`ClassProgressScheduler.planNextClassWindow`：
-     * start=上课、end=下课），那一型的上课时刻在 `startMillis`。
-     *
-     * 所以这枚字段两侧的"哪一格是上课时刻"**不许由调用点各挑各的字段**：取法收在
-     * [countdownAnchorOf]（写侧 / 实况服务读侧）与 [classStartOf]（课堂计划窗口读侧），
-     * 由 `CountdownOwnershipAnchorGuardTest` 钉住（四处调用点 + 那两格造窗形状凭据）。
-     * 这两枚函数不是同值函数的两个名字：它们读的是**不同形状窗口的不同格**，
-     * 只在"课前窗口的 endMillis 恰好是上课时刻"这一形状成立时才同值 ——
-     * 下一次把课前窗口改成自然形状（end=下课）就会破，破的落点见 [countdownAnchorOf] 的警告。
+     * ⚠️ 「哪一格是上课时刻」的取法仍归 #338 那两枚具名函数（[countdownAnchorOf] 写侧 /
+     * 实况服务读侧取 `endMillis`；[classStartOf] 课堂计划窗口读侧取 `startMillis`），由
+     * `CountdownOwnershipAnchorGuardTest` 钉四处调用点 + 两格造窗形状凭据；本卡只把两枚
+     * `@Volatile` 字段折成这一枚快照，**不动取法**。这两枚函数读的是不同形状窗口的不同格，
+     * 只在「课前窗口的 `endMillis` 恰好是上课时刻」这一形状成立时才同值。
      */
-    @Volatile
-    internal var countdownClassStart = 0L
+    internal data class CountdownOwnership(val courseId: Long, val classStartMillis: Long)
 
     /**
      * 「课前 / 实况那一段窗口」里上课时刻的取法（**唯一一份**）。
@@ -311,7 +314,7 @@ object ReminderNotifications {
      *
      * ⚠️ 第二个参数是**上课时刻**：调用方拿的是课堂计划窗口时要走 [classStartOf]，
      * 拿的是课前实况窗口时要走 [countdownAnchorOf]（两型不同格、同一枚时刻，见
-     * [countdownClassStart]）。
+     * [CountdownOwnership]）。
      */
     fun isCountingDownTo(courseId: Long, classStartMillis: Long): Boolean =
         isCountingDownTo(courseId, classStartMillis, System.currentTimeMillis())
@@ -346,7 +349,7 @@ object ReminderNotifications {
      * `countdownAnchorOf(window)`（课前实况窗口）。
      */
     internal fun ownsCountdownTo(courseId: Long, classStartMillis: Long): Boolean =
-        countdownCourseId == courseId && countdownClassStart == classStartMillis
+        countdownOwnership == CountdownOwnership(courseId, classStartMillis)
 
     /** 实况提升诊断日志的 tag：`adb logcat -s BUAA-LiveUpdate` 只看这条链 */
     private const val LIVE_TAG = "BUAA-LiveUpdate"
@@ -383,18 +386,16 @@ object ReminderNotifications {
      * （android.jar 里全是抛 "not mocked" 的桩），于是"归属存的是哪一格"这件事
      * 此前只能靠读源码数，从来没有和真实读侧对过一次账。
      *
-     * 口径全在 [countdownAnchorOf] 与 [countdownClassStart] 那两段里，这里不重说。
+     * 口径全在 [countdownAnchorOf] 与 [CountdownOwnership] 那两段里，这里不重说。
      */
     internal fun recordCountdownOwnership(
         window: ClassProgressScheduler.ClassWindow,
         phase: LivePhase,
     ) {
-        if (phase == LivePhase.BEFORE_CLASS) {
-            countdownCourseId = window.courseId
-            countdownClassStart = countdownAnchorOf(window)
+        countdownOwnership = if (phase == LivePhase.BEFORE_CLASS) {
+            CountdownOwnership(window.courseId, countdownAnchorOf(window))
         } else {
-            countdownCourseId = 0L
-            countdownClassStart = 0L
+            null
         }
     }
 
@@ -652,8 +653,7 @@ object ReminderNotifications {
      * 因为那条通知此刻可能已经是**下一段实况**（上课铃以 IN_CLASS 接手同一 id）的了。
      */
     internal fun clearCountdownOwnership() {
-        countdownCourseId = 0L
-        countdownClassStart = 0L
+        countdownOwnership = null
     }
 
     /**
@@ -665,7 +665,7 @@ object ReminderNotifications {
      * @return true 表示这份归属确实记的是这一节、并且已经被清掉
      */
     internal fun releaseCountdownOwnership(courseId: Long, classStartMillis: Long): Boolean =
-        if (countdownCourseId == courseId && countdownClassStart == classStartMillis) {
+        if (countdownOwnership == CountdownOwnership(courseId, classStartMillis)) {
             clearCountdownOwnership()
             true
         } else {
