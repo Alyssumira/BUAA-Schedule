@@ -175,6 +175,10 @@ object SpecialDayCache {
             // 正文语法合法而形状怪 ⇒ `parse` 里没被 `runCatching` 罩住的 `walk` 会抛，整条 loadAll
             // 抛给调用点），所以"与 loadAll 一致、补抓一次就好"两头都不成立。
             // 本文件不修那两档（修法归 T369⓪ 否掉的乙档，以及读侧那一族），只把话说对。
+            // ——现状（上面那两句旧读数留着不抹）：形状怪那一档已经在 `TeachingScheduleParser` 里就地
+            // 兜住（非标量折成 null ⇒ 只丢那一枚节点，其余条目照旧），于是 loadAll 对"内容坏"只剩一档：
+            // 语法不合法 ⇒ 整枚文件交回空；形状怪不再把抛出送给调用点 ⇒ 冷启动那一路的崩点跟着没了。
+            // 本文件的读侧那一手一字未动 —— 兜底没搬到这里来，是原来那两枚抛出点被就地收掉了。
             val month = runCatching { YearMonth.parse(f.name.removeSuffix(".json")) }.getOrNull()
                 ?: return@mapNotNull null
             val ageMillis = (now - f.lastModified()).coerceAtLeast(0L)

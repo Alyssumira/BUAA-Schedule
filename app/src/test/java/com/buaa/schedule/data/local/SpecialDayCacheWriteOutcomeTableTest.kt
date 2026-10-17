@@ -49,6 +49,11 @@ import org.junit.Test
  *   而"语法合法而形状怪"时它**抛**（`walk` 不在那手 `runCatching` 里）⇒ 同一条链对"内容坏"有两档结论。
  *   这两格是 SpecialDayCache 那段假注释被订正的**依据**；哪天有人把 parse 的覆盖面改了，
  *   这里红 = 那段注释也要同批改，不许只动一边。
+ *   **现状（上面那句"形状怪时它**抛**"是改前读数，留着不抹）**：抛出型标量取法已经换成非标量折成
+ *   null 那一手 ⇒ 形状怪只丢那一枚节点、`parse` 对任何正文都不再抛，"内容坏"那两档并成
+ *   「语法不合法 ⇒ 整枚文件交回空 ／ 形状怪 ⇒ 逐条丢」。本格跟着从"证明会抛"翻成"证明不许抛"，
+ *   并补一枚 kotlinx 那一手照旧抛的对照 —— 免得把"不抛"读成"没人兜"。同批订正的另一半在
+ *   `SpecialDayCache.cachedMonthAges` 那段注释里。
  *
  * ⚠️ 全文件不调任何取钟口、不读文件系统、零 android import（`TeachingScheduleParser` 那边只有
  * kotlinx.serialization 与 java.time，都在 JVM 单测面里跑得动）。
@@ -255,11 +260,25 @@ class SpecialDayCacheWriteOutcomeTableTest {
             emptyList<Any>(),
             TeachingScheduleParser.parse("   "),
         )
-        // 第二档：语法合法而形状怪 —— walk/extractDay 不在那手 runCatching 里 ⇒ **整条抛出**。
-        // 这一格是"半截 ⇒ 跳过"与"形状怪 ⇒ loadAll 抛给调用点"两档并存的可执行证明，
+        // 第二档（取证原文留着不抹）：语法合法而形状怪时 walk/extractDay 不在那手 runCatching 里 ⇒
+        // **整条抛出**，loadAll 把抛出送给调用点。这一格原本就是这个形状的可执行证明，
         // 也是那句假注释（「方向与 loadAll 读到坏文件时一致」）为什么只算半真的依据。
+        // 现状：标量取法换成了"非标量折成 null"那一手 ⇒ 同一枚 payload 现在交回**空名册**而不抛，
+        // 而"半截 ⇒ 跳过"那一档（上面那四把刀口）一字未动。口径变了，SpecialDayCache 那段注释同批改。
+        val poison = runCatching { TeachingScheduleParser.parse("""{"rq":{"a":1}}""") }
+        assertTrue(
+            "形状怪的正文仍然抛（那就是 #727 的崩点回来了）：" + poison.exceptionOrNull(),
+            poison.isSuccess,
+        )
+        assertEquals(
+            "形状怪的正文交回的名册（那一枚节点要被丢掉，而不是把整棵树一起吞）：",
+            emptyList<Any>(),
+            poison.getOrDefault(listOf()),
+        )
+        // 对照：本文件的"不抛"是自己罩住的，不是序列化那一层替我们兜 —— 同一族截断正文递到它那一手照旧抛。
+        // （那一层用的是默认配置，与本文件那枚 isLenient 的实例不是同一枚 ⇒ 这格只钉"抛得出"这一件事。）
         assertThrows(IllegalArgumentException::class.java) {
-            TeachingScheduleParser.parse("""{"rq":{"a":1}}""")
+            kotlinx.serialization.json.Json.parseToJsonElement("""{"datas":{"JJR":[{"rq":"2026-10-01"}""")
         }
     }
 
