@@ -7,7 +7,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
@@ -65,7 +64,8 @@ object TeachingScheduleParser {
             HOLIDAY_CONTEXT_KEYS.any { parentKey.contains(it, ignoreCase = true) }
 
         val dateEntry = obj.entries.firstOrNull { DATE_KEY.matches(it.key) } ?: return null
-        val dateText = dateEntry.value.jsonPrimitive.contentOrNull ?: return null
+        // 日期格不是标量（对象／数组）⇒ 丢这一枚节点，其余条目照旧（见 textOf 那一段的代价账）
+        val dateText = dateEntry.value.textOf() ?: return null
         if (!DATE_VALUE.containsMatchIn(dateText.trim())) return null
         // 教务返回的日期固定是 ASCII 数字，钉死 Locale.US 保证解析一致
         val isoFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd", java.util.Locale.US)
@@ -76,8 +76,8 @@ object TeachingScheduleParser {
             LocalDate.parse(dateText.trim().take(10), slashFmt)
         }.getOrNull() ?: return null
 
-        val type = obj.entries.firstOrNull { TYPE_KEY.matches(it.key) }?.value?.jsonPrimitive?.contentOrNull
-        val note = obj.entries.firstOrNull { NOTE_KEY.matches(it.key) }?.value?.jsonPrimitive?.contentOrNull
+        val type = obj.entries.firstOrNull { TYPE_KEY.matches(it.key) }?.value?.textOf()
+        val note = obj.entries.firstOrNull { NOTE_KEY.matches(it.key) }?.value?.textOf()
 
         val haystack = listOfNotNull(note, type, if (inHolidayContext) "节假日" else null)
             .joinToString("|")
@@ -94,6 +94,22 @@ object TeachingScheduleParser {
             note = note ?: type,
         )
     }
+
+    /**
+     * 取一格的标量文本：**非标量（对象／数组）折成 null，不抛**。
+     *
+     * 这一手为什么必须存在：kotlinx.serialization 的 `jsonPrimitive` 取法在 JsonArray/JsonObject 上
+     * 抛 IllegalArgumentException，而本文件的口径是「解不出来的条目直接丢弃，不影响其余条目」——
+     * 要的是丢**那一枚节点／那一格**，不是把整棵树的解析中断。中断的代价一路逃得出本文件：
+     * `SpecialDayCache.loadAll` 那一手只罩得住**读文件**，本文件的解析那一半是裸着的 ⇒
+     * 一枚语法合法而形状怪的缓存正文就把整条 loadAll 抛给调用点；而第一枚调用点长在
+     * `ScheduleViewModel` 的 init 里、是一枚裸 launch（main 侧没装任何 CoroutineExceptionHandler）
+     * ⇒ 冷启动当场死在这一枚文件上。联网新抓回来的正文走的是同一扇门，所以这一手两边都挡。
+     *
+     * ⚠️ 兜底的射程止于"那一格"。不许把它换成在 parse 或 loadAll 那头套一手**整棵树级**的吞法：
+     * 那一手行为上一枚坏节点抹掉整月的标注，而这种吞法在表驱动那张表里未必看得出来。
+     */
+    private fun JsonElement.textOf(): String? = (this as? JsonPrimitive)?.contentOrNull
 
     private val HOLIDAY_WORDS = listOf("假", "休", "节", "holiday", "rest")
 }
