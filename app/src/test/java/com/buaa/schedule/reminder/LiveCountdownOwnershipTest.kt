@@ -35,13 +35,12 @@ class LiveCountdownOwnershipTest {
 
     @After
     fun clearOwnership() {
-        ReminderNotifications.countdownCourseId = 0L
-        ReminderNotifications.countdownClassStart = 0L
+        ReminderNotifications.countdownOwnership = null
     }
 
     private fun armCountdown(courseId: Long, classStartMillis: Long) {
-        ReminderNotifications.countdownCourseId = courseId
-        ReminderNotifications.countdownClassStart = classStartMillis
+        ReminderNotifications.countdownOwnership =
+            ReminderNotifications.CountdownOwnership(courseId, classStartMillis)
     }
 
     @Test

@@ -10,6 +10,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -84,8 +85,7 @@ class CountdownOwnershipWriterReaderTest {
 
     @After
     fun clearOwnership() {
-        ReminderNotifications.countdownCourseId = 0L
-        ReminderNotifications.countdownClassStart = 0L
+        ReminderNotifications.countdownOwnership = null
     }
 
     // ───────────────────────── 判据表的可执行版本 ─────────────────────────
@@ -166,8 +166,9 @@ class CountdownOwnershipWriterReaderTest {
         val live = preClassLiveWindow(bellAtMillis = classStartMillis - 10 * minute)
 
         ReminderNotifications.recordCountdownOwnership(live, LivePhase.BEFORE_CLASS)
-        assertEquals("写侧存的必须是上课绝对时刻", classStartMillis, ReminderNotifications.countdownClassStart)
-        assertEquals(course.id, ReminderNotifications.countdownCourseId)
+        val stored = requireNotNull(ReminderNotifications.countdownOwnership)
+        assertEquals("写侧存的必须是上课绝对时刻", classStartMillis, stored.classStartMillis)
+        assertEquals(course.id, stored.courseId)
 
         val cases = listOf(
             "ClassProgressScheduler.rescheduleWindows 那一读（带时间判）" to
@@ -264,8 +265,7 @@ class CountdownOwnershipWriterReaderTest {
 
         ReminderNotifications.recordCountdownOwnership(inClass, LivePhase.IN_CLASS)
 
-        assertEquals(0L, ReminderNotifications.countdownCourseId)
-        assertEquals(0L, ReminderNotifications.countdownClassStart)
+        assertNull("IN_CLASS 臂必须把归属整枚快照置空", ReminderNotifications.countdownOwnership)
         assertFalse(ReminderNotifications.ownsCountdownTo(course.id, classStartMillis))
     }
 
@@ -305,16 +305,19 @@ class CountdownOwnershipWriterReaderTest {
         val anchor = ReminderNotifications.countdownAnchorOf(live)
 
         // 记的是别节课的账：不许被本条实况的收尾抹掉
-        ReminderNotifications.countdownCourseId = 99L
-        ReminderNotifications.countdownClassStart = classStartMillis
+        ReminderNotifications.countdownOwnership =
+            ReminderNotifications.CountdownOwnership(99L, classStartMillis)
         assertFalse(ReminderNotifications.releaseCountdownOwnership(course.id, anchor))
-        assertEquals("不属于本条实况的归属必须原样留着", 99L, ReminderNotifications.countdownCourseId)
+        assertEquals(
+            "不属于本条实况的归属必须原样留着",
+            99L,
+            requireNotNull(ReminderNotifications.countdownOwnership).courseId,
+        )
 
         // 正是本条实况那份：清掉并回报 true
         ReminderNotifications.recordCountdownOwnership(live, LivePhase.BEFORE_CLASS)
         assertTrue(ReminderNotifications.releaseCountdownOwnership(course.id, anchor))
-        assertEquals(0L, ReminderNotifications.countdownCourseId)
-        assertEquals(0L, ReminderNotifications.countdownClassStart)
+        assertNull(ReminderNotifications.countdownOwnership)
 
         // 空归属上再清一次：no-op，且回报 false（幂等，onDestroy 与补救那两处会重复走到这里）
         assertFalse(ReminderNotifications.releaseCountdownOwnership(course.id, anchor))

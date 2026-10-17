@@ -955,6 +955,6 @@ class CountdownClockSingleReadGuardTest {
         const val OWNERSHIP_DECLARATION =
             "internal fun ownsCountdownTo(courseId: Long, classStartMillis: Long): Boolean ="
         const val OWNERSHIP_BODY =
-            "countdownCourseId == courseId && countdownClassStart == classStartMillis"
+            "countdownOwnership == CountdownOwnership(courseId, classStartMillis)"
     }
 }

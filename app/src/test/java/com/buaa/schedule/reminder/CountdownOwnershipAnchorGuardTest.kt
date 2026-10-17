@@ -61,9 +61,10 @@ class CountdownOwnershipAnchorGuardTest {
         val code = blankCommentsKeepingLiterals(source(NOTIFICATIONS))
 
         assertEquals(
-            "归属的写入句必须是 `countdownClassStart = countdownAnchorOf(window)`（实到 " +
-                occurrences(code, WRITE_LINE) + " 处）。卡面禁的就是把这句换成另一枚字段名了事 —— " +
-                "取法必须由那枚具名函数承担，守卫才数得到；两枚字段名直接写死的形状在第 ⑥ 层有实物对照",
+            "归属的写入句必须是 `$WRITE_LINE`（实到 " + occurrences(code, WRITE_LINE) +
+                " 处）：卡 #748 把两枚 `@Volatile` 字段折成一枚不可变快照后，classStart 那一格仍" +
+                "必须由具名取法 `countdownAnchorOf(window)` 供给、不许换成裸字段名了事 —— " +
+                "取法归取法、快照归快照，两把尺各数各的（快照那一枚见 SingleSnapshot 守卫）",
             1,
             occurrences(code, WRITE_LINE),
         )
@@ -108,10 +109,18 @@ class CountdownOwnershipAnchorGuardTest {
             mainOccurrences("clearCountdownOwnership("),
         )
         assertEquals(
-            "`countdownCourseId = ` 在 ReminderNotifications 里恰好四处（声明 1 + 写侧两臂 2 + 归零 1；实到 " +
-                occurrences(code, "countdownCourseId = ") + " 处）：多一处就是多一条不经那两枚入口的写路",
-            4,
+            "改前那两枚分写 `@Volatile` 字段之一 `countdownCourseId = ` 必须 0 处（实到 " +
+                occurrences(code, "countdownCourseId = ") + " 处）：卡 #748 已把 `courseId` 与 " +
+                "`classStart` 折成一枚 `countdownOwnership` 快照；分写回来 = 交叉结构（新 id ＋旧 " +
+                "classStart）重新可达。快照本身的赋值点由 `CountdownOwnershipSingleSnapshotShapeGuardTest` 钉",
+            0,
             occurrences(code, "countdownCourseId = "),
+        )
+        assertEquals(
+            "另一枚分写字段 `countdownClassStart = ` 同样必须 0 处（实到 " +
+                occurrences(code, "countdownClassStart = ") + " 处）",
+            0,
+            occurrences(code, "countdownClassStart = "),
         )
     }
 
@@ -643,7 +652,7 @@ class CountdownOwnershipAnchorGuardTest {
         const val PROGRESS_SCHEDULER = "com/buaa/schedule/reminder/ClassProgressScheduler.kt"
 
         // ---- ① 写侧 ----
-        const val WRITE_LINE = "countdownClassStart = countdownAnchorOf(window)"
+        const val WRITE_LINE = "CountdownOwnership(window.courseId, countdownAnchorOf(window))"
         const val OLD_WRITE_SHAPE = "countdownClassStart = window.endMillis"
         const val COUNTDOWN_ANCHOR_DEF =
             "internal fun countdownAnchorOf(window: ClassProgressScheduler.ClassWindow): Long = window.endMillis"
