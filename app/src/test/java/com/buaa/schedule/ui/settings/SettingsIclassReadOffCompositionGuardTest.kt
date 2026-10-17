@@ -347,3 +347,11 @@ class SettingsIclassReadOffCompositionGuardTest {
         private fun occurrences(text: String, needle: String): Int = positions(text, needle).size
     }
 }
+// 变异自证两臂（本趟现量；两臂各跑一次过滤测试、只读新守卫这一枚类；还原一律 git checkout ＋ git diff --quiet HEAD 对账，两次都交回 CLEAN）：
+// W 朝宽（状态位那一行改回带键的 remember 快照里直接问会话）＝ 4 tests / 2 failures：
+//   ① theSessionProbeNowSitsOnlyInsideTheIoBackedEffect 红在「那一问不再是恰好 1 枚」：expected:<1> but was:<2>（本文件 :44）
+//   ② theResumeTickStillDrivesTheEffectAndTheKeyIsNotUnit 红在「状态位仍是一枚可变状态」那一格：expected:<1> but was:<0>（:95）
+// N 朝窄（withContext(Dispatchers.IO) 被摘、只在 Effect 里 launch 同步解）＝ 4 tests / 2 failures：
+//   ① 同一枚格红在「块里不再含 IO 那手」，消息里逐字念出病形块体（:52）
+//   ④ theLogoutStillFlipsTheStateInPlaceAndTheRulerCountsHold 红在「IO 那手与那一问不在同一枚块里」（:176）
+// 合点：取数只许长在「键为 permissionResumeTick 的那一枚 Effect ＋ IO 那手」里，宽窄两侧的偏离都被听见。
