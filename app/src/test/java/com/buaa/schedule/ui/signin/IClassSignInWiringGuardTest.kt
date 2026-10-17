@@ -69,10 +69,14 @@ class IClassSignInWiringGuardTest {
         assertFalse("Failed 状态又带回了平台这一位：\n$vm", vm.contains("val platform:"))
         // 「去登录」那颗按钮仍然把出口交给了调用方（平台信息不该在状态机里丢）
         val screen = blankComments(source(SCAN_SCREEN))
+        // T404② 换形：那颗按钮的 onClick 从裸 `onNeedLogin` 换成具名 `goIClassLogin`（交出口之前先复位，
+        // 见下面第 ⑩ 格）。本条要钉的还是原来那件事 —— 出口是**交给调用方**的，不是界面自己决定去哪。
         assertTrue(
             "失败卡上那颗按钮没把出口交给调用方（界面自己决定去哪 = 状态机与路由各说各话）：\n$screen",
-            screen.contains("Button(onClick = onNeedLogin"),
+            screen.contains("Button(onClick = goIClassLogin"),
         )
+        val goLogin = balancedBlock(screen, "val goIClassLogin: () -> Unit = {")
+        assertTrue("那颗按钮不再把 onNeedLogin 交给调用方：\n$goLogin", goLogin.contains("onNeedLogin()"))
     }
 
     /** ③ 没有 iClass 会话时那条支路必须说话并且给出口（不许静默） */
@@ -238,6 +242,136 @@ class IClassSignInWiringGuardTest {
 
     // ---- 源码核对工具（与 ScanSignInEntryWiringGuardTest 同一套刀法）----
 
+    /**
+     * ⑧ #696：递交这一侧的失败卡**只许按档说话**，不许再念异常原文。
+     *
+     * 病形状：`fail()` 从前是 `error.message ?: "网络异常，请稍后重试"` —— 那一枚 message 是
+     * JVM/传输层的原文（`Read timed out`、`Failed to connect to iclass…:8181` 那一类），
+     * 而同一条链在登录那一侧早已由 `domain/signin/LoginFailureClassifier` 按档折成中文（T392①），
+     * 两页同一族病、只修了一页。本条钉的就是"另一页也修了"这件事本身，加上分工没被合成一半：
+     * 折档住在界面那一头，数据层照旧交回原文（在册那枚 `IClassApiTest.传输层抛出来的是失败而不是异常`
+     * 钉的就是这一条），判据梯全仓只有一把（新内核只写句子表、一枚继承判据都不许再刻）。
+     *
+     * 朝宽判红（W 臂）：把 `fail()` 摘回 `error.message` ⇒ 第一、二枚断言红；
+     * 把 `signIn` 那层换回裸 `runCatching`（取消被吞）⇒ 复投那三枚断言红。
+     * 朝窄判红（N 臂）：把 `SubmitFailure.kt` 里"逐字那一档"摘掉（连厂商中文一起折）⇒
+     * 表驱动那张表的 `SpokenVerbatim` 那三格红（本条不吃它，故点名：那一头由 ② 那张表听）。
+     */
+    @Test
+    fun submitSideSpeaksByTheRungWhileTheDataLayerStillHandsBackTheOriginal() {
+        val vm = blankComments(source(VIEW_MODEL))
+        val fail = balancedBlock(vm, "private fun fail(error: Throwable) {")
+        assertEquals("失败卡又把异常原文当文案念出去（改前那一形）：", 0, occurrences(vm, "error.message"))
+        assertEquals("那句通用兜底不许长回来（它盖住的是九档各不相同的现场）：", 0, occurrences(vm, "网络异常，请稍后重试"))
+        assertEquals("屏上那一句的出口只许一处：", 1, occurrences(vm, "SubmitFailureClassifier.screenLine("))
+        assertEquals("取证行的出口只许一处：", 1, occurrences(vm, "SubmitFailureClassifier.forensicsLine("))
+        assertTrue("fail 段又把「服务端拒绝」当成要重登了：", fail.contains("relogin = false"))
+
+        val api = blankComments(source(ICLASS_API))
+        val signIn = balancedBlock(api, "suspend fun signIn(")
+        assertEquals("数据层不许折档（两半不许合成一半）：", 0, occurrences(signIn, "SubmitFailureClassifier"))
+        assertEquals("数据层不许念句子表：", 0, occurrences(signIn, "screenLine"))
+        assertEquals("吃掉取消的那一层必须已经换掉：", 0, occurrences(signIn, "runCatching"))
+        assertEquals("取消那一型的 catch 只许一处：", 1, occurrences(signIn, "catch (e: CancellationException)"))
+        assertEquals("复投那一手只许一处：", 1, occurrences(signIn, "throw e"))
+        assertTrue(
+            "顺序即语义：复投必须排在宽 catch 之前（排到之后就是先折了一句签到结果、再想起来它是取消）：",
+            signIn.indexOf("catch (e: CancellationException)") in 0 until signIn.indexOf("catch (cause: Throwable)"),
+        )
+
+        val kernel = blankComments(source(SUBMIT_KERNEL))
+        val imports = kernel.lines().map(String::trim).filter { it.startsWith("import ") }
+        assertTrue("递交侧内核出现了 import，这段判据就到不了 JVM：\n$imports", imports.isEmpty())
+        for (banned in listOf("android.", "androidx.", "Build.VERSION", "SystemClock", "System.currentTimeMillis", ".message")) {
+            assertFalse("内核自己去碰了设备/时钟/异常原文（$banned）", kernel.contains(banned))
+        }
+        for (rungJudge in listOf("is SocketTimeoutException", "is SSLException", "is UnknownHostException", "is ConnectException")) {
+            assertEquals("内核里又刻了一枚继承判据「$rungJudge」（全仓第二把尺）：", 0, occurrences(kernel, rungJudge))
+        }
+        assertEquals("判据必须整颗转发给在册那一把梯子：", 1, occurrences(kernel, "LoginFailureClassifier.rungOf"))
+    }
+
+    /**
+     * ⑨ #697 第一枚：结果卡上那枚状态梯子必须**每一档都有自己的支**，不许再用 `else` 兜。
+     *
+     * 钉的不是"今天有没有按钮"，而是"第五档长出来时会不会没人管"：改前那一枚 `else -> Unit`
+     * 把 `Submitting` 与任何将来的档一起静默掉（`Submitting` 那一档屏上零出口、两扇返回门又被
+     * `busy` 按住，是这一页今天的事实 —— 行为本卡一字未动，理由写在源码那一格的注释里）。
+     * 换成 `is Idle` / `is Submitting` 两支之后，`when` 穷尽而没有 `else` ⇒ 加一档就编译不过。
+     *
+     * 同时钉住"不许有人把这一格当成开口的借口"：那两句既有的措辞与两扇返回门都原样在，
+     * 而本页可敲字符的输入控件仍然零枚（第 ⑧ 条与 `ScanSignInEntryWiringGuardTest` 同一口径）。
+     */
+    @Test
+    fun resultCardLadderNamesEveryStateInsteadOfSwallowingThemWithAnElse() {
+        val screen = blankComments(source(SCAN_SCREEN))
+        assertEquals("全页那枚静默兜底必须已经归零（它就是本卡摘掉的那一枚）：", 0, occurrences(screen, "else -> Unit"))
+        for (rung in listOf("is SignInState.Idle -> Unit", "is SignInState.Submitting -> Unit")) {
+            assertEquals("梯子少了「$rung」那一支（新档于是又没人管了）：", 1, occurrences(screen, rung))
+        }
+        for (action in listOf("is SignInState.Failed -> Row(", "is SignInState.Signed -> Button(")) {
+            assertEquals("既有那一支被并掉了（$action）：", 1, occurrences(screen, action))
+        }
+        // 行为一字未动的那两枚参照物
+        assertTrue("在飞那一档说的话被改写了（T345 逐字钉着它）：", screen.contains("is SignInState.Submitting -> \"正在提交签到…\""))
+        assertEquals("返回门那一手多写了（本卡不许开第二条出口）：", 2, occurrences(screen, "requestBack"))
+        assertEquals("卡上那两颗按住的动作没被换成第三把尺：", 2, occurrences(screen, "enabled = !inFlight"))
+    }
+
+    /**
+     * ⑩ #697 第二枚：「去登录」那一下**先复位再把出口交给调用方**，顺序不许反。
+     *
+     * 病形状：`relogin = true` 那一格是那颗 VM 收到的最后一笔写，而登录成功那条导航弹掉的是
+     * 登录页自己（`popUpTo("iclass_login") { inclusive = true }`）—— 扫码那一枚 entry 连同 VM 都还在，
+     * 于是登完回到这一页，卡上还挂着"还没有登录北航 iClass"。反过来写（先导航后复位）在
+     * `launchSingleTop` 复用同一枚 entry 那一档会先离场、来不及落 Idle。
+     */
+    @Test
+    fun goingToLoginResetsTheStateMachineBeforeHandingTheExitOver() {
+        val screen = blankComments(source(SCAN_SCREEN))
+        val go = balancedBlock(screen, "val goIClassLogin: () -> Unit = {")
+        assertEquals("那颗按钮里复位写了两次（第二份真相）：", 1, occurrences(go, "viewModel.reset()"))
+        assertEquals("那颗按钮不再交出口：", 1, occurrences(go, "onNeedLogin()"))
+        assertTrue(
+            "顺序即语义：复位必须排在把出口交出去之前（否则那一页离场之后没人落 Idle）：",
+            go.indexOf("viewModel.reset()") in 0 until go.indexOf("onNeedLogin()"),
+        )
+        assertEquals("全页 reset 的调用点应当三枚（重新扫码 / 继续扫码 / 去登录）：", 3, occurrences(screen, "viewModel.reset()"))
+        // 那颗按钮吃的闸与在册那两枚不同：它不靠 enabled 按住（点了就得走），复位那一手在飞时自己早退
+        assertEquals("本卡没给那颗按钮新加 enabled 那一档（在册那两枚才是那一族病）：", 2, occurrences(screen, "enabled = !inFlight"))
+    }
+
+    /**
+     * ⑪ #698：排斥 `id` 的那道闸门在**两枚文件**里必须同一把尺，都不许吃"看得见值"的那枚问法。
+     *
+     * 病形状：`IClassQrParser.parse` 那道闸门从前问 `queryValue(...) != null`，而 `queryValue` 按成文
+     * 口径看不见空值参数 ⇒ `…&id=` 躲过闸门，提交时与我们附的那枚并成同名双参数（厂商 dex 逐字是
+     * `qrUrl + "&id=" + id`）。第二枚闸门在 `ScanRejectClassifier.iclassVerdict`（卡面没点名它）——
+     * 只改第一枚就是"收不收"与"为什么没收"分家，而 `ScanRejectClassifierTest` 的全矩阵不变量
+     *（`classify == Recognized ⟺ parse != null`）当场拧断，落空的界面念的是
+     * 「iClass 的判据说这张码收得下，签到却没开始」。
+     *
+     * 朝窄判红（N 臂）：把"看见"改成"放行"（闸门整枚摘掉）⇒ 第一枚断言红；
+     * 把念名字那把尺也改成看见空值 ⇒ 最后一枚断言红（取证行那一栏的口径不是这道闸门的口径）。
+     */
+    @Test
+    fun theIdGateUsesTheNameRulerInBothPlacesWhileTheNarratingRulerStaysBlind() {
+        val parser = blankComments(source(QR_PARSER))
+        val reject = blankComments(source(REJECT))
+        assertEquals("解析器那道闸门：", 1, occurrences(parser, "hasQueryParam(text, IClassSignUrl.USER_ID_PARAM)"))
+        assertEquals("判档那道闸门：", 1, occurrences(reject, "hasQueryParam(shape.source, IClassSignUrl.USER_ID_PARAM)"))
+        assertEquals(
+            "两枚闸门都不许回吃 queryValue（那一问按成文口径看不见空值参数，就是本卡的病）：",
+            0,
+            occurrences(parser, "queryValue(text, IClassSignUrl.USER_ID_PARAM)") +
+                occurrences(reject, "queryValue(shape.source, IClassSignUrl.USER_ID_PARAM)"),
+        )
+        assertTrue("看见之后必须是拒绝（不许改成放行）：", parser.contains("if (hasQueryParam(text, IClassSignUrl.USER_ID_PARAM)) return null"))
+        assertEquals("切 query 那一刀全文件只许一枚（两把尺子就是两本账）：", 1, occurrences(parser, "substringBefore('#')"))
+        assertEquals("念名字那把尺必须还是「看得见值的」：", 1, occurrences(parser, "it.second.isNotEmpty()"))
+        assertTrue("取值那颗仍然只认非空值（不许把 `id=` 当有效值接受）：", parser.contains("queryEntries(url).filter"))
+    }
+
     private fun source(relative: String): String {
         val file = File(findMainJavaDir(), relative)
         assertTrue("找不到 ${file.path}：文件挪过家的话这条守卫要跟着改路径", file.isFile)
@@ -375,6 +509,10 @@ class IClassSignInWiringGuardTest {
         const val SCAN_SCREEN = "com/buaa/schedule/ui/signin/SpocScanScreen.kt"
         const val VIEW_MODEL = "com/buaa/schedule/ui/signin/SignInViewModel.kt"
         const val ICLASS_SESSION = "com/buaa/schedule/data/import/IClassSession.kt"
+        const val ICLASS_API = "com/buaa/schedule/data/import/IClassApi.kt"
+        const val QR_PARSER = "com/buaa/schedule/data/import/IClassQrParser.kt"
+        const val REJECT = "com/buaa/schedule/data/import/ScanReject.kt"
+        const val SUBMIT_KERNEL = "com/buaa/schedule/domain/signin/SubmitFailure.kt"
         const val ICLASS_STORE = "com/buaa/schedule/data/local/IClassIdStore.kt"
         const val ICLASS_LOGIN_SCREEN = "com/buaa/schedule/ui/signin/iclass/IClassLoginScreen.kt"
     }

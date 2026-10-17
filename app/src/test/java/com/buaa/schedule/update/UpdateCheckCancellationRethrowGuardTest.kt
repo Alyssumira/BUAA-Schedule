@@ -42,6 +42,19 @@ import org.junit.Test
  * 名册同批重钉成 **11 枚文件／19 枚手** —— 文件数一格不动（没有新增宿主），只动枚数与那一行的来路注释。
  * 那四枚**没有**被换的 runCatching（都在非挂起 `fun` 里、块内零挂起点）不进这一族，也不该进：
  * 它们的来路写在 ROSTER 那一行的注释里，别把"册子没写"读成"盘上没有"。
+ * ## T404① 重钉这一族（追加，不改上面任何一格判据与那三枚针）
+ *
+ * 卡面 #696 的第二枚把 iClass **递交**那一手也换成了同一形状：`data/import/IClassApi.kt` 的
+ * `signIn()` 从前整段裹在一层裸 `runCatching`（吃 `Throwable`）里，取消走到调用点时已经被折成一次
+ * 失败**返回** —— 那一手正是 T397① 在 `login()` 上裁过的同一档，而当时 `IClassApi.kt` 的 KDoc
+ * 把「[signIn] 那一路」与 `Error` 那一族**同列**为已知缺口留在盘上。本卡收掉的是取消那半条：
+ * `signIn()` 现在也有 `catch (e: CancellationException) { throw e }`，排在 `catch (cause: Throwable)`
+ * 之前；**折档仍不在这里**（交回的仍是原文，`IClassApiTest` 那枚在册格钉的就是这一条）。
+ * 于是名册同批重钉成 **11 枚文件／13 枚手**（`IClassApi.kt` 那一行 1 → 2，文件数不动 ——
+ * 同一枚文件里多了一手，正是"文件数与枚数互为两侧"那格要说出来的形状）。
+ * ⚠️ 本卡只改这一枚守卫里的两枚写死值与那一行注释；名册里另外点名的 `widget/**` 两枚与
+ * `ui/ScheduleViewModel.kt` 一字未动（它们分属在飞的 T400／T403）。若那两面在合并态也增删了
+ * 取消那一族的落点，这两枚写死值要由编排者按**合并对象**重钉，别拿任何单支读数当合并态。
  *
  * ## 为什么四格都不许改成 >=
  *
@@ -109,9 +122,11 @@ class UpdateCheckCancellationRethrowGuardTest {
             // 分类（T392① 落盘、T397② 上册）：`cause is CancellationException -> LoginFailureRung.WithdrawnLocally`
             //  —— 这是九档梯子那一格的**判档**，句子与档都未动；复投住在调用点，不在这里
             "com/buaa/schedule/domain/signin/LoginFailure.kt" to 1,
-            // 复投（T397① 新落点）：`catch (e: CancellationException) { throw e }`，
-            //  排在 `catch (cause: Throwable) { Result.failure(spokenLoginFailureOrSelf(cause)) }` 之前
-            "com/buaa/schedule/data/import/IClassApi.kt" to 1,
+            // 复投（T397① 落第一手、T404① 落第二手）：`login()` 与 `signIn()` 各一枚
+            // `catch (e: CancellationException) { throw e }`，两枚都排在
+            // `catch (cause: Throwable)` 之前 —— 签到那一手收下的是 iClass 那一路"取消被折成一次失败返回"
+            // 那半条在册缺口（`IClassApi` 的 signIn KDoc 现在自己写着这一条），折档仍不住在数据层
+            "com/buaa/schedule/data/import/IClassApi.kt" to 2,
             // 复投：`catch (e: kotlinx.coroutines.CancellationException)`（BootReceiver 自己那句口径）
             "com/buaa/schedule/reminder/BootReceiver.kt" to 1,
             // 复投：同一型的 catch（明日预告那一支广播）

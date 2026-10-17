@@ -2,6 +2,7 @@ package com.buaa.schedule.data.import
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -127,6 +128,64 @@ class IClassQrParserTest {
             ),
         )
     }
+
+    /**
+     * #698：那道闸门问的是**名字出现过没有**，不是"值空不空"。
+     *
+     * 病形状：从前它问的是 `queryValue(...) != null`，而那颗按成文口径把空值参数整个看不见
+     *（`queryPairs` 那一枚 filter 管的是"看得见值"，取证行与 `courseSchedId` 的形状判都吃它）
+     * ⇒ `…&id=` 躲过闸门，提交时再与我们附的那枚 `id` 并成**同名双参数** ——
+     * 那条畸形地址是我们自己拼出来的（厂商 dex 逐字是 `qrUrl + "&id=" + id`，与本仓同形），
+     * 而屏上念回来的是厂商那句 `参数错误!`。
+     *
+     * 每一格都是**两头各一枚**：同一份切法下"该拒"的那一头与"该放行"的那一头必须同时在表里，
+     * 否则把闸门朝宽扭（`id` 整个不看）或朝窄扭（空值参数一概不收）都听不见。
+     */
+    @Test
+    fun `空值的 id 也躲不过那道闸门`() {
+        // —— 该拒那一头：空值、只有空白、大写名、放在最前面、连 `=` 都没有 ——
+        for (raw in listOf(
+            "$realCode&id=",
+            "$realCode&id=  ",
+            "$realCode&ID=",
+            "http://iclass.buaa.edu.cn:8081/app/course/stu_scan_sign.action?id=&courseSchedId=2488752",
+            "http://iclass.buaa.edu.cn:8081/app/course/stu_scan_sign.action?courseSchedId=2488752&timestamp=1&id",
+        )) {
+            assertNull("这道闸门又放过去了：$raw", IClassQrParser.parse(raw))
+        }
+        // —— 该放行那一头：别的名字为空值（不收掉它就是把闸门朝宽扭到"看不见的东西一律拒"）——
+        for (raw in listOf(
+            "$realCode&timestamp=",
+            "$realCode&machineInfo=",
+            "$realCode&signId=1",
+            "$realCode&courseSchedId=1&id2=9",
+        )) {
+            assertEquals("这一条里没有 `id` 那一枚参数，凭什么不收：$raw", ScanTarget.IClass(raw), IClassQrParser.parse(raw))
+        }
+    }
+
+    /**
+     * #698 的配对格：`courseSchedId=` 空值那一档**照旧不收**，而收它的理由是"必填参数没值"，
+     * 不是"名字出现过" —— 两枚问法必须在同一份切法上各说各话（`queryValue` 与 `hasQueryParam`）。
+     */
+    @Test
+    fun `空值的 courseSchedId 仍按缺必填那一档不收`() {
+        assertNull(IClassQrParser.parse("http://iclass.buaa.edu.cn:8081/app/course/stu_scan_sign.action?courseSchedId=&timestamp=1"))
+        assertNull(IClassQrParser.parse("http://iclass.buaa.edu.cn:8081/app/course/stu_scan_sign.action?courseSchedId"))
+    }
+
+    /** #698 的另一半：念名字那把尺**不许**跟着看见空值（取证行与失败卡念的是"看得见值的"） */
+    @Test
+    fun `空值参数不上那串念出来的名字`() {
+        assertEquals(listOf("courseschedid"), IClassQrParser.queryParamNames("$SCAN_SIGN?courseSchedId=1&id="))
+        assertEquals(listOf("courseschedid"), IClassQrParser.queryParamNames("$SCAN_SIGN?courseSchedId=1&id"))
+        assertEquals(listOf("courseschedid", "timestamp"), IClassQrParser.queryParamNames(realCode))
+        // 而取值那颗也照旧看不见它（不许把 `id=` 当一枚有效值接受）
+        assertNull(IClassQrParser.queryValue("$SCAN_SIGN?courseSchedId=1&id=", "id"))
+        assertTrue(IClassQrParser.hasQueryParam("$SCAN_SIGN?courseSchedId=1&id=", "id"))
+    }
+
+    private val SCAN_SIGN = "http://iclass.buaa.edu.cn:8081/app/course/stu_scan_sign.action"
 
     /** 两族同在 `*.buaa.edu.cn` 下：智学北航那张码不许被这一族抢走 */
     /** 智学北航那张真码（T85 起本仓不接这一族）：同域、也带 query ID，是 host 门槛最难的一次考试 */

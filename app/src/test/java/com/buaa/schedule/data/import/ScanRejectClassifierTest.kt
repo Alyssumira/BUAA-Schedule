@@ -405,6 +405,13 @@ class ScanRejectClassifierTest {
                 flagged = listOf("courseSchedId"),
             ),
             Case(
+                "courseSchedId 是空值（缺必填那一档，不是形状不对）",
+                "http://iclass.buaa.edu.cn:8081/app/course/stu_scan_sign.action?courseSchedId=&timestamp=1790247391994",
+                ScanRejectRung.MissingParams, ScanCodeFamily.IClass,
+                host = "iclass.buaa.edu.cn", port = "8081", paramNames = listOf("timestamp"),
+                wanted = listOf("courseSchedId"),
+            ),
+            Case(
                 "路由不是扫码签到", AUTO_SIGN_ROUTE,
                 ScanRejectRung.WrongRoute, ScanCodeFamily.IClass,
                 host = "iclass.buaa.edu.cn", port = "8081", paramNames = listOf("courseschedid"),
@@ -414,6 +421,25 @@ class ScanRejectClassifierTest {
                 ScanRejectRung.RequestUrlNotCode, ScanCodeFamily.IClass,
                 host = "iclass.buaa.edu.cn", port = "8081",
                 paramNames = listOf("courseschedid", "timestamp", "id"), flagged = listOf("id"),
+            ),
+            // #698：判这一档吃的是「名字出现过没有」，不是「值空不空」—— 而**念名字**那一栏照旧
+            // 只念看得见值的（`ScanRejectInfo.paramNames` 的口径一字没改，两枚问法各说各话）。
+            Case(
+                "已经带着 id=（空值那一形）", "$REAL_CODE&id=",
+                ScanRejectRung.RequestUrlNotCode, ScanCodeFamily.IClass,
+                host = "iclass.buaa.edu.cn", port = "8081",
+                paramNames = listOf("courseschedid", "timestamp"), flagged = listOf("id"),
+            ),
+            Case(
+                "已经带着 id（连等号都没有）", "$REAL_CODE&id",
+                ScanRejectRung.RequestUrlNotCode, ScanCodeFamily.IClass,
+                host = "iclass.buaa.edu.cn", port = "8081",
+                paramNames = listOf("courseschedid", "timestamp"), flagged = listOf("id"),
+            ),
+            Case(
+                "别的名字是空值也照样收（闸门不许朝宽扭成「空值一概不收」）", "$REAL_CODE&machineInfo=",
+                ScanRejectRung.Recognized, ScanCodeFamily.IClass,
+                host = "iclass.buaa.edu.cn", port = "8081", paramNames = listOf("courseschedid", "timestamp"),
             ),
             Case(
                 "别家的链接", "https://weixin.qq.com/r/abc?x=1",
@@ -484,6 +510,11 @@ class ScanRejectClassifierTest {
             "", "?timestamp=1790247391994", "?courseSchedId=2488752", "?courseSchedId=a%20b",
             "?courseSchedId=ok&id=7777", "?zjdm=ZJ11&czid=CZ22", "?qdid=1AA9A5D7F4295A0DE0630211FE0AB83E",
             "?qdid=ab", "?qdid=1AA9A5",
+            // #698 的四格：空值的 `id=`、大写名、连 `=` 都没有、别的名字是空值（该放行那一头），
+            // 外加必填参数是空值 —— 全矩阵把每一格都在 7 枚 authority × 5 条 path × 5 枚 scheme 上
+            // 各跑一遍"收不收 ⟺ 为什么说它不收"，比抽样强。
+            "?courseSchedId=2488752&id=", "?courseSchedId=2488752&ID=", "?courseSchedId=2488752&id",
+            "?courseSchedId=2488752&machineInfo=", "?courseSchedId=",
         )
     }
 }
