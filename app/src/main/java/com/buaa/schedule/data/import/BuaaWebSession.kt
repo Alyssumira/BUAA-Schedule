@@ -555,9 +555,10 @@ object BuaaWebSession {
         if (!hasSession()) return null
         val fetcher = BuaaInPageFetcher
         val terms = fetcher.fetchTermList(web)
-        // 取哪一枚学期由那枚纯内核一次裁定（改前这一行是 `terms.firstOrNull { it.selected }?.code ?:
-        // terms.firstOrNull()?.code`，用户点名的码根本进不来）—— 两枚 `?:` 支现在都在内核里，
-        // 调用点不再各自判一次，也就不再有两本"当前学期"的册子。
+        // 取哪一枚学期由那枚纯内核一次裁定。改前这一行是：
+        // val selectedTerm = terms.firstOrNull { it.selected }?.code ?: terms.firstOrNull()?.code
+        // —— 用户点名的码根本进不来；那两枚 `?:` 支现在都收进内核，调用点不再各自判一次，
+        // 也就不再有两本"当前学期"的册子。
         val selectedTerm = when (
             val choice = RefreshTermSelection.choose(
                 requested = termCode,
