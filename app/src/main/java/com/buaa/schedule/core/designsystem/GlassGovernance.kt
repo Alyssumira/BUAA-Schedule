@@ -1,5 +1,8 @@
 package com.buaa.schedule.core.designsystem
 
+import android.os.SystemClock
+import com.buaa.schedule.domain.schedule.glassLowerAtForCooldown
+
 /**
  * 玻璃渲染治理：低端机自动降档，避免液态玻璃在弱 SoC 上掉帧/发热。
  *
@@ -22,7 +25,17 @@ object GlassGovernance {
     /** 运行时降档上限（null = 未降档）；由 [lowerTierForJank] 维护 */
     @Volatile private var runtimeCap: Int? = null
 
-    /** 上次降档时刻；null = 从未降档（首次调用必须放行，不能因为「0」既是哨兵又是时刻而被冷却窗口吞掉） */
+    /**
+     * 上次降档时刻；null = 从未降档（首次调用必须放行，不能因为「0」既是哨兵又是时刻而被冷却窗口吞掉）。
+     *
+     * T416丁：刻度是 `SystemClock.elapsedRealtime()`（进程内经过的时间），**不是墙上钟**，也不落盘。
+     * 改前这里收的是调用点递来的 `System.currentTimeMillis()`，量的却是「离上次降档过了多久」；
+     * 墙上钟会被用户改表 / 时区与闰秒校正 / NITZ 下发往回拨，
+     * 而冷却判据那条差值一旦为负就恒小于 [LOWER_COOLDOWN_MS] ⇒ 冷却永不结束、降档链从此静默停摆
+     * （本仓同族判据见 `domain/session/RestoreBackoffWindowGate.kt`，倒退分档的护栏在
+     * `domain/schedule/GlassMonotonicWindowGate.kt`）。可空这一格本身已经是「从没降过」的表达式，
+     * 与刻度起点零不共用同一格（#496 那一族在这里结构上不成立）。
+     */
     @Volatile private var lastLowerAt: Long? = null
 
     /**
@@ -57,10 +70,17 @@ object GlassGovernance {
      * 带冷却窗口防止在瞬时负载（截图/动画风暴）下一路降到底。
      * 只降不升：恢复需要用户主动调档（设置页保存会覆盖生效档位），
      * 避免在"降档→恢复→再掉帧"之间来回震荡。
+     *
+     * `nowMillis` 的刻度是 `elapsedRealtime()`（T416丁），与 [GlassJankMonitor] 帧回调里那枚 `now`
+     * 是同一把尺：调用点显式把它递进来，两侧不许各读各的钟。上一刻的读数先过
+     * [glassLowerAtForCooldown] 的倒退护栏，再交给在册的那一条 `isGlassLowerCoolingDown`
+     * —— 闸门只有一处，这里只负责把「刻度」与「倒退」两件事说清楚。
      */
-    fun lowerTierForJank(nowMillis: Long = System.currentTimeMillis()) {
+    fun lowerTierForJank(nowMillis: Long = SystemClock.elapsedRealtime()) {
         synchronized(this) {
-            if (isGlassLowerCoolingDown(lastLowerAt, nowMillis, LOWER_COOLDOWN_MS)) return
+            if (isGlassLowerCoolingDown(glassLowerAtForCooldown(lastLowerAt, nowMillis), nowMillis, LOWER_COOLDOWN_MS)) {
+                return
+            }
             lastLowerAt = nowMillis
             // 基准必须是可用的最高档：从 Int.MAX_VALUE 往下减得到的 MAX-1 经 coerceAtMost 恒等，
             // 于是"降了一档"实际什么都没降，低端机/热节流场景永不降级（R5 F-18）。
@@ -77,6 +97,7 @@ object GlassGovernance {
      * 上次降档时刻（null = 从未降档）：[GlassJankMonitor] 把它连同 [LOWER_COOLDOWN_MS]
      * 传进纯判据内核，冷却窗口在发起 Demote 之前就该被看见。读一次 volatile 字段，
      * 不加锁——它只用于决策参考，真正的闸门仍在本对象 [lowerTierForJank] 的同步块里。
+     * 刻度同 [lastLowerAt]：`elapsedRealtime()`，调用点不得换成别的钟。
      */
     internal fun lastLowerAtMillis(): Long? = lastLowerAt
 

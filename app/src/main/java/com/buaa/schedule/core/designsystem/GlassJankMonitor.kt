@@ -4,10 +4,14 @@ import com.buaa.schedule.BuildConfig
 import android.app.Activity
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
 import android.util.Log
 import android.view.FrameMetrics
 import android.view.Window
+import com.buaa.schedule.domain.schedule.glassLowerAtForCooldown
+import com.buaa.schedule.domain.schedule.glassMonotonicElapsedMillis
 import java.lang.ref.WeakReference
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 玻璃/UI 性能观测层（JankStats 的轻量替代）。
@@ -37,9 +41,17 @@ object GlassJankMonitor {
     /** Release 降档判定：窗口至少要有这么多帧才可信（静止画面帧数太少容易误判） */
     private const val RELEASE_MIN_FRAMES = 100L
 
-    /** 用弱引用持有宿主，避免静态字段长期拽住 Activity */
-    private var attachedActivity: WeakReference<Activity>? = null
-    private var listener: Window.OnFrameMetricsAvailableListener? = null
+    /**
+     * 用弱引用持有宿主，避免静态字段长期拽住 Activity。
+     *
+     * T416乙：这两枚走的是**双向**跨线程通道——主线程在 [attach] 里写、延出去的 `decorView.post` 读出来验身份；
+     * 后台线程在降档收尾时经 [detachInternal] 把它们写 null。缺可见性时旧 Window 的每帧监听摘不掉、
+     * 也可能摘错人，从此一直每帧回调（耗电），而 release 侧「压到 OFF 就停采样」永不落地。
+     */
+    @Volatile private var attachedActivity: WeakReference<Activity>? = null
+
+    /** 当前挂在 Window 上的那枚监听：摘除时按它找人，读它的线程与写它的线程不同（见 [attachedActivity]） */
+    @Volatile private var listener: Window.OnFrameMetricsAvailableListener? = null
 
     /** 监听器真正挂上了 Window 才允许摘：没挂上就去 remove 会撞上平台的「never added」 */
     @Volatile private var registered = false
@@ -47,40 +59,56 @@ object GlassJankMonitor {
     /** FrameMetrics 回调线程的 Handler：进程内建一次，跨宿主切换复用（见 [frameMetricsHandler]） */
     @Volatile private var callbackHandler: Handler? = null
 
-    @Volatile private var totalFrames = 0L
+    /**
+     * T416丙：这两枚是「读-改-写」，`@Volatile` 只给可见性不给原子性——后台线程的自增与主线程
+     * attach / detachInternal 的整枚清零不成对，会丢更新、把窗口起点复活，于是
+     * [RELEASE_MIN_FRAMES] 与 [SAMPLE_WINDOW_MS] 那两把尺按错的帧数算。换成原子量：
+     * incrementAndGet / set 都不阻塞，帧回调里仍然零锁（在册约束：回调里引可阻塞的锁本身就造 jank）。
+     */
+    private val totalFrames = AtomicLong()
 
-    @Volatile private var jankFrames = 0L
+    private val jankFrames = AtomicLong()
 
+    /** 窗口起点只被赋值、不被自增，volatile 赋值够用；刻度是 `elapsedRealtime()`（见 [glassMonotonicElapsedMillis]，T416丁） */
     @Volatile private var windowStart = 0L
 
     /** release 降档完成后置 true：停止采样，进程内不再有每帧回调 */
     @Volatile private var releaseDeactivated = false
 
-    /** 记录上一个窗口是否同样超标：release 需要连续两个坏窗口才降档 */
-    private var lastWindowBad = false
+    /**
+     * 记录上一个窗口是否同样超标：release 需要连续两个坏窗口才降档。
+     *
+     * T416甲：读它在后台线程（每帧收尾那一次），写它分两头——同一枚后台线程的收尾分支与主线程
+     * [detachInternal] 的归位。缺可见性时「连续两个坏窗口」这枚记忆跨线程不成对，
+     * 单个坏窗口就能把玻璃压到 OFF，而 [GlassGovernance] 只降不升 ⇒ 用户看到玻璃质感莫名消失且回不来。
+     * 赋值都是绝对值（不是自增），所以 @Volatile 与同块其余兄弟字段齐平即为充分修法。
+     */
+    @Volatile private var lastWindowBad = false
 
     fun attach(activity: Activity) {
         if (releaseDeactivated && !BuildConfig.DEBUG) return
         if (attachedActivity?.get() === activity) return
         // 宿主变了（旋转/重建）：先摘掉旧的监听，再挂新的
         attachedActivity?.get()?.let { detachInternal(it) }
-        totalFrames = 0L
-        jankFrames = 0L
-        windowStart = System.currentTimeMillis()
+        totalFrames.set(0L)
+        jankFrames.set(0L)
+        windowStart = SystemClock.elapsedRealtime()
         val debug = BuildConfig.DEBUG
         val newListener = Window.OnFrameMetricsAvailableListener { _, frameMetrics, _ ->
-            totalFrames++
+            // 原子自增顺手交回自增后的值：改前是「先 ++ 再读 volatile」，两记之间能被清零插进来（T416丙）
+            val frames = totalFrames.incrementAndGet()
             val duration = frameMetrics.getMetric(FrameMetrics.TOTAL_DURATION)
             // 视觉帧预算 16ms；超过 32ms 算明显掉帧
-            if (duration > 32_000_000L) jankFrames++
-            val now = System.currentTimeMillis()
-            val frames = totalFrames
-            val jank = jankFrames
-            // 每帧只多一次纯函数调用与一次 volatile 读：窗口没收尾就原样返回 WindowOpen，
-            // 不分配、不打日志；收尾动作（判据见 glassJankWindowAction）10 秒才走一遍。
+            if (duration > 32_000_000L) jankFrames.incrementAndGet()
+            // T416丁：量的全是进程内经过的时间（10 秒采样窗 + 10 分钟降档冷却），走单调刻度，
+            // 且与 GlassGovernance.lowerTierForJank 的默认刻度是同一把尺——只换一侧就是跨一秒读两只钟
+            val now = SystemClock.elapsedRealtime()
+            val jank = jankFrames.get()
+            // 每帧只多两次纯函数调用与一次 volatile 读：窗口没收尾就原样返回 WindowOpen，
+            // 不分配、不打日志、不加锁；收尾动作（判据见 glassJankWindowAction）10 秒才走一遍。
             val action = glassJankWindowAction(
                 debug = debug,
-                windowElapsedMillis = now - windowStart,
+                windowElapsedMillis = glassMonotonicElapsedMillis(now, windowStart),
                 sampleWindowMillis = SAMPLE_WINDOW_MS,
                 frames = frames,
                 jankFrames = jank,
@@ -88,12 +116,12 @@ object GlassJankMonitor {
                 jankRatePercent = RELEASE_JANK_RATE_PERCENT,
                 previousWindowBad = lastWindowBad,
                 nowMillis = now,
-                lastLowerAtMillis = GlassGovernance.lastLowerAtMillis(),
+                lastLowerAtMillis = glassLowerAtForCooldown(GlassGovernance.lastLowerAtMillis(), now),
                 lowerCooldownMillis = GlassGovernance.LOWER_COOLDOWN_MS,
             )
             if (action == GlassJankWindowAction.WindowOpen) return@OnFrameMetricsAvailableListener
-            totalFrames = 0L
-            jankFrames = 0L
+            totalFrames.set(0L)
+            jankFrames.set(0L)
             windowStart = now
             when (action) {
                 GlassJankWindowAction.WindowOpen -> Unit
@@ -201,7 +229,7 @@ object GlassJankMonitor {
             runCatching { activity.window.removeOnFrameMetricsAvailableListener(current) }
                 .onFailure { Log.e(TAG, "FrameMetrics 监听摘除失败", it) }
         }
-        totalFrames = 0L
-        jankFrames = 0L
+        totalFrames.set(0L)
+        jankFrames.set(0L)
     }
 }
