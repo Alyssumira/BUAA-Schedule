@@ -535,6 +535,134 @@ class CalendarModeClassBellCleanupTest {
         )
     }
 
+    // ---- ⑤ #679：兜底轮询的重评估点名册 ----------------------------------------
+
+    /**
+     * 在册 #679（中·代价有界）：[com.buaa.schedule.widget.WidgetFallbackWorker.ensure] 的判据是
+     * `hasAnyWidget || usesInAppReminders(context)`，后者回读的就是设置页那枚「提醒方式」写进 prefs 的
+     * `ReminderMode.PREF_KEY` —— **模式一翻，注册/取消的结论就跟着翻**，而这一档此前不在重评估点名册里
+     * （`onReminderModeChanged` 体内只有 `afterDataChangedInternal()` 那一手）。
+     * 症状：用户切到「系统日历提醒」后那枚 12 小时周期任务不会被撤，要等下一次冷启动
+     * （`BackgroundSync.runColdStartWidgetSteps`）或下一次放/撤组件
+     * （`WidgetCommon.registerBackgroundSyncSteps` / `cancelWidgetMidnightIfNoWidgets`）才对齐；
+     * 反向切回时若期间组件全被移除过，兜底同样要等下一次冷启动才回来。
+     *
+     * ⚠️ 判据本体（裸 :93 那条 `||`）是在册裁定，本格一个字不碰 —— 钉的是"重评估点齐不齐"，
+     * 不是判据宽窄。`ensure` 的形参表同样不许动，所以这一手只能按裸调形状补。
+     */
+    @Test
+    fun reminderModeChangeIsAFallbackWorkerReEvaluationPoint() {
+        val body = balancedBlock(withoutComments(read(SCHEDULE_VIEW_MODEL_FILE)), "fun onReminderModeChanged()")
+
+        assertEquals(
+            "改提醒模式那一手没把兜底轮询交回 ensure() 重估：ensure 的那半条判据读的就是这一手写进 " +
+                "prefs 的 PREF_KEY（缺的是重评估点，判据本体不许动）。\n$body",
+            1,
+            occurrences(body, "WidgetFallbackWorker.ensure("),
+        )
+    }
+
+    /**
+     * 重评估点名册（改前现量 3 枚 ⇒ 本卡补成 4 枚），一处不多一处不少：
+     * 少一枚就是某一档用户永远等不到重估；多一枚就是同一趟链里把「有没有组件」问第二遍 ——
+     * 那正是本仓已裁过两次的形状（`runColdStartWidgetSteps` 的 `probeHasWidgets` 注入、
+     * [com.buaa.schedule.widget.WidgetFallbackWorker.ensure] KDoc 自引的「审计 §2.1：那次唤醒里
+     * 这个问题原本被问三遍」、`ScheduleViewModel` 里 #536 F2 那句「一枚链只读一遍」）。
+     * 这也是本卡不采纳「挂到 afterDataChangedInternal() 公共链」那一档的原因：那边有 17 枚调用点，
+     * 而 `refreshWidgets` 与 `ensure` 各带一份 `hasAnyWidgetSafely` 默认参数，挂上去等于把
+     * 这一族白付从 1 条链扩到 17 条。
+     */
+    @Test
+    fun fallbackWorkerReEvaluationRosterIsTheKnownFour() {
+        val actual = mainJavaSources()
+            .associate { (relative, text) -> relative to occurrences(text, "WidgetFallbackWorker.ensure(") }
+            .filterValues { it > 0 }
+
+        assertEquals(
+            "WidgetFallbackWorker.ensure() 的重评估点名册变了：$actual。这一族的每一枚都必须对应一个会让 " +
+                "hasAnyWidget 或 usesInAppReminders 翻面的写入点（改组件 / 改提醒模式），否则就是白探测。",
+            mapOf(
+                "com/buaa/schedule/widget/BackgroundSync.kt" to 2, // 冷启动链 + 六家 Provider 的 onDisabled 路
+                "com/buaa/schedule/widget/WidgetCommon.kt" to 1,   // 广播补注册路
+                "com/buaa/schedule/ui/ScheduleViewModel.kt" to 1,  // 改提醒模式那一条（#679）
+            ),
+            actual,
+        )
+    }
+
+    /**
+     * 可达性取证，不是假设：设置页那枚分段控件把选中的模式落进 PREF_KEY（裸 :1305-:1307）之后，
+     * 紧接着一手就叫 `onReminderModeChanged()`（裸 :1309）。这一格断的是"入口链还在"——
+     * 入口被摘掉时上一格会假绿（名册照样 4 枚，只是那一手没人按得到）。
+     */
+    @Test
+    fun reminderModeEntryChainStillWritesPrefThenNotifiesViewModel() {
+        val settings = mainJavaSources().first { (relative, _) -> relative == SETTINGS_SCREEN_FILE }.second
+
+        assertTrue(
+            "设置页不再回读 onReminderModeChanged()：#679 那枚重评估点结构上没人按得到",
+            settings.contains("viewModel.onReminderModeChanged()"),
+        )
+        assertTrue(
+            "设置页不再写 ReminderMode.PREF_KEY：ensure 的那半条判据就少了这一处写入读者",
+            settings.contains("ReminderMode.PREF_KEY, mode"),
+        )
+    }
+
+    // ---- ⑥ #680：精确闹钟守卫的真宿主名册（订正一枚假指路）----------------------
+
+    /**
+     * 在册 #680（薄·注释替不存在的守卫背书）：`WidgetRefreshReceiver` 那枚
+     * `catch (e: SecurityException)` 的注释曾写着「BackgroundSync 内部已有 canScheduleExactAlarms 守卫」
+     * —— 那是假指路：那枚文件里 `canScheduleExactAlarms` 是 **0 命中**。
+     *
+     * 真宿主名册（抹注释 + 抹字面量后的**调用级**计数）= **6 枚文件 / 7 枚调用点**，全在
+     * `reminder/` 与 `ui/settings/` 那一侧。`widget/BackgroundSync.kt` 一枚也没有，而且不是漏了：
+     * 它体内唯一那手排闹钟（`scheduleWidgetMidnight`）走的是 `setAndAllowWhileIdle`
+     * —— **不需要精确闹钟权限**的那一档 —— 外加就地 `runCatching`，所以它靠的是换 API 而不是前置判据。
+     *
+     * ⚠️ 两栏计数别混，这一格就钉这个分歧：`grep -rln 'canScheduleExactAlarms' app/src/main` 念的是
+     * **7 枚文件**，多出来那一枚就是 `WidgetRefreshReceiver.kt` 自己 —— 它那一枚命中是**注释里的字**，
+     * 不是一枚调用。本格吃抹注释后的调用计数，所以对它给 0；那句假指路一回魂，第三条断言当场红。
+     */
+    @Test
+    fun exactAlarmGuardHostRosterIsNamedHonestly() {
+        val actual = mainJavaSources()
+            .associate { (relative, text) -> relative to occurrences(text, "canScheduleExactAlarms()") }
+            .filterValues { it > 0 }
+
+        assertEquals(
+            "`canScheduleExactAlarms()` 的宿主名册变了：$actual。涨一枚 = 有第二处排精确闹钟没走前置判据，" +
+                "掉一枚 = 某条链的权限护栏被摘；两种都要当场点名，不许折成一句「内部已有守卫」。",
+            mapOf(
+                "com/buaa/schedule/reminder/ClassProgressDnd.kt" to 1,
+                "com/buaa/schedule/reminder/ClassProgressScheduler.kt" to 2,
+                "com/buaa/schedule/reminder/CourseFluidService.kt" to 1,
+                "com/buaa/schedule/reminder/ReminderScheduler.kt" to 1,
+                "com/buaa/schedule/reminder/TomorrowPreviewReceiver.kt" to 1,
+                "com/buaa/schedule/ui/settings/ReminderGuidance.kt" to 1,
+            ),
+            actual,
+        )
+        assertEquals(
+            "widget/BackgroundSync.kt 又长出 canScheduleExactAlarms 调用点（真宿主在 reminder 那一侧）",
+            0,
+            actual[BACKGROUND_SYNC_FILE] ?: 0,
+        )
+        assertEquals(
+            "widget/WidgetRefreshReceiver.kt 里出现了 canScheduleExactAlarms 调用：它自己并不排闹钟，" +
+                "这一手该落在有权限护栏的那几枚文件里",
+            0,
+            actual[WIDGET_REFRESH_RECEIVER_FILE] ?: 0,
+        )
+        assertFalse(
+            "那枚 catch(SecurityException) 的注释又把 BackgroundSync 说成有 canScheduleExactAlarms 守卫" +
+                "（假指路：那判据在那枚文件里 0 命中）。命中行：" +
+                linesContaining(read(WIDGET_REFRESH_RECEIVER_FILE), "BackgroundSync 内部已有"),
+            read(WIDGET_REFRESH_RECEIVER_FILE).contains("BackgroundSync 内部已有"),
+        )
+    }
+
     // ---- 源码核对工具（抄 BootDndSelfHealDecisionTest）--------------------------
 
     /**
@@ -700,6 +828,9 @@ class CalendarModeClassBellCleanupTest {
         const val BOOT_RECEIVER_FILE = "com/buaa/schedule/reminder/BootReceiver.kt"
         const val SCHEDULE_VIEW_MODEL_FILE = "com/buaa/schedule/ui/ScheduleViewModel.kt"
         const val SETTINGS_SCREEN_FILE = "com/buaa/schedule/ui/settings/SettingsScreen.kt"
+
+        /** #680 那枚假指路的宿主；只用来钉"它的 canScheduleExactAlarms 调用计数是 0" */
+        const val WIDGET_REFRESH_RECEIVER_FILE = "com/buaa/schedule/widget/WidgetRefreshReceiver.kt"
 
         /**
          * 报告口那个标签：生产与这里必须同名，否则闸门数不到这一格。
