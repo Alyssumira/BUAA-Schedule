@@ -314,7 +314,13 @@ class IClassSignInWiringGuardTest {
         }
         // 行为一字未动的那两枚参照物
         assertTrue("在飞那一档说的话被改写了（T345 逐字钉着它）：", screen.contains("is SignInState.Submitting -> \"正在提交签到…\""))
-        assertEquals("返回门那一手多写了（本卡不许开第二条出口）：", 2, occurrences(screen, "requestBack"))
+        // 这枚格由 T404b② 按盘重钉（崩卡留下的四枚新格之一，从没跑过；红在**期望那一侧**，不是实现缺手）：
+        // 针数的是 `requestBack` 这个**名字**在抹注释后的全文里出现几次，本树现量三枚 ——
+        // SpocScanScreen.kt:559 那一枚定义 `fun requestBack()`、:566 那扇系统返回门
+        // `BackHandler(enabled = busy) { requestBack() }`、:691 顶栏箭头那一扇 `onBack = { requestBack() }`。
+        // 崩卡把期望写成 2，数的是"两扇门"那一栏，漏了定义自己也带这个名字；改前起点 `faaae1e` 用同一把尺量的也是 3
+        // ⇒ 实现段没有多开第二条出口（它动的只有那颗「去登录」按钮与那枚 `else -> Unit`，两扇门与 `busy` 的定义一字未动）。
+        assertEquals("返回门那一手多写了（本卡不许开第二条出口；3 枚 = 一枚定义 ＋ 两扇门的调用点）：", 3, occurrences(screen, "requestBack"))
         assertEquals("卡上那两颗按住的动作没被换成第三把尺：", 2, occurrences(screen, "enabled = !inFlight"))
     }
 
