@@ -12,7 +12,7 @@ powershell -ExecutionPolicy Bypass -File release.ps1         # 首发：按 grad
 ```
 
 传号时第一步会拒绝"同号或更小的号"（`stampVersion`），所以首次发布**不要**传号 ——
-`VERSION_NAME` 已经写着 `0.1.0`，没有上一个版本可比。
+`VERSION_NAME` 在首发那一趟只有 `0.1.0` 一档，那一趟没有上一个版本可比（现值以 `gradle.properties` 为准）。
 
 它按顺序做完**四步**（"做完就停"的那一处"停"是第 4 步，不是第 3 步）：
 

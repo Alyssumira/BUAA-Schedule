@@ -10,9 +10,10 @@ JSON，顶层字段（全部有默认值，向后兼容新增字段）：
 | --- | --- | --- |
 | `version` | Int | 当前 `2`；恢复时若版本比本应用新，确认卡片会禁用「恢复」按钮 |
 | `semester` | Object? | `termCode / termName / startDate / totalWeeks` |
+| `semesters` | Array | `termCode / termName / startDate / totalWeeks`（T204 加的一族：多学期逐条各一枚；老备份缺这枚键解析成空列表、读侧回落 `semester` 单字段。漏掉它产出的文件会丢历史学期那一族） |
 | `timeSlots` | Array? | `number / startTime / endTime`（HH:mm） |
-| `courses` | Array? | `name / teacher? / location? / campus? / dayOfWeek / periods[] / weeks[] / colorIndex / customColorArgb? / sourceGroupKey? / isManualOverride / credit?` |
-| `reminders` | Array? | `courseKey / enabled / advanceMinutes`（按课程内容签名而非数据库 id，恢复后 id 重排也能对上） |
+| `courses` | Array? | `name / alias? / teacher? / location? / campus? / dayOfWeek / periods[] / weeks[] / colorIndex / customColorArgb? / remark? / sourceGroupKey? / semesterCode? / isManualOverride / credit? / startSection? / endSection?` |
+| `reminders` | Array? | `courseKey / enabled / advanceMinutes / fragmentWeeks?`（按课程内容签名而非数据库 id，恢复后 id 重排也能对上） |
 
 要点：
 
