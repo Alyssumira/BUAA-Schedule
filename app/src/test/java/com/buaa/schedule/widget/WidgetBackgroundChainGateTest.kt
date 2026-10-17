@@ -1,8 +1,11 @@
 package com.buaa.schedule.widget
 
 import java.io.File
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -90,10 +93,17 @@ class WidgetBackgroundChainGateTest {
         // 两处调用点的形状照旧（两处都被在册守卫逐字钉着，分层不许动它们）
         val refresh = balancedBlock(sync, "suspend fun refreshWidgets(")
         assertTrue("refreshWidgets 不再把载体递给重绘：$refresh", refresh.contains("syncAndRedrawAllWidgets(context, snapshot)"))
-        val coldStart = balancedBlock(sync, "internal suspend fun runColdStartWidgetSteps(")
+        // 那枚 Context 重载是**表达式体**（`): Boolean = runColdStartWidgetSteps(…)`），
+        // balancedBlock 只会切到第一枚实参 lambda（`probeHasWidgets = { … }`）⇒ 按两枚重载之间的窗口切
+        // （先例：ChainReadSnapshotWiringGuardTest 里 `loadWindowInput = load@{` 那一格记的同一类地雷）
+        val flat = sync.replace(Regex("\\s+"), " ")
+        val wiringAt = flat.indexOf("suspend fun runColdStartWidgetSteps(")
+        val seamAt = flat.indexOf("internal suspend fun runColdStartWidgetSteps(", wiringAt)
+        check(wiringAt >= 0 && seamAt > wiringAt) { "两枚 runColdStartWidgetSteps 重载的相对位置变了：wiringAt=$wiringAt seamAt=$seamAt" }
+        val coldStart = flat.substring(wiringAt, seamAt)
         assertTrue(
-            "冷启动那一步的接线不再逐字相同（ColdStartWidgetStepsTest:176 钉的就是这一串）：$coldStart",
-            coldStart.replace(Regex("\\s+"), " ").contains("refreshWidgetData = { syncAndRedrawAllWidgets(context, snapshot) }"),
+            "冷启动那一步的接线不再逐字相同（ColdStartWidgetStepsTest:176 钉的就是这一串；分层闸门不许动调用点）：$coldStart",
+            coldStart.contains("refreshWidgetData = { syncAndRedrawAllWidgets(context, snapshot) }"),
         )
     }
 
@@ -166,10 +176,17 @@ class WidgetBackgroundChainGateTest {
         )
         // 每一枚复投的第二臂吃 Throwable 而不是 Exception：原先那层 runCatching 本来吃 Throwable，
         // 收窄成 Exception 会把 Error 那一档（定制 ROM 的 NoSuchMethodError 之类）放逃到广播/Worker 里去崩。
+        // 六枚换掉的落点 ＋ 新增的分层执行体 = 七臂；`readChainSnapshotOrNull` 仍吃 Exception（改前形状，本卡不动它）。
         assertEquals(
-            "catch (e: Throwable) 实到 " + occurrences(sync, "catch (e: Throwable) {") + " ／ 写死 6（六个改过的落点各一臂）",
-            6,
+            "catch (e: Throwable) 实到 " + occurrences(sync, "catch (e: Throwable) {") + " ／ 写死 7" +
+                "（六个换掉的落点各一臂 ＋ runIsolatedRedrawLayers），少一臂就是那一处把 Error 那一档放逃出去了",
+            7,
             occurrences(sync, "catch (e: Throwable) {"),
+        )
+        // 第六枚（冷启动探测）落在两枚同名重载里，按行首锚点单独钉，免得 balancedBlock 切到上面那一枚 Context 版
+        assertTrue(
+            "runColdStartWidgetSteps 的探测那一枚没有换成带复投的 try/catch（取消会被折成「探测抛了」）：\n$sync",
+            sync.contains("val hasWidgets = try {"),
         )
         for (anchor in listOf(
             "suspend fun rescheduleReminders(",
@@ -235,11 +252,13 @@ class WidgetBackgroundChainGateTest {
             1,
             occurrences(throwableArm, "onStepFailed(\"rescheduleReminders\", e)"),
         )
+        // balancedBlock 切的是「锚点到那记收尾右括号（含）」，所以臂内最后一个**表达式**在倒数第二行
+        val armTail = throwableArm.lines().dropLast(1).last { it.isNotBlank() }.trim()
         assertEquals(
-            "抛那一档的结论不再是 true —— 钥匙 2 会探错闹钟头（要修的是 Worker 的读法，不是这里的含义）：" +
-                "现尾部表达式 = " + throwableArm.lines().last { it.isNotBlank() }.trim(),
+            "抛那一档的结论不再是 true —— 钥匙 2 会探错闹钟头（要修的正是 Worker 那一侧的读法，不是这里的含义）：" +
+                "现尾部表达式 = $armTail",
             "true",
-            throwableArm.lines().last { it.isNotBlank() }.trim(),
+            armTail,
         )
         assertFalse(
             "getOrDefault 又回来了（它把「没人接手」与「抛了」压成同一个 true，正是 #675 的病灶）：\n$body",
@@ -268,8 +287,12 @@ class WidgetBackgroundChainGateTest {
             signature.contains("onStepFailed: (label: String, error: Throwable) -> Unit = NO_STEP_FAILURE"),
         )
         assertTrue("提醒那一步没有吃这条链的报告口：\n$body", body.contains("rescheduleReminders(context, onStepFailed, snapshot)"))
-        // 控制格：载体与组件那一步的形状一个字没动（ChainReadSnapshotWiringGuardTest 逐字钉着后者）
-        assertTrue("组件那一步不再吃载体/结论（那枚针要红）：\n$body", body.contains("refreshWidgets(context, hasAnyWidget, snapshot)"))
+        // 控制格：载体与结论那两枚实参一个字没少（ChainReadSnapshotWiringGuardTest 的那根针已随 #675 同批重钉成四枚实参）
+        assertTrue(
+            "组件那一步不再吃载体/结论（少任何一枚都是 #536 F2 那族复发）：实参表 = " +
+                body.lines().first { it.contains("refreshWidgets(") }.trim(),
+            body.contains("refreshWidgets(context, hasAnyWidget, snapshot, onStepFailed)"),
+        )
         assertTrue("入口那一次读仍然走可复投的那一枚：\n$body", body.contains("val snapshot = readChainSnapshotOrNull(context)"))
     }
 
@@ -302,26 +325,243 @@ class WidgetBackgroundChainGateTest {
 
     // ---- #680 C-13 同族：闹钟那两支早退的留痕 --------------------------------------
 
-    /** 今天/明晚翻面的唯一闹钟：两支早退各自点名，控制流一个字不动（继续 return，不抛 ⇒ "别崩广播"保留） */
+    /**
+     * 今天/明晚翻面的唯一闹钟：两支早退各自点名，控制流一个字不动（继续 return，不抛 ⇒ "别崩广播"保留）。
+     *
+     * ⚠️ 留痕一律落在 Info／Warning 级、**不落 Debug**：本仓自己成文的取证口径写着真机 logcat 被 HyperOS
+     * 截在 Info 级（`MonotonicWindowGateWiringGuardTest` 与 `WidgetRolloverClaimWiringGuardTest` 里那两格
+     * 「这一族零枚 Log 得不许」＋「`Log.d` 必须 0 枚 —— 写了等于没写」）。
+     * 一张卡面写着"零留痕"的链，修成一条读不到的留痕，等于没修（第⓪问的裁定在这里跟着盘面事实改口，
+     * 见 T400② 的订正段）。
+     */
     @Test
     fun midnightAlarmEarlyExitsAreNamedOnTheLog() {
         val code = withoutComments(read(BACKGROUND_SYNC_FILE))
         val midnight = balancedBlock(code, "fun scheduleWidgetMidnight(context: Context, hasAnyWidget: Boolean")
         val cancel = balancedBlock(code, "fun cancelWidgetMidnight(context: Context)")
 
-        assertTrue("「桌面没有组件」那一支仍然零留痕（日志里分不清「没排」与「排了但没响」）：\n$midnight", midnight.contains("Log.d("))
         assertTrue(
-            "拿不到 AlarmManager 那一支还是静默 return：\n$midnight",
-            occurrences(midnight, "?: run {") >= 2 || midnight.contains("拿不到 AlarmManager"),
+            "「桌面没有组件」那一支仍然零留痕，或者留痕落在读不到的级别：\n$midnight",
+            midnight.contains("Log.i("),
         )
-        assertTrue("撤闹钟那一支（同形而未列的第四支）仍然静默：\n$cancel", cancel.contains("拿不到 AlarmManager"))
+        assertEquals("无组件那一支的留痕恰好一枚（多一处就是同一档两处各说一遍）：\n$midnight", 1, occurrences(midnight, "Log.i("))
+        assertTrue(
+            "拿不到 AlarmManager 那一支还是静默 return（这条链是翻面唯一的闹钟）：\n$midnight",
+            midnight.contains("拿不到 AlarmManager"),
+        )
+        assertEquals(
+            "排闹钟那一族的 Warning 留痕实到 " + occurrences(midnight, "Log.w(") + " ／ 写死 2" +
+                "（改前那句「调度零点刷新失败」＋新加的「拿不到 AlarmManager」；少一枚就是静默的那一支又回来了）：\n$midnight",
+            2,
+            occurrences(midnight, "Log.w("),
+        )
+        assertTrue("撤闹钟那一支（同形而卡面未列的那一枚）仍然静默：\n$cancel", cancel.contains("拿不到 AlarmManager"))
         // 控制格：两支都还是"当场退出"，没有改成抛（抛会崩广播回调，那是既有理由）
-        assertTrue("无组件那一支不再 return（被改成了抛/继续往下排？）：\n$midnight", midnight.contains("cancelWidgetMidnight(context)"))
+        assertTrue("无组件那一支不再撤残留闹钟（被改成了抛/继续往下排？）：\n$midnight", midnight.contains("cancelWidgetMidnight(context)"))
         assertEquals("排闹钟那一步仍然只有一把就地 runCatching：\n$midnight", 1, occurrences(midnight, "runCatching"))
         assertTrue("零点闹钟那一路的 builder 接线变了：\n$midnight", midnight.contains("midnightPendingIntent(context)"))
+        assertFalse("两支之一被改成向外抛（会崩在广播回调里）：\n$midnight", midnight.contains("throw "))
+    }
+
+    // ---- 行为格子（纯 JVM 判据本体，零 Context、零 android）------------------------
+
+    /** 一层都不许被前面那家带走：第 k 家抛了，第 k+1 家…第 7 家仍然各画一次（#676 收的就是这一条） */
+    @Test
+    fun everyLayerRunsEvenWhenAnEarlierLayerThrows() = runBlocking {
+        val trace = Trace()
+        val failed = BackgroundSync.runIsolatedRedrawLayers(
+            layers = productionShapedLayers(trace, failing = setOf("TodayWidgetProvider.updateAll")),
+            reportLayer = { label, error -> trace.reports += label to error },
+        )
+
+        assertEquals(
+            "第一家抛了后面的就不画（这正是改前三层连坐里最响的那一层）：实到调用 " + trace.called,
+            REDRAW_LAYER_LABELS,
+            trace.called,
+        )
+        assertEquals("失败清单里该只有那一家", listOf("TodayWidgetProvider.updateAll"), failed)
+        assertEquals("留痕该恰好一枚、且报的就是那一家", 1, trace.reports.size)
+    }
+
+    /** 逐档点名：七层里任何一层抛，都只记它自己一个名字，其余六层照跑 */
+    @Test
+    fun eachLayerNamesItselfAndNothingElse() = runBlocking {
+        for (culprit in REDRAW_LAYER_LABELS) {
+            val trace = Trace()
+            val failed = BackgroundSync.runIsolatedRedrawLayers(
+                layers = productionShapedLayers(trace, failing = setOf(culprit)),
+                reportLayer = { label, error -> trace.reports += label to error },
+            )
+
+            assertEquals("$culprit 抛了，七层仍然要各跑一次：实到 " + trace.called, REDRAW_LAYER_LABELS, trace.called)
+            assertEquals("$culprit 那一层被记成了别的名字：实到 " + failed, listOf(culprit), failed)
+            assertEquals("$culprit 的留痕枚数：实到 " + trace.reports.size, 1, trace.reports.size)
+            assertEquals("报告里点名的层不对（留痕分不出是哪一层就等于没分层）", culprit, trace.reports.single().first)
+        }
+    }
+
+    /** 取消是控制流不是失败：复投、后面的层不跑、也不记进失败清单（#677 落在这枚新 seam 上的那一半） */
+    @Test
+    fun cancellationIsNotALayerFailureAndStopsTheRemainingLayers() = runBlocking {
+        val trace = Trace()
+        val cancellation = CancellationException("调用方把这条链摘掉了")
+        var caught: Throwable? = null
+        try {
+            BackgroundSync.runIsolatedRedrawLayers(
+                layers = productionShapedLayers(trace, failing = setOf("WeekWidgetProvider.updateAll"), cancellation = cancellation),
+                reportLayer = { label, error -> trace.reports += label to error },
+            )
+        } catch (e: Throwable) {
+            caught = e
+        }
+
+        assertSame("取消没有被原样复投（被折成一次普通层失败就是 #677 的病灶）：$caught", cancellation, caught)
+        assertEquals(
+            "复投之后后面的层不该再跑（那是调用方已经不想跑了；culprit 自己算被跑到，因为它抛之前先记了一笔）：实到 " + trace.called,
+            listOf("WidgetDataSynchronizer.sync", "TodayWidgetProvider.updateAll", "TomorrowWidgetProvider.updateAll", "WeekWidgetProvider.updateAll"),
+            trace.called,
+        )
+        assertTrue("取消被记成了一枚层失败（外层会把它当「跑坏了」上报闸门）：" + trace.reports, trace.reports.isEmpty())
+    }
+
+    /** Error 那一档也算一层失败：闸门吃 Throwable，跟改前那层 runCatching 一样宽（不收窄成 Exception） */
+    @Test
+    fun errorsAreCountedAsLayerFailuresToo() = runBlocking {
+        val trace = Trace()
+        val brokenLink = NoSuchMethodError("RemoteViews 在个别定制 ROM 上抛的就是这一族")
+        val failed = BackgroundSync.runIsolatedRedrawLayers(
+            layers = listOf(
+                "WidgetDataSynchronizer.sync" to { trace.called += "WidgetDataSynchronizer.sync" },
+                "TodayWidgetProvider.updateAll" to {
+                    trace.called += "TodayWidgetProvider.updateAll"
+                    throw brokenLink
+                },
+                "TomorrowWidgetProvider.updateAll" to { trace.called += "TomorrowWidgetProvider.updateAll" },
+            ),
+            reportLayer = { label, error -> trace.reports += label to error },
+        )
+
+        assertEquals(
+            "Error 被放逃出去、或者把后面的层带走了：实到 " + trace.called,
+            listOf("WidgetDataSynchronizer.sync", "TodayWidgetProvider.updateAll", "TomorrowWidgetProvider.updateAll"),
+            trace.called,
+        )
+        assertEquals(listOf("TodayWidgetProvider.updateAll"), failed)
+        assertSame(brokenLink, trace.reports.single().second)
+    }
+
+    /** 抛几层就报几次、顺序 = 执行顺序、异常本体不换 */
+    @Test
+    fun everyFailedLayerIsReportedExactlyOnceInOrder() = runBlocking {
+        val trace = Trace()
+        val failed = BackgroundSync.runIsolatedRedrawLayers(
+            layers = productionShapedLayers(
+                trace,
+                failing = setOf("WidgetDataSynchronizer.sync", "WeekGridWidgetProvider.updateAll", "TwoDayWidgetProvider.updateAll"),
+            ),
+            reportLayer = { label, error -> trace.reports += label to error },
+        )
+
+        assertEquals(
+            "三层各抛一次 ⇒ 报告口该被调用三次（少一次就是有一层没人知道）：实到 " + trace.reports.size,
+            3,
+            trace.reports.size,
+        )
+        assertEquals(
+            "失败清单的顺序就是执行顺序（取证要按这一串点名是哪一层）",
+            listOf("WidgetDataSynchronizer.sync", "WeekGridWidgetProvider.updateAll", "TwoDayWidgetProvider.updateAll"),
+            failed,
+        )
+        assertEquals(
+            "报告里的层名与清单对不上",
+            failed,
+            trace.reports.map { it.first },
+        )
+        assertEquals("七层仍然各跑一次：实到 " + trace.called, 7, trace.called.size)
+    }
+
+    /** 边界：没有层就没有失败，也没有留痕（别把空清单当"全抛了"） */
+    @Test
+    fun noLayersMeansNoFailureAndNoReport() = runBlocking {
+        val trace = Trace()
+        val failed = BackgroundSync.runIsolatedRedrawLayers(layers = emptyList(), reportLayer = { label, error -> trace.reports += label to error })
+
+        assertTrue(failed.isEmpty())
+        assertTrue(trace.reports.isEmpty())
+    }
+
+    /** 重试判据表：抛过 且 没到顶才 retry；到顶就按原样成功（永久坏掉的库不该每一轮 30 秒地敲） */
+    @Test
+    fun retryHappensOnlyWhenSomethingFailedAndTheCeilingIsNotPassed() {
+        // (本轮抛了几步, 本次尝试序号) → 该不该 retry
+        val table = listOf(
+            Triple(0, 0, false), // 干净跑完：第一趟也不该重跑
+            Triple(0, 2, false),
+            Triple(1, 0, true), // 抛了一步、第一趟 ⇒ 交回 WorkManager
+            Triple(1, 1, true),
+            Triple(2, 1, true),
+            Triple(7, 2, true), // 七层全抛也照样只到第 3 趟为止
+            Triple(1, 3, false), // ← 到顶：本卡写死的那一档，不再敲
+            Triple(3, 3, false),
+            Triple(1, 4, false), // 到顶之后继续往后仍然不再 retry
+            Triple(0, 9, false),
+        )
+        for ((failedSteps, attempt, expected) in table) {
+            assertEquals(
+                "shouldRetryFallbackChain(failedStepCount = $failedSteps, runAttemptCount = $attempt) 该给 $expected",
+                expected,
+                shouldRetryFallbackChain(failedStepCount = failedSteps, runAttemptCount = attempt),
+            )
+        }
+    }
+
+    /** 上限那枚常量本身（判据表的第 3 档全靠它；谁把它调大就得回来重钉上面那张表） */
+    @Test
+    fun theRetryCeilingIsTheOneWrittenIntoTheConstant() {
+        val worker = withoutComments(read(FALLBACK_WORKER_FILE))
+
+        assertEquals(
+            "`MAX_FALLBACK_RETRY_ATTEMPTS = 3` 恰好一枚（实到 " + occurrences(worker, "MAX_FALLBACK_RETRY_ATTEMPTS = 3") +
+                "）：上限换了就得重钉上面那张判据表，别只改常量",
+            1,
+            occurrences(worker, "MAX_FALLBACK_RETRY_ATTEMPTS = 3"),
+        )
+        val functionAt = worker.indexOf("internal fun shouldRetryFallbackChain(")
+        val companionAt = worker.indexOf("companion object")
+        assertTrue(
+            "判据函数被挪进了 companion object（顶层函数编译进 WidgetFallbackWorkerKt，JVM 单测调它不会" +
+                "连带去初始化 CoroutineWorker 那堆 android 桩；挪进 companion 就把这层隔离弄丢了，而本模块没有 Robolectric）。" +
+                "实到 functionAt=$functionAt ／ companionAt=$companionAt",
+            functionAt >= 0 && (companionAt < 0 || functionAt < companionAt),
+        )
     }
 
     // ---- 源码核对工具（抄 CalendarModeClassBellCleanupTest，逐枚同名同形）---------
+
+    /** 按生产的层名册造一层：记一笔"这层被调用过"，再按名册决定它抛什么 */
+    private fun productionShapedLayers(
+        trace: Trace,
+        failing: Set<String>,
+        cancellation: Throwable? = null,
+    ): List<Pair<String, suspend () -> Unit>> = REDRAW_LAYER_LABELS.map { label ->
+        val boom: Throwable? = when {
+            label in failing && cancellation != null -> cancellation
+            label in failing -> IllegalStateException("$label 画不动")
+            else -> null
+        }
+        label to suspendLayer(trace, label, boom)
+    }
+
+    private fun suspendLayer(trace: Trace, label: String, boom: Throwable?): suspend () -> Unit = {
+        trace.called += label
+        if (boom != null) throw boom
+    }
+
+    private class Trace {
+        val called = mutableListOf<String>()
+        val reports = mutableListOf<Pair<String, Throwable>>()
+    }
+
 
     private fun read(relative: String): String {
         val file = File(findMainJavaDir(), relative)
