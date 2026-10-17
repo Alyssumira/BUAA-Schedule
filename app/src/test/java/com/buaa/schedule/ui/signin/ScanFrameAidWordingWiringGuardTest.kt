@@ -210,10 +210,15 @@ class ScanFrameAidWordingWiringGuardTest {
             // compareAndSet）。为什么非改不可：递交入口不止两条、也不都在主线程（相机兜底那一手就在
             // CameraX 的分析线程上就地调状态机），"读→判→写"在两颗线程之间不是原子的一步，两发真请求
             // 可以一起飞出去。差集大小由下面那枚 T395 靶子当场复算，反向钉照旧不删、不放宽。
+            // T404①（崩卡的实现段，由本回收卡 T404C 收口）把状态机这一枚第三次前移：被授权的只有
+            // `fail(error)` 那一句**用户文案的出处**（`error.message ?: "网络异常，请稍后重试"` →
+            // 按档取句子 `SubmitFailureClassifier.screenLine(...)` ＋一行 `.forensicsLine(...)`，另加两段
+            // KDoc/注释）。这一格为什么非改不可：那一句 JVM 原文带着主机名与端口上屏，是 #696 收的账，
+            // 而"话怎么说"这一族归判据侧的在册内核 —— 差集大小由下面那枚 T404① 靶子当场复算。
             // 反向钉一枚没删、没放宽：闸门与状态机从今往后照样"不许顺手改"。
             val rev = when (relative) {
                 GATE_FILE -> T245_GATE_BASELINE
-                VIEW_MODEL_FILE -> T395_VIEW_MODEL_BASELINE
+                VIEW_MODEL_FILE -> T404_VIEW_MODEL_BASELINE
                 else -> T90_BASELINE
             }
             val baseline = gitShow(rev, path)
@@ -654,6 +659,14 @@ class ScanFrameAidWordingWiringGuardTest {
          * [T257_VIEW_MODEL_BASELINE] 留在原地不删 —— 它是靶子的"前一头"。
          */
         const val T395_VIEW_MODEL_BASELINE = "869fc13"
+
+        /**
+         * T404①：[VIEW_MODEL_FILE] 的逐字节基点第三次前移。被授权的只有状态机 `fail(error)` 那一句
+         * 用户文案的出处（`error.message ?: "网络异常，请稍后重试"` → `SubmitFailureClassifier.screenLine`
+         * ＋一行 `.forensicsLine`，另加两段 KDoc/注释），闸门那一族与漏斗一枚都没动。
+         * [T395_VIEW_MODEL_BASELINE] 留在原地不删 —— 它是这一枚靶子的"前一头"。
+         */
+        const val T404_VIEW_MODEL_BASELINE = "bd0eca7"
 
         /**
          * T92（#133）被授权改动的那一段（[FRAME_FLOW_FILE] 头部"空转有多少帧"的读数）的两个锚点，

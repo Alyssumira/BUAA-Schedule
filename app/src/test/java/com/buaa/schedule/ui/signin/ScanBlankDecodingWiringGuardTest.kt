@@ -222,10 +222,20 @@ class ScanBlankDecodingWiringGuardTest {
             // 基点前移＋反向钉不删不放宽＋把"被授权的差集到底有多大"钉成可复算的格子（见下面那枚靶子）。
             // 七档判据、措辞与取证行这一手一个字都没动，所以这颗文件从今往后照样"不许顺手改"：
             // 谁再动它的判据或措辞，逐字节那一头当场红。
+            //
+            // T404①（崩卡的实现段，由本回收卡 T404C 按「基点前移＋补靶子」这一档收口）把这份清单里
+            // **两枚**文件的基点各前移一次：
+            //  · [REJECT_FILE] 押的那一手是「把 `IClassQrParser.queryValue(…) != null` 换成
+            //    在册的 `IClassQrParser.hasQueryParam(…)`」那一枚存在性判据（`ScanReject.kt` 里
+            //    `USER_ID_PARAM` 那一行，全文件**只**差这一行、行数一字不动），
+            //  · [VIEW_MODEL_FILE] 押的那一手是 [fail] 那句 `error.message ?: "网络异常，请稍后重试"`
+            //    换成按档取句子（`SubmitFailureClassifier.screenLine` / `.forensicsLine`）。
+            // 两次前移都照 T245②／T257③／T309①／T395③ 那一套：不删、不放宽，
+            // 差集的形状由下面那两枚 T404① 靶子当场复算；旧常量留在原地不删——它们是靶子的"前一头"。
             val rev = when (relative) {
                 GATE_FILE -> T245_GATE_BASELINE
-                VIEW_MODEL_FILE -> T395_VIEW_MODEL_BASELINE
-                REJECT_FILE -> T302_REJECT_BASELINE
+                VIEW_MODEL_FILE -> T404_VIEW_MODEL_BASELINE
+                REJECT_FILE -> T404_REJECT_BASELINE
                 else -> T87_BASELINE
             }
             val baseline = gitShow(rev, path)
@@ -609,6 +619,16 @@ class ScanBlankDecodingWiringGuardTest {
         const val T395_VIEW_MODEL_BASELINE = "869fc13"
 
         /**
+         * T404①：[VIEW_MODEL_FILE] 的逐字节基点第三次前移。被授权的只有状态机 `fail(error)` 那一句
+         * 用户文案的出处（`error.message ?: "网络异常，请稍后重试"` → `SubmitFailureClassifier.screenLine`
+         * ＋一行 `.forensicsLine`，另加两段 KDoc/注释），闸门那一族与漏斗一枚都没动。
+         *
+         * 差集的形状由 ⑤b 那枚 T404① 靶子当场复算（出现次数＋行数两头各钉）。
+         * [T395_VIEW_MODEL_BASELINE] 留在原地不删：它是这一枚靶子的"前一头"。
+         */
+        const val T404_VIEW_MODEL_BASELINE = "bd0eca7"
+
+        /**
          * T302①（由编排者 10-12 裁「并尺合法」授权）把 [REJECT_FILE] 里那四刀同包裸调用改成跨层委托
          * `com.buaa.schedule.domain.url.*` 并补了三行说明注释，所以这一枚的逐字节基点前移到那一枚。
          *
@@ -616,6 +636,17 @@ class ScanBlankDecodingWiringGuardTest {
          * 还原回去必须逐字节落回 [T87_BASELINE] —— 从今往后动 ScanReject.kt 的判据或措辞就红在这里。
          */
         const val T302_REJECT_BASELINE = "06214c1"
+
+        /**
+         * T404①（崩卡的实现段）把 [REJECT_FILE] 里 `USER_ID_PARAM` 那一行的存在性判据
+         * `IClassQrParser.queryValue(shape.source, …) != null` 换成在册的
+         * `IClassQrParser.hasQueryParam(shape.source, …)`，所以这一枚的逐字节基点前移到那一枚。
+         *
+         * 这一手的差集**恰好一行**（全文件行数 330 → 330，行数在这里量不出东西）——
+         * 形状由 ⑤b 那枚 T404① 靶子当场复算，押的是出现次数差＋逐字还原，不押行数。
+         * [T302_REJECT_BASELINE] 留在原地不删：它是这一枚靶子的"前一头"。
+         */
+        const val T404_REJECT_BASELINE = "bd0eca7"
 
         /** 那四刀共用的跨层前缀：靶子按枚数钉它（新基线恰好 4 枚、旧基线 0 枚、还原后归零） */
         const val T302_DELEGATION_PREFIX = "com.buaa.schedule.domain.url."
