@@ -57,7 +57,26 @@ import org.junit.Test
  * `ui/ScheduleViewModel.kt` 一字未动（它们分属在飞的 T400／T403）。若那两面在合并态也增删了
  * 取消那一族的落点，这两枚写死值要由编排者按**合并对象**重钉，别拿任何单支读数当合并态。
  *
- * ## 为什么四格都不许改成 >=
+ * ## T404b③ 重钉这一族（回收卡在合并态上的**现量**，不抄任何单支读数）
+ *
+ * 回收卡把 `EXPECTED_RETHROW_HANDS` 从编排者留在盘上的 19 重钉成**本树现量 20**；`EXPECTED_RETHROW_FILES`
+ * 照旧 11（现量相符 ⇒ 一格未动，那格是"枚数对而文件数不对"的互为两侧）。量法逐字按本仓在册那一族：
+ * 逐枚读 `app/src/main/java` 下的 `.kt` → **先把块注释抹成空、再把行注释抹成空** → 对上面那三枚针
+ * 各数出现次数求和（三枚针一字未动；抹注释这一步不许省，否则 KDoc 与报错文案里的字会被一起数进来）。
+ * 独立跑了**两把不同形状**的尺（一把"两趟正则"、一把照本文件 [withoutComments] 那枚字符扫描器同形重写：
+ * 字符串字面量原样留着、块注释可嵌套、行注释到行尾，行号保持），两把都是 **11 枚文件／20 枚手**；
+ * 本守卫 ③ 那一格自己数出来的也是 20（红名念的「实到 20 枚」）⇒ 三把尺同值。
+ * 20 枚逐枚落点（文件：行号）都拿 `sed -n 'Xp'` 回读过原文、每格都读得出宣布的那一枚符号 ⇒ 这是**现量**不是上界：
+ * `IClassApi.kt` :203 :246 ｜ `LoginFailure.kt` :139 ｜ `UpdateFetchSettlement.kt` :86 ｜ `BootReceiver.kt` :94
+ * ｜ `TomorrowPreviewReceiver.kt` :47 ｜ `ScheduleViewModel.kt` :293 ｜ `SpocScanScreen.kt` :408
+ * ｜ `UpdateCheck.kt` :237 :412 ｜ `BackgroundSync.kt` :58 :201 :367 :413 :529 :661 :744 :775
+ * ｜ `WidgetCommon.kt` :108 ｜ `WidgetRefreshReceiver.kt` :139。
+ * 差额逐枚点名：19（T400② 那一档，只到 widget 那一族收完）→ 20 就是本卡 `IClassApi.kt` 那一行 1 → 2 的
+ * 那一手（`signIn()` 的取消复投，落在 :246；:203 是 T397① 的 `login()`）。编排者按两族增量叠出来的算术
+ * （base 12 ＋ `BackgroundSync` 1→8 ＋ `IClassApi` 1→2 ⇒ 11 枚文件／20 枚手）**与本卡现量一字相同**，
+ * 但那枚数是推导、这一格是读数 —— 回收卡自己量的，没抄。名册里 widget 那一族与 `ui/ScheduleViewModel.kt`
+ * 本卡照旧一字未动（它们分属已落地的 T400 与 T403b），main 里取消那一族本卡**零新增零删除**。
+ *
  *
  * 三格是等式（落盘锚点各恰 1 枚），因为「多一枚」与「少一枚」在这里都是病：
  * 少一枚 = 那一手没了（病灶复发），多一枚 = 同一枚键又多了第二个写点（T261 第 2 处静默的形状）。
@@ -153,7 +172,7 @@ class UpdateCheckCancellationRethrowGuardTest {
             // 复投：`catch (e: kotlinx.coroutines.CancellationException)`
             "com/buaa/schedule/widget/WidgetRefreshReceiver.kt" to 1,
         )
-        const val EXPECTED_RETHROW_HANDS = 19
+        const val EXPECTED_RETHROW_HANDS = 20
         const val EXPECTED_RETHROW_FILES = 11
 
         // ── ④ 判据文件那三格反着的形状 ＋ 纯度口径 ──
@@ -358,7 +377,7 @@ class UpdateCheckCancellationRethrowGuardTest {
             .filterNotNull()
         assertTrue(
             "逐枚点名对不上（枚数写的是 T365③ 落盘那天抹注释后的现量；" +
-                "T397② 同批重钉为 11 枚文件／12 枚手；T400② 只把 widget/BackgroundSync.kt 那一行从 1 枚手重钉成 8 枚手 ⇒ 11 枚文件／19 枚手，逐枚来路——哪一行、分类还是复投——写在 ROSTER 注释里）：" +
+                "T397② 同批重钉为 11 枚文件／12 枚手；T400② 只把 widget/BackgroundSync.kt 那一行从 1 枚手重钉成 8 枚手 ⇒ 11 枚文件／19 枚手；T404b③ 把这最后一档再叠上本卡那一手（IClassApi.kt 1 → 2，落在 signIn 的取消复投）⇒ 11 枚文件／20 枚手——本树现量，逐枚来路——哪一行、分类还是复投——写在 ROSTER 注释里）：" +
                 mismatches.joinToString(" ／ "),
             mismatches.isEmpty(),
         )
