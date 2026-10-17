@@ -130,11 +130,29 @@ object CourseConflictResolution {
         return null
     }
 
-    /** 课程身份键：落库课程用 id，未落库课程用内容签名 */
+    /**
+     * 课程身份键：落库课程用 id，未落库课程用内容签名。
+     *
+     * 未落库那一支**委托** [ImportPlanner.courseKey]（本仓「同一门课」的唯一定义）再追加周次。
+     * 从前它自带一份只吃 `name|dayOfWeek|periods|weeks` 的清单，于是两门同名、同星期、同节次、
+     * 同周次而**教师或教室不同**的未落库课（理论班＋实验班是最常见的那种）拿到同一枚键：
+     * 上面归组那一步只留得下一门，而它的周次仍按并集进门课。检测两门、展示一门，
+     * 那句「只改这些周」却按两门的账写库（在册 #394）。
+     *
+     * 代价（这是修 #394 必须付的账，不是「顺便统一」）：**同一批未落库课的分组从此更碎**。
+     * 真同名同时间而教师不同的课会从 1 组变成 2 组，屏上那句「N 组冲突」的 N 会变大，
+     * 冲突向导的滚动条目也变多。
+     *
+     * 周次**仍参与键**：同一门课的两个片段周次不相交时是两条不同的处置对象，摘掉周次会让
+     * 「只改这些周」按并集写库时把两段并成一刀。
+     *
+     * 没采纳的乙档（只往那一串里手写插教师／教室／学期／组键）：那是本仓**第二套「同一门课」
+     * 的定义**，在册 #308「门/段单位漂移」与 #423「同句多写」那一族正在骂这个。
+     */
     private fun identityKey(course: Course): String =
         if (course.id != 0L) {
             "id:${course.id}"
         } else {
-            "v:${course.name}|${course.dayOfWeek}|${course.periods}|${course.weeks}"
+            "v:" + ImportPlanner.courseKey(course) + "|" + course.weeks.joinToString(",")
         }
 }

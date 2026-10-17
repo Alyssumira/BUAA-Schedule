@@ -363,17 +363,26 @@ class CourseUnitSingleSourceGuardTest {
 
         /**
          * 「星期夹在两根竖线之间」那一形。尾巴带到 `course.periods.joinToString` 是**故意的**：
-         * `domain/schedule/CourseConflictResolution.kt` 里另有一枚同形状的字符串
-         * （`"v:${course.name}|${course.dayOfWeek}|${course.periods}|${course.weeks}"`），那是
-         * **冲突指纹**（数"同一处冲突"），不是"同一门课"的定义 ⇒ 不在本尺上。见
-         * `冲突指纹那一枚不是第二把尺 反向格逐字仍在`。
+         * 改前病灶那一枚（管理页的 `manual:名称|星期|节次`）正好写在 `joinToString` 上，收在这一尾
+         * 才照得出它，而不再往前吞别处合法的写法。
+         *
+         * `domain/schedule/CourseConflictResolution.kt` 里那枚**冲突指纹**（逐字节钉在下面的
+         * `FINGERPRINT_LITERAL`，反向格见 `冲突指纹那一枚不是第二把尺 反向格逐字仍在`）自 T412/#394
+         * 起委托 `ImportPlanner.courseKey` 再追加周次：它吃的字段集与「同一门课」那份**是同一份**，
+         * 但它仍是**冲突侧的键**（数的是"同一处冲突"），不是界面归并那把尺 ⇒ 依旧不在本尺的
+         * `groupBy` 普查面上。星期与节次都挪进了 `courseKey`，那枚「星期夹在两根竖线之间」的
+         * 就地插值形状在冲突指纹文件里已不存在 ⇒ 对这枚尾针的命中仍是 0（这一格同时在数它）。
          */
         const val LEGACY_KEY_TAIL = "|\${course.dayOfWeek}|\${course.periods.joinToString"
         const val LEGACY_GROUP_CALL = ".groupBy { groupKeyOf(it) }"
 
-        /** 反向格：那枚该活着的冲突指纹逐字（本守卫的 needle 收窄是为了它，不是为了糊过去） */
+        /**
+         * 反向格：那枚该活着的冲突指纹逐字。它与「同一门课」共用 `ImportPlanner.courseKey` 那份
+         * 字段集 + 周次，但仍是冲突侧那把尺（数"同一处冲突"）。放过它是按"尺不同"判的，
+         * 本守卫的 needle 收窄不是为了糊过去。
+         */
         const val CONFLICT_FINGERPRINT = "com/buaa/schedule/domain/schedule/CourseConflictResolution.kt"
-        const val FINGERPRINT_LITERAL = "\"v:\${course.name}|\${course.dayOfWeek}|\${course.periods}|\${course.weeks}\""
+        const val FINGERPRINT_LITERAL = "\"v:\" + ImportPlanner.courseKey(course) + \"|\" + course.weeks.joinToString(\",\")"
 
         /** 合法的界面分组只有这两枚（一枚按星期、一枚吃内核组键） */
         const val GROUP_BY = ".groupBy {"
