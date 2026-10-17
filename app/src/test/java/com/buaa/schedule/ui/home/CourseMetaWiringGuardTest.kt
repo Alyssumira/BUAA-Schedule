@@ -18,8 +18,10 @@ import org.junit.Test
  * 2. peProjectOf 的调用实参**必须是 course.name**：displayName 是别名优先，
  *    用户把别名改成「体育课」项目名就没处剥了——这条换成 displayName 编译器不会响。
  * 3. 管理页课程组与日视图卡片行的学分都走 joinMeta/creditLabel，不许手拼 " · "。
- * 4. 全仓 main 源码不许出现 DecimalFormat / NumberFormat：学分格式化钉死在
- *    CourseMetaFormat 的手拼字符串上，locale 敏感的格式化器会让 JVM 单测与设备行为劈叉。
+ * 4. 全仓 main 源码不许出现 locale 敏感的数值格式化：学分格式化钉死在 CourseMetaFormat 的
+ *    手拼字符串上。刀口有两支——`DecimalFormat` / `NumberFormat` 两枚类名，以及 `%` 风格的
+ *    格式化调用形（不带 Locale 实参的那一形，跟着 `Locale.getDefault(FORMAT)` 走）。
+ *    命中刀口二但按码点读数证明 locale 安全的，进允许清单逐枚点名并钉枚数。
  */
 class CourseMetaWiringGuardTest {
 
@@ -81,21 +83,66 @@ class CourseMetaWiringGuardTest {
         )
     }
 
-    /** ④：学分格式化只有一处手拼实现，别冒出第二份 locale 敏感的 */
+    /**
+     * ④：locale 敏感的数值格式化只有一份手拼实现，别冒出第二份。
+     *
+     * 两把刀口说的是同一件事：数字系统跟着设备 locale 走，JVM 单测钉的断言就会和屏幕上的字形劈叉。
+     * - 刀口一：`DecimalFormat` / `NumberFormat` 两枚类名——学分显示钉死在 CourseMetaFormat 的手拼字符串上。
+     * - 刀口二：`%` 风格的格式化调用形，两枚 needle：带 `%` 转换符的引号串后接 `.format(`
+     *   （Kotlin 的 `String.format` 扩展，没有 Locale 实参 → `java.util.Formatter` →
+     *   `Locale.getDefault(Locale.Category.FORMAT)`），以及 `String.format(` 后第一个实参直接是引号串
+     *   （同样没传 Locale）那一形。原先只有刀口一，`ui/home/TimelineAxis.kt` 的小时刻度列
+     *   就是从刀口二这条缝里漏出去的——名字说"anywhere"，尺子看不见那一整支。
+     *
+     * ⚠️ 刀口二为什么不收裸 `\.format\(`：main 侧 `.format(` 一共 19 处，其中两处是注释里的禁令原文
+     * （`data/local/SpecialDayCache.kt` 的 fileNameOf、`ui/SpecialDayRefreshPolicy.kt` 的
+     * specialDayMonthsLabel，扫之前被 blankComments 抹掉），剩下的绝大多数是 java.time 的
+     * `Temporal.format(formatter)`（`data/export/IcsExporter.kt`、`ui/home/TopBarDateLabel.kt`、
+     * `ui/home/WeekView.kt`、`ui/importing/ImportHistoryScreen.kt`、`widget/WidgetCommon.kt` 等）——
+     * 机理账上它们不是缺陷：JVM 21 码点实测 `DateTimeFormatter` 的 `M`／`d` 输出不跟数字系统
+     * （ar-EG／fa-IR 与 zh-CN 同为 U+0030 档），一刀收进来就是十来枚误报，尺子当场退化成噪音源。
+     * 真落在刀口二里、又**按读数证明**locale 安全的那几枚进 [percentFormatAllowList]，逐枚点名并钉枚数。
+     */
     @Test
     fun noLocaleSensitiveNumberFormatterAnywhere() {
         val root = findMainJavaDir()
-        val hits = root.walkTopDown().filter { it.isFile && it.extension == "kt" }.filter { file ->
+        val classHits = mutableListOf<String>()
+        val percentHits = mutableListOf<Pair<String, String>>()
+        for (file in root.walkTopDown().filter { it.isFile && it.extension == "kt" }) {
             // 注释要先抹掉再扫：CourseMetaFormat 自己的 KDoc 就写着"不许用 DecimalFormat"，
             // 连注释一起扫会把这句禁令 itself 当成违规（第一版就红在了这上面）
             val code = blankComments(file.readText())
-            Regex("""\b(DecimalFormat|NumberFormat)\b""").containsMatchIn(code)
-        }.map { it.relativeTo(root).path }.toList()
+            // 清单按 POSIX 相对路径点名：Windows 上 File.path 给反斜杠，不折成斜杠的话
+            // 同一枚文件在两台机器上叫两个名字，允许清单就成了一枚只在 Linux 上成立的尺
+            val rel = file.relativeTo(root).path.replace('\\', '/')
+            if (numberFormatClassNeedle.containsMatchIn(code)) classHits += rel
+            val matched = percentFormatNeedles.flatMap { needle -> needle.findAll(code).map { it.value }.toList() }
+            if (matched.isNotEmpty()) percentHits += rel to matched.joinToString(" | ")
+        }
         assertTrue(
-            "main 源码里出现了 DecimalFormat/NumberFormat：$hits —— 学分/数值显示一律走 " +
-                "CourseMetaFormat 的手拼字符串，格式化器跟着 locale 走，JVM 单测钉的断言" +
+            "main 源码里出现了 DecimalFormat/NumberFormat：$classHits —— 学分/数值显示一律走 " +
+                "CourseMetaFormat 的手拼字符串，那两枚格式化器跟着 locale 走，JVM 单测钉的断言" +
                 "和设备上的输出可能对不上",
-            hits.isEmpty(),
+            classHits.isEmpty(),
+        )
+        val unexpected = percentHits.filterNot { (rel, _) -> rel in percentFormatAllowList }
+        assertTrue(
+            "main 源码里出现了 locale 敏感的 % 风格格式化（没有 Locale 实参）：\n" +
+                unexpected.joinToString("\n") { (rel, why) -> "$rel -> $why" } +
+                "\n补零一律走 padStart（成文口径见 data/local/SpecialDayCache.kt 的 fileNameOf 与 " +
+                "ui/SpecialDayRefreshPolicy.kt 的 specialDayMonthsLabel；时间轴那一枚收在 " +
+                "domain/model/TimelineTickFormat.kt 的 hourTickLabel），要钉 locale 就显式传 " +
+                "Locale.US（见 reminder/ReminderNotifications.kt 的 clockOf）。" +
+                "确有 locale 安全读数的才进本守卫的允许清单，并同批把枚数对齐",
+            unexpected.isEmpty(),
+        )
+        val hitFiles = percentHits.map { it.first }.toSet()
+        assertTrue(
+            "% 风格刀口的允许清单是一张钉死的格：清单 " + percentFormatAllowList.size + " 枚、实际命中 " +
+                hitFiles.size + " 枚——清单里已失效的=${percentFormatAllowList.keys - hitFiles}，" +
+                "命中却没进清单的=${hitFiles - percentFormatAllowList.keys}。" +
+                "删一处 % 风格调用要同批删条目，新增要同批点名并附读数",
+            hitFiles == percentFormatAllowList.keys && percentHits.size == percentFormatAllowList.size,
         )
     }
 
@@ -177,5 +224,29 @@ class CourseMetaWiringGuardTest {
         const val DETAIL_SHEET = "com/buaa/schedule/ui/home/CourseDetailSheet.kt"
         const val MANAGEMENT = "com/buaa/schedule/ui/course/CourseManagementScreen.kt"
         const val DAY_VIEW = "com/buaa/schedule/ui/home/DayView.kt"
+
+        /** 刀口一：两枚 locale 敏感的格式化器类名 */
+        val numberFormatClassNeedle = Regex("""\b(DecimalFormat|NumberFormat)\b""")
+
+        /**
+         * 刀口二：`%` 风格的两枚调用形（形一 = 带 `%` 转换符的引号串后接 `.format(`；
+         * 形二 = `String.format(` 后紧跟引号串，即第一个实参不是 Locale）。
+         * 显式传 Locale 的 `String.format(Locale.US, ...)` 不在射程内——那是钉死的一档，不是泄漏。
+         */
+        val percentFormatNeedles = listOf(
+            Regex("\"[^\"]*%[-+ #0-9,.]*[a-zA-Z][^\"]*\"\\s*\\.format\\("),
+            Regex("String\\.format\\(\\s*\""),
+        )
+
+        /**
+         * 允许清单：命中刀口二、但按码点读数证明不跟数字系统走的，逐枚点名并钉枚数。
+         * 读数来自 JVM 21 的 `String.format` 探针（打印码点不打印字形），不是"看起来没事"。
+         */
+        val percentFormatAllowList: Map<String, String> = mapOf(
+            "com/buaa/schedule/reminder/IslandFocusTemplate.kt" to
+                "highlightColorOf 用 %06X 十六进制：实测 %X/%x 在 ar-EG 与 fa-IR 仍出 U+0030-U+0039 与 " +
+                "U+0041-U+0046（Formatter 的十六进制档不查 DecimalStyle），改成 padStart 拼不出十六进制、" +
+                "反而把小米岛要的 #RRGGBB 写坏",
+        )
     }
 }
