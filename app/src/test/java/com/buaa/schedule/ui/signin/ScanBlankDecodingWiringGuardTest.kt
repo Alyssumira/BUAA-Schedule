@@ -247,7 +247,7 @@ class ScanBlankDecodingWiringGuardTest {
                 REJECT_FILE -> T404_REJECT_BASELINE
                 else -> T87_BASELINE
             }
-            val baseline = gitShow(rev, path)
+            val baseline = baselineBlob(rev, path)
             check(baseline != null) { "git 跑不动或基线取不到（$path@$rev），反向钉无从核对" }
             assertEquals(
                 "$relative 相对基点被改过了：本卡只该在解码与递交之间加一道准入，" +
@@ -260,13 +260,13 @@ class ScanBlankDecodingWiringGuardTest {
         // 否则"换个 sha"就等于把反向钉空转掉
         assertTrue(
             "ScanSubmissionGate.kt 在 6a27324 与 T245 基点上逐字节相同 ⇒ 基点前移是白给的，这一枚反向钉已经空转",
-            gitShow(T87_BASELINE, "$MAIN_PREFIX/$GATE_FILE") != gitShow(T245_GATE_BASELINE, "$MAIN_PREFIX/$GATE_FILE"),
+            baselineBlob(T87_BASELINE, "$MAIN_PREFIX/$GATE_FILE") != baselineBlob(T245_GATE_BASELINE, "$MAIN_PREFIX/$GATE_FILE"),
         )
         // 同一枚靶子换到状态机那一头（T257③）：旧基线里那句静默早退必须还在，
         // 新基线里必须已经换成判据分档 —— 两头都在，才说明前移前的是"被授权改过"那一手
         val viewModelPath = "$MAIN_PREFIX/$VIEW_MODEL_FILE"
-        val oldViewModel = gitShow(T87_BASELINE, viewModelPath)
-        val newViewModel = gitShow(T257_VIEW_MODEL_BASELINE, viewModelPath)
+        val oldViewModel = baselineBlob(T87_BASELINE, viewModelPath)
+        val newViewModel = baselineBlob(T257_VIEW_MODEL_BASELINE, viewModelPath)
         check(oldViewModel != null && newViewModel != null) {
             "状态机的两份基线取不到（$viewModelPath），靶子无从复算"
         }
@@ -287,8 +287,8 @@ class ScanBlankDecodingWiringGuardTest {
         // 本卡那一枚（基点）里它们必须一枚都不剩，而 CAS 恰好两枚（领取 + 落回）。
         // 差集不许比这更大：闸门之外那七处（三处按按钮的守卫、唯一那颗闸门字段与它的 StateFlow、
         // 漏斗、说话那颗、取证行、原文字段的落点数）在新基线里枚数与中间那一枚一字不动。
-        val gateShape = gitShow(T257_VIEW_MODEL_BASELINE, viewModelPath)
-        val gateClaimed = gitShow(T395_VIEW_MODEL_BASELINE, viewModelPath)
+        val gateShape = baselineBlob(T257_VIEW_MODEL_BASELINE, viewModelPath)
+        val gateClaimed = baselineBlob(T395_VIEW_MODEL_BASELINE, viewModelPath)
         check(gateShape != null && gateClaimed != null) {
             "状态机闸门的两份基线取不到（$viewModelPath），T395① 的靶子无从复算"
         }
@@ -322,7 +322,7 @@ class ScanBlankDecodingWiringGuardTest {
         // 两枚 SubmitFailureClassifier 调用必须一枚都没有；基点那份里那句必须归零、两枚调用各恰好一枚，
         // 而 `Log.w(TAG, ` 从两枚变三枚（第三枚就是本卡补的那行取证）。差集不许比这更大：
         // 闸门那一族＋漏斗那十一处枚数一字不动，行数 390 → 410（+20：一句换两枚调用＋两段 KDoc/注释）。
-        val spokenBlob = gitShow(T404_VIEW_MODEL_BASELINE, viewModelPath)
+        val spokenBlob = baselineBlob(T404_VIEW_MODEL_BASELINE, viewModelPath)
         check(spokenBlob != null) { "状态机 `fail` 的 T404① 基线取不到（$viewModelPath@$T404_VIEW_MODEL_BASELINE），这一枚靶子无从复算" }
         val screenOld = normalizeNewlines(gateClaimed)
         val screenNew = normalizeNewlines(spokenBlob)
@@ -368,8 +368,8 @@ class ScanBlankDecodingWiringGuardTest {
         // 下面四枚格子的期望值全部手写（326 行 / 330 行 / 四刀 / 三行注释），最后一枚才是真防线：
         // 把新基线里那四刀委托与那段注释**逐字还原**回去，结果必须与旧基线的每一个字节相同。
         val rejectPath = "$MAIN_PREFIX/$REJECT_FILE"
-        val oldReject = gitShow(T87_BASELINE, rejectPath)
-        val newReject = gitShow(T302_REJECT_BASELINE, rejectPath)
+        val oldReject = baselineBlob(T87_BASELINE, rejectPath)
+        val newReject = baselineBlob(T302_REJECT_BASELINE, rejectPath)
         check(oldReject != null && newReject != null) {
             "ScanReject.kt 的两份基线取不到（$rejectPath），靶子无从复算"
         }
@@ -425,7 +425,7 @@ class ScanBlankDecodingWiringGuardTest {
         // ⚠️ 这一手前后**行数相同**（现量两枚独立源：`git show 06214c1:<path> | wc -l` ＝ 330、
         //   `git show bd0eca7:<path> | wc -l` ＝ 330，守卫里这把 `newlines` 也是 330 / 330）⇒ 这一枚靶子
         //   一枚都不许押在行数差上（押了就是当场假绿）：押出现次数差＋逐字还原，行数只当"不许漂"的旁证钉。
-        val rejectT404Blob = gitShow(T404_REJECT_BASELINE, rejectPath)
+        val rejectT404Blob = baselineBlob(T404_REJECT_BASELINE, rejectPath)
         check(rejectT404Blob != null) { "ScanReject.kt 的 T404① 基线取不到（$rejectPath@$T404_REJECT_BASELINE），这一枚靶子无从复算" }
         val rejectT404 = normalizeNewlines(rejectT404Blob)
         val rejectT302Code = withoutComments(rejectAfter)
@@ -465,7 +465,7 @@ class ScanBlankDecodingWiringGuardTest {
             rejectT404.replace(T404_REJECT_LINE_NEW, T404_REJECT_LINE_OLD),
         )
         val statusPath = "$MAIN_PREFIX/$STATUS_FILE"
-        val statusBaseline = gitShow(T87_BASELINE, statusPath)
+        val statusBaseline = baselineBlob(T87_BASELINE, statusPath)
         check(statusBaseline != null) { "git 跑不动或基线取不到（$statusPath@$T87_BASELINE），反向钉无从核对" }
         val current = normalizeNewlines(File(findMainJavaDir(), STATUS_FILE).readText())
         assertEquals(
@@ -489,7 +489,7 @@ class ScanBlankDecodingWiringGuardTest {
         assertEquals("帧观测措辞出口只能有一颗（第二份=页面自算口径）：", 1, occurrences(current, "internal fun scanFrameAidText("))
         // ---- T92（#133）：ScanFrameFlowPolicy 的"空转速率那一段"之外逐字节，钉法与上面同一套 ----
         val flowPath = "$MAIN_PREFIX/$FRAME_FLOW_FILE"
-        val flowBaseline = gitShow(T87_BASELINE, flowPath)
+        val flowBaseline = baselineBlob(T87_BASELINE, flowPath)
         check(flowBaseline != null) { "git 跑不动或基线取不到（$flowPath@$T87_BASELINE），反向钉无从核对" }
         val flowCurrent = normalizeNewlines(File(findMainJavaDir(), FRAME_FLOW_FILE).readText())
         assertEquals(
@@ -628,6 +628,54 @@ class ScanBlankDecodingWiringGuardTest {
      */
     private fun newlines(text: String): Int = occurrences(text, "\n")
 
+    /**
+     * 在册 #733（门禁可移植性 · 乙档）的基线取数口：**两套并存，理由写在这里**。
+     *
+     *  · 下面 [GOLDEN_BASELINE_LEDGER] 那五行里的 (基点 sha, 文件) 只活在五枚**未合并分支**上
+     *    （`ai/T245`／`ai/T257`／`ai/T395`／`ai/T404b`／`ai/T404C`），**不在 master 的祖先链上**
+     *    （本卡现量：`git merge-base --is-ancestor <sha> HEAD` 四枚全 NO）。本仓每轮清理 worktree 与
+     *    `ai/` 打头那批分支是常规动作 ⇒ 谁清了那五枚分支，`git show` 就在一枚什么都没改的树上取不到对象，
+     *    反向钉当场硬红，而报错话只说"git 跑不动或基线取不到"，读不出真因。这一类改成从 classpath
+     *    资源 `baseline/<sha7>__<basename>.txt` 读 —— blob 由 `git show <rev>:<path>` 直接落盘、
+     *    逐字节、不过编辑器（本仓在册：手重打会把 CRLF 写进 blob，日后对基线 rebase 时造假冲突）。
+     *  · 仍可达的基点（6a27324／06214c1／d7af6f8／003bbdc／03d6546／83d18f5／9e155df）押在 HEAD 的
+     *    祖先链上，清分支也取得到 ⇒ **照旧走 [gitShow]**，口径与消息一字不改；它们的可达性由
+     *    [everyBaselineStillTakenFromGitIsStillReachableFromHead] 那格常驻钉住（#733 从此不靠人工审计）。
+     *
+     * 取不到不许静默：golden 这一头当场 `check`（非 null 且非空），git 这一头沿用调用点原有的
+     * `check(... != null)` —— 两栏同一口径，都不许退化成"没比也算过"。
+     */
+    private fun baselineBlob(rev: String, path: String): String? {
+        val row = GOLDEN_BASELINE_LEDGER.firstOrNull { it.startsWith("$rev $path ") }
+            ?: return gitShow(rev, path)
+        val sha = row.substringBefore(' ')
+        val resource = "baseline/$sha" + "__" + path.substringAfterLast('/').removeSuffix(".kt") + ".txt"
+        val bytes = javaClass.getResourceAsStream("/$resource")?.use { it.readBytes() }
+        check(bytes != null && bytes.isNotEmpty()) {
+            "golden 基线取不到或为空：app/src/test/resources/$resource（在册 #733：$path@$sha 这一枚已经取成 golden，" +
+                "资源不在＝红，不许静默跳过）"
+        }
+        // blob 是 LF（`git show` 不走 smudge），而 Windows 工作树 checkout 出来的 .txt 可能被补成 CRLF；
+        // 这里抹回 blob 的形状，使 golden 这一头与 [gitShow] 那一头是同一把尺。
+        return String(bytes, Charsets.UTF_8).replace("\r\n", "\n")
+    }
+
+    /**
+     * 小册子（在册 #733 乙档）：五行，一行一枚已迁成 golden 资源的基线，格式
+     * `"<sha7> <仓库内路径> <授权卡号/事由>"`。取数口 [baselineBlob] 只认这张表 ⇒
+     * 将来谁要把基点再前移一格，就**必须有格子可改**：这里加/改一行，同时按
+     * `git show <rev>:<path> > app/src/test/resources/baseline/<sha7>__<basename>.txt` 落一枚 blob
+     * 并当场双向 md5 对账（[everyGoldenBaselineIsOnClasspathAndMatchesItsLedgerRow] 钉枚数＝5、
+     * 资源在场非空、且逐枚与那行 (sha,path) 对得上）。
+     */
+    private val GOLDEN_BASELINE_LEDGER: List<String> = listOf(
+        "ddf493f app/src/main/java/com/buaa/schedule/ui/signin/ScanSubmissionGate.kt T245② 被授权改闸门措辞（占位的语义 + awaitingUserAction 有两个写者那两句）——三枚反向钉共同的基点",
+        "869fc13 app/src/main/java/com/buaa/schedule/ui/signin/SignInViewModel.kt T395① 被授权改闸门那一次原子换（领取与落回各一枚 compareAndSet）",
+        "00b0b51 app/src/main/java/com/buaa/schedule/ui/signin/SignInViewModel.kt T257③ 被授权改漏斗（第四处 if (flight.value) return 换成 ScanFlightAdmission 分档）",
+        "bd0eca7 app/src/main/java/com/buaa/schedule/ui/signin/SignInViewModel.kt T404① 被授权改 fail 那句用户文案的出处（按档取句子 + 一行取证）",
+        "bd0eca7 app/src/main/java/com/buaa/schedule/data/import/ScanReject.kt T404① 被授权改 USER_ID_PARAM 那一行的存在性判据（queryValue 非空 → hasQueryParam）",
+    )
+
     /** `git show <rev>:<path>`；取不到（没 git / 没这个对象）返回 null，由调用方判失败而不是静默通过 */
     private fun gitShow(rev: String, path: String): String? = try {
         val process = ProcessBuilder("git", "show", "$rev:$path")
@@ -664,6 +712,124 @@ class ScanBlankDecodingWiringGuardTest {
             dir = dir?.parentFile
         }
         throw IllegalStateException("找不到仓库根：当前目录 ${File("").absolutePath}")
+    }
+
+    /**
+     * 新增判据 ①（在册 #733 · 乙档的"册子格"）：五枚 golden 基线全部在场、非空，且逐枚与册子里那行
+     * (sha, path) 对得上。四把尺：
+     *  · 册子枚数**写死 5**，行格式三段（sha7 ／ 仓库内路径 ／ 授权卡号·事由）；
+     *  · 资源名按命名规则 `<sha7>__<basename>.txt` 从那一行推出来，必须从 classpath 读得到且非空；
+     *  · "对得上"＝那份 blob 的 `package` 句正是那行路径所在的包（资源名串门、落盘取错 path 都当场红）；
+     *  · 取数口 [baselineBlob] 对那一行必须返回**同一份字节**（证明这行走到了，不是纸面账）。
+     */
+    @Test
+    fun everyGoldenBaselineIsOnClasspathAndMatchesItsLedgerRow() {
+        assertEquals("册子（GOLDEN_BASELINE_LEDGER）的枚数写死五枚，少一行或多一行都是有人在纸上动账：", 5, GOLDEN_BASELINE_LEDGER.size)
+        val names = mutableListOf<String>()
+        for (row in GOLDEN_BASELINE_LEDGER) {
+            val parts = row.split(" ", limit = 3)
+            assertEquals("册子每一行必须是「<sha7> <path> <授权卡号/事由>」三段：「$row」", 3, parts.size)
+            val sha = parts[0]
+            val path = parts[1]
+            val resource = "baseline/$sha" + "__" + path.substringAfterLast('/').removeSuffix(".kt") + ".txt"
+            names += resource
+            val bytes = javaClass.getResourceAsStream("/$resource")?.use { it.readBytes() }
+            check(bytes != null && bytes.isNotEmpty()) {
+                "golden 基线取不到或为空：app/src/test/resources/$resource（在册 #733：$path@$sha 这一枚押在未合并分支上，" +
+                    "已经取成 golden；资源不在＝红，不许静默跳过）"
+            }
+            val blob = String(bytes, Charsets.UTF_8).replace("\r\n", "\n")
+            val pkg = "package " + path.removePrefix("$MAIN_PREFIX/").substringBeforeLast('/').replace('/', '.')
+            assertTrue(
+                "$resource 与册子那行对不上（$sha $path）：那份 blob 里没有本路径所在包的 package 句 ⇒ 资源名写错门，或落盘时取错了 path",
+                blob.contains(pkg),
+            )
+            assertEquals(
+                "取数口 baselineBlob 对册子那行没走 golden（$sha $path）：册子与取数口两张账对不上 —— 这枚基线还在从 git 取：",
+                blob,
+                baselineBlob(sha, path),
+            )
+        }
+        assertEquals("五枚 golden 的资源名必须互不相同（同名就是互相覆盖，账上少一枚）：", 5, names.distinct().size)
+    }
+
+    /**
+     * 新增判据 ②（在册 #733 · 乙档的"迁出格"）：那四枚不可达 sha 的基点**不再经 git 取**。
+     * 尺＝按字符串数"引用这四枚 sha（字面量，或持有它们的五枚常量名）的 git 取数调用点"，
+     * 三枚在册守卫各两栏：原文一栏、抹注释（[withoutComments]）后再数一遍一栏 —— 四栏都得归零。
+     */
+    @Test
+    fun unreachableBaselinesAreNeverTakenFromGitAgain() {
+        val migrated = Regex(
+            "gitShow\\s*\\(\\s*[^)]*?(?:ddf493f|869fc13|00b0b51|bd0eca7" +
+                "|T245_GATE_BASELINE|T257_VIEW_MODEL_BASELINE|T395_VIEW_MODEL_BASELINE" +
+                "|T404_VIEW_MODEL_BASELINE|T404_REJECT_BASELINE)"
+        )
+        for (relative in listOf(
+            "app/src/test/java/com/buaa/schedule/ui/signin/ScanBlankDecodingWiringGuardTest.kt",
+            "app/src/test/java/com/buaa/schedule/ui/signin/ScanFrameAidWordingWiringGuardTest.kt",
+            "app/src/test/java/com/buaa/schedule/ui/signin/ScanSecondEngineWiringGuardTest.kt",
+        )) {
+            val file = File(findRepoRoot(), relative)
+            check(file.isFile) { "找不到守卫自己的源码：${file.path} —— 这一格的尺没东西可数" }
+            val source = file.readText()
+            assertEquals(
+                "原文这一栏：$relative 里还有引用四枚不可达 sha 的 git 取数调用点（在册 #733 该走 golden 资源）：",
+                0,
+                migrated.findAll(source).count(),
+            )
+            assertEquals(
+                "抹注释后再数一遍：$relative 的代码那一栏里还有引用四枚不可达 sha 的 git 取数调用点：",
+                0,
+                migrated.findAll(withoutComments(source)).count(),
+            )
+        }
+    }
+
+    /**
+     * 新增判据 ③（在册 #733 的"绊线格"，最值钱的一格：把 #733 从人工审计变成常驻守卫）：
+     * 对每一枚**仍走 git 的可达基点**断言它现在仍然可达 —— `git cat-file -e <sha>^{commit}` 成功
+     * **且** `git merge-base --is-ancestor <sha> HEAD` 成功；不可达就红，并点名"这枚也要迁 golden"。
+     * 名单＝三枚在册守卫仍在从 git 取的基点：本文件那两枚常量（6a27324／06214c1）＋另两枚守卫与
+     * 别处守卫在用的五枚（d7af6f8／003bbdc／03d6546／83d18f5／9e155df）。
+     * 谁把哪一枚迁成 golden，就顺手把这一行的名单同步一下（这一格少盯一枚＝册子那一格多盯一枚）。
+     */
+    @Test
+    fun everyBaselineStillTakenFromGitIsStillReachableFromHead() {
+        val stillOnGit = listOf(
+            T87_BASELINE,
+            T302_REJECT_BASELINE,
+            "d7af6f8",
+            "003bbdc",
+            "03d6546",
+            "83d18f5",
+            "9e155df",
+        ).distinct()
+        val broken = mutableListOf<String>()
+        for (sha in stillOnGit) {
+            val objectExists = gitExitOk(listOf("cat-file", "-e", "$sha" + "^{commit}"))
+            val onAncestorChain = gitExitOk(listOf("merge-base", "--is-ancestor", sha, "HEAD"))
+            if (!objectExists || !onAncestorChain) {
+                broken += "$sha（cat-file=${if (objectExists) "ok" else "NO"}、merge-base=${if (onAncestorChain) "ok" else "NO"}）"
+            }
+        }
+        assertEquals(
+            "这些仍走 git 的基点已经不可达（对象取不到，或已掉出 HEAD 的祖先链）⇒ 按在册 #733 这一枚也要迁成 golden 资源" +
+                "（取数口只认册子那张表），别等反向钉报一句「git 跑不动或基线取不到」读不出真因：",
+            emptyList<String>(),
+            broken,
+        )
+    }
+
+    /** `git` 的退出码：0 算 true。跑不动（没 git／起不了子进程）直接抛，不许静默算过 */
+    private fun gitExitOk(args: List<String>): Boolean {
+        val process = try {
+            ProcessBuilder(listOf("git") + args).directory(findRepoRoot()).redirectErrorStream(true).start()
+        } catch (io: java.io.IOException) {
+            throw IllegalStateException("git 跑不动（${args.joinToString(" ")}）：在册 #733 的绊线格要靠 git 复算可达性，不许静默", io)
+        }
+        process.inputStream.readBytes()
+        return process.waitFor() == 0
     }
 
     private companion object {

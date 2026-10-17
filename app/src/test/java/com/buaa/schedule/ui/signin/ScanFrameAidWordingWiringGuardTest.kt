@@ -229,7 +229,7 @@ class ScanFrameAidWordingWiringGuardTest {
                 VIEW_MODEL_FILE -> T404_VIEW_MODEL_BASELINE
                 else -> T90_BASELINE
             }
-            val baseline = gitShow(rev, path)
+            val baseline = baselineBlob(rev, path)
             check(baseline != null) { "git 跑不动或基线取不到（$path@$rev），反向钉无从核对" }
             assertEquals(
                 "$relative 相对本卡起点被改过了：① 的结论是「分不清」，所以判据侧一个字都不许动 —— " +
@@ -242,13 +242,13 @@ class ScanFrameAidWordingWiringGuardTest {
         // 否则"换个 sha"就等于把反向钉空转掉
         assertTrue(
             "ScanSubmissionGate.kt 在 d7af6f8 与 T245 基点上逐字节相同 ⇒ 基点前移是白给的，这一枚反向钉已经空转",
-            gitShow(T90_BASELINE, "$MAIN_PREFIX/$GATE_FILE") != gitShow(T245_GATE_BASELINE, "$MAIN_PREFIX/$GATE_FILE"),
+            baselineBlob(T90_BASELINE, "$MAIN_PREFIX/$GATE_FILE") != baselineBlob(T245_GATE_BASELINE, "$MAIN_PREFIX/$GATE_FILE"),
         )
         // 同一枚靶子换到状态机那一头（T257③）：旧基线里那四处静默早退必须还在，
         // 新基线里必须已经换成判据分档，两头都在才说明前移押的是本卡改的那一手
         val viewModelPath = "$MAIN_PREFIX/$VIEW_MODEL_FILE"
-        val oldViewModel = gitShow(T90_BASELINE, viewModelPath)
-        val newViewModel = gitShow(T257_VIEW_MODEL_BASELINE, viewModelPath)
+        val oldViewModel = baselineBlob(T90_BASELINE, viewModelPath)
+        val newViewModel = baselineBlob(T257_VIEW_MODEL_BASELINE, viewModelPath)
         check(oldViewModel != null && newViewModel != null) {
             "状态机的两份基线取不到（$viewModelPath），靶子无从复算"
         }
@@ -267,8 +267,8 @@ class ScanFrameAidWordingWiringGuardTest {
         // ---- 靶子（T395①）：状态机这一枚第二次前移押的就是「闸门那一次原子换」，别的一字没动 ----
         // 中间那一枚（00b0b51）里闸门两次裸写 + 一次会过期的读必须还在；本卡那一枚里它们必须归零，
         // CAS 恰好两枚（领取 + 落回）。差集不许更大：闸门之外那七处在新基线里枚数一字不动。
-        val gateShape = gitShow(T257_VIEW_MODEL_BASELINE, viewModelPath)
-        val gateClaimed = gitShow(T395_VIEW_MODEL_BASELINE, viewModelPath)
+        val gateShape = baselineBlob(T257_VIEW_MODEL_BASELINE, viewModelPath)
+        val gateClaimed = baselineBlob(T395_VIEW_MODEL_BASELINE, viewModelPath)
         check(gateShape != null && gateClaimed != null) {
             "状态机闸门的两份基线取不到（$viewModelPath），T395① 的靶子无从复算"
         }
@@ -302,7 +302,7 @@ class ScanFrameAidWordingWiringGuardTest {
         // 调用必须一枚都没有；基点那份里那句必须归零、两枚调用各恰好一枚，而 `Log.w(TAG, ` 从两枚变三枚
         //（第三枚就是本卡补的那行取证）。差集不许比这更大：闸门那一族＋漏斗那十一处枚数一字不动，
         // 行数 390 → 410（+20：一句换两枚调用＋两段 KDoc/注释）。
-        val spokenBlob = gitShow(T404_VIEW_MODEL_BASELINE, viewModelPath)
+        val spokenBlob = baselineBlob(T404_VIEW_MODEL_BASELINE, viewModelPath)
         check(spokenBlob != null) { "状态机 `fail` 的 T404① 基线取不到（$viewModelPath@$T404_VIEW_MODEL_BASELINE），这一枚靶子无从复算" }
         val screenOld = normalizeNewlines(gateClaimed)
         val screenNew = normalizeNewlines(spokenBlob)
@@ -345,7 +345,7 @@ class ScanFrameAidWordingWiringGuardTest {
         }
         // 帧观测那颗内核的头部：挖掉 T92 的「空转速率」一段之外逐字节（同一把尺子，另一枚文件）
         val flowPath = "$MAIN_PREFIX/$FRAME_FLOW_FILE"
-        val flowBaseline = gitShow(T90_BASELINE, flowPath)
+        val flowBaseline = baselineBlob(T90_BASELINE, flowPath)
         check(flowBaseline != null) { "git 跑不动或基线取不到（$flowPath@$T90_BASELINE），反向钉无从核对" }
         val flowCurrent = normalizeNewlines(File(findMainJavaDir(), FRAME_FLOW_FILE).readText())
         assertEquals(
@@ -367,7 +367,7 @@ class ScanFrameAidWordingWiringGuardTest {
         assertFalse("又退回没有口径的裸数（「模拟器实测该页 X 帧/秒」那一形状）：\n$span", span.contains("模拟器实测该页"))
         // 兜底那颗内核：挖掉 T91 的五段之外逐字节
         val kernelPath = "$MAIN_PREFIX/$SECOND_ENGINE_FILE"
-        val kernelBaseline = gitShow(T90_BASELINE, kernelPath)
+        val kernelBaseline = baselineBlob(T90_BASELINE, kernelPath)
         check(kernelBaseline != null) { "git 跑不动或基线取不到（$kernelPath@$T90_BASELINE），反向钉无从核对" }
         val kernelCurrent = normalizeNewlines(File(findMainJavaDir(), SECOND_ENGINE_FILE).readText())
         assertEquals(
@@ -386,7 +386,7 @@ class ScanFrameAidWordingWiringGuardTest {
         assertTrue("靶子丢了：工作树里 FailureTrace 那一档不是「不算手里有码」：", kernelCurrent.contains("SecondEngineHandState.FailureTrace -> false"))
         // 帧观测的数法与判档树：整段逐字节（本卡没加计数、没改阈值、没改阶梯）
         val ledger = "$MAIN_PREFIX/$FRAME_LEDGER_FILE"
-        val ledgerBaseline = gitShow(T90_BASELINE, ledger)
+        val ledgerBaseline = baselineBlob(T90_BASELINE, ledger)
         check(ledgerBaseline != null) { "git 跑不动或基线取不到（$ledger@$T90_BASELINE）" }
         for (region in listOf(
             listOf("internal fun frameSymbolCounts(", "internal const val UsefulModulePx"),
@@ -400,7 +400,7 @@ class ScanFrameAidWordingWiringGuardTest {
         }
         // 靶子：扫的确实是这卡管的那件事（空文件/挪过家都要红）
         assertTrue("靶子丢了：措辞内核还在？", File(findMainJavaDir(), STATUS_FILE).readText().contains("internal fun scanFrameAidText("))
-        assertTrue("靶子丢了：准入判据还在？", gitShow(T90_BASELINE, "$MAIN_PREFIX/$ADMISSION_FILE")!!.contains("internal fun decodingAdmission("))
+        assertTrue("靶子丢了：准入判据还在？", baselineBlob(T90_BASELINE, "$MAIN_PREFIX/$ADMISSION_FILE")!!.contains("internal fun decodingAdmission("))
     }
 
     // ---- 源码核对工具（与同族守卫一个刀法）----
@@ -476,6 +476,46 @@ class ScanFrameAidWordingWiringGuardTest {
     private fun newlines(text: String): Int = occurrences(text, "\n")
 
     /** `git show <rev>:<path>`；取不到（没 git / 没这个对象）返回 null，由调用方判失败而不是静默通过 */
+    /**
+     * 在册 #733（门禁可移植性 · 乙档）的基线取数口：**两套并存，理由**。
+     * 下面 [GOLDEN_BASELINE_LEDGER] 那五行里的 (基点 sha, 文件) 只活在五枚未合并分支上
+     * （`ai/T245`／`ai/T257`／`ai/T395`／`ai/T404b`／`ai/T404C`），不在 master 的祖先链上 ⇒ 本仓每轮
+     * 清理 worktree 与 `ai/` 打头那批分支之后，`git show` 会在一枚什么都没改的树上取不到对象，反向钉硬红却只报
+     * "git 跑不动或基线取不到"。这一类改成从 classpath 资源 `baseline/<sha7>__<basename>.txt` 读
+     * （blob 由 `git show <rev>:<path>` 直接落盘、逐字节、不过编辑器）。
+     * 仍可达的基点（d7af6f8 那一族）押在 HEAD 祖先链上，清分支也取得到 ⇒ **照旧走 [gitShow]**，
+     * 口径一字不改（可达性由 `ScanBlankDecodingWiringGuardTest` 的绊线格常驻钉住）。
+     * 取不到不许静默：golden 这一头当场 `check`（非 null 且非空），git 这一头沿用调用点原有的 check。
+     */
+    private fun baselineBlob(rev: String, path: String): String? {
+        val row = GOLDEN_BASELINE_LEDGER.firstOrNull { it.startsWith("$rev $path ") }
+            ?: return gitShow(rev, path)
+        val sha = row.substringBefore(' ')
+        val resource = "baseline/$sha" + "__" + path.substringAfterLast('/').removeSuffix(".kt") + ".txt"
+        val bytes = javaClass.getResourceAsStream("/$resource")?.use { it.readBytes() }
+        check(bytes != null && bytes.isNotEmpty()) {
+            "golden 基线取不到或为空：app/src/test/resources/$resource（在册 #733：$path@$sha 已经取成 golden，" +
+                "资源不在＝红，不许静默跳过）"
+        }
+        // blob 是 LF（git show 不走 smudge），Windows 工作树 checkout 出来的 .txt 可能被补成 CRLF；
+        // 抹回 blob 的形状，使 golden 这一头与 [gitShow] 那一头同一把尺。
+        return String(bytes, Charsets.UTF_8).replace("\r\n", "\n")
+    }
+
+    /**
+     * 小册子（在册 #733 乙档）：五行，一行一枚已迁成 golden 资源的基线，
+     * `"<sha7> <仓库内路径> <授权卡号/事由>"`。取数口只认这张表 ⇒ 将来前移基点必须有格子可改
+     * （这里加/改一行 + 按命名规则落一枚 blob + 当场双向 md5 对账）；枚数与内容钉在
+     * `ScanBlankDecodingWiringGuardTest` 的册子格那枚 `@Test` 上。
+     */
+    private val GOLDEN_BASELINE_LEDGER: List<String> = listOf(
+        "ddf493f app/src/main/java/com/buaa/schedule/ui/signin/ScanSubmissionGate.kt T245② 被授权改闸门措辞（占位的语义 + awaitingUserAction 有两个写者那两句）——三枚反向钉共同的基点",
+        "869fc13 app/src/main/java/com/buaa/schedule/ui/signin/SignInViewModel.kt T395① 被授权改闸门那一次原子换（领取与落回各一枚 compareAndSet）",
+        "00b0b51 app/src/main/java/com/buaa/schedule/ui/signin/SignInViewModel.kt T257③ 被授权改漏斗（第四处 if (flight.value) return 换成 ScanFlightAdmission 分档）",
+        "bd0eca7 app/src/main/java/com/buaa/schedule/ui/signin/SignInViewModel.kt T404① 被授权改 fail 那句用户文案的出处（按档取句子 + 一行取证）",
+        "bd0eca7 app/src/main/java/com/buaa/schedule/data/import/ScanReject.kt T404① 被授权改 USER_ID_PARAM 那一行的存在性判据（queryValue 非空 → hasQueryParam）",
+    )
+
     private fun gitShow(rev: String, path: String): String? = try {
         val process = ProcessBuilder("git", "show", "$rev:$path")
             .directory(findRepoRoot())

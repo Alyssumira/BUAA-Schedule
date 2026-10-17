@@ -420,7 +420,7 @@ class ScanSecondEngineWiringGuardTest {
             // 其余三枚仍按 003bbdc 逐字节核对。守卫一枚没删、也没放宽：闸门文件从今往后照样
             // "不许顺手改"，要改必须像这样把基点与授权一起钉走。
             val rev = if (relative == GATE_FILE) T245_GATE_BASELINE else T66_BASELINE
-            val baseline = gitShow(rev, path)
+            val baseline = baselineBlob(rev, path)
             check(baseline != null) { "git 跑不动或基线取不到（$path@$rev），反向钉无从核对" }
             assertEquals(
                 "$relative 相对基点被改过了：本卡只该加第二引擎，不该动文案/探针/预热那三条链",
@@ -429,13 +429,23 @@ class ScanSecondEngineWiringGuardTest {
             )
         }
         // 靶子：这一枚的基点前移是有实物的（新旧两份闸门文件逐字节不同的话才允许不同源），
-        // 否则"换个 sha"就等于把反向钉空转掉
+        // 否则"换个 sha"就等于把反向钉空转掉。
+        // 在册 #733 顺带补的**纵深**（盘面上不是活雷）：这一格原本写成"两枚基线做不等比较"，两头任何一枚
+        // 取不到都会让 `null != 文本` 变成 true ⇒ 基线没了反而绿。盘面复核：本方法开头那段循环已经对
+        // PROBE／WARM_UP／RECOVERY（003bbdc 那一头）与 GATE（不可达那一头的同名文件）各 check 过一轮，
+        // 而且跑在这一格之前 ⇒ "基线取不到"在抵达这一格时就已经红了。所以这一枚补的是纵深、不是修活雷：
+        // 改完之后这一格自己要求两头都非 null **且**逐字节不同，不再靠上游那圈循环替它兜。
+        val gateAtT66 = baselineBlob(T66_BASELINE, "$MAIN_PREFIX/$GATE_FILE")
+        val gateAtT245 = baselineBlob(T245_GATE_BASELINE, "$MAIN_PREFIX/$GATE_FILE")
+        check(gateAtT66 != null && gateAtT245 != null) {
+            "靶子的两头取不到（$MAIN_PREFIX/$GATE_FILE@$T66_BASELINE 或 @$T245_GATE_BASELINE）：不许拿 null≠文本 当绿"
+        }
         assertTrue(
             "ScanSubmissionGate.kt 在 003bbdc 与 T245 基点上逐字节相同 ⇒ 基点前移是白给的，这一枚反向钉已经空转",
-            gitShow(T66_BASELINE, "$MAIN_PREFIX/$GATE_FILE") != gitShow(T245_GATE_BASELINE, "$MAIN_PREFIX/$GATE_FILE"),
+            normalizeNewlines(gateAtT66) != normalizeNewlines(gateAtT245),
         )
         val statusPath = "$MAIN_PREFIX/$STATUS_FILE"
-        val statusBaseline = gitShow(T66_BASELINE, statusPath)
+        val statusBaseline = baselineBlob(T66_BASELINE, statusPath)
         check(statusBaseline != null) { "git 跑不动或基线取不到（$statusPath@$T66_BASELINE），反向钉无从核对" }
         val current = normalizeNewlines(File(findMainJavaDir(), STATUS_FILE).readText())
         val currentOutside = withoutFrameAidSection(current, STATUS_FILE)
@@ -565,6 +575,46 @@ class ScanSecondEngineWiringGuardTest {
     }
 
     /** `git show <rev>:<path>`；取不到（没 git/没这个对象）返回 null，由调用方判失败 */
+    /**
+     * 在册 #733（门禁可移植性 · 乙档）的基线取数口：**两套并存，理由**。
+     * 下面 [GOLDEN_BASELINE_LEDGER] 那五行里的 (基点 sha, 文件) 只活在五枚未合并分支上
+     * （`ai/T245`／`ai/T257`／`ai/T395`／`ai/T404b`／`ai/T404C`），不在 master 的祖先链上 ⇒ 本仓每轮
+     * 清理 worktree 与 `ai/` 打头那批分支之后，`git show` 会在一枚什么都没改的树上取不到对象，反向钉硬红却只报
+     * "git 跑不动或基线取不到"。这一类改成从 classpath 资源 `baseline/<sha7>__<basename>.txt` 读
+     * （blob 由 `git show <rev>:<path>` 直接落盘、逐字节、不过编辑器）。
+     * 仍可达的基点（003bbdc 那一族）押在 HEAD 祖先链上，清分支也取得到 ⇒ **照旧走 [gitShow]**，
+     * 口径一字不改（可达性由 `ScanBlankDecodingWiringGuardTest` 的绊线格常驻钉住）。
+     * 取不到不许静默：golden 这一头当场 `check`（非 null 且非空），git 这一头沿用调用点原有的 check。
+     */
+    private fun baselineBlob(rev: String, path: String): String? {
+        val row = GOLDEN_BASELINE_LEDGER.firstOrNull { it.startsWith("$rev $path ") }
+            ?: return gitShow(rev, path)
+        val sha = row.substringBefore(' ')
+        val resource = "baseline/$sha" + "__" + path.substringAfterLast('/').removeSuffix(".kt") + ".txt"
+        val bytes = javaClass.getResourceAsStream("/$resource")?.use { it.readBytes() }
+        check(bytes != null && bytes.isNotEmpty()) {
+            "golden 基线取不到或为空：app/src/test/resources/$resource（在册 #733：$path@$sha 已经取成 golden，" +
+                "资源不在＝红，不许静默跳过）"
+        }
+        // blob 是 LF（git show 不走 smudge），Windows 工作树 checkout 出来的 .txt 可能被补成 CRLF；
+        // 抹回 blob 的形状，使 golden 这一头与 [gitShow] 那一头同一把尺。
+        return String(bytes, Charsets.UTF_8).replace("\r\n", "\n")
+    }
+
+    /**
+     * 小册子（在册 #733 乙档）：五行，一行一枚已迁成 golden 资源的基线，
+     * `"<sha7> <仓库内路径> <授权卡号/事由>"`。取数口只认这张表 ⇒ 将来前移基点必须有格子可改
+     * （这里加/改一行 + 按命名规则落一枚 blob + 当场双向 md5 对账）；枚数与内容钉在
+     * `ScanBlankDecodingWiringGuardTest` 的册子格那一枚判据上。
+     */
+    private val GOLDEN_BASELINE_LEDGER: List<String> = listOf(
+        "ddf493f app/src/main/java/com/buaa/schedule/ui/signin/ScanSubmissionGate.kt T245② 被授权改闸门措辞（占位的语义 + awaitingUserAction 有两个写者那两句）——三枚反向钉共同的基点",
+        "869fc13 app/src/main/java/com/buaa/schedule/ui/signin/SignInViewModel.kt T395① 被授权改闸门那一次原子换（领取与落回各一枚 compareAndSet）",
+        "00b0b51 app/src/main/java/com/buaa/schedule/ui/signin/SignInViewModel.kt T257③ 被授权改漏斗（第四处 if (flight.value) return 换成 ScanFlightAdmission 分档）",
+        "bd0eca7 app/src/main/java/com/buaa/schedule/ui/signin/SignInViewModel.kt T404① 被授权改 fail 那句用户文案的出处（按档取句子 + 一行取证）",
+        "bd0eca7 app/src/main/java/com/buaa/schedule/data/import/ScanReject.kt T404① 被授权改 USER_ID_PARAM 那一行的存在性判据（queryValue 非空 → hasQueryParam）",
+    )
+
     private fun gitShow(rev: String, path: String): String? = try {
         val process = ProcessBuilder("git", "show", "$rev:$path")
             .directory(findRepoRoot())
