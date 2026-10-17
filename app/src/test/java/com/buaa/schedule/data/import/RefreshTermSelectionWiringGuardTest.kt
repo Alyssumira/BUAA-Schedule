@@ -256,11 +256,12 @@ class RefreshTermSelectionWiringGuardTest {
             sites.size,
         )
         assertEquals(
-            "**钉法 = 数出现次数 ＋ 落点名册**：那四处的册子必须恰好是 `$VM_NAME=1 ／ $HOME_NAME=2 ／ " +
-                "$IMPORT_NAME=1`（实到 " + byFile.entries.toList().sortedBy { it.key }
+            "**钉法 = 数出现次数 ＋ 落点名册**：那四处的册子按**文件名字序**必须恰好是 `$HOME_NAME=2 ／ " +
+                "$IMPORT_NAME=1 ／ $VM_NAME=1`（实到 " + byFile.entries.toList().sortedBy { it.key }
                     .filter { occurrences(it.value, "refreshFromBuaa(") > 0 }
-                    .joinToString(" ／ ") { "${it.key}=${occurrences(it.value, "refreshFromBuaa(")}" } + "）",
-            listOf("$VM_NAME=1", "$HOME_NAME=2", "$IMPORT_NAME=1"),
+                    .joinToString(" ／ ") { "${it.key}=${occurrences(it.value, "refreshFromBuaa(")}" } + "）：" +
+                "册子的**内容与每栏枚数**才是判据，顺序是本文件自己那把 `sortedBy { it.key }` 尺定的",
+            listOf("$HOME_NAME=2", "$IMPORT_NAME=1", "$VM_NAME=1"),
             byFile.entries.toList().sortedBy { it.key }
                 .filter { occurrences(it.value, "refreshFromBuaa(") > 0 }
                 .map { "${it.key}=${occurrences(it.value, "refreshFromBuaa(")}" },
