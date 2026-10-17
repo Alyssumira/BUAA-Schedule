@@ -12,6 +12,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.core.content.edit
 import com.buaa.schedule.data.local.BuaaCookieStore
+import com.buaa.schedule.domain.importing.RefreshTermChoice
+import com.buaa.schedule.domain.importing.RefreshTermSelection
 import com.buaa.schedule.domain.model.Course
 import com.buaa.schedule.domain.model.Semester
 import com.buaa.schedule.domain.session.InFlightRelease
@@ -533,17 +535,44 @@ object BuaaWebSession {
      *   两者都没有则判定本次刷新失败——写一个猜出来的日期会让整张课表的日期与
      *   周次编号整体偏移（课次日期 = startDate.plusWeeks(w-1).plusDays(dow-1)），
      *   而调用方紧接着就删旧插新，没有回滚路径。
+     * @param termCode 用户点名要刷的那一枚学期代码（台账 #347）。首页「学期切换」下拉与导入页那枚
+     *   可手打的「学期代码」框递的就是它。
+     *   ⚠️ **非空时必须在本轮 [BuaaInPageFetcher.fetchTermList] 答回来的清单里**，不在就整趟拒绝、
+     *   一个字都不取——绝不"退回服务器那一份接着刷"，那就是 #347 本体（下拉念 A、库里写 B）。
+     *   为什么这一路必须在清单上判，而不是靠 `fetchSemesterInfo` 里那枚 `TERM_CODE_PATTERN`：
+     *   那枚正则只认形状（1–32 个 `[0-9A-Za-z._-]`），拦不住「形状合法而教务根本没给这一枚」；
+     *   而逐周抓那一趟（`fetchSemesterCourses`）把 termCode 直接拼进页面内 JS 的请求体，
+     *   它自己**零枚**白名单——清单是这一路唯一的白名单来源。
+     *   判据本体在 `domain/importing/RefreshTermSelection.kt`（纯 JVM、表驱动单测覆盖），这里只递参数。
+     *   为 null / 空白 = 用户没点名（首页菜单那枚「刷新课表」就走这一档），沿用服务器 selected。
      */
     suspend fun refreshSchedule(
         existingStartDate: java.time.LocalDate? = null,
+        termCode: String? = null,
         onProgress: (week: Int, total: Int) -> Unit = { _, _ -> },
     ): kotlin.Result<SemesterCourses>? {
         val web = sessionWebView ?: return null
         if (!hasSession()) return null
         val fetcher = BuaaInPageFetcher
         val terms = fetcher.fetchTermList(web)
-        val selectedTerm = terms.firstOrNull { it.selected }?.code ?: terms.firstOrNull()?.code
-        if (selectedTerm == null) return Result.failure(IllegalStateException("无法获取学期列表"))
+        // 取哪一枚学期由那枚纯内核一次裁定（改前这一行是 `terms.firstOrNull { it.selected }?.code ?:
+        // terms.firstOrNull()?.code`，用户点名的码根本进不来）—— 两枚 `?:` 支现在都在内核里，
+        // 调用点不再各自判一次，也就不再有两本"当前学期"的册子。
+        val selectedTerm = when (
+            val choice = RefreshTermSelection.choose(
+                requested = termCode,
+                offeredCodes = terms.map { it.code },
+                selectedCode = terms.firstOrNull { it.selected }?.code,
+            )
+        ) {
+            is RefreshTermChoice.Fetch -> choice.termCode
+            is RefreshTermChoice.NotOffered -> return Result.failure(
+                IllegalStateException("教务系统这一轮的学期清单里没有「${choice.requested}」，未改动课表"),
+            )
+            RefreshTermChoice.NoOfferedList -> return Result.failure(
+                IllegalStateException("无法获取学期列表"),
+            )
+        }
         val info = fetcher.fetchSemesterInfo(web, selectedTerm)
         val startDate = info.firstWeekMonday
             ?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }

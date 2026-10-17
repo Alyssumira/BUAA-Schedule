@@ -1109,7 +1109,16 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                 val terms = com.buaa.schedule.data.import.BuaaWebSession.fetchTermList()
                 if (terms.isNotEmpty()) {
                     _buaaTermOptions.value = terms
-                    terms.firstOrNull { it.selected }?.let { _buaaTermCode.value = it.code }
+                    // 显示位的口径是「课表上现在挂着哪一学期」，不是「服务器把哪一学期标成 selected」。
+                    // 改前这里无条件覆写成 selected，在甲之前是对的（刷新恒写 selected 那一枚，两边同源）；
+                    // 甲之后库里那一枚可能正是用户上一趟点名刷出来的（`replaceSemesterCourses` 的
+                    // 删旧插新把它顶成 id 最大的一行，口径见 `data/repository/ScheduleRepository.kt` 的
+                    // switchSemester 段首与 `data/local/SemesterDao.kt` 的 `ORDER BY id DESC LIMIT 1`），
+                    // 冷启动再无条件覆写成 selected 就造出「下拉念 B、网格念 A」——
+                    // 与在册 #347 同一枚错配、方向相反。本地没有对应学期行（首次登录）才退回 selected。
+                    val localCurrentTermCode = repository.getCurrentSemester()?.termCode
+                    (terms.firstOrNull { it.code == localCurrentTermCode } ?: terms.firstOrNull { it.selected })
+                        ?.let { _buaaTermCode.value = it.code }
                 }
             } finally {
                 buaaTermsFetching = false
@@ -1377,6 +1386,12 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     /**
      * 静默刷新课表：复用保留的登录 WebView（BuaaWebSession）页面内重拉整学期。
      * 无保留会话时返回 false，调用方引导用户重新登录。
+     *
+     * @param termCode 用户点名的学期代码（首页「学期切换」下拉 / 导入页那枚手打框）。非空即**递进取数**，
+     *   教务本轮没给这一枚时整趟拒绝而不是退回 selected（在册 #347，判据在
+     *   `domain/importing/RefreshTermSelection.kt`）；空白走默认档 = 服务器 selected，
+     *   首页菜单那枚「刷新课表」（`ui/home/HomeScreen.kt` 的 LiquidMenu）今天就不调这一枚实参，
+     *   它要的正是这一档，本卡不给它补显式的 ""。
      */
     /** 正在进行的教务刷新任务；用户可在抓取中途取消（已抓到的数据不落库） */
     private var buaaRefreshJob: kotlinx.coroutines.Job? = null
@@ -1384,7 +1399,12 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     fun refreshFromBuaa(termCode: String = ""): Boolean {
         if (_buaaRefreshing.value) return true
         if (!com.buaa.schedule.data.import.BuaaWebSession.hasSession()) return false
-        if (termCode.isNotBlank()) _buaaTermCode.value = termCode.trim()
+        // #347：用户点名那一枚必须**递进取数**，不是只落进一枚显示用的 StateFlow。
+        // 显示位改到刷新**真的落库**那一支再按 `fetched.semester.termCode` 落（见下面 onSuccess）——
+        // 于是「手打了一枚教务本轮没给的代码」不会把下拉顶成一枚不存在的学期，
+        // 而「结果不完整 / 零条课」那两档不写库，显示位也跟着不动（下拉与网格同源才是这格的判据）。
+        // 空白 = 用户没点名（首页菜单「刷新课表」那枚调用点就走这一档），内核退回服务器 selected。
+        val requestedTermCode = termCode.trim().takeIf { it.isNotBlank() }
         _buaaRefreshing.value = true
         buaaRefreshJob = viewModelScope.launch {
             // 必须与导入/恢复共用同一把锁：此前 refreshFromBuaa 绕开了 withImportLock，
@@ -1399,6 +1419,7 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                     // 页面上下文 fetch（原生栈复刻不出凭证 → 401，必须走保留的 byxt WebView）
                     val result = com.buaa.schedule.data.import.BuaaWebSession.refreshSchedule(
                         existingStartDate = repository.getCurrentSemester()?.startLocalDate,
+                        termCode = requestedTermCode,
                         onProgress = { week, total -> _importMessage.value = AppMessage("正在刷新课表：第 $week/$total 周...") },
                     )
                     when (result) {
@@ -1428,6 +1449,10 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                                     }
                                     else -> {
                                         repository.replaceSemesterCourses(fetched.semester, fetched.courses)
+                                        // 显示位与库里那一枚同源（#347 的另一半）：只有真写了库这一支才改下拉，
+                                        // 而值取**内核裁出来的那一枚**（fetched.semester.termCode），
+                                        // 不取用户递进来的那枚原始串 —— 清单判据已经在 BuaaWebSession 里过了。
+                                        _buaaTermCode.value = fetched.semester.termCode
                                         afterDataChangedInternal()
                                         _importMessage.value = AppMessage(
                                             "课表已刷新：${fetched.courses.size} 条课程（${fetched.semester.termName}）",
