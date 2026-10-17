@@ -169,7 +169,7 @@ object ScanRejectClassifier {
         if (!IClassQrParser.SCHED_ID_PATTERN.matches(schedId)) {
             return infoOf(shape, ScanRejectRung.BadParamValue, ScanCodeFamily.IClass, flagged = listOf(SCHED_ID_SHOWN))
         }
-        if (IClassQrParser.queryValue(shape.source, IClassSignUrl.USER_ID_PARAM) != null) {
+        if (IClassQrParser.hasQueryParam(shape.source, IClassSignUrl.USER_ID_PARAM)) {
             return infoOf(
                 shape,
                 ScanRejectRung.RequestUrlNotCode,

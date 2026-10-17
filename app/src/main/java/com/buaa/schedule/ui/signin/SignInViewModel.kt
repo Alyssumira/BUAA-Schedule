@@ -14,6 +14,7 @@ import com.buaa.schedule.data.import.ScanTargetParser
 import com.buaa.schedule.data.import.scanRejectCardText
 import com.buaa.schedule.data.import.scanRejectEvidenceText
 import com.buaa.schedule.data.import.scanRejectForensicLine
+import com.buaa.schedule.domain.signin.SubmitFailureClassifier
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,7 +46,10 @@ sealed interface SignInState {
 
     /**
      * @param relogin true 表示这一族压根没有可用的凭证，界面该给「去登录」出口
-     *   （iClass 只有这一个出口：没有可静默续期的东西，服务端拒绝不算"要重登"，见 [fail]）
+     *   （iClass 只有这一个出口：没有可静默续期的东西，服务端拒绝不算"要重登"，见 [fail]）。
+     *   册子（#697 第⓪问现量）：写点全仓 1 枚（[submitToIClass] 里"盘上没有 id"那一下），
+     *   读者全仓 1 枚（`SpocScanScreen.kt` 失败卡上那句 `if (s.relogin)`）—— 服务端答的那七档
+     *   没有一档表示"要重登"，所以 `fail` 这一侧恒 false，不许替服务端猜。
      * @param evidence 失败卡第二行：**扫到的东西长什么样**（host / 路径 / 参数名 / 字符数，
      *   由 [ScanRejectClassifier] 的形状件拼出来，一个参数值都不在里面）。
      *   只有解析失败那一档带得出形状，服务端拒绝那几档没有形状可说 ⇒ null（不许编一份）。
@@ -342,19 +346,32 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * 服务端与网络那一头的失败：一句话，外加"要不要给「去登录」出口"。
+     * 服务端与网络那一头的失败：**按档说一句人话**，外加"要不要给「去登录」出口"。
      *
      * T85 之前这里还有一支 `error is SpocSessionExpiredException → relogin = true`：那是 JWT
      * 带 `exp` 才会有的分类。iClass 没有可静默续期的东西、也没有取证到"凭证过期"这一说
      * （[IClassApi] 那三枚异常没有一枚表示"要重登"），所以那一整支跟着 SPOC 一起拆掉，
      * `relogin` 现在只有一个写点（[submitToIClass] 里"盘上没有 id"那一下）。
      *
-     * 留下来的这一支仍然一个字都不加工：服务端给的 ERRMSG 就是中文原因，
-     * 包一层"签到失败"把信息吃掉是这一族最早栽过的亏。
+     * #696 收的是**这一句**：从前这里是 `error.message ?: "网络异常，请稍后重试"`，而 `message`
+     * 是 JVM/传输层的原文（`Read timed out`、`Failed to connect to iclass…:8181` 那一类 —— 英文、
+     * 带着主机名与端口），它被当作用户文案逐字上屏。同一条链在登录那一侧早已由
+     * [com.buaa.schedule.domain.signin.LoginFailureClassifier] 按档折成中文（T392①），
+     * 递交这一侧没走过那把尺 —— 两页同一族病、只修了一页。现在档位判据仍住在那颗内核
+     *（[SubmitFailureClassifier] 转发给它，全仓一把继承判据梯，理由写在那颗文件的类注释里），
+     * 这里只按档取递交这一侧的句子。
+     *
+     * ⚠️ 服务端与本仓已经写好那句话的那几枚**仍然逐字**：`classifySign` 那七档交回的异常都实现
+     * [com.buaa.schedule.domain.signin.LocallySpokenFailure]（厂商 ERRMSG 的中文原文 / 本仓按外壳
+     * 档位各写好的那七句），落 [com.buaa.schedule.domain.signin.LoginFailureRung.SpokenVerbatim]
+     * 那一档。给它们再包一层"签到失败"把信息吃掉，是这一族最早栽过的亏。
+     * 取证那一行只交回档位与类名 —— 异常原文里那半句地址不写日志（同一句理由：那一行在用户设备上，
+     * release 也剥不掉 Warn 级）。
      */
     private fun fail(error: Throwable) {
+        Log.w(TAG, SubmitFailureClassifier.forensicsLine(error))
         _state.value = SignInState.Failed(
-            error.message ?: "网络异常，请稍后重试",
+            reason = SubmitFailureClassifier.screenLine(error),
             relogin = false,
         )
     }
@@ -365,6 +382,9 @@ class SignInViewModel(application: Application) : AndroidViewModel(application) 
          * 与相机侧那几行（`SpocScanScreen`）分得开 —— 那几行说"帧到没到、解没解出原文"，
          * 这一行说"解出来的那段文字被判成什么档"。级别口径与那一页一致（只有 Info/Warn，
          * 用户的机器把 logcat 砍到 Info、release 又剥 Verbose，`Log.d` 等于没写）。
+         * ⚠️ #696 起这一枚 tag 下面还站**第四站**那一行：[fail] 的「签到失败分档 档=…」。
+         * 它俩是同一趟链的相邻两站（判格式 → 递交），过滤条件（`-s ScanSignInParse`）因此不变 ——
+         * 另立一枚 tag 会让"这一发为什么没签上"要跨两个 tag 才拼得出账。
          */
         private const val TAG = "ScanSignInParse"
 

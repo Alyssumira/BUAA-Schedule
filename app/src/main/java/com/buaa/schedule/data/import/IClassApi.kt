@@ -183,10 +183,27 @@ class IClassApi(
      * @param rawUrl 扫码原文（[ScanTarget.IClass.rawUrl]），中间只过 [IClassSignUrl.forSubmission]
      * @return 成功只带一个 `Unit`：这一族的成功回执里没有任何我们读得懂的附加信息
      *         （`stuSignStatus` 之外没有取到证的字段，不猜、也不显示）
+     *
+     * **这一路交回的是原文，不是折过的句子**（#696 的分工）：话怎么说住在
+     * `ui/signin/SignInViewModel.kt` 的 `fail()` 那一头（它按档取
+     * [com.buaa.schedule.domain.signin.SubmitFailureClassifier] 的句子）。这里再折一次就是两份真相，
+     * 而 `IClassApiTest` 那枚在册格「传输层抛出来的是失败而不是异常」钉的正是"原文交回调用点"。
+     *
+     * **取消在这里原样复投**（#696 第二枚的另一半，形状抄本文件 [login] 那一手 / T397①）：
+     * 这一手从前整段裹在一层 `runCatching` 里，而那一层吃的是 `Throwable` —— 协程取消走到调用点时
+     * 已经被换成一次**失败返回**，屏上念的是"这一发签到断了"那一类句子，而"这一趟没了"这件事
+     * 协程框架与调用点都收不到。所以换掉那一层才是修法（只在那层之内补一句复投会被同一层再吃一遍）。
+     * ⚠️ `Error` 那一族**仍**被折成一次失败返回：那是改前既有的口径、不是这一手引入的，与 [login]
+     * 那一侧同列（见那里的在册说明）。
      */
     suspend fun signIn(rawUrl: String, userId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            classifySign(transport.execute(IClassSignUrl.forSubmission(rawUrl, userId), "GET", null)).getOrThrow()
+        try {
+            val response = transport.execute(IClassSignUrl.forSubmission(rawUrl, userId), "GET", null)
+            Result.success(classifySign(response).getOrThrow())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (cause: Throwable) {
+            Result.failure(cause)
         }
     }
 
@@ -202,8 +219,10 @@ class IClassApi(
      * - 传输层（[IClassTransport.execute]）抛出来的那一族读不到外壳，从前会连着 JVM 的英文
      *   （用户当场看到过 `timeout`）一路走到登录页那句「登录失败：…」；现在它们在**这里**就被折成
      *   [com.buaa.schedule.domain.signin.LoginFailureRung]，每一档只念本机这一趟看得见的事。
-     * 折档只发生在这一路：[signIn] 那一路一个字没动（在册判据见 IClassApiTest 那枚
-     * 「传输层抛出来的是失败而不是异常」，它钉的正是签到那一路交回原文）。
+     * 折档只发生在这一路：[signIn] 那一路**也不折**（它交回原文，句子由界面那一侧按同一把判据梯取，
+     * 见那里的 `fail()` 与 #696；在册判据见 IClassApiTest 那枚「传输层抛出来的是失败而不是异常」，
+     * 它钉的正是签到那一路交回原文）。两路的共同点是判据只住
+     * [com.buaa.schedule.domain.signin.LoginFailureClassifier] 那一颗，差别只在话说给哪一页听。
      *
      * **取消不在这里折档**（T397①，第⓪问裁的丙档形状）：这一手从前整个裹在一层 `runCatching` 里，
      * 而那一层吃的是 `Throwable` —— 协程取消走到调用点时已经被换成一句普通的失败**返回**，

@@ -51,10 +51,13 @@ object IClassQrParser {
      * 3. 路径落在 [SCAN_SIGN_ROUTE] 上（见那里写的理由）；
      * 4. query 里有非空 `courseSchedId`。
      *
-     * 再加一道**排斥**条件：原文里已经带 `id=` 参数的不认。提交是
+     * 再加一道**排斥**条件：原文里已经带 `id` 参数的不认。提交是
      * `原文 + "&id=" + User.id`（见 [IClassSignUrl.forSubmission]），再拼一个就成了同名双参数 ——
      * 那是服务端 `参数错误!` 的另一条来路；而课堂投影那张码里没有这一项，
      * 带它的只能是"某次请求的 URL"而不是码。
+     * ⚠️ 这一道问的是**名字出没出现过**（[hasQueryParam]），不是"值空不空"：`…&id=` 这种空值形态
+     * 从前躲得过这一格（那一版问的是 [queryValue]，而它按成文口径看不见空值参数），
+     * 又照样会在提交时与我们附的那枚 `id` 并成两枚同名参数 —— #698 收的就是这一格。
      */
     fun parse(raw: String?): ScanTarget.IClass? {
         val text = raw?.trim() ?: return null
@@ -73,7 +76,7 @@ object IClassQrParser {
         if (!isScanSignRoute(text)) return null
         val schedId = queryValue(text, COURSE_SCHED_ID) ?: return null
         if (!SCHED_ID_PATTERN.matches(schedId)) return null
-        if (queryValue(text, IClassSignUrl.USER_ID_PARAM) != null) return null
+        if (hasQueryParam(text, IClassSignUrl.USER_ID_PARAM)) return null
         return ScanTarget.IClass(rawUrl = text)
     }
 
@@ -93,6 +96,10 @@ object IClassQrParser {
 
     /**
      * query 取值（键名大小写不敏感）：只看 `#` 之前那一截 —— 这张码没有 hash 路由。
+     *
+     * **只看非空值**（`…&id=` 那一格在这里是"没取值"），因为它的三枚调用点量的都是"值合不合形状"
+     *（`courseSchedId` 的必填与非空、`SCHED_ID_PATTERN` 那一判）。⚠️ 它**不是**"这个名字出现过没有"
+     * 那一问 —— 那一问用 [hasQueryParam]，#698 收的就是有人把这两问当成一问。
      *
      * T83 起 `internal`：[ScanRejectClassifier] 判"参数齐不齐 / 值合不合形状"用的就是这两道
      * 门槛本身，不再抄一份取值逻辑。⚠️ 取到的值只许用来**判形状**，绝不许进日志或界面。
@@ -114,17 +121,40 @@ object IClassQrParser {
      */
     internal fun queryParamNames(url: String): List<String> = queryPairs(url).map { it.first }.distinct()
 
+    /**
+     * 这个名字在 query 里**出现过**没有 —— 空值也算出现过（`…&id=` 算，`…&id` 那种连 `=` 都没有的片段不算，
+     * 与 [queryValue] / [queryParamNames] 同一刀：三枚问法吃的是同一份 [queryEntries]）。
+     *
+     * 存在的理由（#698）：收码那道排斥闸门问的是"这条 URL 是不是已经带着提交才拼的那枚 `id`"，
+     * 而**带不带跟值空不空无关** —— 从前它问的是 [queryValue]，于是 `…&id=` 从闸门缝里走过去，
+     * 提交时与 [IClassSignUrl.forSubmission] 附的那枚并成**同名双参数**（厂商 dex 逐字是
+     * `qrUrl + "&id=" + id`，与本仓同形），而那条畸形地址是我们自己拼出来的。
+     * ⚠️ 闸门要的仍然是"拒绝"（见 [parse] 那四道门槛后面的排斥条件），不是"看见空值就放行"，
+     * 更不是把 `id=` 当成一枚有效值接受。[ScanRejectClassifier] 判 `RequestUrlNotCode` 那一问吃的是
+     * 同一颗 —— "收不收"与"为什么没收"必须同一把尺（不变量在 `ScanRejectClassifierTest` 里钉着）。
+     */
+    internal fun hasQueryParam(url: String, key: String): Boolean =
+        queryEntries(url).any { it.first == key }
+
     /** query 段里看得见的 `(名字, 值)` 对；值为空的直接不算看见（[queryValue] 与 [queryParamNames] 同源） */
-    private fun queryPairs(url: String): List<Pair<String, String>> {
+    private fun queryPairs(url: String): List<Pair<String, String>> =
+        queryEntries(url).filter { it.second.isNotEmpty() }
+
+    /**
+     * 切 query 那一刀（全文件唯一一处）：`(名字, 值)`，名字已 lowercase、两端去过空白，
+     * **值为空的留在册**（`id=` 是一个参数，只是没值 —— [queryPairs] 与 [hasQueryParam] 各自决定看不看它）。
+     * 连 `=` 都没有的那一截（`…&id`）按 `(名字, 空值)` 入册 —— 它在 HTTP 里就是一枚没值的参数，
+     * 而"我们不能再附一枚同名参数"这一问跟它有关；取值与念名字那两枚问法照旧看不见它（同一个 filter）。
+     */
+    private fun queryEntries(url: String): List<Pair<String, String>> {
         val query = url.substringBefore('#').substringAfter('?', "")
         if (query.isEmpty()) return emptyList()
-        val pairs = ArrayList<Pair<String, String>>()
+        val entries = ArrayList<Pair<String, String>>()
         for (pair in query.split('&')) {
-            if (!pair.contains('=')) continue
             val name = pair.substringBefore('=').trim().lowercase()
-            val value = pair.substringAfter('=').trim()
-            if (name.isNotEmpty() && value.isNotEmpty()) pairs += name to value
+            if (name.isEmpty()) continue
+            entries += name to pair.substringAfter('=', "").trim()
         }
-        return pairs
+        return entries
     }
 }

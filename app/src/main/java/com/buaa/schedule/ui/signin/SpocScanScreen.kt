@@ -565,6 +565,25 @@ fun SpocScanScreen(
     }
     BackHandler(enabled = busy) { requestBack() }
 
+    /**
+     * 「去登录」那一下：**先复位，再把出口交给调用方**（#697 第二枚，甲档）。
+     *
+     * 为什么必须复位在这里：`SignInViewModel.kt` 写 `relogin = true` 那一格是**最后一笔写** ——
+     * 那条支路在置上失败卡之后直接 `return`，既不发请求也没再写别的状态；而 `MainActivity.kt`
+     * 那条回来的路（登录成功后 `navigate("spoc_scan") { popUpTo("iclass_login") { inclusive = true } }`）
+     * 弹掉的是登录页自己，扫码这一枚 entry 连同它的 VM 都还在。于是登完回到这一页，
+     * 那张"还没有登录北航 iClass"跟着 `if (s.relogin)` 一起回来 —— 说的是十秒钟前的事。
+     * 复位走的是页上另一颗按钮同一颗 [SignInViewModel.reset]（它在飞时早退，那一条由
+     * `enabled = !inFlight` 与 `ScanSilentBranchGuardTest` 的三枚等式钉着，本卡不动那一档）。
+     *
+     * ⚠️ 为什么不在 `onNeedLogin` 的实参表里复位：那颗回调的实参住在 `MainActivity.kt`（本卡禁改面），
+     * 而状态机的复位这件事本来就该由用它的这一页决定 —— 界面话的落点留在界面这一侧。
+     */
+    val goIClassLogin: () -> Unit = {
+        viewModel.reset()
+        onNeedLogin()
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
             factory = { previewView },
@@ -800,7 +819,8 @@ fun SpocScanScreen(
                                 // 只有一条登录链了：`relogin` 现在唯一的写点就是"盘上没有 iClass 的 id"
                                 // （从前这里要把用户按平台分流 —— 送错一族等于丢进一个这一族根本
                                 // 不需要填的页面，那枚 `SignInPlatform` 随 SPOC 一起拆在 T85）
-                                Button(onClick = onNeedLogin, modifier = cardAction) { Text("去登录") }
+                                // 交出口之前先复位，理由写在上面那枚 `goIClassLogin` 的注释里
+                                Button(onClick = goIClassLogin, modifier = cardAction) { Text("去登录") }
                             }
                             TextButton(
                                 onClick = { viewModel.reset() },
@@ -816,7 +836,27 @@ fun SpocScanScreen(
                                 .fillMaxWidth()
                                 .defaultMinSize(minHeight = DesignTokens.minTouchTarget),
                         ) { Text("继续扫码") }
-                        else -> Unit
+                        // #697 第一枚：这一档**从前是 `else -> Unit`** —— 它把"这一档屏上没有出口"这件
+                        // 事写成了一句谁都没读过的默认值（新增一档时编译器不再在这里说话）。
+                        // 现在两档各自有名有姓，判据本体一个字没动：卡上的动作仍然只有
+                        // 「重新扫码 / 继续扫码 / 去登录」三颗。
+                        // `Idle` 那一支到不了：上面的 resultText 在 Idle 是 null，这张卡根本没被组合
+                        //（`is SignInState.Idle` 写在这里唯一的作用是取消掉那枚 else）。
+                        is SignInState.Idle -> Unit
+                        // `Submitting` 这一档屏上确实没有出口，而它**只能**没有：
+                        // ① 没有可"撤回"的那一手 —— 握着那次连接的是
+                        //   `IClassApi.kt` 里 `HttpURLConnectionIClassTransport.execute` 那枚局部
+                        //   `connection`（它只在 execute 自己的 finally 里 disconnect），
+                        //   界面这一侧拿不到它，"取消这一发"那颗按钮点下去什么也停不下来；
+                        // ② 那一发可能已经被服务端记上了 —— 本仓对这一刻的成文口径是
+                        //   「没有任何受理的证据」（见 `IClassApi` 的 `EmptyBody` / `BodyUnreadable`
+                        //   那两支的句子），所以也不许把这一颗写成"取消"或"撤回"；
+                        // ③ 它是**有界**的：connect 15 s ＋ read 30 s 两枚常量都在
+                        //   `IClassApi.kt` 里，`signIn` 一次往返、不重试 ⇒ 落回必然写 Signed/Failed，
+                        //   那两档都有自己的出口（上面的两支）。等待本身不由这一颗按钮回答。
+                        // 这一档在屏上说话的那张嘴是上面 resultText 那句既有的"正在提交签到…"
+                        //（T345 裁的形状：两扇返回门与这张卡同源，见 requestBack 那段注释）。
+                        is SignInState.Submitting -> Unit
                     }
                 }
             }
