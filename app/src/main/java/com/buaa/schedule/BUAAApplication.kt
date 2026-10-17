@@ -106,11 +106,21 @@ class BUAAApplication : Application(), Configuration.Provider {
     }
 
     /**
-     * 内存回收信号：交出最大的两块常驻内存。
+     * 内存回收信号：交出常驻内存里最大的一族块 —— 隐藏会话 WebView、组件行缓存、
+     * 组件玻璃位图缓存（卡 T423 把第三记纳进来：此前它**不在本方法的清场范围内**，
+     * 因为那枚容器根本没有生产清入口）。
      *
      * 隐藏会话 WebView 挂在 Chromium 堆上（几十 MB 量级），是全应用最大的单个常驻块；
      * Cookie 已经由 [com.buaa.schedule.data.import.BuaaCookieStore] 落盘，
      * 销毁后下次回前台按 Cookie 重建即可。
+     *
+     * 组件玻璃位图缓存是**组件侧**最大的一块：两条各 ≤ 480x320 ARGB_8888 =
+     * 最坏 1,228,800 B 的稳态驻留。交出去的方式是**丢掉容器对它们的引用**、不是回收位图
+     * （口径与理由见 [com.buaa.schedule.widget.GlassBakeCache] 的类注释），
+     * 该不该在这一档清也不由本方法判 —— [com.buaa.schedule.widget.WidgetBackgroundRenderer]
+     * 那记公开入口自己问纯函数 [com.buaa.schedule.widget.widgetGlassCacheReleasesAtTrimLevel]，
+     * 本方法只把系统那一档与地板线原样交过去（地板线就是下面那道门用的同一枚常量，
+     * 不在这里抄第二份）。
      *
      * 只处理 BACKGROUND / MODERATE / COMPLETE 这三档 —— 它们只会发给**已在后台**的进程。
      * RUNNING_CRITICAL 虽然名字更吓人，却是发给前台进程的，而前台正是用户可能正在
@@ -123,5 +133,9 @@ class BUAAApplication : Application(), Configuration.Provider {
         if (level < ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) return
         com.buaa.schedule.data.import.BuaaWebSession.releaseForMemory()
         com.buaa.schedule.widget.WidgetDataCache.invalidate()
+        com.buaa.schedule.widget.WidgetBackgroundRenderer.releaseGlassCacheForMemory(
+            level,
+            ComponentCallbacks2.TRIM_MEMORY_BACKGROUND,
+        )
     }
 }

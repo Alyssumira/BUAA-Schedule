@@ -15,6 +15,7 @@ import androidx.core.graphics.createBitmap
 import androidx.core.graphics.scale
 import androidx.core.graphics.withClip
 import com.buaa.schedule.core.designsystem.Personalization
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 小组件“玻璃化”背景渲染：把壁纸采样/模糊成一张静态位图。
@@ -62,6 +63,16 @@ object WidgetBackgroundRenderer {
 
     /** 缓存里那位（见 [glassCache]）。见 [GLASS_CACHE_MAX_ENTRIES] 的论证。 */
     private val glassCache = GlassBakeCache<Bitmap>()
+
+    /**
+     * 乙档读数（卡 T423）：**键给不出来**那一格现烤了几张不入缓存的图。
+     *
+     * 只增不减，不参与任何判据，内存压力清场也不 reset 它 —— 它记的是这一整条路的趟数，
+     * 不是驻留量。开这一记的理由就是那一格的账：一张 ≤ 480x320 ARGB_8888 = 614,400 B，
+     * 既不入库也没人回收，每轮刷新每个撞不上键的实例各付一次，全靠 GC 收尾。
+     * 光写注释看不见它跑得多勤；另开一记"顺手回收"就是第二条静默路径，本卡不许。
+     */
+    private val unkeyedBakeCount = AtomicInteger()
 
     /** 应用内背景的 prefs 与组件唯一读的那枚全局壁纸键（与 Personalization.load 同一份） */
     private const val SETTINGS_PREFS = "schedule_settings"
@@ -128,8 +139,13 @@ object WidgetBackgroundRenderer {
                     glassArgb = glass,
                     nightMode = isNightMode(context),
                 )
-                // 键给不出来（壁纸内容签名取不到）就照改前的样子现烤一张，不入库
+                // 键给不出来（壁纸内容签名取不到）就照改前的样子现烤一张，不入库。
+                // 取向"宁可白烤，不可糊错"不动（卡 T423 第乙档裁定）：这一张出去之后
+                // 立刻进 RemoteViews，binder 什么时候抄完像素本调用点无从得知，在这里
+                // 回收就是拿 IllegalStateException 换那 614,400 B —— 与类注释拦下的那一手
+                // 是同一手。所以这里只留一记读数，不留处置。
                 val baked = if (key == null) {
+                    unkeyedBakeCount.incrementAndGet()
                     bakeGlass(wallpaper, size, radii, glass)
                 } else {
                     glassCache.obtain(key) { bakeGlass(wallpaper, size, radii, glass) }
@@ -148,6 +164,31 @@ object WidgetBackgroundRenderer {
             Log.w(TAG, "玻璃背景这次画不出来，回退纯色底（appWidgetId=$appWidgetId）", it)
         }.getOrElse { GlassRender.Preset }
     }
+
+    /**
+     * 内存压力档位的清场入口（卡 T423，第⓪问裁定＝甲）：交出玻璃烘焙缓存那两位的**引用**。
+     *
+     * 这是 [glassCache] 唯一的生产清场口（它是 private，`BUAAApplication.onTrimMemory`
+     * 只能走这一记），语义与逐出同一档：只丢引用，对位图一个字节都不碰 ——
+     * 论证见 [GlassBakeCache] 的类注释。[GlassBakeCache.clearOnMemoryPressure] 里没有
+     * 第二份键册子要安置：键与值同生共死，下次 obtain 撞不上键就现烤一张，
+     * 付的是 CPU 而不会再付一次驻留。
+     *
+     * **档位判据在自己手里**：这一记是公开的，所以先把 `level` 与 `backgroundFloor`
+     * 交给纯函数 [widgetGlassCacheReleasesAtTrimLevel] 问一遍，前台档直接不动 ——
+     * 它不许任何调用方拿一个前台档位把这记清场当成"随手一调"（地板线由调用点把
+     * `ComponentCallbacks2.TRIM_MEMORY_BACKGROUND` 本体传进来，本文件不抄第二份常量）。
+     */
+    fun releaseGlassCacheForMemory(level: Int, backgroundFloor: Int) {
+        if (!widgetGlassCacheReleasesAtTrimLevel(level, backgroundFloor)) return
+        glassCache.clearOnMemoryPressure()
+    }
+
+    /**
+     * 乙档读数入口：键给不出来那一格至今白烤了几张（见 [unkeyedBakeCount]）。
+     * 生产代码没有读它的地方，排障与单测用；它不参与任何判据，也不随清场归零。
+     */
+    internal fun unkeyedBakeCountForReadOff(): Int = unkeyedBakeCount.get()
 
     /**
      * 位图档撞空时的第二档：问到主色就交一块推导出来的板色，问不到就照改前那样回
@@ -580,6 +621,27 @@ internal fun glassBakeKey(
 }
 
 /**
+ * 「这一档内存压力该不该交出玻璃烘焙缓存」的判据本体（卡 T423，第⓪问裁定＝甲）。
+ *
+ * 零 android API：两枚分量都当参数交进来 —— `level` 是系统发给本进程的那一档，
+ * `backgroundFloor` 是调用点手里的 `ComponentCallbacks2.TRIM_MEMORY_BACKGROUND` 本体
+ * （本卡不抄第二份常量，两处若漂了由在册守卫那一格点名）。于是这一枚能在纯 JVM 里
+ * 表驱动逐档钉住：前台两档（RUNNING_CRITICAL／UI_HIDDEN）绝不清，后台三档
+ * （BACKGROUND／MODERATE／COMPLETE）清。
+ *
+ * 为什么前台两档不清：这一档的位图正是 Launcher 可能正在显示的那一张，而组件刷新
+ * 本身就在后台协程里跑；清掉的只是"下一次要现烤"那笔 CPU，省下的驻留不到 1.2 MB，
+ * 换来的是用户回到桌面时看到纯色底的那一轮。
+ *
+ * 为什么按 BACKGROUND 这一档起步、而不是只按最狠那一档：组件侧那两记常驻数据
+ * （行缓存与这张位图缓存）本来就一起交给后台档处理，把位图那一记再收窄一档只会让
+ * 清场推迟到系统准备杀进程的那一刻，而"组件全被拆掉之后还钉着 1.2 MB"恰恰是
+ * 卡 T423 点名的缺口 —— 它要的是**后台档就能放手**，不是**濒死才放手**。
+ */
+internal fun widgetGlassCacheReleasesAtTrimLevel(level: Int, backgroundFloor: Int): Boolean =
+    level >= backgroundFloor
+
+/**
  * 从这一个实例报上来的真实尺寸推出要烘的画布尺寸（每一轴各推各的）。
  *
  * 改前这里是"一律 480x320"：一个 2×1「下一节课」真身 110x40dp，在 density 2.625 的机上
@@ -659,11 +721,13 @@ private fun List<Int>.distinctClamp(dimension: Int): List<Int> =
  * 结果是同一张画（同键同管线），多花一次 CPU 而不会出错。反过来若把烘焙圈进锁里，
  * 一次 8MB 位图的重采样会把同轮后面的实例堵在锁上等，那就是把省下来的钱换个地方花。
  *
- * 逐出时**不回收**位图：这张图可能已经交给 RemoteViews、还在 binder 事务里排着，
- * 或者正被 Launcher 显示 —— 回收一张别人还引用的位图，下一次用到它就是
- * Canvas/`drawBitmap` 上的 IllegalStateException。丢掉引用就够了：API 26 起
- * 位图像素就在 Java 堆上，GC 自己收（这仓库 minSdk 26，没有"像素在 native 堆、
- * 不 recycle 就漏"那一档要照顾）。
+ * 逐出与清场都**不回收**位图，理由**不依赖"像素住在哪一片内存"**（那一问的一手出处本卡
+ * 不许联网、取不到；仓内另有一句与它互斥的说法，两边都没判赢 —— 见卡 T423 的回执，
+ * 那句不归本文件改）。这里只说得出、也不需要那个答案就成立的那一半：这张图可能已经
+ * 交给 RemoteViews、还在 binder 事务里排着，或者正被 Launcher 显示 —— 本容器根本不是它
+ * 唯一的持有者。**丢掉引用就够了**：本容器放手之后，别人手里那一份照旧能用，等最后一名
+ * 持有者也松开，这张图自然再没人要。反过来若在这里回收，就是替别人做决定 ——
+ * 下一次用到它的地方就是 Canvas/`drawBitmap` 上的 IllegalStateException。
  */
 internal class GlassBakeCache<V>(private val maxEntries: Int = GLASS_CACHE_MAX_ENTRIES) {
 
@@ -687,7 +751,28 @@ internal class GlassBakeCache<V>(private val maxEntries: Int = GLASS_CACHE_MAX_E
         return baked
     }
 
-    /** 单测与将来的排障入口用：生产路径上没有"清缓存"这一步，键自己会翻面。 */
+    /**
+     * 内存压力那一档的清入口（卡 T423）：**只丢本容器对这些结果的引用**。
+     *
+     * 与逐出同一口径、同一条锁（@Synchronized 与 [obtain] 抢的是同一枚 monitor，
+     * 所以不会出现"一边写一边清"夹出来的半条）。这里不问"这张图还有人在用吗"：
+     * 本容器答不出这个问题（交出去的那一份不归它管），而**丢引用**这一手无论答案
+     * 是什么都安全 —— 别人手里的引用照旧有效，本容器只是不再握着它。
+     * 若在这里做回收，才是拿 IllegalStateException 换驻留，类注释拦的就是那一手。
+     *
+     * 键不用安置：容器里没有第二份键册子，键与值同生共死。下一次 [obtain] 撞不上键
+     * 就现烤一张 —— 付 CPU，不再付驻留。
+     */
+    @Synchronized
+    fun clearOnMemoryPressure() {
+        entries.clear()
+    }
+
+    /**
+     * 单测与排障入口用。容器现在有两记清场：按容量的逐出（[removeEldestEntry] 那一段）
+     * 与按内存压力的 [clearOnMemoryPressure]。平时没人清 —— "键自己会翻面"那句仍然成立，
+     * 但**组件全被拆掉之后**这一族不再需要等到翻面：压力档位一到就归零。
+     */
     @Synchronized
     fun entryCount(): Int = entries.size
 }
