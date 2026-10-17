@@ -143,7 +143,22 @@ class WidgetRefreshReceiver : BroadcastReceiver() {
             } catch (e: SecurityException) {
                 // 精确闹钟权限在调度中途被撤销（或 ROM 收紧）时系统会抛 SecurityException：
                 // 这是要用户去设置里处理的权限问题，与一般性失败不同，单独留痕便于定位。
-                // BackgroundSync 内部已有 canScheduleExactAlarms 守卫，走到这里多为非预期路径。
+                //
+                // ⚠️ 订正（#680）：这一行原本写的是「那枚守卫在 widget/BackgroundSync.kt 里已经有了」，
+                // 那是**假指路** —— `canScheduleExactAlarms` 在那枚文件里是 0 命中，它根本没有这判据。
+                // BackgroundSync 不需要同它：体内唯一那手排闹钟（`scheduleWidgetMidnight`）走的是
+                // `setAndAllowWhileIdle` —— **不需要精确闹钟权限**的那一档 —— 外加就地
+                // `runCatching`（它自己的注释写着"极端情况下仍可能抛 SecurityException"，那一层已经吞掉）。
+                // 本文件同样不排任何闹钟，所以这两枚文件的调用计数都是 0。
+                //
+                // 真宿主在提醒那一侧，现量 **6 枚文件 / 7 枚调用点**（逐格点名钉在
+                // `widget/CalendarModeClassBellCleanupTest.exactAlarmGuardHostRosterIsNamedHonestly`）：
+                // `reminder/ClassProgressDnd` 1、`reminder/ClassProgressScheduler` 2、
+                // `reminder/CourseFluidService` 1、`reminder/ReminderScheduler` 1、
+                // `reminder/TomorrowPreviewReceiver` 1、`ui/settings/ReminderGuidance` 1（唯一裸调）。
+                // ⇒ 于是这一臂的来路不是"非预期路径"：`ReminderScheduler` 自己的注释就写着那枚守卫
+                // 本身可能抛 SecurityException（权限被运行期撤销），加上 ROM 收紧，
+                // 这里恰好是这一族唯一的权限类留痕口 —— 别把它当死支摘掉。
                 Log.w(TAG, "事件刷新被系统拒绝（权限类失败）: $action", e)
             } catch (e: Exception) {
                 Log.w(TAG, "事件刷新失败: $action", e)

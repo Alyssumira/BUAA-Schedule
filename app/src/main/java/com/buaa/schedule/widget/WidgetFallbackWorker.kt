@@ -70,6 +70,19 @@ class WidgetFallbackWorker(
          * （审计 §2.1：那次唤醒里这个问题原本被问三遍）。
          * 一个口径变化：探测抛异常此前会让整块 `runCatching` 提前退出，也就是"这一轮既不注册也不注销"；
          * 现在按"有组件"处理 = 走注册那一头。注册是幂等的（KEEP），漏注册才是这条链真正的代价。
+         *
+         * ⚠️ 重评估点名册（谁有资格调本函数）：**上面判据的两半各有一个写入点，两半都必须挂够**。
+         * `hasAnyWidget` 那一半由组件的增删与冷启动负责 —— [BackgroundSync.runColdStartWidgetSteps]、
+         * `WidgetCommon.registerBackgroundSyncSteps`、[BackgroundSync.cancelWidgetMidnightIfNoWidgets]；
+         * [BackgroundSync.usesInAppReminders] 那一半只由**「提醒方式」那一枚分段控件**改写
+         * （`ui/settings/SettingsScreen` 先 `putString(ReminderMode.PREF_KEY, mode)`，
+         * 再 `ScheduleViewModel.onReminderModeChanged()`），所以那条链也必须进来调一次（在册 #679）。
+         * 少任何一枚都不是崩溃，而是"某一档用户要等下一次冷启动才对得回来"——
+         * 点名册整份钉在 `widget/CalendarModeClassBellCleanupTest` 的
+         * `fallbackWorkerReEvaluationRosterIsTheKnownFour` 那一格，别靠记忆维护它。
+         * 反过来也别顺手把本函数挂到 [BackgroundSync.onDataChanged] 那条数据变化公共链上：
+         * 那里有十几枚调用点，而本函数与 [BackgroundSync.refreshWidgets] 各带一份 `hasAnyWidgetSafely`
+         * 默认参数 ⇒ 同一趟链里会把"有没有组件"跨 binder 问 Launcher 两遍（#536 F2 那族已裁过）。
          */
         fun ensure(context: Context, hasAnyWidget: Boolean = BackgroundSync.hasAnyWidgetSafely(context)) {
             // 两份调用方（onEnabled 与应用启动块）都指望这里不抛：

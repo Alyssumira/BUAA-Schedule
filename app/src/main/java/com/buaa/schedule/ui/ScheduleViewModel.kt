@@ -1323,10 +1323,40 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    /** 用户切换提醒模式后调用：立即按新模式重排/取消应用内闹钟 */
+    /**
+     * 用户切换提醒模式后调用：立即按新模式重排/取消应用内闹钟，**并且**让兜底轮询重新判定自己。
+     *
+     * ⚠️ 第二手 `WidgetFallbackWorker.ensure(...)` 不能省（在册 #679）：`ensure` 的判据是
+     * `hasAnyWidget || BackgroundSync.usesInAppReminders(context)`，而后半读的就是调用方紧接着
+     * 写进 prefs 的那枚 `ReminderMode.PREF_KEY`（见 `ui/settings/SettingsScreen.kt` 那枚分段控件：
+     * 先 `putString(PREF_KEY, mode)`、再 `viewModel.onReminderModeChanged()`）。**模式一翻，
+     * 「这枚 12 小时周期任务该留还是该撤」的结论就跟着翻**，而这一档此前不在重评估点名册里 ——
+     * 在册只有三处：冷启动 `BackgroundSync.runColdStartWidgetSteps`、广播补注册
+     * `WidgetCommon.registerBackgroundSyncSteps`、组件被撤 `cancelWidgetMidnightIfNoWidgets`。
+     * 漏掉的症状不是崩溃而是静默错位：切到「系统日历提醒」后应用内不再排闹钟，兜底轮询却照样
+     * 每 12 小时醒一次（`WidgetFallbackWorker.doWork` 白跑一轮查表 + 跨 binder 探测），要等下一次
+     * 冷启动或下一次放/撤组件才对齐；反向切回时若期间组件全被移除过，最需要兜底的那批
+     * HyperOS 机型用户要等到下一次冷启动才重新拿到兜底。
+     *
+     * 为什么不挂到 [afterDataChangedInternal] 那条公共链（覆盖面大一档的那条选路）：那条链在本文件里
+     * 有 17 枚调用点，而 `ensure` 与 `BackgroundSync.refreshWidgets` **各带一份**
+     * `hasAnyWidget = hasAnyWidgetSafely(context)` 默认参数 ⇒ 挂上去等于把"同一趟链里跨 binder
+     * 问 Launcher 两遍"从 1 条链扩到 17 条，那是本仓已经裁过两次的形状（`runColdStartWidgetSteps`
+     * 收 `probeHasWidgets` 注入、`WidgetFallbackWorker.ensure` 的 KDoc 自引「审计 §2.1：那次唤醒里
+     * 这个问题原本被问三遍」、以及 #536 F2 那句「一枚链只读一遍」）。要真走那条路，得先让这一层
+     * 探一次、再把结论同时递给 `refreshWidgets(hasAnyWidget = …)` 与 `ensure(hasAnyWidget = …)`，
+     * 那是改 17 条链的读表时序，不是这一手的事。
+     *
+     * 于是本卡的代价是有界的：一次模式切换多一枚跨 binder 探测 + 一次 WorkManager 幂等 op
+     * （注册侧 `ExistingPeriodicWorkPolicy.KEEP`，取消侧 `cancelUniqueWork` 是实打实的写），
+     * 且只走用户主动那一条路，不在任何逐帧或每日路径上。判据本体一个字不动。
+     */
     fun onReminderModeChanged() {
         viewModelScope.launch {
             afterDataChangedInternal()
+            // 提醒模式是那半条判据唯一"改了就翻面"的写入点 ⇒ 补一枚重评估点（#679）。
+            // 不许在这里自己先探组件再把结论递下去：判据只在 ensure 那一处实现，形参表也不许动。
+            com.buaa.schedule.widget.WidgetFallbackWorker.ensure(getApplication())
         }
     }
 
