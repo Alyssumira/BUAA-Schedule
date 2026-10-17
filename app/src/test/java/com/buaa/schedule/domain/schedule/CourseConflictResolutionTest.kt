@@ -152,4 +152,69 @@ class CourseConflictResolutionTest {
     fun emptyInputYieldsNoGroups() {
         assertTrue(CourseConflictResolution.groupConflicts(emptyList()).isEmpty())
     }
+
+    // ---- 在册 #394：未落库那枚档的内容签名要吃「同一门课」那份字段集 ----
+
+    @Test
+    fun keepsTwoUnsavedCoursesWithDifferentTeachersAsTwoCourses() {
+        // 两门未落库课除教师外逐字段相同（理论班＋实验班是最常见的那种），真码会交回一对。
+        // 组里必须两门都在：改前那枚内容签名不吃教师 ⇒ 第二门被从组里丢掉，
+        // 而它的周次仍并进门课 ⇒ 检测两门、展示一门，那句「只改这些周」却按两门的账写库。
+        val lecture = course(name = "物理实验").copy(teacher = "甲老师")
+        val lab = course(name = "物理实验").copy(teacher = "乙老师")
+        val groups = CourseConflictResolution.groupConflicts(
+            listOf(conflict(lecture, lab, (1..16).toList())),
+        )
+        assertEquals(1, groups.size)
+        assertEquals("教师不同的两门未落库课都得在组里", 2, groups.single().courses.size)
+        assertEquals(
+            "组里逐门数教师（只数组不数人，第二门被丢掉时枚数恰好看不出来）",
+            setOf("甲老师", "乙老师"),
+            groups.single().courses.map { it.teacher }.toSet(),
+        )
+    }
+
+    @Test
+    fun keepsTwoUnsavedCoursesWithDifferentLocationOrSemesterAsTwoCourses() {
+        // 同一形的两枚账：换教室一枚、换学期码一枚，各自都该在组里留下两门（改前各只剩一门）。
+        val mainBuilding = course(name = "高等数学").copy(teacher = "丙老师", location = "主楼")
+        val secondHall = course(name = "高等数学").copy(teacher = "丙老师", location = "二教")
+        val byLocation = CourseConflictResolution.groupConflicts(
+            listOf(conflict(mainBuilding, secondHall, (1..16).toList())),
+        )
+        assertEquals(1, byLocation.size)
+        assertEquals("教室不同的两门未落库课都得在组里", 2, byLocation.single().courses.size)
+
+        // 学期码那一档吃的是键的字段集本身：两个学期的课在真码里不会互撞，
+        // 所以这里直接把配对喂给归并，不过检测器。
+        val lastTerm = course(name = "线性代数").copy(semesterCode = "2025-2026-2")
+        val thisTerm = course(name = "线性代数").copy(semesterCode = "2026-2027-1")
+        val bySemester = CourseConflictResolution.groupConflicts(
+            listOf(conflict(lastTerm, thisTerm, (1..16).toList())),
+        )
+        assertEquals(1, bySemester.size)
+        assertEquals("学期码不同的两门未落库课都得在组里", 2, bySemester.single().courses.size)
+    }
+
+    @Test
+    fun keepsTheTwoWeekSpansOfOneUnsavedCourseAsTwoEntriesInOneGroup() {
+        // 同一门未落库课的两个片段：除周次外逐字段相同，两片段各自与满学期的第三门课撞。
+        // 这里手写的两对就是检测器交回的形状（每对的周次 = 那个片段与它重叠的周次）。
+        // 组仍是一枚（传递闭包），但两个片段必须各占一条处置对象、组的周次是两段的并集：
+        // 把周次从键里摘掉，第二个片段就会人间蒸发，那句「只改这些周」随之把两段并成一刀。
+        val firstSpan = course(name = "机械设计", weeks = (1..8).toList())
+            .copy(teacher = "丁老师", location = "工三", sourceGroupKey = "G1")
+        val secondSpan = course(name = "机械设计", weeks = (9..16).toList())
+            .copy(teacher = "丁老师", location = "工三", sourceGroupKey = "G1")
+        val allTerm = course(name = "机械制图", weeks = (1..16).toList())
+        val groups = CourseConflictResolution.groupConflicts(
+            listOf(
+                conflict(firstSpan, allTerm, (1..8).toList()),
+                conflict(secondSpan, allTerm, (9..16).toList()),
+            ),
+        )
+        assertEquals(1, groups.size)
+        assertEquals("两个片段各是一条处置对象，加上满学期那门共三条", 3, groups.single().courses.size)
+        assertEquals("组的周次是两段周次的并集", (1..16).toList(), groups.single().weeks)
+    }
 }
