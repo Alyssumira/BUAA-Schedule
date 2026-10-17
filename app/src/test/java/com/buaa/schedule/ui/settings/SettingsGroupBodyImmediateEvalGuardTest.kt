@@ -852,7 +852,11 @@ private val ITEM_VISIBLE_ROWS = listOf(
     "com/buaa/schedule/ui/importing/ImportScreen.kt|item(key = \"icsInput\", visible = expandedSource == SOURCE_ICS) {",
     "com/buaa/schedule/ui/importing/ImportScreen.kt|item(key = \"shareInput\", visible = expandedSource == SOURCE_SHARE) {",
     "com/buaa/schedule/ui/importing/ImportScreen.kt|item(key = \"textInput\", visible = expandedSource == SOURCE_TEXT) {",
-    "com/buaa/schedule/ui/settings/SettingsScreen.kt|item(key = \"iclass_logout\", visible = iclassSignedIn) {",
+    // #713 甲档同批重钉（授权来自该卡卡面裁定）：SettingsScreen 里 iclassSignedIn 从 Boolean 改成
+    // Boolean?（null ＝ 还没读到盘），退登那一枚 item 的可见性实参因此改成「与 true 比」。
+    // 这一格只漂清单不漂枚数：两把数出现次数的尺仍念 23 ／ 22，白名单那一格照旧放行
+    // （标识符与字面量的 == 比较本就在册形状里），落点也仍是组体直处。
+    "com/buaa/schedule/ui/settings/SettingsScreen.kt|item(key = \"iclass_logout\", visible = iclassSignedIn == true) {",
     "com/buaa/schedule/ui/settings/SettingsScreen.kt|item(key = \"multiSemester\", visible = allSemesters.size > 1) {",
     "com/buaa/schedule/ui/settings/SettingsScreen.kt|item(key = \"panelBlur\", visible = glassTier >= DesignTokens.GLASS_TIER_STANDARD) {",
     "com/buaa/schedule/ui/settings/SettingsScreen.kt|item(key = \"status\", visible = calendarSync.message != null) {",

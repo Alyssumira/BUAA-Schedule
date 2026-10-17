@@ -38,6 +38,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -56,7 +57,9 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.EventNote
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -311,8 +314,18 @@ fun SettingsScreen(
     // 登录态跟着上面那个 tick 重读：从 iClass 登录页返回时本页不重组，只走一次 ON_RESUME。
     // 是可变状态而不是快照，因为「退出登录」要在原地把它翻回未登录。
     // （T85 之前这里还有一位 `spocSignedIn` 与它同形，量的是智学北航那一族 —— 账号行连着状态一起拆了）
-    var iclassSignedIn by remember(permissionResumeTick) {
-        mutableStateOf(IClassSession.hasSession())
+    // #713 甲档：这一位换成 Boolean?，`null` ＝ 还没读到盘。取数那一手（hasSession() → 密钥库 binder
+    // ＋ AES/GCM ＋ prefs 读）不再落在组合期，进程内首枚调用挪进下面那枚 LaunchedEffect 的 IO 线程。
+    // 三条代价，如实列在这里：
+    // ① 每进一次本页，首帧会念一帧「正在确认」，读完盘这句才自己改口；
+    // ② `null` 档那颗 chip 的字色与 `true` 档同为 onSurfaceVariant，只有字不同；
+    // ③ 退登的本地写仍要在原地把这一位翻回 false，LaunchedEffect 不替它翻 ——
+    //    所以下面那一枚 item 的可见性实参要改成「与 true 比」。
+    // 顺带记一笔被推翻的说法：`userId()` 的记忆位 loadedFromDisk 只写 true、全仓零处写回 false，
+    // 所以一进程至多解一次密文；这里挪走的只是「首枚调用落在组合期」。
+    var iclassSignedIn by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(permissionResumeTick) {
+        iclassSignedIn = withContext(Dispatchers.IO) { IClassSession.hasSession() }
     }
 
     var darkModePref by remember { mutableStateOf(com.buaa.schedule.DarkModePreference.load(prefs)) }
@@ -1389,27 +1402,38 @@ fun SettingsScreen(
             // 这一页只负责账号状态 —— 从前那两行做的事，现在由下面 iClass 那两行原样做着。
             item(key = "iclass_account") {
                 SettingsRow(
-                    title = if (iclassSignedIn) "已登录北航 iClass" else "未登录北航 iClass",
-                    summary = if (iclassSignedIn) {
-                        "课堂上扫的那张码（轻新课堂）用的 id 只存在本机加密存储里，不随备份迁移"
-                    } else {
-                        "老师投的那张码属于这一族：登一次即可，之后签到只用到服务端回传的 id"
+                    title = when (iclassSignedIn) {
+                        null -> "正在确认北航 iClass 登录状态"
+                        true -> "已登录北航 iClass"
+                        false -> "未登录北航 iClass"
+                    },
+                    summary = when (iclassSignedIn) {
+                        null -> "正在读本机加密存储里那枚 id，读完这句会自己改口"
+                        true -> "课堂上扫的那张码（轻新课堂）用的 id 只存在本机加密存储里，不随备份迁移"
+                        false -> "老师投的那张码属于这一族：登一次即可，之后签到只用到服务端回传的 id"
                     },
                     showChevron = true,
                     onClick = onOpenIClassSignIn,
                     trailing = {
                         Text(
-                            text = if (iclassSignedIn) "正常" else "去登录",
+                            text = when (iclassSignedIn) {
+                                null -> "确认中"
+                                true -> "正常"
+                                false -> "去登录"
+                            },
                             style = MaterialTheme.typography.labelMedium,
-                            color = if (iclassSignedIn) MaterialTheme.colorScheme.onSurfaceVariant
-                            else MaterialTheme.colorScheme.error,
+                            color = when (iclassSignedIn) {
+                                null -> MaterialTheme.colorScheme.onSurfaceVariant
+                                true -> MaterialTheme.colorScheme.onSurfaceVariant
+                                false -> MaterialTheme.colorScheme.error
+                            },
                         )
                     },
                 )
             }
             // 清凭证这一档必须摆在界面上：存储里那枚 id 一旦失效（换号、服务端重排），
             // 这是唯一的活路 —— 找不到它的人只会反复扫同一张码
-            item(key = "iclass_logout", visible = iclassSignedIn) {
+            item(key = "iclass_logout", visible = iclassSignedIn == true) {
                 SettingsRow(
                     title = "退出北航 iClass 登录",
                     summary = "只清 iClass 的 id，教务那边的课表导入登录态不受影响",
