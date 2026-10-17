@@ -34,6 +34,15 @@ import org.junit.Test
  * 补了真正的复投那一手（把裹在外面的 `runCatching` 换成 try／catch 取消那一型复投／catch 其余才折档），
  * 于是名册同批重钉成 **11 枚文件／12 枚手**。上面 ① ② ④ 三格与三枚针一字未动。
  *
+ * ## T400② 重钉这一族（追加，三枚针照旧一字未动）
+ *
+ * 卡 T400 收 `widget/BackgroundSync.kt` 那条后台链（在册 #677）：把「块内带挂起点」那六枚
+ * `runCatching { … }` **整个换掉**成 try／catch 取消复投／catch 其余，另把 `readChainSnapshotOrNull`
+ * 的 FQ 写法收敛成短形（同文件已 import，为了让全文件同形、数得出来）。于是那一枚文件盘面从 1 枚手变成 **8 枚手**，
+ * 名册同批重钉成 **11 枚文件／19 枚手** —— 文件数一格不动（没有新增宿主），只动枚数与那一行的来路注释。
+ * 那四枚**没有**被换的 runCatching（都在非挂起 `fun` 里、块内零挂起点）不进这一族，也不该进：
+ * 它们的来路写在 ROSTER 那一行的注释里，别把"册子没写"读成"盘上没有"。
+ *
  * ## 为什么四格都不许改成 >=
  *
  * 三格是等式（落盘锚点各恰 1 枚），因为「多一枚」与「少一枚」在这里都是病：
@@ -111,15 +120,24 @@ class UpdateCheckCancellationRethrowGuardTest {
             "com/buaa/schedule/ui/ScheduleViewModel.kt" to 1,
             // 复投：`if (error is CancellationException) throw error`（扫码页递交那一手）
             "com/buaa/schedule/ui/signin/SpocScanScreen.kt" to 1,
-            // 复投：`readChainSnapshotOrNull` 那一形的 `catch (e: kotlinx.coroutines.CancellationException)`；
-            //  ⚠️ 同文件 :49 的散文里还有第二形，被 withoutComments 抹掉 ⇒ 1 枚而不是 2 枚
-            "com/buaa/schedule/widget/BackgroundSync.kt" to 1,
+            // 复投 ×8（T400② 把这条后台链上「块内带挂起点」的六枚外面那一层整个换掉，
+            //  并把 `readChainSnapshotOrNull` 那枚 FQ 写法收敛成短形 ⇒ 全文件同形八枚，逐枚点名）：
+            //  ① `readChainSnapshotOrNull`（改前就在册的那一枚）
+            //  ② `rescheduleReminders`（原来那层 `runCatching { … }.getOrDefault(true)` 把取消与"读库失败"压成同一个 true）
+            //  ③ `refreshWidgetsAsync` ④ `refreshWidgets` ⑤ `scheduleTomorrowPreview`
+            //  ⑥ `runColdStartWidgetSteps` 的 `probeHasWidgets` ⑦ `runChainStep`（冷启动四步的公共闸门）
+            //  ⑧ `runIsolatedRedrawLayers`（T400② 新增的分层执行体：各层试完，取消除外）
+            //  ⚠️ 同文件 :49 的散文里还有第二形，被 withoutComments 抹掉 ⇒ 不计
+            //  ⚠️ 同文件另有四枚 runCatching **不在这一族**（cleanUpInCalendarMode / scheduleWidgetMidnight /
+            //  cancelLegacyPeriodicWork / hasAnyWidgetSafely）：都不在非挂起 `fun` 里、块内零挂起点，
+            //  取消结构上不可能发生 ⇒ 本卡裁定不换（针数不到它们，也不需要数）
+            "com/buaa/schedule/widget/BackgroundSync.kt" to 8,
             // 复投：`catch (e: CancellationException)`
             "com/buaa/schedule/widget/WidgetCommon.kt" to 1,
             // 复投：`catch (e: kotlinx.coroutines.CancellationException)`
             "com/buaa/schedule/widget/WidgetRefreshReceiver.kt" to 1,
         )
-        const val EXPECTED_RETHROW_HANDS = 12
+        const val EXPECTED_RETHROW_HANDS = 19
         const val EXPECTED_RETHROW_FILES = 11
 
         // ── ④ 判据文件那三格反着的形状 ＋ 纯度口径 ──
@@ -324,7 +342,7 @@ class UpdateCheckCancellationRethrowGuardTest {
             .filterNotNull()
         assertTrue(
             "逐枚点名对不上（枚数写的是 T365③ 落盘那天抹注释后的现量；" +
-                "T397② 同批重钉为 11 枚文件／12 枚手，逐枚来路——哪一行、分类还是复投——写在 ROSTER 注释里）：" +
+                "T397② 同批重钉为 11 枚文件／12 枚手；T400② 只把 widget/BackgroundSync.kt 那一行从 1 枚手重钉成 8 枚手 ⇒ 11 枚文件／19 枚手，逐枚来路——哪一行、分类还是复投——写在 ROSTER 注释里）：" +
                 mismatches.joinToString(" ／ "),
             mismatches.isEmpty(),
         )

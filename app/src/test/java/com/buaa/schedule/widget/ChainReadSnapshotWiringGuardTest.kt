@@ -184,10 +184,16 @@ class ChainReadSnapshotWiringGuardTest {
 
         // Worker 那条链（改数据后的第四处入口）：onDataChanged 自己造一枚，交给下面两步
         val sync = normalize(withoutComments(readMainSource(backgroundSyncFile)))
-        val onDataChanged = functionBlock(sync, "suspend fun onDataChanged(context: Context")
+        // ⚠️ T400② 同批重钉两处（判据对象一个字没动，动的只是锚点宽度与实参表长度）：
+        // `onDataChanged` 现在多收一枚报告口（#675 —— Worker 那条链调它，此前形参表里根本没有那一枚，
+        // 于是提醒那一步抛了在这条链上结构上不可见），签名因此换成竖排多行 ——
+        // 锚点从 `…onDataChanged(context: Context` 收到 `…onDataChanged(`（normalize 把换行折成一个空格，
+        // 旧锚点从写下的那一刻起就切不出函数体）。载体与结论那两枚实参仍然逐枚在册，
+        // 只是各自多带一个尾巴上的报告口 —— 递出去的东西只多不少。
+        val onDataChanged = functionBlock(sync, "suspend fun onDataChanged(")
         assertTrue("onDataChanged 没造载体：$onDataChanged", onDataChanged.contains("val snapshot = readChainSnapshotOrNull(context)"))
-        assertTrue("onDataChanged 里的提醒那步没吃载体：$onDataChanged", onDataChanged.contains("rescheduleReminders(context, snapshot = snapshot)"))
-        assertTrue("onDataChanged 里的组件那步没吃载体：$onDataChanged", onDataChanged.contains("refreshWidgets(context, hasAnyWidget, snapshot)"))
+        assertTrue("onDataChanged 里的提醒那步没吃载体：$onDataChanged", onDataChanged.contains("rescheduleReminders(context, onStepFailed, snapshot)"))
+        assertTrue("onDataChanged 里的组件那步没吃载体：$onDataChanged", onDataChanged.contains("refreshWidgets(context, hasAnyWidget, snapshot, onStepFailed)"))
     }
 
     /** ④ 链上每一步吃载体、不回头查（逐字节的回退式 + 四张表的负册） */

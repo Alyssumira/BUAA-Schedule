@@ -84,9 +84,23 @@ class WallpaperSaveWidgetRefreshTest {
             body.contains("CoroutineScope(Dispatchers.IO).launch"),
         )
         assertTrue("把活又挪回主线程了：\n$body", !body.contains("Dispatchers.Main"))
+        // ⚠️ T400② 同批重钉这一格（判据对象没变：那一手仍然就地吞、仍然不许逃到调用线程）：
+        // #677 把外面那一层换成带取消复投的 try/catch —— 词面从 runCatching 换成了两臂 catch，
+        // 所以针要跟着换；"吞异常"那一半一字未少，多的那一半是"取消不再被折成一次普通失败"。
+        // 原来那根针（contains runCatching）留在册上会把正当的修法判成违规，这里按形状钉而不是按词面钉。
+        val spaced = body.replace(Regex("\\s+"), " ")
         assertTrue(
             "没吞异常：协程默认处理器接不住就是杀进程（同 WidgetCommon.launchRefresh 那条 R5 F-24 的账）：\n$body",
-            body.contains("runCatching"),
+            spaced.contains("catch (e: Throwable) {"),
+        )
+        assertTrue(
+            "吞异常那一手被摘掉了（换成抛出去就是杀进程）：\n$body",
+            !spaced.contains("catch (e: Throwable) { throw e }"),
+        )
+        assertTrue(
+            "取消没有被复投（#677：那是控制流不是失败；复投必须排在闸门之外，" +
+                "在 runCatching 块里补 catch 是空操作）：\n$body",
+            spaced.contains("catch (e: CancellationException) { throw e }"),
         )
     }
 

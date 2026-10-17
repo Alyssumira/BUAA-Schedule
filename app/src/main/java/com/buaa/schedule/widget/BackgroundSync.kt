@@ -16,6 +16,7 @@ import com.buaa.schedule.reminder.ClassProgressScheduler
 import com.buaa.schedule.reminder.ReminderScheduler
 import com.buaa.schedule.reminder.TomorrowPreviewReceiver
 import com.buaa.schedule.reminder.TomorrowPreviewScheduler
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -54,7 +55,7 @@ internal val NO_STEP_FAILURE: (label: String, error: Throwable) -> Unit = { _, _
  */
 internal suspend fun readChainSnapshotOrNull(context: Context): ChainReadSnapshot? = try {
     context.scheduleRepository().loadChainReadSnapshot()
-} catch (e: kotlinx.coroutines.CancellationException) {
+} catch (e: CancellationException) {
     throw e
 } catch (e: Exception) {
     Log.w(LOG_TAG, "读后台链快照失败，链上各步改回自己查库", e)
@@ -84,6 +85,23 @@ internal val LOG_COLD_START_STEP_FAILURE: (label: String, error: Throwable) -> U
 internal val LOG_CALENDAR_CLEANUP_FAILURE: (Throwable) -> Unit = {
     Log.w(LOG_TAG, "日历模式下清理应用内闹钟失败", it)
 }
+
+/**
+ * [BackgroundSync.syncAndRedrawAllWidgets] 逐层试完之后，"有哪几层抛了"那份清单的载体（#676）。
+ *
+ * 为什么要有这么一枚异常而不让各层自己吞掉：分层闸门解决的是**连坐**（一家抛 = 六家不画），
+ * 但它顺手会解决掉第二件事 —— 外层再也看不见里面抛过。这条链的外层有两道，
+ * 一道是 [BackgroundSync.refreshWidgets] 自己那把闸门（兜底 Worker 走这一头），
+ * 另一道是 [BackgroundSync.runColdStartWidgetSteps] 里那枚 `runChainStep("refreshWidgets")`
+ * （冷启动走这一头，而那一头报出来的失败正是 [ColdStartRebuild] 决定"要不要写下上次成功的指纹"的凭据）。
+ * 分层之后不把这声交回去，冷启动那一条就会把"六家里有五家没画成"记成干净、白跳最长 24 小时 ——
+ * 那是拿一个新病换一件旧病，本卡不接受。
+ *
+ * 它**不是** `CancellationException` 的子类，也不许有谁把它当失败折成 true：
+ * 取消那一族的口径见 [readChainSnapshotOrNull] 与 [BackgroundSync.rescheduleReminders]。
+ */
+internal class WidgetRedrawLayersFailed(val failedLayers: List<String>) :
+    Exception("组件重绘有 ${failedLayers.size} 层抛了：${failedLayers.joinToString(" ／ ")}")
 
 /**
  * 后台任务统一入口：提醒重排、Widget 刷新与零点刷新调度。
@@ -158,7 +176,16 @@ object BackgroundSync {
             )
             return false
         }
-        return runCatching {
+        // #677：这一枚原来是 `runCatching { … }.onFailure { … }.getOrDefault(true)`。
+        // 块内有两处挂起点（`loadChainReadSnapshot()` 与 `rescheduleAll`），于是"调用方已经把这条链摘掉"
+        // 那一次 CancellationException 会被折成一次普通失败，再被末尾那记兜底折成 true ——
+        // "别跑了"被读成"排上了"。口径与上面 [readChainSnapshotOrNull] 逐字相同：**取消是控制流，不是错误**，必须复投。
+        // ⚠️ 复投只能写成现在这个样子（把外面那一层换掉）：在 `runCatching { try … catch { throw 折出来的那枚 } }`
+        // 里补复投是空操作，同一层会把自己 catch 里抛出去的东西再吞一遍（`ui/ScheduleViewModel` 的
+        // `suspendCatching` 就是那个形状的活反例，本卡不动它，只登记为"不许照抄"）。
+        // 第二臂吃 Throwable 而不是 Exception：原来那一层本来吃 Throwable，收窄会把 Error 那一档
+        // （定制 ROM 的 NoSuchMethodError 之类）放逃到广播与 Worker 里去崩。
+        return try {
             // 一枚链只读一遍：入口把四张表的结论装进载体递进来，这里不再各自回头查。
             // 没有载体（单独调用这一步的调用点）照旧自己读，一次也不比别人少。
             val read = snapshot ?: context.scheduleRepository().loadChainReadSnapshot()
@@ -171,10 +198,17 @@ object BackgroundSync {
                 read.timeSlots,
                 read.remindersByCourseId,
             ) != null
-        }.onFailure {
-            Log.w(TAG, "重排提醒失败", it)
-            onStepFailed("rescheduleReminders", it)
-        }.getOrDefault(true)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.w(TAG, "重排提醒失败", e)
+            onStepFailed("rescheduleReminders", e)
+            // 结论仍然是 true，一字不改（硬约束）：那枚 `true` 是 [ColdStartRebuild] 钥匙 2 的输入，
+            // "读库失败也返回 true"与它的方向性都写在上面的 @return 里，改窄就是让钥匙 2 探不到。
+            // #675 要修的是**读法**（[WidgetFallbackWorker] 把这一档读成"课堂铃有人接手"）与留痕，
+            // 报告口现在交给调用方，见 [onDataChanged] 的 `onStepFailed`。
+            true
+        }
     }
 
     /**
@@ -322,12 +356,19 @@ object BackgroundSync {
      */
     fun refreshWidgetsAsync(context: Context) {
         val appContext = context.applicationContext
-        // 协程里这一层 runCatching 是最后一道：默认参数那次跨 binder 探测（MIUI 上会抛
+        // 协程里这一手是最后一道闸门：默认参数那次跨 binder 探测（MIUI 上会抛
         // DeadObjectException）与协程默认处理器接不住就是杀进程 —— 同 WidgetCommon.launchRefresh
         // 那笔 R5 F-24 的账，只是这里没有 PendingResult 要 finish。
+        // #677 把外面那一层换成带复投的 try/catch：吞异常那一半一个字没少，
+        // 只是"调用方把这一颗协程摘掉"从此不再被折成一次普通失败（复投排在闸门之外，理由见 [rescheduleReminders]）。
         CoroutineScope(Dispatchers.IO).launch {
-            runCatching { refreshWidgets(appContext) }
-                .onFailure { Log.w(TAG, "壁纸变更后刷新组件失败", it) }
+            try {
+                refreshWidgets(appContext)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.w(TAG, "壁纸变更后刷新组件失败", e)
+            }
         }
     }
 
@@ -348,19 +389,33 @@ object BackgroundSync {
      * 结论不可能不同。共享方式是把结论**当参数传下去**而不是缓存起来 ——
      * 没有缓存就没有陈旧问题（组件刚被拖上/拆掉的 `onEnabled` / `onDisabled` 那两条路
      * 拿到的仍然是自己当场探测的结果，见 [runColdStartWidgetSteps] 的注释）。
+     *
+     * [onStepFailed] 是"这一整步抛了"的留痕口，默认 [NO_STEP_FAILURE] = 只留原来那句 `Log.w`
+     * （审计 §4.4 的取证过滤条件不许变）。它存在的理由只有一条：#675 之后
+     * [WidgetFallbackWorker] 那条链要能分清"组件刷新干净地跑完了"与"里面有一层抛了"，
+     * 而这条链对某些用户是唯一兜底 —— 把失败折成静默成功，就等于把兜底摘掉还不留案底。
      */
     suspend fun refreshWidgets(
         context: Context,
         hasAnyWidget: Boolean = hasAnyWidgetSafely(context),
         snapshot: ChainReadSnapshot? = null,
+        onStepFailed: (label: String, error: Throwable) -> Unit = NO_STEP_FAILURE,
     ) {
-        runCatching {
+        // #677：块内两处挂起（快照 sync 与六家重绘），所以复投排在闸门之外，形状与理由见 [rescheduleReminders]。
+        // #675：这枚闸门现在会把结论交给调用方的报告口 —— 默认 [NO_STEP_FAILURE]，
+        // 所以那十几处调用点一个字没变；只有兜底 Worker 那一条链要的是"抛了必须让我知道"。
+        try {
             WidgetDataCache.invalidate()
             // 一个组件都没放时，下面的全量快照 sync（逐个学期查库 + JSON + upsert）与
             // 6 次 getAppWidgetIds 都没有读者 —— 开机/改时间/12 小时兜底每次都白跑一遍。
             if (!hasAnyWidget) return
             syncAndRedrawAllWidgets(context, snapshot)
-        }.onFailure { Log.w(TAG, "刷新 Widget 失败", it) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.w(TAG, "刷新 Widget 失败", e)
+            onStepFailed("refreshWidgets", e)
+        }
     }
 
     /**
@@ -397,15 +452,88 @@ object BackgroundSync {
      * 它刻意不走 [refreshWidgets]，因为那一刻课表没改、只是时间翻面 ——
      * 今日列表的「进行中」高亮正是随铃翻面的，任何"数据没变就不用重绘"的判据落在它身上
      * 都是功能回归。
+     *
+     * ## 在册 #676：这一段的闸门从"六家共用一把"换成"逐层各一把"（T400②）
+     *
+     * 改动前的形状是七手裸排（一枚快照 sync + 六家 `updateAll`），整段一把闸门都没有，
+     * 唯一的兜在调用点：`refreshWidgets` 那一把，与冷启动 `runChainStep("refreshWidgets")` 那一把。
+     * 后果是**三层连坐**，一层比一层安静：
+     * - 第一家某枚实例渲染抛 ⇒ 那一家剩下的实例不画（`WidgetCommon.updateAllOfProvider*` 体内那记裸 `ids.forEach`）；
+     * - 那一家任何一手抛 ⇒ 后面五家整轮不画（就是这一段）；
+     * - 而日志只有一句"刷新 Widget 失败"，分不出断在哪一层，这条链又没有重试。
+     *
+     * 现在这一段把闸门分成**七层**（顺序一字未挪，见上面那条"别在这里挪"），每层各一句 `Log.w` 点名是谁家，
+     * 层体与层名全部交给 [runIsolatedRedrawLayers] 那枚不接 Context 的执行体 ——
+     * 收成一个 seam 是为了让"第一家抛了后面五家画没画"这件事在 JVM 单测里数得出来（本模块没有 Robolectric）。
+     * 各层试完之后仍然把失败清单经 [WidgetRedrawLayersFailed] 交回外层（那一手的理由与"分层不许把失败吃干净"
+     * 写在那枚异常自己的 KDoc 里）。
+     *
+     * ⚠️ **这条链收到这里为止**：第一层连坐（同一家内部的逐实例）在 [WidgetCommon] 那四枚 `ids.forEach` 体内，
+     * 不在本卡的射程里 ⇒ 现在"一家抛 = 后面五家整轮不画"收掉了，
+     * 而"一家抛 = 同家剩下的实例不画"仍然成立，只是它从此**有名字**（那一家会留下一整条 label）。
+     * 谁把这一格报成"连坐已收干净"就是谎报。
      */
     internal suspend fun syncAndRedrawAllWidgets(context: Context, snapshot: ChainReadSnapshot? = null) {
-        WidgetDataSynchronizer.sync(context, snapshot)
-        TodayWidgetProvider.updateAll(context)
-        TomorrowWidgetProvider.updateAll(context)
-        WeekWidgetProvider.updateAll(context)
-        WeekGridWidgetProvider.updateAll(context)
-        NextClassWidgetProvider.updateAll(context)
-        TwoDayWidgetProvider.updateAll(context)
+        val failedLayers = runIsolatedRedrawLayers(
+            layers = listOf(
+                "WidgetDataSynchronizer.sync" to { WidgetDataSynchronizer.sync(context, snapshot) },
+                "TodayWidgetProvider.updateAll" to { TodayWidgetProvider.updateAll(context) },
+                "TomorrowWidgetProvider.updateAll" to { TomorrowWidgetProvider.updateAll(context) },
+                "WeekWidgetProvider.updateAll" to { WeekWidgetProvider.updateAll(context) },
+                "WeekGridWidgetProvider.updateAll" to { WeekGridWidgetProvider.updateAll(context) },
+                "NextClassWidgetProvider.updateAll" to { NextClassWidgetProvider.updateAll(context) },
+                "TwoDayWidgetProvider.updateAll" to { TwoDayWidgetProvider.updateAll(context) },
+            ),
+            reportLayer = { label, error ->
+                // 每层一句、句里带层名：改前那一句"刷新 Widget 失败"分不出断在哪一层，
+                // 而这条链的取证全靠 grep（审计 §4.4）—— 一句到不了层，就等于七层共用一张案底。
+                Log.w(TAG, "组件重绘这一层抛了，后面的层照跑：$label", error)
+            },
+        )
+        if (failedLayers.isNotEmpty()) throw WidgetRedrawLayersFailed(failedLayers)
+    }
+
+    /**
+     * [syncAndRedrawAllWidgets] 那一段的执行体：**逐层试完，一层抛了后面的照跑**，把抛过的层名按顺序交回调用方。
+     *
+     * 不接 Context、层名与层体全是注入的 —— 形状照 [cleanUpInCalendarMode] 与 [runColdStartWidgetSteps]
+     * 那两份 seam，理由一字不差：本模块 JVM 单测没有 Robolectric，而这张卡要钉的恰好是数得出来的那件事
+     * （"第一家抛了后面五家画没画"、"抛过的层叫什么名字"、"取消算不算一层失败"）。
+     * 代价照旧在册：接线注的是哪七层、顺序对不对，只能按源码形状核对（见
+     * `WidgetBackgroundChainGateTest`）。
+     *
+     * 三条判据都写在这七行里，逐条都有格子钉着：
+     * - **各层都不许连坐**：循环体不 break、不 rethrow 真失败，试完为止（#676 收的就是这一条）；
+     * - **取消不是失败**：[CancellationException] 一律复投，且**复投排在这枚执行体自己的 catch 臂里**，
+     *   不套任何吞异常的外层（#677 的口径；把外面那层换掉才有用，在 runCatching 里补复投是空操作）；
+     *   复投之后后面的层不再跑 —— 那是调用方已经不想跑了，不是这一层抛了。
+     * - **失败要留痕也要能数**：每抛一层调用 [reportLayer] 一次（生产接线给它的是一句带层名的 `Log.w`），
+     *   层名同时进返回清单，交回外层由外层的闸门决定怎么上报。
+     *
+     * 第二臂吃 [Throwable]：这条链上"抛"的真实形状包含 Error（RemoteViews 在个别 ROM 上抛的就是
+     * NoSuchMethodError 那一族），换成只吃 Exception 就等于把那一档放回连坐里。
+     *
+     * @param layers 层名到层体，**顺序就是执行顺序**（组件刷新时序是验证过的口径）
+     * @param reportLayer 每一层抛了说一次的口子；默认值给不了（谁在调用它谁就得自己决定留痕去向），
+     *   这也是它能被单测数出"报了几次、报的是哪个名字"的原因
+     * @return 抛过的层名，按执行顺序
+     */
+    internal suspend fun runIsolatedRedrawLayers(
+        layers: List<Pair<String, suspend () -> Unit>>,
+        reportLayer: (label: String, error: Throwable) -> Unit,
+    ): List<String> {
+        val failedLayers = mutableListOf<String>()
+        for ((label, body) in layers) {
+            try {
+                body()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                failedLayers += label
+                reportLayer(label, e)
+            }
+        }
+        return failedLayers
     }
 
     /**
@@ -417,11 +545,25 @@ object BackgroundSync {
      * 这里也是**一枚链**（兜底 Worker 每 12 小时那一趟就是这两步连着跑），所以它自己就是入口：
      * 载体在这里造一次，两步共用（#536 F2）。造失败就当没有载体 —— 那两步照旧各自读，
      * 一个字节都不会少读（宁可多读，不许少读）。
+     *
+     * ## 在册 #675：这里为什么多了一枚 [onStepFailed]（T400②）
+     *
+     * 改动前 [WidgetFallbackWorker] 调进来的就是这一枚函数，而它的形参表里**根本没有报告口**
+     * —— 于是 [rescheduleReminders] 抛那一档（`true` 交回去、课堂铃没人续排）在 Worker 侧
+     * 只剩一句 `Log.w`，结构上不可见：Worker 既补不了续排，也照样 `Result.success()` 让 WorkManager
+     * 不再重试。现在两步的结论都递进出口，默认 [NO_STEP_FAILURE] ⇒ 除 Worker 之外的调用点一个字没变。
+     *
+     * ⚠️ 这里**没有**改那枚 `true` 的含义（它是 [ColdStartRebuild] 钥匙 2 的输入，方向性是成文的：
+     * 宁可多跑一轮）。修的是**读法** —— 见 [WidgetFallbackWorker.doWork] 里那枚 `reportFailedStep`。
      */
-    suspend fun onDataChanged(context: Context, hasAnyWidget: Boolean = hasAnyWidgetSafely(context)): Boolean {
+    suspend fun onDataChanged(
+        context: Context,
+        hasAnyWidget: Boolean = hasAnyWidgetSafely(context),
+        onStepFailed: (label: String, error: Throwable) -> Unit = NO_STEP_FAILURE,
+    ): Boolean {
         val snapshot = readChainSnapshotOrNull(context)
-        val bellsHandled = rescheduleReminders(context, snapshot = snapshot)
-        refreshWidgets(context, hasAnyWidget, snapshot)
+        val bellsHandled = rescheduleReminders(context, onStepFailed, snapshot)
+        refreshWidgets(context, hasAnyWidget, snapshot, onStepFailed)
         return bellsHandled
     }
 
@@ -435,6 +577,11 @@ object BackgroundSync {
         // 安全版：探测跨 binder 问 Launcher，MIUI 上会抛 DeadObjectException。
         // 探测失败按"有组件"处理 = 多注册一次幂等闹钟，无害。
         if (!hasAnyWidget) {
+            // 在册 #680 C-13 同族（T400②）：这一支改前一句留痕都没有。它是正常路径，所以走 Info 级
+            // 而不是 Warning —— 但**不许走 Debug**：本仓的取证口径写着真机 logcat 被 HyperOS 截在 Info 级
+            // （见 `MonotonicWindowGateWiringGuardTest` 与 `WidgetRolloverClaimWiringGuardTest` 那两格
+            // 「这一族零枚 Log 得不许」），写了等于没写的留痕不是留痕。
+            Log.i(TAG, "桌面没有组件：撤掉残留的零点闹钟，这一轮不排新闹钟")
             cancelWidgetMidnight(context)
             return
         }
@@ -443,7 +590,14 @@ object BackgroundSync {
             .toInstant().toEpochMilli()
         // getSystemService(Class) 在个别定制 ROM / 低内存实例上会返回 null，
         // 直接点调用会 NPE 崩在广播里
-        val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
+        // 同一族第二支（改前也是静默 return）：这条链是"今天/明晚翻面"唯一的闹钟，
+        // 拿不到服务就是"组件停在昨天"的一条真因，必须在案底上留下名字。控制流一个字不动（继续 return，
+        // 不抛 ⇒ "别崩在广播里"那句既有理由原样保留）。
+        val alarmManager = context.getSystemService(AlarmManager::class.java)
+            ?: run {
+                Log.w(TAG, "拿不到 AlarmManager：这一轮的零点闹钟没排上，组件会停在今天直到下一次事件")
+                return
+            }
         // setAndAllowWhileIdle 在极端情况下仍可能抛 SecurityException
         // （闹钟权限被运行期撤销），不能让它带着崩溃逃出广播回调
         runCatching {
@@ -489,7 +643,10 @@ object BackgroundSync {
             TomorrowPreviewScheduler.cancel(context)
             return
         }
-        runCatching {
+        // #677：块内有挂起点（`loadChainReadSnapshot()` 与 `TomorrowPreviewScheduler.schedule`），
+        // 所以外面那一层整个换掉：取消复投排在 catch 臂里，真失败仍然就地吞（这条链跑在广播的
+        // 部分唤醒锁里，抛出去就是崩广播 —— 改前那句 `Log.w` 的 tag 与文案一字未动，审计 §4.4）。
+        try {
             val read = snapshot ?: context.scheduleRepository().loadChainReadSnapshot()
             val fireDay = TomorrowPreviewReceiver.nextScheduledPreviewDay(
                 courses = read.courses,
@@ -501,7 +658,11 @@ object BackgroundSync {
             } else {
                 TomorrowPreviewScheduler.schedule(context, fireDay)
             }
-        }.onFailure { Log.w(TAG, "调度明日预告失败", it) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.w(TAG, "调度明日预告失败", e)
+        }
     }
 
     /**
@@ -574,10 +735,18 @@ object BackgroundSync {
         reportStepFailure: (label: String, error: Throwable) -> Unit = LOG_COLD_START_STEP_FAILURE,
     ): Boolean {
         // 注入的探测若抛（生产接线给的是 hasAnyWidgetSafely，正常不会走到这里），
-        // 按"有组件"处理：方向只能是多刷一次，不能是少刷一次
-        val hasWidgets = runCatching { probeHasWidgets() }
-            .onFailure { reportStepFailure("probeHasWidgets", it) }
-            .getOrDefault(true)
+        // 按"有组件"处理：方向只能是多刷一次，不能是少刷一次。
+        // #677：这一枚原来也是 `runCatching { … }.getOrDefault(true)`，而 `probeHasWidgets` 是 suspend ——
+        // 调用方把这条链摘掉时那一次取消会被折成"探测抛了 ⇒ 按有组件处理"，
+        // 于是四步照样跑完、还多报一枚 `probeHasWidgets` 的假失败。复投排在 catch 臂里，形状同 [rescheduleReminders]。
+        val hasWidgets = try {
+            probeHasWidgets()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            reportStepFailure("probeHasWidgets", e)
+            true
+        }
         runChainStep("invalidateWidgetCache", reportStepFailure) { invalidateWidgetCache() }
         if (hasWidgets) {
             runChainStep("refreshWidgets", reportStepFailure) { refreshWidgetData() }
@@ -596,11 +765,28 @@ object BackgroundSync {
         report: (label: String, error: Throwable) -> Unit,
         block: suspend () -> Unit,
     ) {
-        runCatching { block() }.onFailure { report(label, it) }
+        // #677：这一枚是冷启动那四步的公共闸门，`block` 是 suspend ⇒ 取消真的会从这里进来。
+        // 改前 `runCatching { block() }.onFailure { report(label, it) }` 把它折成一次普通步骤失败：
+        // 于是"用户已经退出这条链"会让 [runColdStartWidgetSteps] 把剩下的步骤继续跑完，
+        // 还会向 [ColdStartRebuild] 报一枚假失败（那一轮本该是"被摘掉"，不是"跑坏了"）。
+        // 外层那把 runCatching 是整个换掉的，不是在它块里补 catch —— 后者是空操作（见 rescheduleReminders 那段旁白）。
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            report(label, e)
+        }
     }
 
     fun cancelWidgetMidnight(context: Context) {
-        val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
+        // 同一族第三支（卡面未列、T400② 一并收）：撤不掉残留闹钟也是"组件停在昨天"的一条来路，
+        // 而它改前同样是静默 return。留痕级别与排闹钟那支一致（拿不到服务不是正常路径 ⇒ Warning）。
+        val alarmManager = context.getSystemService(AlarmManager::class.java)
+            ?: run {
+                Log.w(TAG, "拿不到 AlarmManager：残留的零点闹钟没撤掉")
+                return
+            }
         // 取消这一头只查不造，理由见 ReminderScheduler.cancelAll 的注释；
         // 查不到就是没排过，本来就是 no-op
         existingMidnightPendingIntent(context)?.let { alarmManager.cancel(it) }
