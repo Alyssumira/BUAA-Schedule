@@ -9,6 +9,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import com.buaa.schedule.domain.importing.BuaaWeekShellPolicy
+import com.buaa.schedule.domain.importing.WeekShellTier
 import com.buaa.schedule.domain.schedule.CourseConstraints
 import java.time.LocalDate
 import java.util.concurrent.atomic.AtomicLong
@@ -70,7 +72,8 @@ object BuaaInPageFetcher {
 
     /**
      * 连续 3 周失败即中止整轮：这几乎一定是会话过期或教务不可用，而不是单周抖动，
-     * 剩下的周次只会重复超时。剩余周次一律记为失败，调用方据此拒绝覆盖既有课表。
+     * 剩下的周次只会重复同一手（要么不答，要么答了而外壳里没有课程数据）。
+     * 剩余周次一律记为失败，调用方据此拒绝覆盖既有课表。
      */
     private const val MAX_CONSECUTIVE_FAILURES = 3
 
@@ -191,9 +194,16 @@ object BuaaInPageFetcher {
     /** 按周抓取的完整性结果：调用方据此决定能否覆盖落库 */
     data class SemesterFetchOutcome(
         val courses: List<BuaaCourseDto>,
-        /** 成功返回并解析出数据的周次数量 */
+        /** 外壳里有 `datas` 那一格的周次数量（空课周算在内：那一格在、列表是空表 = 教务答了「这周没课」） */
         val succeededWeeks: Int,
-        /** 抓取或解析失败的周次（从 1 开始） */
+        /**
+         * 没能交出这一周课表的周次（从 1 开始），**两档都在这里面**：
+         * 抓取或解析失败的、以及页面答了而那份答的外壳里没有 `datas` 那一格的（限流 / 会话半失效 ——
+         * 判据本体见 `domain/importing/BuaaWeekShellPolicy.kt`）。
+         *
+         * 后者必须记在这里而不是记进 [succeededWeeks]：覆盖导入是「先删掉该学期再写入交回的这份」，
+         * 一周没进本物又没进失败周次，就意味着那几周的既有课程被删掉而界面上念的是绿色成功。
+         */
         val failedWeeks: List<Int>,
     ) {
         val isComplete: Boolean get() = failedWeeks.isEmpty()
@@ -206,6 +216,11 @@ object BuaaInPageFetcher {
      * 单周失败**不再静默丢弃**：失败周次会一并返回，因为调用方随后会做
      * "先清空该学期再写入"的覆盖导入 —— 如果按部分结果写入，
      * 没抓到的周次会被直接删掉。是否落库由调用方按 [SemesterFetchOutcome] 判断。
+     *
+     * T401：「页面答了、而那份答的外壳里没有 `datas` 那一格」的一周同样记进 [SemesterFetchOutcome.failedWeeks]
+     * 而不是记进成功 —— 它一门课都没交回，记成成功就是上面那句话点名的静默删除。
+     * 连带效果是 [MAX_CONSECUTIVE_FAILURES] 那道熔断对「会话半失效」不再隐形：改前那一周会把连败计数
+     * 清零，整轮二十周可以一路「空成功」跑完而熔断一次都不响。
      */
     suspend fun fetchSemesterCourses(
         webView: WebView,
@@ -232,22 +247,40 @@ object BuaaInPageFetcher {
             // failedWeeks 会让用户面对「课表不完整」并整轮重导，所以失败后静默重试一次。
             // R5 F-38：超时与解析失败共用同一份预算，一周最多 2 次尝试。
             var parsed: BuaaScheduleResponse? = null
+            // 「解得开、而外壳里没有 datas」的那一档留在手里，只为让下面那一行日志把两件事分开念：
+            // 「页面没答」与「页面答了而那份答里没有课程数据」。两件事在屏上是同一句「第 N 周失败」，
+            // 在本机日志里必须是两句话。
+            var noDataTier: WeekShellTier? = null
             var attempt = 0
             while (parsed == null && attempt < MAX_ATTEMPTS_PER_WEEK) {
                 if (attempt > 0) delay(RETRY_DELAY_MS)
                 attempt++
-                parsed = fetch(
+                val shell = fetch(
                     webView, "POST",
                     "/jwapp/sys/homeapp/api/home/student/getMyScheduleDetail.do", body,
                 )?.let { raw ->
                     runCatching { json.decodeFromString<BuaaScheduleResponse>(raw) }.getOrNull()
-                        // 教务限流/会话半失效时会返回 HTTP 200 的 {"code":"-1","datas":null}：
-                        // JSON 解得动但没有数据，若记成功会让 isComplete 通过覆盖导入闸门，
-                        // 把那些周的课程直接删没。判据：只有 datas 非空（或 code 缺省/为 "0"）才算有数据。
-                        ?.takeIf { it.datas != null || it.code == null || it.code == "0" }
+                }
+                if (shell != null) {
+                    // 判据本体在 `domain/importing/BuaaWeekShellPolicy.kt`（纯 JVM 内核，全仓唯一一把尺）：
+                    // 只有「外壳里有 datas 那一格」才算教务答了这一周。code 缺省、或 code 是成功值，
+                    // 都**不再单独放行**任何一格 —— 改前的两枚「或」支把 `{"code":null,"datas":null}`
+                    // 与 `{}` 记成成功，于是那几周既没进失败周次、也没往课表里放一门课，
+                    // 被覆盖导入「先删该学期再插入」静默删掉，而屏上念的是绿色成功。
+                    // 反过来，`arrangedList` 是空表**不算失败**：那是合法的空课周（寒暑假 / 停课周 /
+                    // 台账 #310 那一族），判成失败会同时改坏熔断与报数两头。
+                    val tier = BuaaWeekShellPolicy.tier(
+                        datasPresent = shell.datas != null,
+                        arrangedListSize = shell.datas?.arrangedList?.size,
+                        code = shell.code,
+                    )
+                    if (tier.importable) parsed = shell else noDataTier = tier
                 }
             }
             if (parsed == null) {
+                noDataTier?.let {
+                    Log.w(TAG, "第 $week 周教务答了而那份答里没有课程数据（档位 $it），这一周记为失败，不进覆盖导入")
+                }
                 failed += week
                 consecutiveFailures++
                 if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
