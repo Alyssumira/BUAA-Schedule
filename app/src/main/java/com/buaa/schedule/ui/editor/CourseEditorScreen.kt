@@ -677,7 +677,7 @@ fun CourseEditorScreen(
                             // 底栏那条红条常驻、读者不在删除弹窗里，漏清这一半就会在删课途中
                             // 继续念着上一次保存的失败。形状钉在 CourseEditorSaveErrorClearPairingGuardTest。
                             saveError = null
-                            // ⚠️ 删成那一档**故意不在这里退栈**（T166）：这一枚 `scope` 是 `:129` 的
+                            // ⚠️ 删成那一档**故意不在这里退栈**（T166）：这一枚 `scope` 是编辑器顶部声明的那枚
                             // `rememberCoroutineScope()`，绑在这次组合上。删除事务 commit 之后 VM 还要跑
                             // `afterDataChangedInternal()` 才交回结论，这期间新的 `uiState` 一落地，
                             // MainActivity 编辑器目的地那道 `if (!uiState.loading && !courseMissing)` 闸门

@@ -47,7 +47,7 @@ import org.junit.Test
  * 的 `callArgumentLists`（按调用点取实参表，本守卫额外允许 `com.buaa.schedule.core.designsystem.` 那种
  * 全限定前缀 —— 编辑器那颗箭头就是这么写的）。
  *
- * 三枚 @Test 全做**源码核对**（JVM，无 Robolectric、无设备、不读时钟）：零 adb ⇒ 真机上「按返回键/点箭头
+ * 四枚 @Test 全做**源码核对**（JVM，无 Robolectric、无设备、不读时钟）：零 adb ⇒ 真机上「按返回键/点箭头
  * 的手感」本卡一律**未验到**，这里钉的是形状不是行为复现。
  */
 class ReturnDoorPairingGuardTest {
@@ -455,7 +455,7 @@ class ReturnDoorPairingGuardTest {
 
     /**
      * **只抹注释、保留字符串字面量内容**，长度与换行位置不变（行号因此仍然可信）。
-     * 整段抄 `CourseEditorSaveErrorClearPairingGuardTest`：本守卫这三枚 @Test 的判据既有字面量
+     * 整段抄 `CourseEditorSaveErrorClearPairingGuardTest`：本守卫这四枚 @Test 的判据既有字面量
      * （`onBack = { }`、结果卡那句文案）也有行号提示，那两把刀（整段换空格／连字面量一起抹）都会砍错。
      */
     private fun blankCommentsKeepingLiterals(source: String): String {
