@@ -38,7 +38,10 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.kyant.backdrop.backdrops.layerBackdropCoordinates
 import androidx.compose.ui.unit.IntSize
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -203,28 +206,51 @@ fun SceneBackground(
     LaunchedEffect(wallpaperUri, useSystemWallpaper, retryToken) {
         val bitmap = when {
             // 用户拾取的壁纸优先
-            wallpaperUri != null ->
-                withContext(Dispatchers.IO) { decodeSampledWallpaper(context, wallpaperUri) }
+            wallpaperUri != null -> withContext(Dispatchers.IO) {
+                decodeSampledWallpaper(context, wallpaperUri).also { discardIfCancelled(it) }
+            }
             // 默认：提取系统桌面壁纸
-            useSystemWallpaper ->
-                withContext(Dispatchers.IO) { decodeSystemWallpaper(context) }
+            useSystemWallpaper -> withContext(Dispatchers.IO) {
+                decodeSystemWallpaper(context).also { discardIfCancelled(it) }
+            }
             else -> null
         }
-        // 玻璃底板的不透明度下限取决于它底下到底有多亮/多暗，而主题只知道
-        // colorScheme.background，看不到用户壁纸——这里顺手量一次。
-        // 必须在赋值**之前**量：DisposableEffect(wallpaper) 会回收换掉的那张图。
-        SceneLuma.wallpaper = if (bitmap == null || bitmap.isRecycled) {
-            SceneLuma.Stats.Unknown
-        } else {
-            withContext(Dispatchers.IO) { measureWallpaper(bitmap) }
+        // 位图只要没被 wallpaper 这枚状态接手，就没有任何人会回收它：下面的
+        // DisposableEffect(wallpaper) 只认已经进 state 的那一张。而"解码已返回 → 赋值"
+        // 这一截里有两个能把位图丢在原地的出口（用户快速改 wallpaperUri、
+        // 组件配置页秒关都会点火）：withContext 在调用方已取消时按平台口径
+        // **即使块体成功也抛** CancellationException，返回的那张图就掉在原地。
+        var handedOff = false
+        try {
+            // 玻璃底板的不透明度下限取决于它底下到底有多亮/多暗，而主题只知道
+            // colorScheme.background，看不到用户壁纸——这里顺手量一次。
+            // 必须在赋值**之前**量：DisposableEffect(wallpaper) 会回收换掉的那张图。
+            SceneLuma.wallpaper = if (bitmap == null || bitmap.isRecycled) {
+                SceneLuma.Stats.Unknown
+            } else {
+                // 量亮度这一趟也要切 IO，取消正好能落在"解码已返回、赋值还没发生"之间。
+                withContext(Dispatchers.IO) { measureWallpaper(bitmap) }
+            }
+            // 赋值是 try 里的最后一手：try 里没有第二次能把这张图交出去的机会，
+            // 于是 catch 里那句回收绝碰不到"已经进 state／已经画进录制层"的那一张。
+            // 也不改成"整份延迟到 drawWithCache 再赋值"——那一手会引入新的空帧闪烁。
+            wallpaper = bitmap
+            handedOff = true
+        } catch (throwable: Throwable) {
+            if (!handedOff) recycleUnpublished(bitmap)
+            throw throwable
         }
-        wallpaper = bitmap
     }
 
-    // 旧壁纸位图必须显式回收：换壁纸 / 改 useSystemWallpaper / 重试都会重新解码一张
-    // 1080×1920（约 8MB，且在 native 堆上，GC 回收滞后）。此前每次换图都漏一张，
-    // 反复切换几次就把进程推到 OOM。DisposableEffect 在 wallpaper 变化/离开组合时
-    // 回收上一张，这是 Compose 官方为原生资源推荐的清理时机。
+    // 旧壁纸位图必须显式回收：换壁纸 / 改 useSystemWallpaper / 重试都会重新解码一张，
+    // 而 DisposableEffect 只认已经进 state 的那枚（没进 state 的那枚由上面两记
+    // "取消即回收"的兜就地处理）。口径落在**引用归属**上，不押在堆归属上：
+    // 位图随时可能已经被画进录制层、或被别处引用 ⇒ 回收时机必须由持有它的那一手指定。
+    // 「像素到底落在哪一块堆上、GC 什么时候收」在本仓同一进程里有两句相反的读数，
+    // 一手出处本轮未取到 ⇒ 两句都不采信（登记为未验到，见 T422 回执；本卡不改另一枚
+    // 文件那句），显式回收仍是本仓口径。
+    // 此前每次换图都漏一张，反复切换几次就把进程推到 OOM。DisposableEffect 在 wallpaper
+    // 变化/离开组合时回收上一张，这是 Compose 官方为原生资源推荐的清理时机。
     DisposableEffect(wallpaper) {
         val current = wallpaper
         onDispose {
@@ -286,6 +312,36 @@ fun SceneBackground(
                 }
             },
     )
+}
+
+/**
+ * 显式回收一张"还没被任何持有者接手"的壁纸位图。
+ *
+ * 只许在确认它既没进 `wallpaper` 状态、也没被画进录制层时调用 —— 进了状态就归
+ * `DisposableEffect(wallpaper)` 管，两处都收会撞上"draw on recycled bitmap" 那一族。
+ * `isRecycled` 那一手是为了让两记兜叠在一起也不重复点火。
+ */
+private fun recycleUnpublished(bitmap: Bitmap?) {
+    if (bitmap != null && !bitmap.isRecycled) bitmap.recycle()
+}
+
+/**
+ * 取消即回收：解码返回与赋值之间那一截的兜。
+ *
+ * 协程被取消时 `withContext` 照常把块体的返回值丢掉（平台口径：调用方已取消 ⇒ 即使块体
+ * 成功也抛 CancellationException），于是刚解出来的那张位图谁也没接手 —— 它进不了 state，
+ * 也就进不了 DisposableEffect 的回收路径。这里在交回调用方**之前**验一次协程还活着：
+ * 死了就地回收，再让取消照常传播（不能让后半截把 Unknown 写进 [SceneLuma]、把 null 写进
+ * `wallpaper`，那会把新一次解码的正确读数覆盖掉）。
+ *
+ * ⚠️ 剩下的窗口：本函数返回与 withContext 把值送回调用方之间若正好被另一个线程取消，
+ * 这一记兜碰不到（静态可证的窗口，出现频率需装机 ⇒ 未验到）。真正封死它需要把所有权
+ * 交给 IO 块自己（decode 完就地发布），那是另一张卡的形状。
+ */
+private fun CoroutineScope.discardIfCancelled(bitmap: Bitmap?) {
+    if (isActive) return
+    recycleUnpublished(bitmap)
+    ensureActive() // 必然抛：isActive 已经是 false
 }
 
 /**
@@ -356,6 +412,88 @@ private const val WALLPAPER_TARGET_WIDTH = 1080
 private const val WALLPAPER_TARGET_HEIGHT = 1920
 
 /**
+ * 解码位图**长边**的硬上界（px）—— 本文件唯一决定"最多解多大"的那枚数。
+ *
+ * ## 为什么现有那道两轴判据挡不住横图
+ * [wallpaperSampleSize] 的第一趟要求**两轴同时**不低于 [WALLPAPER_TARGET_WIDTH] /
+ * [WALLPAPER_TARGET_HEIGHT] 才继续缩，而这一对目标是按竖屏写的（短边 1080 / 长边 1920）。
+ * 一张 4032×3024 的横图：短边 3024 再缩一档是 1512 < 1920 ⇒ 循环一轮都不跑 ⇒
+ * `inSampleSize = 1` ⇒ 整份进内存：12,192,768 px × 4 B（ARGB_8888）= 48,771,072 B ≈ 46.5 MiB。
+ * 同一开关下竖图 3024×4032 缩到 1512×2016 = 12,192,768 B ⇒ 横竖的字节账差整整 4 倍，
+ * 而清单既没有 `android:largeHeap` 也没有 `android:process` 可以指望。
+ *
+ * ## 为什么是这枚数（不是"设计如此"的魔数）
+ * 本文件拿不到真实屏幅（全颗文件 `displayMetrics` 0 命中；从调用点传进来要改两处调用点，
+ * 在 IO 里量一次又缺 API 31+ 的 WindowManager 分档一手读数 ⇒ 未验到，不押猜测），
+ * 所以这里只能按"上界"而不是按"实测目标"收口。取 2× [WALLPAPER_TARGET_WIDTH] 的理由有两条边界：
+ * - **下界**：不能低于竖图现有档的长边 2016，否则竖图被多推一档到 `inSampleSize = 4`
+ *   （1008×756），今天看得见的清晰度当场倒退；
+ * - **上界**：必须低于 4032，否则卡面那格横图一点都没按住。
+ * 2160 是同时满足两侧、且与本文件既有目标同族（2× 短轴）的那个数。
+ *
+ * ## 代价（要改就改这里）
+ * 封顶后的最坏账是长边 = 本常数、短边也等于它的方图：2160×2160 × 4 B = 18,662,400 B ≈ 17.8 MiB
+ * （横图 4032×3024 落在 2016×1512 = 12,192,768 B ≈ 11.6 MiB，与竖图同档 ⇒ 4 倍不对称塌成 1 倍）。
+ * ⚠️ 硬上界这一档的代价要一起认：长边落在 2161–4320 的照片会被多推一档 ——
+ * 例如 1080×2400 从整份解（10,368,000 B）变成 540×1200（2,592,000 B），比本文件
+ * [WALLPAPER_TARGET_WIDTH]×[WALLPAPER_TARGET_HEIGHT] 那一档低一级（表驱动测试把这一格钉在册，
+ * 不是悄悄发生）。乙档（解码后二次缩放）同样躲不掉这一格，而且它先付 46.5 MiB 的整份解码峰值。
+ * 想更锐就把本常数调大（内存账按 (长边/2160)² 涨），想更省就调小，但**不得低于 2016**（见上）。
+ * 真实屏幅的读数到位之后，正确的手是换成"按实屏短轴/长轴配对的目标"，
+ * 那需要调用点把设备事实传进来（本仓成文判据：设备事实留在调用点当参数）。
+ */
+internal const val WALLPAPER_MAX_DECODED_LONG_EDGE_PX = 2160
+
+/**
+ * 给定边界尺寸，该取哪一档 `inSampleSize`（纯判据，只走 2 的幂）。
+ *
+ * 零 android 依赖：边界尺寸与三档上限一律当参数传 —— 真实屏幅这类设备事实留在调用点，
+ * 本函数只算"给定的这几个数该怎么缩"，所以能在 JVM 上表驱动铺平。
+ *
+ * 两趟各有分工，都不许省：
+ * 1. 两轴同达标的缩档（原样保留）：竖图/方图靠它拿到"仍不低于目标"的最大档；
+ * 2. 长边硬上界 [WALLPAPER_MAX_DECODED_LONG_EDGE_PX]：横图在第一趟里因为短边先撞线而一轮不跑，
+ *    由这一趟兜住。
+ *
+ * ⚠️ 平台事实：`BitmapFactory.Options.inSampleSize` 只按 2 的幂生效（非 2 的幂会被向下取整到
+ * 2 的幂），所以第二趟沿 1 → 2 → 4 → 8 往上跳，停在**第一个让长边不超过上界的 2 的幂**；
+ * 绝不返回 3、5 这种"算出来以为缩了 3 倍"的假档。
+ *
+ * @param outWidthPx 边界宽（`BitmapFactory.Options.outWidth`），非正数按"不缩"处理
+ * @param outHeightPx 边界高（`outHeight`）
+ * @param targetWidthPx 第一趟的短边目标，默认竖屏写死的那一档
+ * @param targetHeightPx 第一趟的长边目标
+ * @param maxDecodedLongEdgePx 第二趟的长边上界，默认 [WALLPAPER_MAX_DECODED_LONG_EDGE_PX]
+ * @return 2 的幂（1、2、4、…）；上界给成非正数时第二趟不点火（＝不设上界，交回第一趟的读数），
+ * 绝不返回 0 或负数那种 `inSampleSize` 根本不认的假档
+ */
+internal fun wallpaperSampleSize(
+    outWidthPx: Int,
+    outHeightPx: Int,
+    targetWidthPx: Int = WALLPAPER_TARGET_WIDTH,
+    targetHeightPx: Int = WALLPAPER_TARGET_HEIGHT,
+    maxDecodedLongEdgePx: Int = WALLPAPER_MAX_DECODED_LONG_EDGE_PX,
+): Int {
+    var sampleSize = 1
+    while (outWidthPx / (sampleSize * 2) >= targetWidthPx &&
+        outHeightPx / (sampleSize * 2) >= targetHeightPx
+    ) {
+        sampleSize *= 2
+    }
+    // 第二趟：横图在这一档上短边先撞线（3024/2 < 1920 ⇒ 第一趟一轮不跑），长边还整份在内存里。
+    if (maxDecodedLongEdgePx > 0) {
+        val longEdgePx = maxOf(outWidthPx, outHeightPx)
+        while (longEdgePx / sampleSize > maxDecodedLongEdgePx) {
+            val next = sampleSize * 2
+            // 溢出到非正就停在当前档：再跳下去只会把负数交给 inSampleSize（那是"不缩"的另一型假档）。
+            if (next <= 0) break
+            sampleSize = next
+        }
+    }
+    return sampleSize
+}
+
+/**
  * 取壁纸失败后的最大重试次数（每次 ON_RESUME 算一次）。
  * API 34+ 读系统壁纸被平台禁用，重试注定失败，必须收敛。
  */
@@ -380,12 +518,9 @@ internal fun decodeSampledWallpaper(context: android.content.Context, uriString:
             android.util.Log.w("SceneBackground", "壁纸尺寸未知，放弃解码: $uriString")
             return null
         }
-        var sampleSize = 1
-        while (bounds.outWidth / (sampleSize * 2) >= WALLPAPER_TARGET_WIDTH &&
-            bounds.outHeight / (sampleSize * 2) >= WALLPAPER_TARGET_HEIGHT
-        ) {
-            sampleSize *= 2
-        }
+        // 采样档位交给纯判据函数：两轴同达标那一趟挡不住横图（见 [wallpaperSampleSize] 的 KDoc），
+        // 长边硬上界也在那一枚函数里点火 —— 本卡唯一的"多大算过大"读数就是它。
+        val sampleSize = wallpaperSampleSize(bounds.outWidth, bounds.outHeight)
         val options = BitmapFactory.Options().apply { inSampleSize = sampleSize }
         context.contentResolver.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, options)
