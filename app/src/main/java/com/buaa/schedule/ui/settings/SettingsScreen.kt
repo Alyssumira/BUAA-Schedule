@@ -768,6 +768,22 @@ fun SettingsScreen(
             val widgetManager = remember(context) {
                 android.appwidget.AppWidgetManager.getInstance(context)
             }
+            // 「桌面到底让不让应用内一键添加」这一问要跨 binder 问 Launcher 进程，个别 ROM 上会抛
+            // DeadObjectException：同仓另外两处都包了闸（WidgetPinRow.kt:65 的 runCatching、
+            // BackgroundSync.kt:844 的 hasAnyWidgetSafely），这一处以前是全仓唯一没闸的一处。
+            // 更要紧的是**求值时机**：SettingsGroup 的 content 形参是 SettingsGroupScope.() -> Unit、
+            // 不带 @Composable（SettingsStack.kt:88），它在 :90 那句 `.apply(content)` 里**每次组合当场跑一遍**，
+            // 而分组可见性要到 :104-105 的 AnimatedVisibility 才被读（:91-93 那两枚早退只看条目的 visible）。
+            // 从前这一问就写在下面那枚组的组体直处 ⇒ 用户停在设置根界面／关于／提醒任一分类，
+            // 只要这枚组重组成，就白问桌面一次。挪进 remember 之后：每个桌面实例只问一次。
+            // 代价（如实记，别当成纯赚）：
+            //   甲 这一问落到了设置页的**首次组合**上，从不进「桌面组件」分类的用户也要付一次
+            //      （旧写法是每次组合付一次；换来的是"最多一次"，不是"零次"）；
+            //   乙 缓存之后桌面进程中途被杀再起来，这一格不会再自纠（旧写法靠每次重组重问自纠）；
+            //   丙 探测抛了就按"不支持"走，与真不支持共用组里那一行文案 —— 界面分不开这两种。
+            val pinSupported = remember(widgetManager) {
+                runCatching { widgetManager.isRequestPinAppWidgetSupported }.getOrDefault(false)
+            }
             SettingsGroup(title = "桌面组件", visibleWhen = section == SettingsSection.WIDGET) {
             item(key = "desc") {
                 val widgetCount = remember(widgetManager) {
@@ -797,7 +813,7 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.titleSmall,
                 )
             }
-            if (widgetManager.isRequestPinAppWidgetSupported) {
+            if (pinSupported) {
                 item(key = "pinToday") {
                     PinWidgetRow(
                         label = "今日课程（4×2 列表）",
