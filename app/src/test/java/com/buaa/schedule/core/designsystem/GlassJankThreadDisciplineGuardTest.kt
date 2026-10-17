@@ -204,7 +204,8 @@ class GlassJankThreadDisciplineGuardTest {
 
     /**
      * 只抹注释、保留字面量与换行位置（长度不变 ⇒ 行号仍可信）。走 StringBuilder 方言，
-     * 不写 `val out = …toCharArray()` ＋ `String(out)` 那一族（会动在册的助手形状尺）。
+     * 不写「先把源串 toCharArray()、收尾再把字符数组折回字符串」那一族（收尾那枚写法被在册的助手形状尺
+     * 逐字点名，逐字抄进注释会把它的裸原文栏顶高一枚，见 CommentStrippingHelperShapeGuardTest 的 ④）。
      */
     private fun withoutComments(src: String): String {
         val builder = StringBuilder(src.length)
