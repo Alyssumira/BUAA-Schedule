@@ -196,6 +196,14 @@ class ScanFrameAidWordingWiringGuardTest {
      * T92 被授权改的是那颗内核头部"空转有多少帧"那一段的**读数口径**（旧文本把一个 2.80 帧/秒
      * 写成了这一页的固有属性）。判据、措辞与停帧那条取证行的全文都在被挖段之外，照旧逐字节。
      * 见 [cutT92FrameFlowSpan]，口径与 [ScanBlankDecodingWiringGuardTest] ⑤b 同一份。
+     *
+     * ⚠️ 现在时的账（T404C② 改口，只说这一枚格子**此刻**钉成什么样；上面 T91／T92 那两段是历史叙述，一字不动）：
+     * ④ 那张表是**四枚文件**（`listOf(ADMISSION_FILE, RECOVERY_FILE, GATE_FILE, VIEW_MODEL_FILE)`）配**三枚基点常量**
+     *（`when`：`GATE_FILE -> ddf493f`、`VIEW_MODEL_FILE -> bd0eca7`、其余两枚落 `else -> d7af6f8`）。
+     * 状态机那一枚到 T404① 已经是**第三次前移**（`00b0b51`／`869fc13` 两枚"前一头"常量留在文件底部不删，
+     * 各给一枚靶子复算差集），而 `ScanReject.kt` **不在这份清单里**（它由 [ScanBlankDecodingWiringGuardTest] ⑤b
+     * 一枚钉着，那边同批前移）。每一枚基点的实物都由"两头逐字节必须不同"＋"被授权那一手的出现次数差"＋
+     * "差集不许更大"钉着，一枚都没有朝宽改过。
      */
     @Test
     fun theJudgingSideWasNotTouchedByThisCard() {
@@ -287,6 +295,53 @@ class ScanFrameAidWordingWiringGuardTest {
         )) {
             assertEquals("T395① 没被授权动「$needle」，新基线里的枚数与 00b0b51 那份对不上：", expected, occurrences(gateClaimedCode, needle))
             assertEquals("00b0b51 那份「$needle」的枚数不是 $expected（靶子取错了，这么比量不出东西）：", expected, occurrences(gateShapeCode, needle))
+        }
+        // ---- 靶子（T404①，照上面 T395① 那条先例的写法，也与 [ScanBlankDecodingWiringGuardTest] ⑤b 同批同一套） ----
+        // 状态机这一枚第三次前移押的就是「`fail` 那句用户文案换了出处」：前一头（869fc13 ＝ 上面那枚
+        // gateClaimed 的同一份字节，不重取）里 `error.message ?: …` 必须还在、两枚 SubmitFailureClassifier
+        // 调用必须一枚都没有；基点那份里那句必须归零、两枚调用各恰好一枚，而 `Log.w(TAG, ` 从两枚变三枚
+        //（第三枚就是本卡补的那行取证）。差集不许比这更大：闸门那一族＋漏斗那十一处枚数一字不动，
+        // 行数 390 → 410（+20：一句换两枚调用＋两段 KDoc/注释）。
+        val spokenBlob = gitShow(T404_VIEW_MODEL_BASELINE, viewModelPath)
+        check(spokenBlob != null) { "状态机 `fail` 的 T404① 基线取不到（$viewModelPath@$T404_VIEW_MODEL_BASELINE），这一枚靶子无从复算" }
+        val screenOld = normalizeNewlines(gateClaimed)
+        val screenNew = normalizeNewlines(spokenBlob)
+        assertTrue(
+            "SignInViewModel.kt 在 869fc13 与 T404① 基点上逐字节相同 ⇒ 这一枚基点前移是白给的，反向钉已经空转",
+            screenOld != screenNew,
+        )
+        val screenOldCode = withoutComments(screenOld)
+        val screenNewCode = withoutComments(screenNew)
+        // 被授权的那一手（屏上句子与取证行的出处）
+        assertEquals("869fc13 那份还在把 JVM 原文当用户文案（本卡收的就是这一格）：", 1, occurrences(screenOldCode, "error.message ?: "))
+        assertEquals("T404① 那份又长回 JVM 原文上屏（那一形状从这一格复活）：", 0, occurrences(screenNewCode, "error.message ?: "))
+        assertEquals("869fc13 那份一枚按档取句子都没有（靶子取错了就量不出本卡那一手）：", 0, occurrences(screenOldCode, "SubmitFailureClassifier.screenLine("))
+        assertEquals("T404① 那份的屏上句子不是按档取的：", 1, occurrences(screenNewCode, "SubmitFailureClassifier.screenLine("))
+        assertEquals("869fc13 那份没有递交这一侧的取证行：", 0, occurrences(screenOldCode, "SubmitFailureClassifier.forensicsLine("))
+        assertEquals("T404① 那份的取证行不止一枚（第二份＝页面自算口径）：", 1, occurrences(screenNewCode, "SubmitFailureClassifier.forensicsLine("))
+        assertEquals("869fc13 那份没有那颗内核的 import：", 0, occurrences(screenOldCode, "import com.buaa.schedule.domain.signin.SubmitFailureClassifier"))
+        assertEquals("T404① 那份的 import 恰好一枚：", 1, occurrences(screenNewCode, "import com.buaa.schedule.domain.signin.SubmitFailureClassifier"))
+        assertEquals("869fc13 那份「Log.w(TAG, 」恰好两枚：", 2, occurrences(screenOldCode, "Log.w(TAG, "))
+        assertEquals("T404① 那份的「Log.w(TAG, 」不是三枚（第三枚＝本卡补的那行取证，少一枚就是它被撤了）：", 3, occurrences(screenNewCode, "Log.w(TAG, "))
+        // 行数（手写期望值，两枚独立源现量：`git show <rev>:<path> | wc -l` 与下面这把 `newlines`）
+        assertEquals("SignInViewModel.kt 在 869fc13 上的行数（手写期望值）：", 390, newlines(screenOld))
+        assertEquals("SignInViewModel.kt 在 T404① 基点上的行数＝前一头＋20：", 410, newlines(screenNew))
+        // 差集不许更大：闸门那一族与漏斗那十一处在新基线里枚数与前一头一字不动
+        for ((needle, expected) in listOf(
+            "flight.compareAndSet" to 2,
+            "flight.value = " to 0,
+            "dispatching = !claimed" to 1,
+            "if (flight.value) return" to 3,
+            "MutableStateFlow(false)" to 1,
+            "val inFlight: StateFlow<Boolean>" to 1,
+            "scanFlightAdmission(" to 1,
+            "tellDroppedArrival(" to 2,
+            "dispatchingPayload" to 4,
+            "Log.w(TAG, droppedArrivalTraceText(" to 1,
+            "relogin = false" to 5,
+        )) {
+            assertEquals("T404① 没被授权动「$needle」，新基线里的枚数与 869fc13 那份对不上：", expected, occurrences(screenNewCode, needle))
+            assertEquals("869fc13 那份「$needle」的枚数不是 $expected（靶子取错了，这么比量不出东西）：", expected, occurrences(screenOldCode, needle))
         }
         // 帧观测那颗内核的头部：挖掉 T92 的「空转速率」一段之外逐字节（同一把尺子，另一枚文件）
         val flowPath = "$MAIN_PREFIX/$FRAME_FLOW_FILE"
@@ -408,6 +463,17 @@ class ScanFrameAidWordingWiringGuardTest {
             from = at + needle.length
         }
     }
+
+    /**
+     * 换行符枚数（＝ `wc -l` 那把尺：数的是 `\n` 的枚数，量的是 `git show <rev>:<path>` 取回的**整份文件**
+     * 抹 CR 之后的字节，**不抹注释**——抹注释那把是 [withoutComments] ＋ [occurrences]，两把尺各管各的期望值）。
+     * 口径与 [ScanBlankDecodingWiringGuardTest] 的 `newlines` 同一枚（T404C② 那批靶子在两枚守卫里押的是
+     * 同一对写死值：`SignInViewModel.kt` 在 869fc13／bd0eca7 上 **390／410**，各由两枚独立源现量 ——
+     * `git show <rev>:<path> | wc -l` 与这一把 `newlines`）。
+     * 用 `count("\n")` 而不是 `lines().size`：后者"结尾那个换行算不算一行"是 stdlib 的口径，
+     * 而 ④ 的靶子期望值是**手写字面数**，钉的必须与复算时同一把尺。
+     */
+    private fun newlines(text: String): Int = occurrences(text, "\n")
 
     /** `git show <rev>:<path>`；取不到（没 git / 没这个对象）返回 null，由调用方判失败而不是静默通过 */
     private fun gitShow(rev: String, path: String): String? = try {

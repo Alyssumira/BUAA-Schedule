@@ -187,6 +187,15 @@ class ScanBlankDecodingWiringGuardTest {
      * T92 被授权改的是那颗内核头部"空转有多少帧"那一段的**读数口径**（旧文本把一个 2.80 帧/秒
      * 写成了这一页的固有属性，被 T87/T88/T91 六个读数打到 3.1–3.3 倍）。判据、措辞、取证行全文
      * 都在被挖段之外，照旧逐字节。见 [cutFrameFlowRate]。
+     *
+     * ⚠️ 现在时的账（T404C② 改口，只说这一枚格子**此刻**钉成什么样；上面 T90／T92 那两段是历史叙述，一字不动）：
+     * ⑤b 那张表是**四枚文件**（`listOf(REJECT_FILE, VIEW_MODEL_FILE, GATE_FILE, RECOVERY_FILE)`）配**四枚基点常量**
+     *（`when`：`GATE_FILE -> ddf493f`、`VIEW_MODEL_FILE -> bd0eca7`、`REJECT_FILE -> bd0eca7`、
+     *  `RECOVERY_FILE` 落 `else -> 6a27324`）—— 也就是上面那句"其余四份文件照旧整文件逐字节对 [T87_BASELINE]"
+     * 在 T245②／T257③／T302①／T395①／T404① 五次授权改动之后只对**棘轮那一枚**还成立。
+     * 文件底部另留**三枚"前一头"常量**（`00b0b51`／`869fc13`／`06214c1`，外加它们共同的起点 `6a27324`）
+     * 给靶子复算差集：每一枚基点的实物都由"两头逐字节必须不同"＋"被授权那一手的出现次数差"＋
+     * "差集不许更大"＋（`ScanReject.kt` 那一族再加一枚**逐字还原**）钉着，一枚都没有朝宽改过。
      */
     @Test
     fun filesThisCardMustNotTouchAreByteIdenticalToBaseline() {
@@ -308,6 +317,52 @@ class ScanBlankDecodingWiringGuardTest {
             assertEquals("T395① 没被授权动「$needle」，新基线里的枚数与 00b0b51 那份对不上：", expected, occurrences(gateClaimedCode, needle))
             assertEquals("00b0b51 那份「$needle」的枚数不是 $expected（靶子取错了，这么比量不出东西）：", expected, occurrences(gateShapeCode, needle))
         }
+        // ---- 靶子（T404①，照上面 T395① 那条先例的写法）：状态机这一枚第三次前移押的就是「fail 那句用户文案换了出处」 ----
+        // 前一头（869fc13 ＝ 上面那枚 gateClaimed 的同一份字节，不重取）里 `error.message ?: …` 必须还在、
+        // 两枚 SubmitFailureClassifier 调用必须一枚都没有；基点那份里那句必须归零、两枚调用各恰好一枚，
+        // 而 `Log.w(TAG, ` 从两枚变三枚（第三枚就是本卡补的那行取证）。差集不许比这更大：
+        // 闸门那一族＋漏斗那十一处枚数一字不动，行数 390 → 410（+20：一句换两枚调用＋两段 KDoc/注释）。
+        val spokenBlob = gitShow(T404_VIEW_MODEL_BASELINE, viewModelPath)
+        check(spokenBlob != null) { "状态机 `fail` 的 T404① 基线取不到（$viewModelPath@$T404_VIEW_MODEL_BASELINE），这一枚靶子无从复算" }
+        val screenOld = normalizeNewlines(gateClaimed)
+        val screenNew = normalizeNewlines(spokenBlob)
+        assertTrue(
+            "SignInViewModel.kt 在 869fc13 与 T404① 基点上逐字节相同 ⇒ 这一枚基点前移是白给的，反向钉已经空转",
+            screenOld != screenNew,
+        )
+        val screenOldCode = withoutComments(screenOld)
+        val screenNewCode = withoutComments(screenNew)
+        // 被授权的那一手（屏上句子与取证行的出处）
+        assertEquals("869fc13 那份还在把 JVM 原文当用户文案（本卡收的就是这一格）：", 1, occurrences(screenOldCode, "error.message ?: "))
+        assertEquals("T404① 那份又长回 JVM 原文上屏（那一形状从这一格复活）：", 0, occurrences(screenNewCode, "error.message ?: "))
+        assertEquals("869fc13 那份一枚按档取句子都没有（靶子取错了就量不出本卡那一手）：", 0, occurrences(screenOldCode, "SubmitFailureClassifier.screenLine("))
+        assertEquals("T404① 那份的屏上句子不是按档取的：", 1, occurrences(screenNewCode, "SubmitFailureClassifier.screenLine("))
+        assertEquals("869fc13 那份没有递交这一侧的取证行：", 0, occurrences(screenOldCode, "SubmitFailureClassifier.forensicsLine("))
+        assertEquals("T404① 那份的取证行不止一枚（第二份＝页面自算口径）：", 1, occurrences(screenNewCode, "SubmitFailureClassifier.forensicsLine("))
+        assertEquals("869fc13 那份没有那颗内核的 import：", 0, occurrences(screenOldCode, "import com.buaa.schedule.domain.signin.SubmitFailureClassifier"))
+        assertEquals("T404① 那份的 import 恰好一枚：", 1, occurrences(screenNewCode, "import com.buaa.schedule.domain.signin.SubmitFailureClassifier"))
+        assertEquals("869fc13 那份「Log.w(TAG, 」恰好两枚：", 2, occurrences(screenOldCode, "Log.w(TAG, "))
+        assertEquals("T404① 那份的「Log.w(TAG, 」不是三枚（第三枚＝本卡补的那行取证，少一枚就是它被撤了）：", 3, occurrences(screenNewCode, "Log.w(TAG, "))
+        // 行数（手写期望值，两枚独立源现量：`git show <rev>:<path> | wc -l` 与守卫里这把 `newlines`）
+        assertEquals("SignInViewModel.kt 在 869fc13 上的行数（手写期望值）：", 390, newlines(screenOld))
+        assertEquals("SignInViewModel.kt 在 T404① 基点上的行数＝前一头＋20：", 410, newlines(screenNew))
+        // 差集不许更大：闸门那一族与漏斗那十一处在新基线里枚数与前一头一字不动
+        for ((needle, expected) in listOf(
+            "flight.compareAndSet" to 2,
+            "flight.value = " to 0,
+            "dispatching = !claimed" to 1,
+            "if (flight.value) return" to 3,
+            "MutableStateFlow(false)" to 1,
+            "val inFlight: StateFlow<Boolean>" to 1,
+            "scanFlightAdmission(" to 1,
+            "tellDroppedArrival(" to 2,
+            "dispatchingPayload" to 4,
+            "Log.w(TAG, droppedArrivalTraceText(" to 1,
+            "relogin = false" to 5,
+        )) {
+            assertEquals("T404① 没被授权动「$needle」，新基线里的枚数与 869fc13 那份对不上：", expected, occurrences(screenNewCode, needle))
+            assertEquals("869fc13 那份「$needle」的枚数不是 $expected（靶子取错了，这么比量不出东西）：", expected, occurrences(screenOldCode, needle))
+        }
         // ---- 靶子（T309①，照上面 T257③ 那条先例的写法）：ScanReject.kt 这次前移的差集**恰好**是那四刀＋那段注释 ----
         // ⚠️ 不许只写成"新旧两份逐字节不同就通过"：那只能证明前移不是白给的，证不了差集里只有被授权的那一手。
         // 下面四枚格子的期望值全部手写（326 行 / 330 行 / 四刀 / 三行注释），最后一枚才是真防线：
@@ -365,6 +420,49 @@ class ScanBlankDecodingWiringGuardTest {
                 "七档判据、措辞或取证行被顺手改过，这一枚基点前移不成立、得回退 T302① 那一手",
             rejectBefore,
             rejectRebuilt,
+        )
+        // ---- 靶子（T404①，照上面 T309① 那条先例的写法）：ScanReject.kt 这次前移的差集**恰好那一行** ----
+        // ⚠️ 这一手前后**行数相同**（现量两枚独立源：`git show 06214c1:<path> | wc -l` ＝ 330、
+        //   `git show bd0eca7:<path> | wc -l` ＝ 330，守卫里这把 `newlines` 也是 330 / 330）⇒ 这一枚靶子
+        //   一枚都不许押在行数差上（押了就是当场假绿）：押出现次数差＋逐字还原，行数只当"不许漂"的旁证钉。
+        val rejectT404Blob = gitShow(T404_REJECT_BASELINE, rejectPath)
+        check(rejectT404Blob != null) { "ScanReject.kt 的 T404① 基线取不到（$rejectPath@$T404_REJECT_BASELINE），这一枚靶子无从复算" }
+        val rejectT404 = normalizeNewlines(rejectT404Blob)
+        val rejectT302Code = withoutComments(rejectAfter)
+        val rejectT404Code = withoutComments(rejectT404)
+        assertTrue(
+            "ScanReject.kt 在 06214c1 与 T404① 基点上逐字节相同 ⇒ 这一枚基点前移是白给的，这一枚反向钉已经空转",
+            rejectAfter != rejectT404,
+        )
+        // 格子 1（出现次数差）：`USER_ID_PARAM` 那一行换掉了——旧形状归零、新形状恰好一枚，`!= null` 随之少一枚
+        assertEquals("06214c1 那份「IClassQrParser.queryValue(」恰好两枚（抹注释后数出现次数）：", 2, occurrences(rejectT302Code, "IClassQrParser.queryValue("))
+        assertEquals("T404① 那份还留着两枚（本卡那一手没落地）：", 1, occurrences(rejectT404Code, "IClassQrParser.queryValue("))
+        assertEquals("06214c1 那份还不认识「IClassQrParser.hasQueryParam(」（靶子取错了就量不出本卡那一手）：", 0, occurrences(rejectT302Code, "IClassQrParser.hasQueryParam("))
+        assertEquals("T404① 那份的存在性判据恰好一枚（第二枚＝签到这一族自己又写了一遍空白尺子）：", 1, occurrences(rejectT404Code, "IClassQrParser.hasQueryParam("))
+        assertEquals("06214c1 那份抹注释后的「!= null」恰好四枚：", 4, occurrences(rejectT302Code, "!= null"))
+        assertEquals("T404① 那份的「!= null」不是三枚（这一手被撤销、或又被别人添了一枚判据）：", 3, occurrences(rejectT404Code, "!= null"))
+        // 格子 2（不许漂的旁证）：行数两头同值，四刀与跨层前缀枚数两头一字不动
+        assertEquals("ScanReject.kt 在 06214c1 上的行数（手写期望值）：", 330, newlines(rejectAfter))
+        assertEquals("ScanReject.kt 在 T404① 基点上的行数与前一头相同（这一手的差集只有一行，行数量不出它）：", 330, newlines(rejectT404))
+        for ((needle, expected) in listOf(
+            T302_DELEGATION_PREFIX to 4,
+            "urlSchemeOf(" to 1,
+            "urlPathOf(" to 1,
+            "urlAuthority(" to 1,
+            "splitAuthority(" to 1,
+        )) {
+            assertEquals("T404① 没被授权动「$needle」，新基线里的枚数与 06214c1 那份对不上：", expected, occurrences(rejectT404Code, needle))
+            assertEquals("06214c1 那份「$needle」的枚数不是 $expected（靶子取错了，这么比量不出东西）：", expected, occurrences(rejectT302Code, needle))
+        }
+        // 格子 3（真防线·逐字还原）：把那一行并回 06214c1 的形状，结果必须与那份**逐字节**相同。
+        //              差集里多一个字符（换判据、改措辞、动取证行、把代码挪个位置）都红在这里，而不是红在"顺手换个 sha"。
+        assertEquals("那一行在 T404① 那份里必须是 `hasQueryParam` 的形状（找不到就没法把它并回去）：", 1, occurrences(rejectT404, T404_REJECT_LINE_NEW))
+        assertEquals("旧形状在 T404① 那份里必须归零（没归零＝还原的替换会撞上两处，比不出东西）：", 0, occurrences(rejectT404, T404_REJECT_LINE_OLD))
+        assertEquals(
+            "ScanReject.kt 相对 06214c1 的差集不只有「`USER_ID_PARAM` 那一行的存在性判据」：逐字还原回去之后还剩别的改动 ⇒ " +
+                "七档判据、措辞或取证行被顺手改过，这一枚基点前移不成立、得回退 T404① 那一手",
+            rejectAfter,
+            rejectT404.replace(T404_REJECT_LINE_NEW, T404_REJECT_LINE_OLD),
         )
         val statusPath = "$MAIN_PREFIX/$STATUS_FILE"
         val statusBaseline = gitShow(T87_BASELINE, statusPath)
@@ -518,7 +616,13 @@ class ScanBlankDecodingWiringGuardTest {
     }
 
     /**
-     * 换行符枚数（＝ `wc -l` 那把尺，两枚独立数据源都对得上 326 / 330）。
+     * 换行符枚数（＝ `wc -l` 那把尺：数的是 `\n` 的枚数，量的是 `git show <rev>:<path>` 取回的**整份文件**
+     * 抹 CR 之后的字节，**不抹注释**——抹注释那把是 [withoutComments] ＋ [occurrences]，两把尺各管各的期望值）。
+     * 现在时（T404C② 现量）：⑤b 里被这一把尺钉住的期望值一共三对，每对都由两枚独立源各量一遍
+     *（`git show <rev>:<path> | wc -l` 与这一把 `newlines`）—— `ScanReject.kt` 在 6a27324／06214c1 上
+     * **326／330**（T309① 那枚靶子）、在 06214c1／bd0eca7 上 **330／330**（T404① 那一枚：两头同值，
+     * 所以那一手的差集**不押行数**、押出现次数与逐字还原）、`SignInViewModel.kt` 在 869fc13／bd0eca7 上
+     * **390／410**（T404① 的状态机靶子）。
      * 用 `count("\n")` 而不是 `lines().size`：后者"结尾那个换行算不算一行"是 stdlib 的口径，
      * 而 ⑤b 的靶子期望值是**手写字面数**，钉的必须是与我复算时同一把尺。
      */
@@ -647,6 +751,17 @@ class ScanBlankDecodingWiringGuardTest {
          * [T302_REJECT_BASELINE] 留在原地不删：它是这一枚靶子的"前一头"。
          */
         const val T404_REJECT_BASELINE = "bd0eca7"
+
+        /**
+         * T404① 在 [REJECT_FILE] 里换掉的那一行，两枚**逐字**形状（8 枚缩进在内）：
+         * 旧的那一行（[T302_REJECT_BASELINE] 那份）与新的那一行（[T404_REJECT_BASELINE] 那份）。
+         * ⑤b 的 T404① 靶子用这一对做逐字还原 —— 把新那份并回旧形状之后必须与旧基线逐字节相同。
+         */
+        const val T404_REJECT_LINE_OLD =
+            "        if (IClassQrParser.queryValue(shape.source, IClassSignUrl.USER_ID_PARAM) != null) {"
+
+        const val T404_REJECT_LINE_NEW =
+            "        if (IClassQrParser.hasQueryParam(shape.source, IClassSignUrl.USER_ID_PARAM)) {"
 
         /** 那四刀共用的跨层前缀：靶子按枚数钉它（新基线恰好 4 枚、旧基线 0 枚、还原后归零） */
         const val T302_DELEGATION_PREFIX = "com.buaa.schedule.domain.url."
